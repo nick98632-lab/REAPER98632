@@ -39,13 +39,17 @@ suppressPackageStartupMessages({
 # USER INPUT
 # -----------------------------------------------------------------------------
 
-count_file <- "WTTS-Seq_2022.2_DE_raw_read_numbers.csv"
+input_dir  <- "data"
+output_root <- "exports"
+analysis_name <- "EVS_HBFSS_AllComparisons_Output"
+
+count_file <- file.path(input_dir, "WTTS-Seq_2022.2_DE_raw_read_numbers.csv")
 
 DESIGN_FORMULA <- ~ condition
 
 # Set to TRUE and supply twas_file to enable downstream TWAS gene overlap.
 run_twas_overlap <- FALSE
-twas_file        <- "3aTWAS_genes_of_11_brain_disorders.csv"
+twas_file        <- file.path(input_dir, "3aTWAS_genes_of_11_brain_disorders.csv")
 
 # Significance threshold for all DESeq2 calls and effect-class classification.
 alpha_level <- 0.10
@@ -140,7 +144,7 @@ plot_palette <- list(
   treatment = "#1F78B4"
 )
 
-output_dir <- "EVS_HBFSS_AllComparisons_Output"
+output_dir <- file.path(output_root, analysis_name)
 dir.create(output_dir, showWarnings = FALSE, recursive = TRUE)
 
 # -----------------------------------------------------------------------------
@@ -1130,6 +1134,7 @@ clean_gene_set <- function(x) {
 }
 
 save_csv <- function(df, path) {
+  dir.create(dirname(path), showWarnings = FALSE, recursive = TRUE)
   write.csv(df, file = path, row.names = FALSE)
 }
 
@@ -1137,6 +1142,7 @@ save_grob <- function(g, path, width = 16.4, height = 9.9, dpi = figure_dpi, bg 
   if (!isTRUE(export_all_plots)) return(invisible(FALSE))
   tryCatch(
     {
+      dir.create(dirname(path), showWarnings = FALSE, recursive = TRUE)
       ggsave(
         filename  = path,
         plot      = g,
