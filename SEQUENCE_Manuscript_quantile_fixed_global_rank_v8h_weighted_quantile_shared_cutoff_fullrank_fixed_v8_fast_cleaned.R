@@ -34,7 +34,7 @@ n_workers <- max(
   min(4L, parallel::detectCores(logical = FALSE) - 1L)
 )
 
-input_dir  <- "data"
+input_dir <- "/root/REAPER98632/data"
 output_root <- "exports"
 analysis_name <- "EVS_HBFSS_AllComparisons_Output"
 
