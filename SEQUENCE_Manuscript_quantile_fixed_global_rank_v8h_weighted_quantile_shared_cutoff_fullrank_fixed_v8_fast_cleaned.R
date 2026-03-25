@@ -38,7 +38,7 @@ input_dir  <- "data"
 output_root <- "exports"
 analysis_name <- "EVS_HBFSS_AllComparisons_Output"
 
-count_file <- file.path(input_dir, "WTTS-Seq_2022.2_DE_raw_read_numbers.xlsx")
+count_file <- file.path(input_dir, "WTTS-Seq_2022.2_DE_raw_read_numbers.cvs")
 output_dir <- file.path(output_root, analysis_name)
 dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
 
