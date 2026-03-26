@@ -1,0 +1,5 @@
+"preprocessing","group","cutoff_mode","empiric_rank_selected","cutoff_quantile","selected_reason","comparison_name"
+"normalized","treatment","shared_rank_exhaustive_search",31576,0.000126662444585146,"comparison_specific_rank_from_score_weighted_median_of_top_k_local_lagrange_anchor_quantiles","RT8_ZT14"
+"normalized","control","shared_rank_exhaustive_search",31576,0.000126662444585146,"comparison_specific_rank_from_score_weighted_median_of_top_k_local_lagrange_anchor_quantiles","RT8_ZT14"
+"raw","treatment","shared_rank_exhaustive_search",31576,0.000126662444585146,"comparison_specific_rank_from_score_weighted_median_of_top_k_local_lagrange_anchor_quantiles_same_rank_raw_view","RT8_ZT14"
+"raw","control","shared_rank_exhaustive_search",31576,0.000126662444585146,"comparison_specific_rank_from_score_weighted_median_of_top_k_local_lagrange_anchor_quantiles_same_rank_raw_view","RT8_ZT14"
