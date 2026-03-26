@@ -1,6 +1,6 @@
 # =============================================================================
-# PART 1 OF 4
-# SETUP, GLOBAL CONTROLS, METADATA, IMPORT, AND CORE HELPERS
+# EVS + HBFSS FULL PIPELINE
+# FREE-SLOPE CHANGEPOINT CUTOFF ON PC1-RANKED FEATURES
 # =============================================================================
 
 suppressPackageStartupMessages({
@@ -21,11 +21,22 @@ suppressPackageStartupMessages({
 })
 
 # -----------------------------------------------------------------------------
+# GLOBAL PATHS
+# -----------------------------------------------------------------------------
+
+repo_dir <- "/root/REAPER98632"
+input_dir <- file.path(repo_dir, "data")
+count_file <- file.path(input_dir, "WTTS-Seq_2022.2_DE_raw_read_numbers.csv")
+
+output_root <- file.path(repo_dir, "exports")
+analysis_name <- "EVS_HBFSS_AllComparisons_Output"
+output_dir <- file.path(output_root, analysis_name)
+dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+
+# -----------------------------------------------------------------------------
 # GLOBAL CONTROLS
 # -----------------------------------------------------------------------------
 
-fast_mode <- TRUE
-compute_optional_diagnostics <- FALSE
 use_fast_apeglm <- TRUE
 export_all_plots <- TRUE
 
@@ -33,15 +44,6 @@ n_workers <- max(
   1L,
   min(4L, parallel::detectCores(logical = FALSE) - 1L)
 )
-
-output_root <- "exports"
-analysis_name <- "EVS_HBFSS_AllComparisons_Output"
-
-input_dir <- "/root/REAPER98632/data"
-count_file <- file.path(input_dir, "WTTS-Seq_2022.2_DE_raw_read_numbers.csv")
-
-output_dir <- file.path(output_root, analysis_name)
-dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
 
 DESIGN_FORMULA <- ~ condition
 
@@ -53,12 +55,25 @@ figure_dpi <- 320
 base_theme_size <- 10
 
 # -----------------------------------------------------------------------------
-# EVS SEARCH CONTROLS
+# EVS / CHANGEPOINT CONTROLS
 # -----------------------------------------------------------------------------
 
-evs_cutoff_mode_main <- "shared_rank_exhaustive_search"
-evs_candidate_max_leading_frac <- 1.00
+evs_cutoff_mode_main <- "free_slope_changepoint_on_PC1_rank"
 evs_top_k_ranks_per_comparison <- 4L
+
+# TRUE:
+#   estimate DESeq size factors first
+#   do EVS ranking / changepoint on normalized counts
+#   then map chosen IDs back to raw counts and run DESeq2 for inference
+#
+# FALSE:
+#   do EVS ranking / changepoint on raw counts
+#   then run DESeq2 on raw subsets for inference
+normalize_before_evs <- TRUE
+
+changepoint_min_segment_size <- 250L
+changepoint_smoothing_window <- 101L
+changepoint_use_log1p <- TRUE
 
 # -----------------------------------------------------------------------------
 # PLOT CONSTANTS
@@ -74,16 +89,12 @@ LINE_WIDTH_BOUNDARY <- 0.55
 LINE_WIDTH_ZERO     <- 0.40
 LINE_WIDTH_THRESH   <- 0.90
 
-HIST_BINS  <- 60
-HIST_COLOR <- "white"
-
 plot_palette <- list(
   threshold = "#8C2D04",
   hbfss     = "#E67E22",
   deseq2    = "#C0392B",
   overlap   = "#7D3C98",
   weak      = "#4A90E2",
-  histogram = "#969696",
   control   = "#4D4D4D",
   treatment = "#1F78B4"
 )
@@ -112,21 +123,6 @@ get_bpparam <- function(workers = n_workers) {
 }
 
 # -----------------------------------------------------------------------------
-# FAST ROW VARIANCE
-# -----------------------------------------------------------------------------
-
-fast_row_vars <- function(mat) {
-  mat <- as.matrix(mat)
-  storage.mode(mat) <- "double"
-
-  if (requireNamespace("matrixStats", quietly = TRUE)) {
-    return(matrixStats::rowVars(mat, na.rm = TRUE))
-  }
-
-  apply(mat, 1L, stats::var, na.rm = TRUE)
-}
-
-# -----------------------------------------------------------------------------
 # BASIC HELPERS
 # -----------------------------------------------------------------------------
 
@@ -140,6 +136,28 @@ assert_required_columns <- function(df, required_cols, object_name = "data frame
       )
     )
   }
+}
+
+warn_if_noninteger_counts <- function(mat, label = "count matrix", tolerance = 1e-8) {
+  x <- as.matrix(mat)
+  bad <- is.finite(x) & !is.na(x) & abs(x - round(x)) > tolerance
+  if (any(bad)) {
+    warning(sprintf(
+      "[%s] Non-integer values detected. Values will be rounded before DESeq2.",
+      label
+    ))
+  }
+}
+
+fast_row_vars <- function(mat) {
+  mat <- as.matrix(mat)
+  storage.mode(mat) <- "double"
+
+  if (requireNamespace("matrixStats", quietly = TRUE)) {
+    return(matrixStats::rowVars(mat, na.rm = TRUE))
+  }
+
+  apply(mat, 1L, stats::var, na.rm = TRUE)
 }
 
 safe_neglog10 <- function(x, pseudocount = 1e-12) {
@@ -171,78 +189,28 @@ clip_probabilities <- function(x, eps = 1e-300) {
   x
 }
 
-run_empirical_null_fdrtool <- function(stat_vec, dataset_name) {
-  stat_vec <- as.numeric(stat_vec)
-  stat_vec <- stat_vec[is.finite(stat_vec) & !is.na(stat_vec)]
-  stat_vec <- unname(stat_vec)
-
-  if (length(stat_vec) < 5) {
-    stop(sprintf("[%s] Fewer than 5 finite Wald statistics were available for fdrtool.", dataset_name))
-  }
-
-  fit <- tryCatch(
-    fdrtool(
-      stat_vec,
-      statistic     = "normal",
-      plot          = FALSE,
-      verbose       = FALSE,
-      cutoff.method = "fndr",
-      pct0          = 0.75
-    ),
-    error = function(e1) {
-      message(sprintf("[%s] Primary fdrtool call failed: %s", dataset_name, conditionMessage(e1)))
-      tryCatch(
-        fdrtool(
-          as.vector(stat_vec),
-          statistic     = "normal",
-          plot          = FALSE,
-          verbose       = FALSE,
-          cutoff.method = "pct0",
-          pct0          = 0.75
-        ),
-        error = function(e2) {
-          stop(sprintf("[%s] fdrtool failed after retry: %s", dataset_name, conditionMessage(e2)))
-        }
-      )
-    }
-  )
-
-  fit$pval <- clip_probabilities(fit$pval)
-  fit$qval <- clip_probabilities(fit$qval)
-  fit$lfdr <- as.numeric(fit$lfdr)
-  fit
+safe_log_vec <- function(x, use_log1p = FALSE, eps = 1e-12) {
+  x <- as.numeric(x)
+  if (use_log1p) return(log1p(pmax(x, 0)))
+  log(pmax(x, eps))
 }
 
-safe_hc_thresh <- function(empirical_p, dataset_name) {
-  sorted_empirical_p <- sort(
-    clip_probabilities(empirical_p),
-    na.last = NA,
-    decreasing = FALSE
-  )
-  if (length(sorted_empirical_p) < 5) return(NA_real_)
+rolling_mean_centered <- function(x, k = changepoint_smoothing_window) {
+  x <- as.numeric(x)
+  n <- length(x)
+  if (n == 0L) return(numeric(0))
+  if (!is.finite(k) || is.na(k) || k < 2L) return(x)
 
-  out <- suppressWarnings(
-    tryCatch(
-      fdrtool::hc.thresh(as.vector(sorted_empirical_p)),
-      error = function(e) {
-        message(sprintf("[%s] hc.thresh failed: %s", dataset_name, conditionMessage(e)))
-        NA_real_
-      }
-    )
-  )
+  k <- as.integer(k)
+  if ((k %% 2L) == 0L) k <- k + 1L
+  half <- k %/% 2L
 
-  out <- as.numeric(out[1])
-
-  if (!is.finite(out) || out <= 0 || out >= max_usable_hc_p_threshold) {
-    message(sprintf(
-      "[%s] HC threshold rejected for HBFSS calibration (value=%s; cutoff=%s)",
-      dataset_name,
-      ifelse(is.finite(out), signif(out, 6), "NA"),
-      max_usable_hc_p_threshold
-    ))
-    return(NA_real_)
+  out <- numeric(n)
+  for (i in seq_len(n)) {
+    lo <- max(1L, i - half)
+    hi <- min(n, i + half)
+    out[i] <- mean(x[lo:hi], na.rm = TRUE)
   }
-
   out
 }
 
@@ -383,6 +351,85 @@ manuscript_theme <- function() {
 }
 
 # -----------------------------------------------------------------------------
+# EMPIRICAL NULL / HBFSS HELPERS
+# -----------------------------------------------------------------------------
+
+run_empirical_null_fdrtool <- function(stat_vec, dataset_name) {
+  stat_vec <- as.numeric(stat_vec)
+  stat_vec <- stat_vec[is.finite(stat_vec) & !is.na(stat_vec)]
+  stat_vec <- unname(stat_vec)
+
+  if (length(stat_vec) < 5) {
+    stop(sprintf("[%s] Fewer than 5 finite Wald statistics were available for fdrtool.", dataset_name))
+  }
+
+  fit <- tryCatch(
+    fdrtool::fdrtool(
+      stat_vec,
+      statistic     = "normal",
+      plot          = FALSE,
+      verbose       = FALSE,
+      cutoff.method = "fndr",
+      pct0          = 0.75
+    ),
+    error = function(e1) {
+      message(sprintf("[%s] Primary fdrtool call failed: %s", dataset_name, conditionMessage(e1)))
+      tryCatch(
+        fdrtool::fdrtool(
+          as.vector(stat_vec),
+          statistic     = "normal",
+          plot          = FALSE,
+          verbose       = FALSE,
+          cutoff.method = "pct0",
+          pct0          = 0.75
+        ),
+        error = function(e2) {
+          stop(sprintf("[%s] fdrtool failed after retry: %s", dataset_name, conditionMessage(e2)))
+        }
+      )
+    }
+  )
+
+  fit$pval <- clip_probabilities(fit$pval)
+  fit$qval <- clip_probabilities(fit$qval)
+  fit$lfdr <- as.numeric(fit$lfdr)
+  fit
+}
+
+safe_hc_thresh <- function(empirical_p, dataset_name) {
+  sorted_empirical_p <- sort(
+    clip_probabilities(empirical_p),
+    na.last = NA,
+    decreasing = FALSE
+  )
+  if (length(sorted_empirical_p) < 5) return(NA_real_)
+
+  out <- suppressWarnings(
+    tryCatch(
+      fdrtool::hc.thresh(as.vector(sorted_empirical_p)),
+      error = function(e) {
+        message(sprintf("[%s] hc.thresh failed: %s", dataset_name, conditionMessage(e)))
+        NA_real_
+      }
+    )
+  )
+
+  out <- as.numeric(out[1])
+
+  if (!is.finite(out) || out <= 0 || out >= max_usable_hc_p_threshold) {
+    message(sprintf(
+      "[%s] HC threshold rejected for HBFSS calibration (value=%s; cutoff=%s)",
+      dataset_name,
+      ifelse(is.finite(out), signif(out, 6), "NA"),
+      max_usable_hc_p_threshold
+    ))
+    return(NA_real_)
+  }
+
+  out
+}
+
+# -----------------------------------------------------------------------------
 # METADATA
 # -----------------------------------------------------------------------------
 
@@ -411,12 +458,6 @@ comparison_table <- data.frame(
   group1_prefix   = c("R0", "R2", "R4", "R8"),
   group2_prefix   = c("ZT6", "ZT8", "ZT10", "ZT14"),
   stringsAsFactors = FALSE
-)
-
-dataset_key_labels <- c(
-  raw_dataset          = "Original dataset",
-  leading_edge_dataset = "Leading-edge dataset",
-  remainder_dataset    = "Remainder dataset"
 )
 
 # -----------------------------------------------------------------------------
@@ -475,6 +516,7 @@ prepare_comparison_data <- function(comparison_name, group1_prefix, group2_prefi
   }
 
   count_sub <- WTTS_Seq[, sample_ids, drop = FALSE]
+  count_sub <- count_sub[, rownames(coldata), drop = FALSE]
   stopifnot(all(colnames(count_sub) == rownames(coldata)))
 
   list(
@@ -496,16 +538,32 @@ comparison_inputs <- lapply(seq_len(nrow(comparison_table)), function(i) {
 names(comparison_inputs) <- comparison_table$comparison_name
 
 # =============================================================================
-# PART 2 OF 4
-# EVS HELPERS, SHARED-RANK SEARCH, AND GLOBAL PRECOMPUTE
+# EVS HELPERS
 # =============================================================================
 
 compute_pc1_loading_table <- function(value_df, sample_names,
-                                      preprocessing_label = "Normalized before EVS",
+                                      preprocessing_label,
                                       selected_reason = "shared_rank_external") {
   x <- log1p(as.matrix(value_df[, sample_names, drop = FALSE]))
+  storage.mode(x) <- "double"
+
+  if (nrow(x) < 2L || ncol(x) < 2L) {
+    stop(sprintf(
+      "PCA failed for '%s': need at least 2 features and 2 samples, found %d features and %d samples.",
+      preprocessing_label, nrow(x), ncol(x)
+    ))
+  }
+
   max_pcs <- min(5L, ncol(x))
+  if (!is.finite(max_pcs) || is.na(max_pcs) || max_pcs < 1L) {
+    stop(sprintf("PCA failed for '%s': invalid rank requested.", preprocessing_label))
+  }
+
   pca_fit <- prcomp(t(x), scale. = FALSE, rank. = max_pcs)
+
+  if (is.null(pca_fit$rotation) || nrow(pca_fit$rotation) < 1L || ncol(pca_fit$rotation) < 1L) {
+    stop(sprintf("PCA failed for '%s': rotation matrix was empty.", preprocessing_label))
+  }
 
   loading_abs <- abs(pca_fit$rotation[, 1])
   loading_tbl <- data.frame(
@@ -525,222 +583,9 @@ compute_pc1_loading_table <- function(value_df, sample_names,
     cutoff = NA_real_,
     top_n_used = NA_integer_,
     cutoff_quantile = NA_real_,
-    cutoff_method = "shared_rank_exhaustive_search",
+    cutoff_method = evs_cutoff_mode_main,
     selected_reason = selected_reason,
     preprocessing_label = preprocessing_label
-  )
-}
-
-build_rank_prefix_cache <- function(count_matrix, fit_obj,
-                                    max_leading_frac = evs_candidate_max_leading_frac) {
-  loading_tbl <- as.data.frame(fit_obj$loading_table, stringsAsFactors = FALSE)
-  loading_tbl <- loading_tbl[order(loading_tbl$rank), , drop = FALSE]
-  n_total <- nrow(loading_tbl)
-
-  if (!n_total) {
-    return(list(
-      loading_table = loading_tbl,
-      n_total = 0L,
-      iod_prefix = numeric(0),
-      cv2_prefix = numeric(0),
-      valid_prefix = integer(0),
-      iod_total = 0,
-      cv2_total = 0,
-      valid_total = 0L,
-      max_leading_frac = max_leading_frac
-    ))
-  }
-
-  feature_ids <- as.character(loading_tbl$feature_id)
-  idx <- match(feature_ids, rownames(count_matrix))
-  if (anyNA(idx)) {
-    stop(sprintf(
-      "Rank prefix cache failed: %d feature_id(s) from loading table were not found in count_matrix.",
-      sum(is.na(idx))
-    ))
-  }
-
-  mat <- as.matrix(count_matrix[idx, , drop = FALSE])
-  storage.mode(mat) <- "double"
-
-  feature_mean <- rowMeans(mat, na.rm = TRUE)
-  feature_var  <- fast_row_vars(mat)
-
-  valid <- is.finite(feature_mean) & !is.na(feature_mean) & (feature_mean > 0) &
-    is.finite(feature_var) & !is.na(feature_var) & (feature_var >= 0)
-
-  iod <- rep(0, n_total)
-  cv2 <- rep(0, n_total)
-  iod[valid] <- feature_var[valid] / feature_mean[valid]
-  cv2[valid] <- feature_var[valid] / (feature_mean[valid]^2)
-
-  list(
-    loading_table = loading_tbl,
-    n_total = as.integer(n_total),
-    iod_prefix = cumsum(iod),
-    cv2_prefix = cumsum(cv2),
-    valid_prefix = cumsum(as.integer(valid)),
-    iod_total = sum(iod),
-    cv2_total = sum(cv2),
-    valid_total = sum(valid),
-    max_leading_frac = max_leading_frac
-  )
-}
-
-score_single_rank_from_cache <- function(rank_cache, rank_index) {
-  n_total <- rank_cache$n_total
-  n_leading <- as.integer(rank_index)
-  n_remainder <- n_total - n_leading
-
-  if (n_leading < 1L || n_remainder < 1L) {
-    return(data.frame(
-      rank_index = rank_index,
-      objective_score = NA_real_,
-      valid_split = FALSE,
-      stringsAsFactors = FALSE
-    ))
-  }
-
-  frac_leading <- n_leading / max(1L, n_total)
-  if (!is.finite(frac_leading) || frac_leading > rank_cache$max_leading_frac) {
-    return(data.frame(
-      rank_index = rank_index,
-      objective_score = NA_real_,
-      valid_split = FALSE,
-      stringsAsFactors = FALSE
-    ))
-  }
-
-  iod_sum_leading <- rank_cache$iod_prefix[n_leading]
-  cv2_sum_leading <- rank_cache$cv2_prefix[n_leading]
-  valid_leading <- rank_cache$valid_prefix[n_leading]
-
-  iod_sum_remainder <- rank_cache$iod_total - iod_sum_leading
-  cv2_sum_remainder <- rank_cache$cv2_total - cv2_sum_leading
-  valid_remainder <- rank_cache$valid_total - valid_leading
-
-  if (valid_leading <= 0L || valid_remainder <= 0L) {
-    return(data.frame(
-      rank_index = rank_index,
-      objective_score = NA_real_,
-      valid_split = FALSE,
-      stringsAsFactors = FALSE
-    ))
-  }
-
-  iod_mean_leading <- iod_sum_leading / valid_leading
-  iod_mean_remainder <- iod_sum_remainder / valid_remainder
-  cv2_mean_leading <- cv2_sum_leading / valid_leading
-  cv2_mean_remainder <- cv2_sum_remainder / valid_remainder
-
-  valid_direction <- (iod_mean_leading > iod_mean_remainder) &&
-    (cv2_mean_remainder > cv2_mean_leading)
-
-  if (!valid_direction) {
-    return(data.frame(
-      rank_index = rank_index,
-      objective_score = NA_real_,
-      valid_split = FALSE,
-      stringsAsFactors = FALSE
-    ))
-  }
-
-  mean_logratio_score <- log(iod_mean_leading / iod_mean_remainder) +
-    log(cv2_mean_remainder / cv2_mean_leading)
-
-  size_logratio_score <- log(iod_sum_leading / iod_sum_remainder) +
-    log(cv2_sum_remainder / cv2_sum_leading)
-
-  objective_score <- mean_logratio_score + size_logratio_score
-
-  data.frame(
-    rank_index = rank_index,
-    objective_score = objective_score,
-    valid_split = TRUE,
-    stringsAsFactors = FALSE
-  )
-}
-
-evaluate_comparison_shared_rank_candidates <- function(normalized_counts,
-                                                       comparison_name,
-                                                       fit_trt,
-                                                       fit_untrt,
-                                                       top_k = evs_top_k_ranks_per_comparison) {
-  cache_trt <- build_rank_prefix_cache(normalized_counts, fit_trt)
-  cache_untrt <- build_rank_prefix_cache(normalized_counts, fit_untrt)
-
-  shared_n_total <- min(cache_trt$n_total, cache_untrt$n_total)
-
-  if (!is.finite(shared_n_total) || is.na(shared_n_total) || shared_n_total <= 1L) {
-    candidate_grid <- data.frame(
-      comparison_name = comparison_name,
-      rank_index = integer(0),
-      local_lagrange_objective = numeric(0),
-      valid_in_all_panels = logical(0),
-      stringsAsFactors = FALSE
-    )
-
-    return(list(
-      comparison_summary = data.frame(),
-      candidate_grid = candidate_grid,
-      best_rank = NA_integer_,
-      best_score = NA_real_,
-      top_ranks = integer(0),
-      top_scores = numeric(0)
-    ))
-  }
-
-  rank_grid <- seq_len(shared_n_total - 1L)
-
-  score_rows <- lapply(rank_grid, function(r) {
-    s1 <- score_single_rank_from_cache(cache_trt, r)
-    s2 <- score_single_rank_from_cache(cache_untrt, r)
-
-    both_valid <- isTRUE(s1$valid_split[1]) && isTRUE(s2$valid_split[1])
-    score <- if (both_valid) s1$objective_score[1] + s2$objective_score[1] else NA_real_
-
-    data.frame(
-      comparison_name = comparison_name,
-      rank_index = r,
-      local_lagrange_objective = score,
-      valid_in_all_panels = both_valid,
-      stringsAsFactors = FALSE
-    )
-  })
-
-  candidate_grid <- bind_rows(score_rows)
-  valid_grid <- candidate_grid[candidate_grid$valid_in_all_panels & is.finite(candidate_grid$local_lagrange_objective), , drop = FALSE]
-  valid_grid <- valid_grid[order(-valid_grid$local_lagrange_objective, valid_grid$rank_index), , drop = FALSE]
-
-  if (!nrow(valid_grid)) {
-    return(list(
-      comparison_summary = data.frame(),
-      candidate_grid = candidate_grid,
-      best_rank = NA_integer_,
-      best_score = NA_real_,
-      top_ranks = integer(0),
-      top_scores = numeric(0)
-    ))
-  }
-
-  top_k <- min(as.integer(top_k), nrow(valid_grid))
-  top_rows <- valid_grid[seq_len(top_k), , drop = FALSE]
-
-  comparison_summary <- data.frame(
-    comparison_name = comparison_name,
-    selected_rank_order = seq_len(nrow(top_rows)),
-    independently_best_rank = as.integer(top_rows$rank_index),
-    independently_best_local_lagrange_objective = as.numeric(top_rows$local_lagrange_objective),
-    stringsAsFactors = FALSE
-  )
-
-  list(
-    comparison_summary = comparison_summary,
-    candidate_grid = candidate_grid,
-    best_rank = as.integer(top_rows$rank_index[1]),
-    best_score = as.numeric(top_rows$local_lagrange_objective[1]),
-    top_ranks = as.integer(top_rows$rank_index),
-    top_scores = as.numeric(top_rows$local_lagrange_objective)
   )
 }
 
@@ -761,10 +606,317 @@ apply_loading_cutoff <- function(fit_obj, rank_index, selected_reason = "shared_
   fit_obj$cutoff <- cutoff_value
   fit_obj$top_n_used <- rank_index
   fit_obj$cutoff_quantile <- 1 - (rank_index / nrow(loading_tbl))
-  fit_obj$cutoff_method <- "shared_rank_exhaustive_search"
+  fit_obj$cutoff_method <- evs_cutoff_mode_main
   fit_obj$selected_reason <- selected_reason
   fit_obj
 }
+
+# =============================================================================
+# CHANGEPOINT CUT-OFF
+# =============================================================================
+
+compute_ranked_mean_variance_table <- function(count_matrix,
+                                               rank_order_ids,
+                                               smoothing_window = changepoint_smoothing_window,
+                                               use_log1p = changepoint_use_log1p) {
+  count_matrix <- as.matrix(count_matrix)
+  rank_order_ids <- as.character(rank_order_ids)
+
+  idx <- match(rank_order_ids, rownames(count_matrix))
+  keep <- !is.na(idx)
+  idx <- idx[keep]
+  rank_order_ids <- rank_order_ids[keep]
+
+  if (length(idx) < 5L) {
+    return(data.frame())
+  }
+
+  mat <- count_matrix[idx, , drop = FALSE]
+  storage.mode(mat) <- "double"
+
+  feature_mean <- rowMeans(mat, na.rm = TRUE)
+  feature_var  <- fast_row_vars(mat)
+
+  ok <- is.finite(feature_mean) & !is.na(feature_mean) & (feature_mean > 0) &
+    is.finite(feature_var) & !is.na(feature_var) & (feature_var > 0)
+
+  if (sum(ok) < 5L) {
+    return(data.frame())
+  }
+
+  tbl <- data.frame(
+    feature_id = rank_order_ids[ok],
+    rank_index = seq_len(sum(ok)),
+    mean_value = feature_mean[ok],
+    var_value  = feature_var[ok],
+    stringsAsFactors = FALSE
+  )
+
+  tbl$log_mean <- safe_log_vec(tbl$mean_value, use_log1p = use_log1p)
+  tbl$log_var  <- safe_log_vec(tbl$var_value,  use_log1p = use_log1p)
+
+  if (is.finite(smoothing_window) && !is.na(smoothing_window) && smoothing_window > 1L) {
+    tbl$log_mean_smooth <- rolling_mean_centered(tbl$log_mean, smoothing_window)
+    tbl$log_var_smooth  <- rolling_mean_centered(tbl$log_var,  smoothing_window)
+  } else {
+    tbl$log_mean_smooth <- tbl$log_mean
+    tbl$log_var_smooth  <- tbl$log_var
+  }
+
+  tbl
+}
+
+fit_free_slope_segment <- function(x, y) {
+  x <- as.numeric(x)
+  y <- as.numeric(y)
+
+  ok <- is.finite(x) & !is.na(x) & is.finite(y) & !is.na(y)
+  x <- x[ok]
+  y <- y[ok]
+
+  n <- length(x)
+  if (n < 3L) {
+    return(list(
+      slope = NA_real_,
+      intercept = NA_real_,
+      rss = Inf
+    ))
+  }
+
+  x_mean <- mean(x)
+  y_mean <- mean(y)
+  sxx <- sum((x - x_mean)^2)
+
+  if (!is.finite(sxx) || sxx <= 0) {
+    slope_hat <- 0
+  } else {
+    slope_hat <- sum((x - x_mean) * (y - y_mean)) / sxx
+  }
+
+  intercept_hat <- y_mean - slope_hat * x_mean
+  resid <- y - (intercept_hat + slope_hat * x)
+  rss <- sum(resid^2)
+
+  list(
+    slope = slope_hat,
+    intercept = intercept_hat,
+    rss = rss
+  )
+}
+
+score_single_rank_changepoint <- function(rank_mv_tbl,
+                                          rank_index,
+                                          min_segment_size = changepoint_min_segment_size) {
+  n_total <- nrow(rank_mv_tbl)
+
+  if (!is.finite(rank_index) || is.na(rank_index)) {
+    return(data.frame(
+      rank_index = rank_index,
+      objective_score = NA_real_,
+      valid_split = FALSE,
+      lead_rss = NA_real_,
+      rem_rss = NA_real_,
+      lead_slope = NA_real_,
+      rem_slope = NA_real_,
+      null_rss = NA_real_,
+      improvement_vs_null = NA_real_,
+      stringsAsFactors = FALSE
+    ))
+  }
+
+  rank_index <- as.integer(rank_index)
+  n_lead <- rank_index
+  n_rem  <- n_total - rank_index
+
+  if (n_lead < min_segment_size || n_rem < min_segment_size) {
+    return(data.frame(
+      rank_index = rank_index,
+      objective_score = NA_real_,
+      valid_split = FALSE,
+      lead_rss = NA_real_,
+      rem_rss = NA_real_,
+      lead_slope = NA_real_,
+      rem_slope = NA_real_,
+      null_rss = NA_real_,
+      improvement_vs_null = NA_real_,
+      stringsAsFactors = FALSE
+    ))
+  }
+
+  x1 <- rank_mv_tbl$log_mean_smooth[seq_len(n_lead)]
+  y1 <- rank_mv_tbl$log_var_smooth[seq_len(n_lead)]
+
+  x2 <- rank_mv_tbl$log_mean_smooth[(n_lead + 1L):n_total]
+  y2 <- rank_mv_tbl$log_var_smooth[(n_lead + 1L):n_total]
+
+  fit_lead <- fit_free_slope_segment(x1, y1)
+  fit_rem  <- fit_free_slope_segment(x2, y2)
+  fit_null <- fit_free_slope_segment(rank_mv_tbl$log_mean_smooth, rank_mv_tbl$log_var_smooth)
+
+  split_rss <- fit_lead$rss + fit_rem$rss
+  null_rss <- fit_null$rss
+
+  if (!is.finite(split_rss) || !is.finite(null_rss)) {
+    return(data.frame(
+      rank_index = rank_index,
+      objective_score = NA_real_,
+      valid_split = FALSE,
+      lead_rss = fit_lead$rss,
+      rem_rss = fit_rem$rss,
+      lead_slope = fit_lead$slope,
+      rem_slope = fit_rem$slope,
+      null_rss = fit_null$rss,
+      improvement_vs_null = NA_real_,
+      stringsAsFactors = FALSE
+    ))
+  }
+
+  improvement_vs_null <- null_rss - split_rss
+
+  data.frame(
+    rank_index = rank_index,
+    objective_score = improvement_vs_null,
+    valid_split = is.finite(improvement_vs_null) && (improvement_vs_null > 0),
+    lead_rss = fit_lead$rss,
+    rem_rss = fit_rem$rss,
+    lead_slope = fit_lead$slope,
+    rem_slope = fit_rem$slope,
+    null_rss = fit_null$rss,
+    improvement_vs_null = improvement_vs_null,
+    stringsAsFactors = FALSE
+  )
+}
+
+evaluate_comparison_shared_rank_candidates <- function(counts_for_evs,
+                                                       comparison_name,
+                                                       fit_trt,
+                                                       fit_untrt,
+                                                       top_k = evs_top_k_ranks_per_comparison,
+                                                       min_segment_size = changepoint_min_segment_size) {
+  trt_rank_ids <- as.character(fit_trt$loading_table$feature_id[order(fit_trt$loading_table$rank)])
+  ctrl_rank_ids <- as.character(fit_untrt$loading_table$feature_id[order(fit_untrt$loading_table$rank)])
+
+  trt_mv_tbl <- compute_ranked_mean_variance_table(
+    count_matrix = counts_for_evs,
+    rank_order_ids = trt_rank_ids
+  )
+
+  ctrl_mv_tbl <- compute_ranked_mean_variance_table(
+    count_matrix = counts_for_evs,
+    rank_order_ids = ctrl_rank_ids
+  )
+
+  shared_n_total <- min(nrow(trt_mv_tbl), nrow(ctrl_mv_tbl))
+
+  if (!is.finite(shared_n_total) || is.na(shared_n_total) || shared_n_total <= (2L * min_segment_size)) {
+    candidate_grid <- data.frame(
+      comparison_name = comparison_name,
+      rank_index = integer(0),
+      local_lagrange_objective = numeric(0),
+      valid_in_all_panels = logical(0),
+      trt_lead_slope = numeric(0),
+      trt_rem_slope = numeric(0),
+      ctrl_lead_slope = numeric(0),
+      ctrl_rem_slope = numeric(0),
+      trt_improvement = numeric(0),
+      ctrl_improvement = numeric(0),
+      stringsAsFactors = FALSE
+    )
+
+    return(list(
+      comparison_summary = data.frame(),
+      candidate_grid = candidate_grid,
+      best_rank = NA_integer_,
+      best_score = NA_real_,
+      top_ranks = integer(0),
+      top_scores = numeric(0),
+      trt_rank_mv_table = trt_mv_tbl,
+      ctrl_rank_mv_table = ctrl_mv_tbl
+    ))
+  }
+
+  rank_grid <- seq.int(from = min_segment_size, to = shared_n_total - min_segment_size, by = 1L)
+
+  score_rows <- lapply(rank_grid, function(r) {
+    s1 <- score_single_rank_changepoint(
+      rank_mv_tbl = trt_mv_tbl,
+      rank_index = r,
+      min_segment_size = min_segment_size
+    )
+
+    s2 <- score_single_rank_changepoint(
+      rank_mv_tbl = ctrl_mv_tbl,
+      rank_index = r,
+      min_segment_size = min_segment_size
+    )
+
+    both_valid <- isTRUE(s1$valid_split[1]) && isTRUE(s2$valid_split[1])
+    score <- if (both_valid) s1$objective_score[1] + s2$objective_score[1] else NA_real_
+
+    data.frame(
+      comparison_name = comparison_name,
+      rank_index = r,
+      local_lagrange_objective = score,
+      valid_in_all_panels = both_valid,
+      trt_lead_slope = s1$lead_slope[1],
+      trt_rem_slope = s1$rem_slope[1],
+      ctrl_lead_slope = s2$lead_slope[1],
+      ctrl_rem_slope = s2$rem_slope[1],
+      trt_improvement = s1$improvement_vs_null[1],
+      ctrl_improvement = s2$improvement_vs_null[1],
+      stringsAsFactors = FALSE
+    )
+  })
+
+  candidate_grid <- dplyr::bind_rows(score_rows)
+  valid_grid <- candidate_grid[candidate_grid$valid_in_all_panels & is.finite(candidate_grid$local_lagrange_objective), , drop = FALSE]
+  valid_grid <- valid_grid[order(-valid_grid$local_lagrange_objective, valid_grid$rank_index), , drop = FALSE]
+
+  if (!nrow(valid_grid)) {
+    return(list(
+      comparison_summary = data.frame(),
+      candidate_grid = candidate_grid,
+      best_rank = NA_integer_,
+      best_score = NA_real_,
+      top_ranks = integer(0),
+      top_scores = numeric(0),
+      trt_rank_mv_table = trt_mv_tbl,
+      ctrl_rank_mv_table = ctrl_mv_tbl
+    ))
+  }
+
+  top_k <- min(as.integer(top_k), nrow(valid_grid))
+  top_rows <- valid_grid[seq_len(top_k), , drop = FALSE]
+
+  comparison_summary <- data.frame(
+    comparison_name = comparison_name,
+    selected_rank_order = seq_len(nrow(top_rows)),
+    independently_best_rank = as.integer(top_rows$rank_index),
+    independently_best_local_lagrange_objective = as.numeric(top_rows$local_lagrange_objective),
+    trt_lead_slope = as.numeric(top_rows$trt_lead_slope),
+    trt_rem_slope = as.numeric(top_rows$trt_rem_slope),
+    ctrl_lead_slope = as.numeric(top_rows$ctrl_lead_slope),
+    ctrl_rem_slope = as.numeric(top_rows$ctrl_rem_slope),
+    trt_improvement = as.numeric(top_rows$trt_improvement),
+    ctrl_improvement = as.numeric(top_rows$ctrl_improvement),
+    stringsAsFactors = FALSE
+  )
+
+  list(
+    comparison_summary = comparison_summary,
+    candidate_grid = candidate_grid,
+    best_rank = as.integer(top_rows$rank_index[1]),
+    best_score = as.numeric(top_rows$local_lagrange_objective[1]),
+    top_ranks = as.integer(top_rows$rank_index),
+    top_scores = as.numeric(top_rows$local_lagrange_objective),
+    trt_rank_mv_table = trt_mv_tbl,
+    ctrl_rank_mv_table = ctrl_mv_tbl
+  )
+}
+
+# =============================================================================
+# GLOBAL PRECOMPUTE
+# =============================================================================
 
 precompute_global_evs_rank_selection <- function(comparison_inputs,
                                                  top_k_ranks_per_comparison = evs_top_k_ranks_per_comparison) {
@@ -773,6 +925,8 @@ precompute_global_evs_rank_selection <- function(comparison_inputs,
 
   for (cmp in names(comparison_inputs)) {
     input_obj <- comparison_inputs[[cmp]]
+
+    warn_if_noninteger_counts(input_obj$count_matrix, label = paste0(cmp, " precompute count matrix"))
 
     dds_init <- DESeqDataSetFromMatrix(
       countData = round(as.matrix(input_obj$count_matrix)),
@@ -790,13 +944,21 @@ precompute_global_evs_rank_selection <- function(comparison_inputs,
     trt_ids <- sample_ids[input_obj$coldata$condition == "trt"]
     untrt_ids <- sample_ids[input_obj$coldata$condition == "untrt"]
 
-    fit_trt <- compute_pc1_loading_table(norm_counts_init, trt_ids)
-    fit_untrt <- compute_pc1_loading_table(norm_counts_init, untrt_ids)
-    fit_trt_raw <- compute_pc1_loading_table(raw_counts_init, trt_ids, preprocessing_label = "Raw counts before EVS")
-    fit_untrt_raw <- compute_pc1_loading_table(raw_counts_init, untrt_ids, preprocessing_label = "Raw counts before EVS")
+    if (normalize_before_evs) {
+      counts_for_evs <- norm_counts_init
+      evs_preproc_label <- "Normalized before EVS"
+    } else {
+      counts_for_evs <- raw_counts_init
+      evs_preproc_label <- "Raw counts before EVS"
+    }
+
+    fit_trt <- compute_pc1_loading_table(counts_for_evs, trt_ids, preprocessing_label = evs_preproc_label)
+    fit_untrt <- compute_pc1_loading_table(counts_for_evs, untrt_ids, preprocessing_label = evs_preproc_label)
+    fit_trt_raw_view <- compute_pc1_loading_table(raw_counts_init, trt_ids, preprocessing_label = "Raw counts before EVS")
+    fit_untrt_raw_view <- compute_pc1_loading_table(raw_counts_init, untrt_ids, preprocessing_label = "Raw counts before EVS")
 
     comparison_eval <- evaluate_comparison_shared_rank_candidates(
-      normalized_counts = norm_counts_init,
+      counts_for_evs = counts_for_evs,
       comparison_name = cmp,
       fit_trt = fit_trt,
       fit_untrt = fit_untrt,
@@ -808,17 +970,20 @@ precompute_global_evs_rank_selection <- function(comparison_inputs,
       retained_feature_ids = retained_feature_ids,
       norm_counts_init = norm_counts_init,
       raw_counts_init = raw_counts_init,
+      counts_for_evs = counts_for_evs,
       fit_trt = fit_trt,
       fit_untrt = fit_untrt,
-      fit_trt_raw = fit_trt_raw,
-      fit_untrt_raw = fit_untrt_raw,
-      comparison_eval = comparison_eval
+      fit_trt_raw_view = fit_trt_raw_view,
+      fit_untrt_raw_view = fit_untrt_raw_view,
+      comparison_eval = comparison_eval,
+      trt_rank_mv_table = comparison_eval$trt_rank_mv_table,
+      ctrl_rank_mv_table = comparison_eval$ctrl_rank_mv_table
     )
 
     summary_rows[[cmp]] <- comparison_eval$comparison_summary
   }
 
-  comparison_summary_table <- bind_rows(summary_rows)
+  comparison_summary_table <- dplyr::bind_rows(summary_rows)
 
   anchor_rank_table <- do.call(rbind, lapply(names(per_comparison), function(cmp) {
     eval_obj <- per_comparison[[cmp]]$comparison_eval
@@ -860,15 +1025,15 @@ precompute_global_evs_rank_selection <- function(comparison_inputs,
     stats::setNames(rep(NA_integer_, length(comparison_n_totals)), names(comparison_n_totals))
   }
 
-  overall_median_rank <- if (length(final_shared_rank_by_comparison) > 0 &&
-                             any(is.finite(final_shared_rank_by_comparison))) {
+  overall_median_rank_for_audit <- if (length(final_shared_rank_by_comparison) > 0 &&
+                                       any(is.finite(final_shared_rank_by_comparison))) {
     as.integer(stats::median(final_shared_rank_by_comparison, na.rm = TRUE))
   } else {
     NA_integer_
   }
 
   list(
-    final_shared_rank = overall_median_rank,
+    overall_median_rank_for_audit = overall_median_rank_for_audit,
     final_shared_quantile = weighted_median_anchor_quantile,
     final_shared_rank_by_comparison = final_shared_rank_by_comparison,
     comparison_summary_table = comparison_summary_table,
@@ -878,8 +1043,7 @@ precompute_global_evs_rank_selection <- function(comparison_inputs,
 }
 
 # =============================================================================
-# PART 3 OF 4
-# FINALIZED EVS SPLIT + POST-CUTOFF DESEQ2/HBFSS + FIGURE HELPERS
+# FINALIZED EVS SPLIT
 # =============================================================================
 
 build_eigenvector_split <- function(count_matrix,
@@ -897,11 +1061,10 @@ build_eigenvector_split <- function(count_matrix,
     stop("build_eigenvector_split() requires precomputed_selection for the finalized workflow.")
   }
 
-  norm_counts_init <- as.data.frame(precomputed_cmp$norm_counts_init)
   fit_trt <- precomputed_cmp$fit_trt
   fit_untrt <- precomputed_cmp$fit_untrt
-  fit_trt_raw <- precomputed_cmp$fit_trt_raw
-  fit_untrt_raw <- precomputed_cmp$fit_untrt_raw
+  fit_trt_raw_view <- precomputed_cmp$fit_trt_raw_view
+  fit_untrt_raw_view <- precomputed_cmp$fit_untrt_raw_view
   comparison_eval <- precomputed_cmp$comparison_eval
 
   independently_best_rank <- comparison_eval$best_rank
@@ -909,12 +1072,16 @@ build_eigenvector_split <- function(count_matrix,
     final_shared_rank <- independently_best_rank
   }
 
-  final_reason <- "comparison_specific_rank_from_score_weighted_median_of_top_k_local_lagrange_anchor_quantiles"
+  final_reason <- if (normalize_before_evs) {
+    "free_slope_changepoint_selected_on_normalized_counts_then_mapped_to_raw_counts_for_DESeq2"
+  } else {
+    "free_slope_changepoint_selected_on_raw_counts_then_passed_to_DESeq2"
+  }
 
   fit_trt <- apply_loading_cutoff(fit_trt, final_shared_rank, final_reason)
   fit_untrt <- apply_loading_cutoff(fit_untrt, final_shared_rank, final_reason)
-  fit_trt_raw <- apply_loading_cutoff(fit_trt_raw, final_shared_rank, paste0(final_reason, "_same_rank_raw_view"))
-  fit_untrt_raw <- apply_loading_cutoff(fit_untrt_raw, final_shared_rank, paste0(final_reason, "_same_rank_raw_view"))
+  fit_trt_raw_view <- apply_loading_cutoff(fit_trt_raw_view, final_shared_rank, paste0(final_reason, "_raw_view"))
+  fit_untrt_raw_view <- apply_loading_cutoff(fit_untrt_raw_view, final_shared_rank, paste0(final_reason, "_raw_view"))
 
   trt_high <- as.character(subset(fit_trt$loading_table, split_class == "high_loading")$feature_id)
   untrt_high <- as.character(subset(fit_untrt$loading_table, split_class == "high_loading")$feature_id)
@@ -932,13 +1099,13 @@ build_eigenvector_split <- function(count_matrix,
     independently_best_rank = independently_best_rank,
     independently_best_local_lagrange_objective = comparison_eval$best_score,
     final_shared_rank = final_shared_rank,
-    aggregation_method = "comparison_specific_rank_from_score_weighted_median_of_top_k_local_lagrange_anchor_quantiles",
+    aggregation_method = if (normalize_before_evs) "free_slope_changepoint_normalized_before_EVS" else "free_slope_changepoint_raw_before_EVS",
     stringsAsFactors = FALSE
   )
 
   evs_cutoff_summary <- dplyr::bind_rows(
     data.frame(
-      preprocessing = "normalized",
+      preprocessing = fit_trt$preprocessing_label,
       group = "treatment",
       cutoff_mode = fit_trt$cutoff_method,
       empiric_rank_selected = fit_trt$top_n_used,
@@ -947,7 +1114,7 @@ build_eigenvector_split <- function(count_matrix,
       stringsAsFactors = FALSE
     ),
     data.frame(
-      preprocessing = "normalized",
+      preprocessing = fit_untrt$preprocessing_label,
       group = "control",
       cutoff_mode = fit_untrt$cutoff_method,
       empiric_rank_selected = fit_untrt$top_n_used,
@@ -956,21 +1123,21 @@ build_eigenvector_split <- function(count_matrix,
       stringsAsFactors = FALSE
     ),
     data.frame(
-      preprocessing = "raw",
+      preprocessing = fit_trt_raw_view$preprocessing_label,
       group = "treatment",
-      cutoff_mode = fit_trt_raw$cutoff_method,
-      empiric_rank_selected = fit_trt_raw$top_n_used,
-      cutoff_quantile = fit_trt_raw$cutoff_quantile,
-      selected_reason = fit_trt_raw$selected_reason,
+      cutoff_mode = fit_trt_raw_view$cutoff_method,
+      empiric_rank_selected = fit_trt_raw_view$top_n_used,
+      cutoff_quantile = fit_trt_raw_view$cutoff_quantile,
+      selected_reason = fit_trt_raw_view$selected_reason,
       stringsAsFactors = FALSE
     ),
     data.frame(
-      preprocessing = "raw",
+      preprocessing = fit_untrt_raw_view$preprocessing_label,
       group = "control",
-      cutoff_mode = fit_untrt_raw$cutoff_method,
-      empiric_rank_selected = fit_untrt_raw$top_n_used,
-      cutoff_quantile = fit_untrt_raw$cutoff_quantile,
-      selected_reason = fit_untrt_raw$selected_reason,
+      cutoff_mode = fit_untrt_raw_view$cutoff_method,
+      empiric_rank_selected = fit_untrt_raw_view$top_n_used,
+      cutoff_quantile = fit_untrt_raw_view$cutoff_quantile,
+      selected_reason = fit_untrt_raw_view$selected_reason,
       stringsAsFactors = FALSE
     )
   )
@@ -978,18 +1145,19 @@ build_eigenvector_split <- function(count_matrix,
   list(
     fit_trt = fit_trt,
     fit_untrt = fit_untrt,
-    fit_trt_raw = fit_trt_raw,
-    fit_untrt_raw = fit_untrt_raw,
-    primary_trt_fit = fit_trt,
-    primary_untrt_fit = fit_untrt,
+    fit_trt_raw_view = fit_trt_raw_view,
+    fit_untrt_raw_view = fit_untrt_raw_view,
     final_rank_aggregation = final_rank_aggregation,
     evs_cutoff_summary = evs_cutoff_summary,
-    normalized_counts = norm_counts_init,
     raw_dataset = count_matrix,
     leading_edge_dataset = count_matrix[leading_edge_ids, , drop = FALSE],
-    remainder_dataset = count_matrix[remainder_ids, , drop = FALSE]
+    remainder_dataset = if (length(remainder_ids)) count_matrix[remainder_ids, , drop = FALSE] else count_matrix[0, , drop = FALSE]
   )
 }
+
+# =============================================================================
+# CORE DESEQ2 / HBFSS ANALYSIS
+# =============================================================================
 
 classify_effect_strength <- function(res_strong_padj, res_weak_padj, alpha = alpha_level) {
   out <- rep("intermediate", length(res_strong_padj))
@@ -1002,13 +1170,24 @@ run_core_analysis <- function(count_mat, coldata, dataset_name, annot_df) {
   bp <- get_bpparam()
   use_parallel <- !is.null(bp) && n_workers > 1L
 
+  count_mat <- as.matrix(count_mat)
+  if (nrow(count_mat) < 1L) {
+    stop(sprintf("[%s] Dataset is empty after filtering/splitting.", dataset_name))
+  }
+
+  warn_if_noninteger_counts(count_mat, label = dataset_name)
+
   dds <- DESeqDataSetFromMatrix(
-    countData = round(as.matrix(count_mat)),
+    countData = round(count_mat),
     colData   = coldata,
     design    = DESIGN_FORMULA
   )
 
   dds <- dds[rowSums(counts(dds)) > 0, ]
+  if (nrow(dds) < 1L) {
+    stop(sprintf("[%s] No nonzero features remained after row-sum filtering.", dataset_name))
+  }
+
   dds <- DESeq(
     dds,
     betaPrior = FALSE,
@@ -1067,7 +1246,12 @@ run_core_analysis <- function(count_mat, coldata, dataset_name, annot_df) {
   res_df$empirical_q[valid_stat] <- as.numeric(fdr_fit$qval)
   res_df$lfdr[valid_stat] <- as.numeric(fdr_fit$lfdr)
 
-  coef_name <- resultsNames(dds)[grep("^condition_", resultsNames(dds))[1]]
+  rn <- resultsNames(dds)
+  coef_idx <- grep("^condition_", rn)
+  if (length(coef_idx) < 1L) {
+    stop(sprintf("[%s] No condition coefficient found in resultsNames(dds): %s", dataset_name, paste(rn, collapse = ", ")))
+  }
+  coef_name <- rn[coef_idx[1]]
 
   shrink_args <- list(
     dds      = dds,
@@ -1094,6 +1278,7 @@ run_core_analysis <- function(count_mat, coldata, dataset_name, annot_df) {
   colnames(res_df)[colnames(res_df) == "log2FoldChange_shrunk"] <- "lfc_shrunk"
 
   hc_p_threshold_dataset <- safe_hc_thresh(res_df$empirical_p, dataset_name = dataset_name)
+  hbfss_threshold_dataset <- NA_real_
 
   empirical_p_floored <- ifelse(
     is.na(res_df$empirical_p),
@@ -1104,7 +1289,6 @@ run_core_analysis <- function(count_mat, coldata, dataset_name, annot_df) {
   res_df$HBFSS <- abs(res_df$lfc_shrunk * log10(empirical_p_floored))
 
   if (is.na(hc_p_threshold_dataset)) {
-    hbfss_threshold_dataset  <- NA_real_
     res_df$passes_hc_p_gate  <- FALSE
     res_df$HBFSS_significant <- FALSE
   } else {
@@ -1157,16 +1341,13 @@ run_core_analysis <- function(count_mat, coldata, dataset_name, annot_df) {
     alpha = alpha_level
   )
 
-  res_df$resGA_padj <- res_df$padj_strong_effect
-  res_df$resLA_padj <- res_df$padj_weak_effect
-
-  res_df$standard_significant <- !is.na(res_df$resGA_padj) &
-    (res_df$resGA_padj < alpha_level) &
+  res_df$standard_significant <- !is.na(res_df$padj_strong_effect) &
+    (res_df$padj_strong_effect < alpha_level) &
     res_df$shrunk_lfc_pass
 
   res_df$deseq2_strong_call <- res_df$standard_significant
-  res_df$deseq2_weak_call <- !is.na(res_df$resLA_padj) &
-    (res_df$resLA_padj < alpha_level) &
+  res_df$deseq2_weak_call <- !is.na(res_df$padj_weak_effect) &
+    (res_df$padj_weak_effect < alpha_level) &
     !res_df$shrunk_lfc_pass
 
   res_df$HBFSS_only_call <- res_df$HBFSS_significant & !res_df$standard_significant
@@ -1223,6 +1404,10 @@ run_core_analysis <- function(count_mat, coldata, dataset_name, annot_df) {
     hbfss_threshold = hbfss_threshold_dataset
   )
 }
+
+# =============================================================================
+# PLOTTING HELPERS
+# =============================================================================
 
 condition_shapes <- c("untrt" = 21, "trt" = 25)
 condition_fills  <- c("untrt" = plot_palette$control, "trt" = plot_palette$treatment)
@@ -1382,8 +1567,8 @@ plot_pc1_loading_rank <- function(loading_tbl, cutoff, dataset_label, group_labe
 plot_combined_pca_scatter_panel <- function(evs, comparison_name) {
   p1 <- plot_pca_scatter(evs$fit_trt$pca_fit, comparison_name, "treatment")
   p2 <- plot_pca_scatter(evs$fit_untrt$pca_fit, comparison_name, "control")
-  p3 <- plot_pca_scatter(evs$fit_trt_raw$pca_fit, comparison_name, "treatment")
-  p4 <- plot_pca_scatter(evs$fit_untrt_raw$pca_fit, comparison_name, "control")
+  p3 <- plot_pca_scatter(evs$fit_trt_raw_view$pca_fit, comparison_name, "treatment")
+  p4 <- plot_pca_scatter(evs$fit_untrt_raw_view$pca_fit, comparison_name, "control")
 
   arrangeGrob(
     p1, p2, p3, p4,
@@ -1393,7 +1578,11 @@ plot_combined_pca_scatter_panel <- function(evs, comparison_name) {
       gp = gpar(fontface = "bold", cex = 1.02)
     ),
     bottom = textGrob(
-      "Top: normalized before EVS. Bottom: raw before EVS. Left: treatment. Right: control.",
+      paste0(
+        "Top: ",
+        if (normalize_before_evs) "normalized before EVS." else "raw before EVS.",
+        " Bottom: raw view at same selected rank. Left: treatment. Right: control."
+      ),
       gp = gpar(cex = 0.86)
     )
   )
@@ -1402,8 +1591,8 @@ plot_combined_pca_scatter_panel <- function(evs, comparison_name) {
 plot_combined_pca_variance_panel <- function(evs, comparison_name) {
   p1 <- plot_pca_variance_profile(evs$fit_trt$pca_fit, comparison_name, evs$fit_trt$preprocessing_label, "treatment")
   p2 <- plot_pca_variance_profile(evs$fit_untrt$pca_fit, comparison_name, evs$fit_untrt$preprocessing_label, "control")
-  p3 <- plot_pca_variance_profile(evs$fit_trt_raw$pca_fit, comparison_name, evs$fit_trt_raw$preprocessing_label, "treatment")
-  p4 <- plot_pca_variance_profile(evs$fit_untrt_raw$pca_fit, comparison_name, evs$fit_untrt_raw$preprocessing_label, "control")
+  p3 <- plot_pca_variance_profile(evs$fit_trt_raw_view$pca_fit, comparison_name, evs$fit_trt_raw_view$preprocessing_label, "treatment")
+  p4 <- plot_pca_variance_profile(evs$fit_untrt_raw_view$pca_fit, comparison_name, evs$fit_untrt_raw_view$preprocessing_label, "control")
 
   arrangeGrob(
     p1, p2, p3, p4,
@@ -1413,16 +1602,15 @@ plot_combined_pca_variance_panel <- function(evs, comparison_name) {
       gp = gpar(fontface = "bold", cex = 1.02)
     ),
     bottom = textGrob(
-      "Top: normalized before EVS. Bottom: raw before EVS. Left: treatment. Right: control.",
+      paste0(
+        "Top: ",
+        if (normalize_before_evs) "normalized before EVS." else "raw before EVS.",
+        " Bottom: raw view at same selected rank. Left: treatment. Right: control."
+      ),
       gp = gpar(cex = 0.86)
     )
   )
 }
-
-# =============================================================================
-# PART 4 OF 4
-# VOLCANO/DISPERSION PANELS, EXPORTS, FULL PIPELINE, AND MAIN EXECUTION
-# =============================================================================
 
 method_call_colors <- c(
   "Neither"            = "grey70",
@@ -1699,10 +1887,28 @@ plot_dispersion_panel_for_dataset <- function(df, dataset_name) {
     volcano_guides()
 }
 
+# =============================================================================
+# EXPORT HELPERS
+# =============================================================================
+
 save_cross_dataset_comparison_panels <- function(comparison_name, analysis_results, cmp_dir) {
   if (!isTRUE(export_all_plots)) return(invisible(NULL))
 
-  keys_present <- names(analysis_results)
+  keys_present <- names(analysis_results)[vapply(
+    analysis_results,
+    function(x) {
+      is.list(x) &&
+        !is.null(x$results) &&
+        is.data.frame(x$results) &&
+        nrow(x$results) > 0 &&
+        !is.null(x$summary) &&
+        is.data.frame(x$summary) &&
+        nrow(x$summary) > 0 &&
+        "dataset_name" %in% names(x$summary)
+    },
+    logical(1)
+  )]
+
   if (length(keys_present) == 0) return(invisible(NULL))
 
   make_panel <- function(grob_list, title_text, ncols = length(grob_list)) {
@@ -1813,15 +2019,19 @@ build_pc1_feature_export <- function(analysis_results, annot_df, comparison_name
     x
   }
 
-  out <- dplyr::left_join(out, load_tbl(evs$fit_trt$loading_table,      "pc1_loading_trt_normalized"), by = "feature_id")
-  out <- dplyr::left_join(out, load_tbl(evs$fit_untrt$loading_table,    "pc1_loading_ctrl_normalized"), by = "feature_id")
-  out <- dplyr::left_join(out, load_tbl(evs$fit_trt_raw$loading_table,  "pc1_loading_trt_raw"),        by = "feature_id")
-  out <- dplyr::left_join(out, load_tbl(evs$fit_untrt_raw$loading_table,"pc1_loading_ctrl_raw"),       by = "feature_id")
+  out <- dplyr::left_join(out, load_tbl(evs$fit_trt$loading_table,      "pc1_loading_trt_selected_space"), by = "feature_id")
+  out <- dplyr::left_join(out, load_tbl(evs$fit_untrt$loading_table,    "pc1_loading_ctrl_selected_space"), by = "feature_id")
+  out <- dplyr::left_join(out, load_tbl(evs$fit_trt_raw_view$loading_table,  "pc1_loading_trt_raw_view"), by = "feature_id")
+  out <- dplyr::left_join(out, load_tbl(evs$fit_untrt_raw_view$loading_table,"pc1_loading_ctrl_raw_view"), by = "feature_id")
 
   out$comparison_name <- comparison_name
   save_csv(out, file.path(tab_dir, paste0(comparison_name, "_PC1_loadings_baseMean_dispersion_export.csv")))
   out
 }
+
+# =============================================================================
+# FULL COMPARISON PIPELINE
+# =============================================================================
 
 run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata, annot_df,
                                          final_shared_rank = NA_integer_,
@@ -1838,6 +2048,10 @@ run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata,
     precomputed_selection = precomputed_selection
   )
 
+  message(sprintf("[%s] raw rows: %d", comparison_name, nrow(evs$raw_dataset)))
+  message(sprintf("[%s] leading-edge rows: %d", comparison_name, nrow(evs$leading_edge_dataset)))
+  message(sprintf("[%s] remainder rows: %d", comparison_name, nrow(evs$remainder_dataset)))
+
   evs_cutoff_summary_out <- evs$evs_cutoff_summary
   evs_cutoff_summary_out$comparison_name <- comparison_name
   save_csv(evs_cutoff_summary_out, file.path(tab_dir, paste0(comparison_name, "_EVS_cutoff_summary.csv")))
@@ -1847,6 +2061,24 @@ run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata,
       evs$final_rank_aggregation,
       file.path(tab_dir, paste0(comparison_name, "_EVS_independent_rank_aggregation_summary.csv"))
     )
+  }
+
+  cmp_eval <- precomputed_selection$per_comparison[[comparison_name]]$comparison_eval
+  if (!is.null(cmp_eval$candidate_grid) && nrow(cmp_eval$candidate_grid) > 0) {
+    save_csv(
+      cmp_eval$candidate_grid,
+      file.path(tab_dir, paste0(comparison_name, "_EVS_changepoint_candidate_grid.csv"))
+    )
+  }
+
+  trt_mv_tbl <- precomputed_selection$per_comparison[[comparison_name]]$trt_rank_mv_table
+  ctrl_mv_tbl <- precomputed_selection$per_comparison[[comparison_name]]$ctrl_rank_mv_table
+
+  if (!is.null(trt_mv_tbl) && nrow(trt_mv_tbl) > 0) {
+    save_csv(trt_mv_tbl, file.path(tab_dir, paste0(comparison_name, "_treatment_ranked_mean_variance_table.csv")))
+  }
+  if (!is.null(ctrl_mv_tbl) && nrow(ctrl_mv_tbl) > 0) {
+    save_csv(ctrl_mv_tbl, file.path(tab_dir, paste0(comparison_name, "_control_ranked_mean_variance_table.csv")))
   }
 
   if (isTRUE(export_all_plots)) {
@@ -1882,12 +2114,12 @@ run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata,
         plot_pc1_loading_rank(evs$fit_untrt$loading_table, evs$fit_untrt$cutoff, comparison_name, "control",
                               top_n_used = evs$fit_untrt$top_n_used, cutoff_quantile = evs$fit_untrt$cutoff_quantile,
                               preprocessing_label = evs$fit_untrt$preprocessing_label),
-        plot_pc1_loading_rank(evs$fit_trt_raw$loading_table, evs$fit_trt_raw$cutoff, comparison_name, "treatment",
-                              top_n_used = evs$fit_trt_raw$top_n_used, cutoff_quantile = evs$fit_trt_raw$cutoff_quantile,
-                              preprocessing_label = evs$fit_trt_raw$preprocessing_label),
-        plot_pc1_loading_rank(evs$fit_untrt_raw$loading_table, evs$fit_untrt_raw$cutoff, comparison_name, "control",
-                              top_n_used = evs$fit_untrt_raw$top_n_used, cutoff_quantile = evs$fit_untrt_raw$cutoff_quantile,
-                              preprocessing_label = evs$fit_untrt_raw$preprocessing_label),
+        plot_pc1_loading_rank(evs$fit_trt_raw_view$loading_table, evs$fit_trt_raw_view$cutoff, comparison_name, "treatment",
+                              top_n_used = evs$fit_trt_raw_view$top_n_used, cutoff_quantile = evs$fit_trt_raw_view$cutoff_quantile,
+                              preprocessing_label = evs$fit_trt_raw_view$preprocessing_label),
+        plot_pc1_loading_rank(evs$fit_untrt_raw_view$loading_table, evs$fit_untrt_raw_view$cutoff, comparison_name, "control",
+                              top_n_used = evs$fit_untrt_raw_view$top_n_used, cutoff_quantile = evs$fit_untrt_raw_view$cutoff_quantile,
+                              preprocessing_label = evs$fit_untrt_raw_view$preprocessing_label),
         ncol = 2,
         top = textGrob(
           paste0(comparison_name, " | EVS PC1 loading ranks"),
@@ -1915,21 +2147,22 @@ run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata,
   analysis_results <- list()
 
   for (nm in names(dataset_list)) {
+    dataset_mat <- as.matrix(dataset_list[[nm]])
     full_dataset_name <- paste(comparison_name, nm, sep = "_")
 
-    fit <- tryCatch(
-      run_core_analysis(
-        count_mat = dataset_list[[nm]],
-        coldata = coldata,
-        dataset_name = full_dataset_name,
-        annot_df = annot_df
-      ),
-      error = function(e) {
-        warning(sprintf("[%s][%s] run_core_analysis failed: %s", comparison_name, nm, conditionMessage(e)))
-        NULL
-      }
+    message(sprintf("[%s][%s] rows=%d cols=%d", comparison_name, nm, nrow(dataset_mat), ncol(dataset_mat)))
+
+    if (nrow(dataset_mat) < 1L) {
+      warning(sprintf("[%s][%s] Skipping empty dataset.", comparison_name, nm))
+      next
+    }
+
+    fit <- run_core_analysis(
+      count_mat = dataset_mat,
+      coldata = coldata,
+      dataset_name = full_dataset_name,
+      annot_df = annot_df
     )
-    if (is.null(fit)) next
 
     df <- fit$results
 
@@ -1951,15 +2184,15 @@ run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata,
       n_strong_effect        = sum(df$effect_class == "strong_effect", na.rm = TRUE),
       n_weak_effect          = sum(df$effect_class == "weak_effect", na.rm = TRUE),
       evs_cutoff_mode_main   = evs_cutoff_mode_main,
-      evs_primary_preprocessing = "normalized",
+      evs_selection_space    = if (normalize_before_evs) "normalized_before_EVS" else "raw_before_EVS",
       trt_top_n_used         = evs$fit_trt$top_n_used,
       ctrl_top_n_used        = evs$fit_untrt$top_n_used,
       trt_cutoff_method      = evs$fit_trt$cutoff_method,
       ctrl_cutoff_method     = evs$fit_untrt$cutoff_method,
       trt_cutoff_quantile    = evs$fit_trt$cutoff_quantile,
       ctrl_cutoff_quantile   = evs$fit_untrt$cutoff_quantile,
-      trt_selected_reason    = evs$primary_trt_fit$selected_reason,
-      ctrl_selected_reason   = evs$primary_untrt_fit$selected_reason,
+      trt_selected_reason    = evs$fit_trt$selected_reason,
+      ctrl_selected_reason   = evs$fit_untrt$selected_reason,
       stringsAsFactors       = FALSE
     )
 
@@ -2006,9 +2239,9 @@ run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata,
   dplyr::bind_rows(sm_list)
 }
 
-# -----------------------------------------------------------------------------
+# =============================================================================
 # MAIN EXECUTION
-# -----------------------------------------------------------------------------
+# =============================================================================
 
 global_evs_selection <- precompute_global_evs_rank_selection(comparison_inputs)
 
@@ -2035,7 +2268,7 @@ if (!is.null(global_evs_selection$final_shared_rank_by_comparison) &&
       comparison_name = names(global_evs_selection$final_shared_rank_by_comparison),
       final_shared_rank_by_comparison = as.integer(global_evs_selection$final_shared_rank_by_comparison),
       final_shared_quantile = global_evs_selection$final_shared_quantile,
-      overall_median_rank_for_audit = global_evs_selection$final_shared_rank,
+      overall_median_rank_for_audit = global_evs_selection$overall_median_rank_for_audit,
       stringsAsFactors = FALSE
     ),
     file.path(output_dir, "EVS_final_rank_projection_by_comparison.csv")
@@ -2067,17 +2300,16 @@ for (cmp in names(comparison_inputs)) {
       final_shared_rank = cmp_rank,
       precomputed_selection = global_evs_selection
     ),
-    error = function(e) {
-      failed_comparisons[[cmp]] <<- data.frame(
-        comparison_name = cmp,
-        error_message = conditionMessage(e),
-        stringsAsFactors = FALSE
-      )
-      NULL
-    }
+    error = function(e) e
   )
 
-  if (!is.null(out) && nrow(out) > 0) {
+  if (inherits(out, "error")) {
+    failed_comparisons[[cmp]] <- data.frame(
+      comparison_name = cmp,
+      error_message = conditionMessage(out),
+      stringsAsFactors = FALSE
+    )
+  } else if (!is.null(out) && nrow(out) > 0) {
     all_summaries_list[[cmp]] <- out
   }
 }
@@ -2110,19 +2342,21 @@ if (nrow(all_summaries) > 0) {
 }
 
 session_info_txt <- capture.output(sessionInfo())
-writeLines(session_info_txt, file.path(output_dir, "sessionInfo.txt"))             
+writeLines(session_info_txt, file.path(output_dir, "sessionInfo.txt"))
 saveRDS(sessionInfo(), file.path(output_dir, "sessionInfo.rds"))
+
 # -----------------------------------------------------------------------------
 # AUTO-PUSH EXPORTS TO GITHUB
 # -----------------------------------------------------------------------------
 
-repo_dir <- "/root/REAPER98632"
-
 cmd <- paste(
   "cd", shQuote(repo_dir), "&&",
-  "git add exports/ &&",
+  "git add -A exports &&",
   "branch=$(git rev-parse --abbrev-ref HEAD) &&",
-  "(git diff --cached --quiet || (git commit -m", shQuote("Auto-update pipeline outputs"), "&& git push origin $branch))"
+  "if ! git diff --cached --quiet; then",
+  "git commit -m", shQuote("Auto-update pipeline outputs"), "&&",
+  "git push origin \"$branch\";",
+  "fi"
 )
 
 status <- system(cmd)
