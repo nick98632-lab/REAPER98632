@@ -2110,5 +2110,25 @@ if (nrow(all_summaries) > 0) {
 }
 
 session_info_txt <- capture.output(sessionInfo())
-writeLines(session_info_txt, file.path(output_dir, "sessionInfo.txt"))
+writeLines(session_info_txt, file.path(output_dir, "sessionInfo.txt"))             
 saveRDS(sessionInfo(), file.path(output_dir, "sessionInfo.rds"))
+# -----------------------------------------------------------------------------
+# AUTO-PUSH EXPORTS TO GITHUB
+# -----------------------------------------------------------------------------
+
+repo_dir <- "/root/REAPER98632"
+
+cmd <- paste(
+  "cd", shQuote(repo_dir), "&&",
+  "git add exports/ &&",
+  "branch=$(git rev-parse --abbrev-ref HEAD) &&",
+  "(git diff --cached --quiet || (git commit -m", shQuote("Auto-update pipeline outputs"), "&& git push origin $branch))"
+)
+
+status <- system(cmd)
+
+if (status == 0) {
+  message("Git push successful.")
+} else {
+  warning("Git push failed. Check authentication.")
+}
