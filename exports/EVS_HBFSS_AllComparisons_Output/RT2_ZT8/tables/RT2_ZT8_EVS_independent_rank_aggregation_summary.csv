@@ -1,2 +1,2 @@
 "comparison_name","independently_best_rank","independently_best_local_lagrange_objective","final_shared_rank","aggregation_method"
-"RT2_ZT8",31533,12.0225006032153,31530,"comparison_specific_rank_from_score_weighted_median_of_top_k_local_lagrange_anchor_quantiles"
+"RT2_ZT8",2625,1436.81101395091,15410,"free_slope_changepoint_normalized_before_EVS"
