@@ -1,6 +1,7 @@
 # =============================================================================
 # EVS + HBFSS FULL PIPELINE
 # FREE-SLOPE CHANGEPOINT CUTOFF ON PC1-RANKED FEATURES
+# ROBUSTIFIED VERSION
 # =============================================================================
 
 suppressPackageStartupMessages({
@@ -61,19 +62,19 @@ base_theme_size <- 10
 evs_cutoff_mode_main <- "free_slope_changepoint_on_PC1_rank"
 evs_top_k_ranks_per_comparison <- 4L
 
-# TRUE:
-#   estimate DESeq size factors first
-#   do EVS ranking / changepoint on normalized counts
-#   then map chosen IDs back to raw counts and run DESeq2 for inference
-#
-# FALSE:
-#   do EVS ranking / changepoint on raw counts
-#   then run DESeq2 on raw subsets for inference
 normalize_before_evs <- TRUE
 
 changepoint_min_segment_size <- 250L
 changepoint_smoothing_window <- 101L
 changepoint_use_log1p <- TRUE
+
+# Complexity penalty for 2-segment vs 1-segment comparison.
+# "bic" is recommended. "none" uses raw RSS improvement.
+changepoint_model_selection_mode <- "bic"
+
+# Explicit failure handling
+allow_rank_fallback_if_no_valid_changepoint <- FALSE
+fallback_rank_fraction <- 0.10
 
 # -----------------------------------------------------------------------------
 # PLOT CONSTANTS
@@ -195,7 +196,7 @@ safe_log_vec <- function(x, use_log1p = FALSE, eps = 1e-12) {
   log(pmax(x, eps))
 }
 
-rolling_mean_centered <- function(x, k = changepoint_smoothing_window) {
+fast_centered_rolling_mean <- function(x, k = changepoint_smoothing_window) {
   x <- as.numeric(x)
   n <- length(x)
   if (n == 0L) return(numeric(0))
@@ -203,13 +204,20 @@ rolling_mean_centered <- function(x, k = changepoint_smoothing_window) {
 
   k <- as.integer(k)
   if ((k %% 2L) == 0L) k <- k + 1L
-  half <- k %/% 2L
+  if (k <= 1L || k >= n) return(rep(mean(x, na.rm = TRUE), n))
 
-  out <- numeric(n)
-  for (i in seq_len(n)) {
-    lo <- max(1L, i - half)
-    hi <- min(n, i + half)
-    out[i] <- mean(x[lo:hi], na.rm = TRUE)
+  kernel <- rep(1 / k, k)
+
+  left_pad  <- rep(x[1], k %/% 2L)
+  right_pad <- rep(x[n], k %/% 2L)
+  x_pad <- c(left_pad, x, right_pad)
+
+  out <- stats::filter(x_pad, filter = kernel, sides = 2, method = "convolution")
+  out <- as.numeric(out[(length(left_pad) + 1L):(length(left_pad) + n)])
+
+  if (anyNA(out)) {
+    # defensive fallback
+    out[is.na(out)] <- x[is.na(out)]
   }
   out
 }
@@ -228,6 +236,27 @@ weighted_median_numeric <- function(x, w) {
   cum_w <- cumsum(w) / sum(w)
   idx <- which(cum_w >= 0.5)[1]
   x[idx]
+}
+
+resolve_rank_or_fail <- function(rank_index, n_total, label = "cutoff") {
+  if (is.finite(rank_index) && !is.na(rank_index)) {
+    return(max(1L, min(as.integer(n_total) - 1L, as.integer(rank_index))))
+  }
+
+  if (isTRUE(allow_rank_fallback_if_no_valid_changepoint)) {
+    fallback_rank <- as.integer(round(fallback_rank_fraction * n_total))
+    fallback_rank <- max(1L, min(as.integer(n_total) - 1L, fallback_rank))
+    warning(sprintf(
+      "[%s] No valid changepoint rank found. Falling back to rank %d (fraction %.3f of %d features).",
+      label, fallback_rank, fallback_rank_fraction, n_total
+    ))
+    return(fallback_rank)
+  }
+
+  stop(sprintf(
+    "[%s] No valid changepoint rank could be determined, and fallback is disabled.",
+    label
+  ))
 }
 
 save_csv <- function(df, path) {
@@ -593,7 +622,7 @@ apply_loading_cutoff <- function(fit_obj, rank_index, selected_reason = "shared_
   loading_tbl <- fit_obj$loading_table
   loading_tbl <- loading_tbl[order(loading_tbl$rank), , drop = FALSE]
 
-  rank_index <- max(1L, min(as.integer(rank_index), nrow(loading_tbl)))
+  rank_index <- resolve_rank_or_fail(rank_index, nrow(loading_tbl), label = selected_reason)
   cutoff_value <- as.numeric(loading_tbl$pc1_loading_abs[rank_index])
 
   loading_tbl$split_class <- ifelse(
@@ -656,8 +685,8 @@ compute_ranked_mean_variance_table <- function(count_matrix,
   tbl$log_var  <- safe_log_vec(tbl$var_value,  use_log1p = use_log1p)
 
   if (is.finite(smoothing_window) && !is.na(smoothing_window) && smoothing_window > 1L) {
-    tbl$log_mean_smooth <- rolling_mean_centered(tbl$log_mean, smoothing_window)
-    tbl$log_var_smooth  <- rolling_mean_centered(tbl$log_var,  smoothing_window)
+    tbl$log_mean_smooth <- fast_centered_rolling_mean(tbl$log_mean, smoothing_window)
+    tbl$log_var_smooth  <- fast_centered_rolling_mean(tbl$log_var,  smoothing_window)
   } else {
     tbl$log_mean_smooth <- tbl$log_mean
     tbl$log_var_smooth  <- tbl$log_var
@@ -704,6 +733,29 @@ fit_free_slope_segment <- function(x, y) {
   )
 }
 
+compute_segmented_model_score <- function(split_rss, null_rss, n_obs,
+                                          split_n_params = 4L,
+                                          null_n_params = 2L,
+                                          mode = changepoint_model_selection_mode) {
+  split_rss <- as.numeric(split_rss)[1]
+  null_rss  <- as.numeric(null_rss)[1]
+  n_obs     <- as.integer(n_obs)[1]
+
+  if (!is.finite(split_rss) || !is.finite(null_rss) || n_obs < 5L) {
+    return(NA_real_)
+  }
+
+  if (identical(mode, "none")) {
+    return(null_rss - split_rss)
+  }
+
+  # BIC-style Gaussian RSS comparison; higher is better
+  split_bic <- n_obs * log(split_rss / n_obs) + split_n_params * log(n_obs)
+  null_bic  <- n_obs * log(null_rss  / n_obs) + null_n_params  * log(n_obs)
+
+  null_bic - split_bic
+}
+
 score_single_rank_changepoint <- function(rank_mv_tbl,
                                           rank_index,
                                           min_segment_size = changepoint_min_segment_size) {
@@ -711,7 +763,7 @@ score_single_rank_changepoint <- function(rank_mv_tbl,
 
   if (!is.finite(rank_index) || is.na(rank_index)) {
     return(data.frame(
-      rank_index = rank_index,
+      rank_index = as.integer(rank_index)[1],
       objective_score = NA_real_,
       valid_split = FALSE,
       lead_rss = NA_real_,
@@ -724,7 +776,7 @@ score_single_rank_changepoint <- function(rank_mv_tbl,
     ))
   }
 
-  rank_index <- as.integer(rank_index)
+  rank_index <- as.integer(rank_index)[1]
   n_lead <- rank_index
   n_rem  <- n_total - rank_index
 
@@ -756,33 +808,24 @@ score_single_rank_changepoint <- function(rank_mv_tbl,
   split_rss <- fit_lead$rss + fit_rem$rss
   null_rss <- fit_null$rss
 
-  if (!is.finite(split_rss) || !is.finite(null_rss)) {
-    return(data.frame(
-      rank_index = rank_index,
-      objective_score = NA_real_,
-      valid_split = FALSE,
-      lead_rss = fit_lead$rss,
-      rem_rss = fit_rem$rss,
-      lead_slope = fit_lead$slope,
-      rem_slope = fit_rem$slope,
-      null_rss = fit_null$rss,
-      improvement_vs_null = NA_real_,
-      stringsAsFactors = FALSE
-    ))
-  }
+  improvement_vs_null <- compute_segmented_model_score(
+    split_rss = split_rss,
+    null_rss = null_rss,
+    n_obs = n_total
+  )
 
-  improvement_vs_null <- null_rss - split_rss
+  valid_split <- is.finite(improvement_vs_null) && (improvement_vs_null > 0)
 
   data.frame(
     rank_index = rank_index,
-    objective_score = improvement_vs_null,
-    valid_split = is.finite(improvement_vs_null) && (improvement_vs_null > 0),
+    objective_score = as.numeric(improvement_vs_null)[1],
+    valid_split = valid_split,
     lead_rss = fit_lead$rss,
     rem_rss = fit_rem$rss,
     lead_slope = fit_lead$slope,
     rem_slope = fit_rem$slope,
     null_rss = fit_null$rss,
-    improvement_vs_null = improvement_vs_null,
+    improvement_vs_null = as.numeric(improvement_vs_null)[1],
     stringsAsFactors = FALSE
   )
 }
@@ -1068,9 +1111,15 @@ build_eigenvector_split <- function(count_matrix,
   comparison_eval <- precomputed_cmp$comparison_eval
 
   independently_best_rank <- comparison_eval$best_rank
+
   if (!is.finite(final_shared_rank) || is.na(final_shared_rank)) {
     final_shared_rank <- independently_best_rank
   }
+  final_shared_rank <- resolve_rank_or_fail(
+    final_shared_rank,
+    nrow(fit_trt$loading_table),
+    label = paste0(comparison_name, "_final_rank")
+  )
 
   final_reason <- if (normalize_before_evs) {
     "free_slope_changepoint_selected_on_normalized_counts_then_mapped_to_raw_counts_for_DESeq2"
@@ -1261,11 +1310,21 @@ run_core_analysis <- function(count_mat, coldata, dataset_name, annot_df) {
     parallel = use_parallel,
     BPPARAM  = bp
   )
+
   if (isTRUE(use_fast_apeglm)) {
     shrink_args$apeMethod <- "nbinomC"
   }
 
-  shr <- do.call(lfcShrink, shrink_args)
+  shr <- tryCatch(
+    do.call(lfcShrink, shrink_args),
+    error = function(e) {
+      message(sprintf("[%s] Fast apeglm shrinkage failed or is unsupported; retrying without apeMethod. Error: %s",
+                      dataset_name, conditionMessage(e)))
+      shrink_args$apeMethod <- NULL
+      do.call(lfcShrink, shrink_args)
+    }
+  )
+
   shr_df <- as.data.frame(shr)
   shr_df$feature_id <- as.character(rownames(shr_df))
 
@@ -1286,7 +1345,9 @@ run_core_analysis <- function(count_mat, coldata, dataset_name, annot_df) {
     pmax(res_df$empirical_p, 1e-300)
   )
 
-  res_df$HBFSS <- abs(res_df$lfc_shrunk * log10(empirical_p_floored))
+  res_df$HBFSS <- NA_real_
+  hbfss_ok <- !is.na(res_df$lfc_shrunk) & !is.na(empirical_p_floored) & is.finite(empirical_p_floored)
+  res_df$HBFSS[hbfss_ok] <- abs(res_df$lfc_shrunk[hbfss_ok] * log10(empirical_p_floored[hbfss_ok]))
 
   if (is.na(hc_p_threshold_dataset)) {
     res_df$passes_hc_p_gate  <- FALSE
@@ -1294,6 +1355,7 @@ run_core_analysis <- function(count_mat, coldata, dataset_name, annot_df) {
   } else {
     hbfss_threshold_dataset  <- abs(log10(hc_p_threshold_dataset)) * lfc_boundary
     res_df$passes_hc_p_gate  <- !is.na(res_df$empirical_p) &
+      !is.na(res_df$lfc_shrunk) &
       (res_df$empirical_p < hc_p_threshold_dataset)
     res_df$HBFSS_significant <- res_df$passes_hc_p_gate &
       !is.na(res_df$HBFSS) &
