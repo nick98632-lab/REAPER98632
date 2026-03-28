@@ -1,2 +1,2 @@
 "comparison_name","independently_best_rank","independently_best_local_lagrange_objective","final_shared_rank","aggregation_method"
-"RT4_ZT10",13716,849.350474220622,15470,"free_slope_changepoint_normalized_before_EVS"
+"RT4_ZT10",13735,41486.7622981158,9369,"free_slope_changepoint_normalized_before_EVS"
