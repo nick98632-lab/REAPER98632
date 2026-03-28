@@ -92,7 +92,7 @@ base_theme_size <- 10
 normalize_before_evs <- TRUE
 
 # Number of top candidate ranks retained from each comparison before
-# global shared-quantile aggregation.
+# optional global shared-quantile aggregation.
 evs_top_k_ranks_per_comparison <- 4L
 
 # DESeq2 dispersion source used for NB-regime cutoff scoring.
@@ -100,10 +100,10 @@ evs_top_k_ranks_per_comparison <- 4L
 # "dispersion"  is the final moderated estimate.
 evs_dispersion_source <- "dispGeneEst"   # options: "dispGeneEst", "dispersion"
 
-# How to choose the final per-comparison rank after independent candidate search:
-# "shared_quantile" = weighted-median quantile projected back to each comparison
+# Final rank mode:
 # "independent_best" = each comparison keeps its own best local rank
-evs_final_rank_mode <- "shared_quantile" # options: "shared_quantile", "independent_best"
+# "shared_quantile"  = weighted-median quantile projected back to each comparison
+evs_final_rank_mode <- "independent_best" # options: "independent_best", "shared_quantile"
 
 # Candidate split constraints / smoothing
 changepoint_min_segment_size <- 250L
@@ -115,6 +115,9 @@ changepoint_model_selection_mode <- "bic" # options: "bic", "none"
 # If no valid changepoint is found, either fail or fall back.
 allow_rank_fallback_if_no_valid_changepoint <- FALSE
 fallback_rank_fraction <- 0.10
+
+# Git push of exports
+auto_push_exports <- FALSE
 
 # -----------------------------------------------------------------------------
 # PLOT CONSTANTS
@@ -373,6 +376,51 @@ pretty_group_label <- function(group_label) {
     control   = "Control",
     group_label
   )
+}
+
+ranking_space_label <- function(normalize_before_evs_flag = normalize_before_evs) {
+  if (isTRUE(normalize_before_evs_flag)) {
+    "Normalized before EVS"
+  } else {
+    "Raw counts before EVS"
+  }
+}
+
+final_analysis_label <- function() {
+  "Final DESeq2 and HBFSS performed on raw counts"
+}
+
+reorder_result_columns <- function(final_df) {
+  preferred_front_cols <- c(
+    "feature_id",
+    "gene_symbol",
+    "dataset_name",
+    "regulation_direction",
+    "effect_class",
+    "standard_significant",
+    "HBFSS_significant",
+    "HBFSS_only_call",
+    "deseq2_strong_call",
+    "deseq2_weak_call",
+    "overlap_call",
+    "lfc_shrunk",
+    "log2FoldChange",
+    "HBFSS",
+    "padj",
+    "empirical_p",
+    "empirical_q",
+    "lfdr",
+    "padj_strong_effect",
+    "padj_weak_effect",
+    "baseMean",
+    "dispGeneEst",
+    "dispFit",
+    "dispersion"
+  )
+
+  front <- intersect(preferred_front_cols, names(final_df))
+  back  <- setdiff(names(final_df), front)
+  final_df[, c(front, back), drop = FALSE]
 }
 
 manuscript_theme <- function() {
@@ -715,9 +763,6 @@ build_full_dataset_deseq2_dispersion_table <- function(count_matrix, coldata,
   mm$baseMean <- as.numeric(mm$baseMean)
   mm$alpha_used <- as.numeric(mm$alpha_used)
 
-  # Condition-specific scoring mean:
-  # use the average of condition means so very strongly DE genes are not
-  # mis-scored by a single pooled grand mean.
   norm_counts <- counts(dds, normalized = TRUE)
   trt_cols    <- colnames(norm_counts)[coldata$condition == "trt"]
   untrt_cols  <- colnames(norm_counts)[coldata$condition == "untrt"]
@@ -737,10 +782,6 @@ build_full_dataset_deseq2_dispersion_table <- function(count_matrix, coldata,
     stop(sprintf("[%s] Too few valid features after filtering scoring mean/dispersion.", dataset_label))
   }
 
-  # NB model:
-  # Var = mu + alpha * mu^2
-  # IOD = Var / mu    = 1 + alpha * mu
-  # CV^2 = Var / mu^2 = 1/mu + alpha
   mm$iod_nb <- 1 + (mm$alpha_used * mm$baseMean_scoring)
   mm$cv2_nb <- (1 / mm$baseMean_scoring) + mm$alpha_used
 
@@ -881,11 +922,9 @@ fit_nb_regime_split_score <- function(rank_tbl,
     ))
   }
 
-  # Leading-edge scored on IOD scale
   x1 <- rank_tbl$log_baseMean_smooth[seq_len(n_lead)]
   y1 <- rank_tbl$log_iod_nb_smooth[seq_len(n_lead)]
 
-  # Remainder scored on CV^2 scale
   x2 <- rank_tbl$log_baseMean_smooth[(n_lead + 1L):n_total]
   y2 <- rank_tbl$log_cv2_nb_smooth[(n_lead + 1L):n_total]
 
@@ -893,7 +932,6 @@ fit_nb_regime_split_score <- function(rank_tbl,
   fit_rem  <- fit_free_slope_segment(x2, y2)
   split_rss <- fit_lead$rss + fit_rem$rss
 
-  # Null model: one full-range line on IOD scale plus one full-range line on CV^2 scale
   fit_null_iod <- fit_free_slope_segment(rank_tbl$log_baseMean_smooth, rank_tbl$log_iod_nb_smooth)
   fit_null_cv2 <- fit_free_slope_segment(rank_tbl$log_baseMean_smooth, rank_tbl$log_cv2_nb_smooth)
   null_rss <- fit_null_iod$rss + fit_null_cv2$rss
@@ -902,7 +940,7 @@ fit_nb_regime_split_score <- function(rank_tbl,
     split_rss = split_rss,
     null_rss  = null_rss,
     n_obs     = n_total,
-    split_n_params = 5L,  # includes changepoint location
+    split_n_params = 5L,
     null_n_params  = 4L
   )
 
@@ -1619,6 +1657,7 @@ run_core_analysis <- function(count_mat, coldata, dataset_name, annot_df) {
   final_df$dataset_name <- dataset_name
   final_df$hc_p_threshold_dataset <- hc_p_threshold_dataset
   final_df$hbfss_threshold_dataset <- hbfss_threshold_dataset
+  final_df <- reorder_result_columns(final_df)
 
   list(
     dds = dds,
@@ -1663,40 +1702,57 @@ plot_pca_variance_profile <- function(pca_fit, dataset_name, preprocessing_label
     group_label = ifelse(is.null(group_label), NA_character_, group_label)
   )
 
-  pca_tbl$principal_component <- factor(
-    pca_tbl$principal_component,
-    levels = pca_tbl$principal_component
-  )
+  pca_tbl$pc_index <- seq_len(nrow(pca_tbl))
 
-  group_label_chr <- if (length(group_label) && !is.null(group_label[1])) tolower(as.character(group_label[1])) else NA_character_
-  bar_fill <- if (!is.na(group_label_chr) && group_label_chr %in% c("control", "untrt")) plot_palette$control else plot_palette$treatment
+  group_label_chr <- if (length(group_label) && !is.null(group_label[1])) {
+    tolower(as.character(group_label[1]))
+  } else {
+    NA_character_
+  }
 
-  ggplot(pca_tbl, aes(principal_component, proportion_variance)) +
+  bar_fill <- if (!is.na(group_label_chr) && group_label_chr %in% c("control", "untrt")) {
+    plot_palette$control
+  } else {
+    plot_palette$treatment
+  }
+
+  ggplot(pca_tbl, aes(pc_index, proportion_variance)) +
     geom_col(fill = bar_fill, color = "white") +
     geom_line(
-      aes(x = seq_along(principal_component), y = cumulative_proportion, group = 1),
-      inherit.aes = FALSE,
+      aes(y = cumulative_proportion, group = 1),
       linewidth = LINE_WIDTH_BOUNDARY,
       colour = plot_palette$threshold
     ) +
     geom_point(
-      aes(x = seq_along(principal_component), y = cumulative_proportion),
-      inherit.aes = FALSE,
+      aes(y = cumulative_proportion),
       size = 1.6,
       colour = plot_palette$threshold
     ) +
+    scale_x_continuous(
+      breaks = pca_tbl$pc_index,
+      labels = pca_tbl$principal_component
+    ) +
     scale_y_continuous(labels = percent_format(accuracy = 1), limits = c(0, 1)) +
     labs(
-      title = compact_title(paste(dataset_name, "|", pretty_group_label(group_label), "PCA"), width = 42),
-      subtitle = NULL,
+      title = compact_title(
+        paste(dataset_name, "|", pretty_group_label(group_label), "| PCA variance profile"),
+        width = 42
+      ),
+      subtitle = compact_caption(
+        paste(preprocessing_label, "|", final_analysis_label()),
+        width = 72
+      ),
       x = "Principal component",
       y = "Variance explained"
     ) +
     manuscript_theme() +
-    theme(plot.margin = margin(t = 12, r = 14, b = 14, l = 14), legend.position = "none")
+    theme(
+      plot.margin = margin(t = 12, r = 14, b = 14, l = 14),
+      legend.position = "none"
+    )
 }
 
-plot_pca_scatter <- function(pca_fit, dataset_label, group_label) {
+plot_pca_scatter <- function(pca_fit, dataset_label, group_label, preprocessing_label = NULL) {
   pca_var     <- pca_fit$sdev^2
   pca_var_per <- round(pca_var / sum(pca_var) * 100, 1)
 
@@ -1709,6 +1765,12 @@ plot_pca_scatter <- function(pca_fit, dataset_label, group_label) {
     Condition        = cond_key,
     stringsAsFactors = FALSE
   )
+
+  subtitle_txt <- if (!is.null(preprocessing_label)) {
+    compact_caption(paste(preprocessing_label, "|", final_analysis_label()), width = 72)
+  } else {
+    NULL
+  }
 
   ggplot(pca_df, aes(PC1, PC2, label = Sample, shape = Condition, fill = Condition)) +
     geom_hline(yintercept = 0, linewidth = LINE_WIDTH_ZERO, linetype = "dashed", colour = "grey70") +
@@ -1725,8 +1787,8 @@ plot_pca_scatter <- function(pca_fit, dataset_label, group_label) {
     scale_shape_manual(values = condition_shapes, labels = condition_labels, name = "Condition") +
     scale_fill_manual(values  = condition_fills,  labels = condition_labels, name = "Condition") +
     labs(
-      title = pretty_group_label(group_label),
-      subtitle = NULL,
+      title = paste(dataset_label, "|", pretty_group_label(group_label), "| PCA scatter"),
+      subtitle = subtitle_txt,
       x = paste0("PC1 (", pca_var_per[1], "%)"),
       y = paste0("PC2 (", pca_var_per[2], "%)")
     ) +
@@ -1766,14 +1828,14 @@ plot_pc1_loading_rank <- function(loading_tbl, cutoff, dataset_label, group_labe
     ) +
     labs(
       title = compact_title(
-        paste(dataset_label, "|", pretty_group_label(group_label), "PC1 loading rank"),
+        paste(dataset_label, "|", pretty_group_label(group_label), "| PC1 loading rank"),
         width = 36
       ),
       subtitle = compact_caption(
         paste0(
           preprocessing_label,
-          ". Ranked absolute PC1 loadings. ",
-          "The horizontal line marks the loading value at the selected rank."
+          ". Ranked absolute PC1 loadings. The horizontal line marks the loading value ",
+          "at the selected cutoff rank. ", final_analysis_label(), "."
         ),
         width = 72
       ),
@@ -1781,6 +1843,35 @@ plot_pc1_loading_rank <- function(loading_tbl, cutoff, dataset_label, group_labe
       y = "Absolute PC1 loading"
     ) +
     coord_cartesian(clip = "off") +
+    manuscript_theme()
+}
+
+plot_pc1_loading_histogram <- function(loading_tbl, cutoff, dataset_label, group_label,
+                                       preprocessing_label = "Normalized before EVS") {
+  ggplot(loading_tbl, aes(pc1_loading_abs)) +
+    geom_histogram(bins = 60, fill = "grey70", color = "white") +
+    geom_vline(
+      xintercept = cutoff,
+      colour = plot_palette$threshold,
+      linewidth = 0.9,
+      linetype = "dashed"
+    ) +
+    labs(
+      title = compact_title(
+        paste(dataset_label, "|", pretty_group_label(group_label), "| PC1 loading distribution"),
+        width = 42
+      ),
+      subtitle = compact_caption(
+        paste(
+          preprocessing_label,
+          "| dashed line = selected cutoff loading value",
+          "|", final_analysis_label()
+        ),
+        width = 78
+      ),
+      x = "Absolute PC1 loading",
+      y = "Feature count"
+    ) +
     manuscript_theme()
 }
 
@@ -1832,8 +1923,11 @@ plot_nb_regime_rank_profile <- function(rank_tbl, cutoff_rank, dataset_label, gr
       name = "NB regime"
     ) +
     labs(
-      title = compact_title(paste(dataset_label, "|", pretty_group_label(group_label), "NB-regime ranked profile"), width = 42),
-      subtitle = "Full-dataset DESeq2 dispersion structure mapped onto the EVS rank order.",
+      title = compact_title(paste(dataset_label, "|", pretty_group_label(group_label), "| NB-regime ranked profile"), width = 42),
+      subtitle = compact_caption(
+        paste("Full-dataset DESeq2 dispersion structure mapped onto the EVS rank order.", final_analysis_label()),
+        width = 72
+      ),
       x = "Ranked PAS feature",
       y = "Smoothed log-scale regime metric"
     ) +
@@ -1893,7 +1987,7 @@ plot_nb_regime_scatter_with_segment_fits <- function(rank_tbl, cutoff_rank, data
       name = "NB regime"
     ) +
     labs(
-      title = compact_title(paste(dataset_label, "|", pretty_group_label(group_label), "segment-fit view"), width = 42),
+      title = compact_title(paste(dataset_label, "|", pretty_group_label(group_label), "| segment-fit view"), width = 42),
       subtitle = paste0("Leading-edge ranked top ", cutoff_rank, " features scored on IOD; remainder scored on CV²."),
       x = "Smoothed log(baseMean)",
       y = "Smoothed log-regime metric"
@@ -1903,10 +1997,10 @@ plot_nb_regime_scatter_with_segment_fits <- function(rank_tbl, cutoff_rank, data
 }
 
 plot_combined_pca_scatter_panel <- function(evs, comparison_name) {
-  p1 <- plot_pca_scatter(evs$fit_trt$pca_fit, comparison_name, "treatment")
-  p2 <- plot_pca_scatter(evs$fit_untrt$pca_fit, comparison_name, "control")
-  p3 <- plot_pca_scatter(evs$fit_trt_raw_view$pca_fit, comparison_name, "treatment")
-  p4 <- plot_pca_scatter(evs$fit_untrt_raw_view$pca_fit, comparison_name, "control")
+  p1 <- plot_pca_scatter(evs$fit_trt$pca_fit, comparison_name, "treatment", evs$fit_trt$preprocessing_label)
+  p2 <- plot_pca_scatter(evs$fit_untrt$pca_fit, comparison_name, "control", evs$fit_untrt$preprocessing_label)
+  p3 <- plot_pca_scatter(evs$fit_trt_raw_view$pca_fit, comparison_name, "treatment", evs$fit_trt_raw_view$preprocessing_label)
+  p4 <- plot_pca_scatter(evs$fit_untrt_raw_view$pca_fit, comparison_name, "control", evs$fit_untrt_raw_view$preprocessing_label)
 
   arrangeGrob(
     p1, p2, p3, p4,
@@ -1917,9 +2011,8 @@ plot_combined_pca_scatter_panel <- function(evs, comparison_name) {
     ),
     bottom = textGrob(
       paste0(
-        "Top: ",
-        if (normalize_before_evs) "normalized before EVS." else "raw before EVS.",
-        " Bottom: raw view at same selected rank. Left: treatment. Right: control."
+        "Top: ", if (normalize_before_evs) "Normalized before EVS." else "Raw counts before EVS.",
+        " Bottom: Raw-count EVS view at the same selected rank. Left: treatment. Right: control."
       ),
       gp = gpar(cex = 0.86)
     )
@@ -1941,9 +2034,58 @@ plot_combined_pca_variance_panel <- function(evs, comparison_name) {
     ),
     bottom = textGrob(
       paste0(
-        "Top: ",
-        if (normalize_before_evs) "normalized before EVS." else "raw before EVS.",
-        " Bottom: raw view at same selected rank. Left: treatment. Right: control."
+        "Top: ", if (normalize_before_evs) "Normalized before EVS." else "Raw counts before EVS.",
+        " Bottom: Raw-count EVS view at the same selected rank. Left: treatment. Right: control."
+      ),
+      gp = gpar(cex = 0.86)
+    )
+  )
+}
+
+plot_combined_pc1_histogram_panel <- function(evs, comparison_name) {
+  p1 <- plot_pc1_loading_histogram(
+    evs$fit_trt$loading_table,
+    evs$fit_trt$cutoff,
+    comparison_name,
+    "treatment",
+    evs$fit_trt$preprocessing_label
+  )
+
+  p2 <- plot_pc1_loading_histogram(
+    evs$fit_untrt$loading_table,
+    evs$fit_untrt$cutoff,
+    comparison_name,
+    "control",
+    evs$fit_untrt$preprocessing_label
+  )
+
+  p3 <- plot_pc1_loading_histogram(
+    evs$fit_trt_raw_view$loading_table,
+    evs$fit_trt_raw_view$cutoff,
+    comparison_name,
+    "treatment",
+    evs$fit_trt_raw_view$preprocessing_label
+  )
+
+  p4 <- plot_pc1_loading_histogram(
+    evs$fit_untrt_raw_view$loading_table,
+    evs$fit_untrt_raw_view$cutoff,
+    comparison_name,
+    "control",
+    evs$fit_untrt_raw_view$preprocessing_label
+  )
+
+  arrangeGrob(
+    p1, p2, p3, p4,
+    ncol = 2,
+    top = textGrob(
+      paste0(comparison_name, " | EVS PC1 loading histograms"),
+      gp = gpar(fontface = "bold", cex = 1.02)
+    ),
+    bottom = textGrob(
+      paste0(
+        "Top: ", ranking_space_label(), ". Bottom: raw-count EVS view at the same selected rank. ",
+        "Left: treatment. Right: control."
       ),
       gp = gpar(cex = 0.86)
     )
@@ -1951,11 +2093,11 @@ plot_combined_pca_variance_panel <- function(evs, comparison_name) {
 }
 
 method_call_colors <- c(
-  "Neither"            = "grey70",
-  "DESeq2 weak only"   = plot_palette$weak,
-  "DESeq2 strong only" = plot_palette$deseq2,
-  "HBFSS only"         = plot_palette$hbfss,
-  "Overlap"            = plot_palette$overlap
+  "Neither"            = "grey80",
+  "DESeq2 weak only"   = "#4A90E2",
+  "DESeq2 strong only" = "#C0392B",
+  "HBFSS only"         = "#E67E22",
+  "Overlap"            = "#7D3C98"
 )
 
 method_call_shapes <- c(
@@ -1967,12 +2109,13 @@ method_call_shapes <- c(
 )
 
 method_fill_colors <- method_call_colors
+
 method_border_colors <- c(
-  "Neither"            = "grey40",
-  "DESeq2 weak only"   = "grey15",
-  "DESeq2 strong only" = "grey15",
-  "HBFSS only"         = "grey15",
-  "Overlap"            = "grey15"
+  "Neither"            = "grey45",
+  "DESeq2 weak only"   = "black",
+  "DESeq2 strong only" = "black",
+  "HBFSS only"         = "black",
+  "Overlap"            = "black"
 )
 
 build_reviewer_volcano_classes <- function(df) {
@@ -2117,7 +2260,8 @@ plot_standard_volcano <- function(df, dataset_name) {
       colour     = plot_palette$threshold
     ) +
     labs(
-      title   = pretty_dataset_label(dataset_name),
+      title   = paste(pretty_dataset_label(dataset_name), "| Standard volcano"),
+      subtitle = compact_caption(paste("Call categories reflect DESeq2 and HBFSS agreement patterns.", final_analysis_label()), width = 76),
       x       = "Shrunken log2 fold change (β̂shrunk)",
       y       = expression(-log[10](padj))
     ) +
@@ -2172,7 +2316,8 @@ plot_hbfss_volcano_panel <- function(df, dataset_name) {
 
   p <- add_hbfss_boundary_layer(p, df) +
     labs(
-      title   = pretty_dataset_label(dataset_name),
+      title   = paste(pretty_dataset_label(dataset_name), "| HBFSS volcano"),
+      subtitle = compact_caption("Dashed curve marks the HBFSS decision boundary implied by the empirical HC threshold.", width = 76),
       x       = "Shrunken log2 fold change (β̂shrunk)",
       y       = expression(-log[10](p[empirical]))
     ) +
@@ -2216,8 +2361,8 @@ plot_dispersion_panel_for_dataset <- function(df, dataset_name) {
     scale_color_manual(values = method_call_colors, drop = FALSE, name = "Interpretive tier") +
     scale_shape_manual(values = method_call_shapes, drop = FALSE, name = "Interpretive tier") +
     labs(
-      title    = compact_title(pretty_dataset_label(dataset_name), width = 42),
-      subtitle = NULL,
+      title    = compact_title(paste(pretty_dataset_label(dataset_name), "| Dispersion profile"), width = 42),
+      subtitle = compact_caption(final_analysis_label(), width = 72),
       x        = "baseMean (log10 scale)",
       y        = "Final dispersion (log10 scale)"
     ) +
@@ -2249,9 +2394,11 @@ save_cross_dataset_comparison_panels <- function(comparison_name, analysis_resul
 
   if (length(keys_present) == 0) return(invisible(NULL))
 
-  make_panel <- function(grob_list, title_text, ncols = length(grob_list)) {
+  make_panel <- function(grob_list, title_text, ncols = NULL) {
     grob_list <- Filter(Negate(is.null), grob_list)
     if (!length(grob_list)) return(NULL)
+    if (is.null(ncols)) ncols <- length(grob_list)
+
     do.call(
       arrangeGrob,
       c(
@@ -2357,14 +2504,41 @@ build_pc1_feature_export <- function(analysis_results, annot_df, comparison_name
     x
   }
 
-  out <- dplyr::left_join(out, load_tbl(evs$fit_trt$loading_table,      "pc1_loading_trt_selected_space"), by = "feature_id")
-  out <- dplyr::left_join(out, load_tbl(evs$fit_untrt$loading_table,    "pc1_loading_ctrl_selected_space"), by = "feature_id")
-  out <- dplyr::left_join(out, load_tbl(evs$fit_trt_raw_view$loading_table,  "pc1_loading_trt_raw_view"), by = "feature_id")
-  out <- dplyr::left_join(out, load_tbl(evs$fit_untrt_raw_view$loading_table,"pc1_loading_ctrl_raw_view"), by = "feature_id")
+  out <- dplyr::left_join(out, load_tbl(evs$fit_trt$loading_table,      "pc1_loading_treatment_ranking_space"), by = "feature_id")
+  out <- dplyr::left_join(out, load_tbl(evs$fit_untrt$loading_table,    "pc1_loading_control_ranking_space"), by = "feature_id")
+  out <- dplyr::left_join(out, load_tbl(evs$fit_trt_raw_view$loading_table,  "pc1_loading_treatment_raw_count_view"), by = "feature_id")
+  out <- dplyr::left_join(out, load_tbl(evs$fit_untrt_raw_view$loading_table,"pc1_loading_control_raw_count_view"), by = "feature_id")
 
   out$comparison_name <- comparison_name
+  out$ranking_space <- ranking_space_label()
+  out$final_analysis_space <- "Raw counts"
   save_csv(out, file.path(tab_dir, paste0(comparison_name, "_PC1_loadings_baseMean_dispersion_export.csv")))
   out
+}
+
+plot_global_cutoff_audit <- function(global_evs_selection) {
+  if (is.null(global_evs_selection$comparison_summary_table) ||
+      !nrow(global_evs_selection$comparison_summary_table)) {
+    return(NULL)
+  }
+
+  df <- global_evs_selection$comparison_summary_table
+  df <- df[df$selected_rank_order == 1, , drop = FALSE]
+  df$comparison_name <- factor(df$comparison_name, levels = unique(df$comparison_name))
+
+  ggplot(df, aes(comparison_name, independently_best_rank)) +
+    geom_point(size = 3.0, shape = 21, fill = plot_palette$overlap, color = "black") +
+    geom_line(aes(group = 1), linewidth = 0.5, color = "grey40") +
+    labs(
+      title = "EVS independently selected cutoff ranks by comparison",
+      subtitle = paste(
+        "Each point is the locally best DESeq2-informed NB-regime cutoff rank.",
+        "| Final mode =", evs_final_rank_mode
+      ),
+      x = "Comparison",
+      y = "Selected cutoff rank"
+    ) +
+    manuscript_theme()
 }
 
 # =============================================================================
@@ -2488,6 +2662,20 @@ run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata,
       )
     }
 
+    hist_panel <- safe_plot_build(
+      plot_combined_pc1_histogram_panel(evs, comparison_name),
+      paste0(comparison_name, ": EVS PC1 histogram panel")
+    )
+
+    if (!is.null(hist_panel)) {
+      save_grob(
+        hist_panel,
+        file.path(cmp_dir, "EVS_PC1_loading_histograms_combined.png"),
+        width = 18,
+        height = 13
+      )
+    }
+
     nb_rank_profile_panel <- safe_plot_build(
       arrangeGrob(
         plot_nb_regime_rank_profile(trt_nb_tbl, final_rank_to_use, comparison_name, "treatment"),
@@ -2568,6 +2756,9 @@ run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata,
     summary_row <- data.frame(
       comparison_name        = comparison_name,
       dataset_name           = full_dataset_name,
+      dataset_type           = nm,
+      ranking_space          = ranking_space_label(),
+      final_analysis_space   = "Raw counts",
       n_features             = nrow(df),
       hc_p_threshold         = fit$hc_p_threshold,
       hbfss_threshold        = fit$hbfss_threshold,
@@ -2576,7 +2767,7 @@ run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata,
       n_overlap_significant  = sum(df$standard_significant & df$HBFSS_significant, na.rm = TRUE),
       n_strong_effect        = sum(df$effect_class == "strong_effect", na.rm = TRUE),
       n_weak_effect          = sum(df$effect_class == "weak_effect", na.rm = TRUE),
-      evs_selection_space    = if (normalize_before_evs) "normalized_before_EVS" else "raw_before_EVS",
+      evs_selection_space    = ranking_space_label(),
       evs_dispersion_source  = evs_dispersion_source,
       evs_final_rank_mode    = evs_final_rank_mode,
       final_rank_used        = final_rank_to_use,
@@ -2644,7 +2835,7 @@ if (!is.null(global_evs_selection$comparison_summary_table) &&
     nrow(global_evs_selection$comparison_summary_table) > 0) {
   save_csv(
     global_evs_selection$comparison_summary_table,
-    file.path(output_dir, "EVS_global_shared_rank_summary.csv")
+    file.path(output_dir, "EVS_candidate_cutoffs_by_comparison.csv")
   )
 }
 
@@ -2652,7 +2843,7 @@ if (!is.null(global_evs_selection$global_search_table) &&
     nrow(global_evs_selection$global_search_table) > 0) {
   save_csv(
     global_evs_selection$global_search_table,
-    file.path(output_dir, "EVS_global_shared_rank_search.csv")
+    file.path(output_dir, "EVS_top_candidate_rank_search_table.csv")
   )
 }
 
@@ -2661,14 +2852,30 @@ if (!is.null(global_evs_selection$final_shared_rank_by_comparison) &&
   save_csv(
     data.frame(
       comparison_name = names(global_evs_selection$final_shared_rank_by_comparison),
-      final_shared_rank_by_comparison = as.integer(global_evs_selection$final_shared_rank_by_comparison),
-      final_shared_quantile = global_evs_selection$final_shared_quantile,
+      projected_rank_by_comparison = as.integer(global_evs_selection$final_shared_rank_by_comparison),
+      projected_quantile = global_evs_selection$final_shared_quantile,
       overall_median_rank_for_audit = global_evs_selection$overall_median_rank_for_audit,
       final_rank_mode = evs_final_rank_mode,
       stringsAsFactors = FALSE
     ),
-    file.path(output_dir, "EVS_final_rank_projection_by_comparison.csv")
+    file.path(output_dir, "EVS_projected_rank_reference_by_comparison.csv")
   )
+}
+
+if (isTRUE(export_all_plots)) {
+  cutoff_audit_plot <- safe_plot_build(
+    plot_global_cutoff_audit(global_evs_selection),
+    "Global cutoff audit plot"
+  )
+
+  if (!is.null(cutoff_audit_plot)) {
+    save_grob(
+      cutoff_audit_plot,
+      file.path(output_dir, "EVS_independent_cutoff_audit_plot.png"),
+      width = 10,
+      height = 6
+    )
+  }
 }
 
 all_summaries_list <- list()
@@ -2710,7 +2917,7 @@ all_summaries <- if (length(all_summaries_list) > 0) {
 }
 
 if (nrow(all_summaries) > 0) {
-  save_csv(all_summaries, file.path(output_dir, "all_comparisons_overall_summary.csv"))
+  save_csv(all_summaries, file.path(output_dir, "EVS_overall_pipeline_summary.csv"))
 }
 
 if (length(failed_comparisons) > 0) {
@@ -2748,10 +2955,14 @@ cmd <- paste(
   "fi"
 )
 
-status <- system(cmd)
+if (isTRUE(auto_push_exports)) {
+  status <- system(cmd)
 
-if (status == 0) {
-  message("Git push successful.")
+  if (status == 0) {
+    message("Git push successful.")
+  } else {
+    warning("Git push failed. Check authentication.")
+  }
 } else {
-  warning("Git push failed. Check authentication.")
+  message("auto_push_exports = FALSE; skipping git commit/push.")
 }
