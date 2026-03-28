@@ -1,0 +1,5 @@
+"comparison_name","error_message"
+"RT0_ZT6","[RT0_ZT6_shared_quantile] No valid changepoint rank could be determined, and fallback is disabled."
+"RT2_ZT8","[RT2_ZT8_shared_quantile] No valid changepoint rank could be determined, and fallback is disabled."
+"RT4_ZT10","[RT4_ZT10_shared_quantile] No valid changepoint rank could be determined, and fallback is disabled."
+"RT8_ZT14","[RT8_ZT14_shared_quantile] No valid changepoint rank could be determined, and fallback is disabled."

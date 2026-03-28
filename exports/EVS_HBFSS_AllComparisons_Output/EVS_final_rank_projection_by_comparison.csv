@@ -1,5 +1,5 @@
-"comparison_name","final_shared_rank_by_comparison","final_shared_quantile","overall_median_rank_for_audit"
-"RT0_ZT6",9338,0.704053497290273,9342
-"RT2_ZT8",9332,0.704053497290273,9342
-"RT4_ZT10",9369,0.704053497290273,9342
-"RT8_ZT14",9346,0.704053497290273,9342
+"comparison_name","final_shared_rank_by_comparison","final_shared_quantile","overall_median_rank_for_audit","final_rank_mode"
+"RT0_ZT6",NA,NA,NA,"shared_quantile"
+"RT2_ZT8",NA,NA,NA,"shared_quantile"
+"RT4_ZT10",NA,NA,NA,"shared_quantile"
+"RT8_ZT14",NA,NA,NA,"shared_quantile"
