@@ -1,5 +1,0 @@
-"preprocessing","group","cutoff_mode","empiric_rank_selected","cutoff_quantile","selected_reason","comparison_name"
-"Normalized before EVS","treatment","free_slope_changepoint_on_PC1_rank",9346,0.704053198226726,"free_slope_changepoint_selected_on_normalized_counts_then_mapped_to_raw_counts_for_DESeq2","RT8_ZT14"
-"Normalized before EVS","control","free_slope_changepoint_on_PC1_rank",9346,0.704053198226726,"free_slope_changepoint_selected_on_normalized_counts_then_mapped_to_raw_counts_for_DESeq2","RT8_ZT14"
-"Raw counts before EVS","treatment","free_slope_changepoint_on_PC1_rank",9346,0.704053198226726,"free_slope_changepoint_selected_on_normalized_counts_then_mapped_to_raw_counts_for_DESeq2_raw_view","RT8_ZT14"
-"Raw counts before EVS","control","free_slope_changepoint_on_PC1_rank",9346,0.704053198226726,"free_slope_changepoint_selected_on_normalized_counts_then_mapped_to_raw_counts_for_DESeq2_raw_view","RT8_ZT14"
