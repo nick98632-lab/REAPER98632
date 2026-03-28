@@ -2,41 +2,8 @@
 # EVS + HBFSS FULL PIPELINE
 # DESEQ2-INFORMED NB REGIME CUT-OFF VERSION
 # REVISED: COMPARISON-SPECIFIC COMBINED RANK AXIS
-#
-# METHOD SUMMARY
-# 1. Read raw counts.
-# 2. For each comparison, normalize BEFORE EVS for PCA ranking if requested.
-# 3. Compute PC1 loadings separately in treatment and control.
-# 4. Build one comparison-specific combined rank using:
-#      combined_loading = max(|loading_treatment|, |loading_control|)
-#    unless another combined_loading_rule is selected.
-# 5. Run DESeq2 ON THE FULL RAW DATASET for that comparison to estimate:
-#      - baseMean
-#      - dispersion (or dispGeneEst)
-#    Then derive:
-#      - IOD_NB  = 1 + alpha * mu
-#      - CV2_NB  = 1/mu + alpha
-#    using the average of condition-specific normalized means for scoring.
-# 6. For each candidate cutoff rank on the combined rank axis:
-#      - leading edge is scored on log(IOD_NB)
-#      - remainder   is scored on log(CV2_NB)
-#    using free-slope linear fits in log(baseMean_scoring) space.
-# 7. Candidate split selection uses automatic fallback:
-#      BIC -> AIC -> pure RSS improvement -> deterministic fallback
-# 8. Regime plausibility is based on level separation:
-#      - leading edge mean log(IOD_NB) > remainder mean log(IOD_NB)
-#      - remainder mean log(CV2_NB)  > leading edge mean log(CV2_NB)
-# 9. Freeze the cutoff and rerun DESeq2 separately on:
-#      - original dataset
-#      - leading-edge dataset
-#      - remainder dataset
-# 10. Export full tables and figures.
-#
-# NOTES
-# - EVS ranking and DESeq2 cutoff scoring are conceptually separated:
-#     * EVS ranking uses normalized counts if normalize_before_evs = TRUE
-#     * cutoff scoring uses DESeq2 model-based dispersion from raw counts
-# - Final DESeq2 analyses always use raw counts.
+# FIXED: FEATURE-ID-BASED CUTOFF PROPAGATION
+# FIXED: COARSE/FINE CANDIDATE GRID EXPORT
 # =============================================================================
 
 suppressPackageStartupMessages({
@@ -97,35 +64,28 @@ normalize_before_evs <- TRUE
 evs_top_k_ranks_per_comparison <- 4L
 evs_dispersion_source <- "dispGeneEst"   # options: "dispGeneEst", "dispersion"
 
-# fixed workflow label
 evs_final_rank_mode <- "comparison_specific_combined_rank"
 
 changepoint_min_segment_size <- 250L
 changepoint_smoothing_window <- 101L
 
-# Primary preference + automatic fallback ladder
 changepoint_model_selection_mode <- "bic"   # options: "bic", "aic", "none"
 changepoint_fallback_modes <- c("bic", "aic", "none")
 
-# Regime plausibility checks
 require_regime_separation <- TRUE
 min_regime_separation_delta <- 0.00
 
-# Combined comparison-level ranking rule
 combined_loading_rule <- "max"  # options: "max", "sum", "l2"
 
-# Deterministic fallback
 allow_rank_fallback_if_no_valid_changepoint <- TRUE
 fallback_rank_mode <- "top_n"   # options: "top_n", "fraction"
 fallback_rank_top_n <- 5000L
 fallback_rank_fraction <- 0.10
 
-# Optional candidate-grid thinning for speed
 use_coarse_to_fine_rank_search <- FALSE
 coarse_rank_step <- 25L
 fine_search_half_window <- 100L
 
-# Git push of exports
 auto_push_exports <- FALSE
 
 # -----------------------------------------------------------------------------
@@ -221,13 +181,10 @@ clip_probabilities <- function(x, eps = 1e-300) {
   if (!length(x)) return(numeric(0))
 
   missing_idx <- is.na(x)
-  pos_inf_idx <- is.infinite(x) & x > 0
   neg_inf_idx <- is.infinite(x) & x < 0
-
-  x[pos_inf_idx] <- 1 - 1e-12
-  x[neg_inf_idx] <- eps
-
   finite_idx <- is.finite(x) & !missing_idx
+
+  x[neg_inf_idx] <- eps
   x[finite_idx] <- pmin(pmax(x[finite_idx], eps), 1 - 1e-12)
   x[missing_idx] <- NA_real_
   x
@@ -245,6 +202,7 @@ fast_centered_rolling_mean <- function(x, k = changepoint_smoothing_window) {
 
   if (k >= n) {
     k <- if ((n %% 2L) == 0L) n - 1L else n
+    if ((k %% 2L) == 0L) k <- k - 1L
     if (k < 3L) return(x)
   }
 
@@ -256,25 +214,11 @@ fast_centered_rolling_mean <- function(x, k = changepoint_smoothing_window) {
   out <- stats::filter(x_pad, filter = kernel, sides = 2, method = "convolution")
   out <- as.numeric(out[(length(left_pad) + 1L):(length(left_pad) + n)])
 
-  if (anyNA(out)) out[is.na(out)] <- x[is.na(out)]
+  if (anyNA(out)) {
+    bad <- is.na(out)
+    out[bad] <- x[bad]
+  }
   out
-}
-
-weighted_median_numeric <- function(x, w) {
-  x <- as.numeric(x)
-  w <- as.numeric(w)
-  ok <- is.finite(x) & !is.na(x) & is.finite(w) & !is.na(w) & (w > 0)
-  x <- x[ok]
-  w <- w[ok]
-  if (!length(x)) return(NA_real_)
-
-  ord <- order(x)
-  x <- x[ord]
-  w <- w[ord]
-  cum_w <- cumsum(w) / sum(w)
-  idx <- which(cum_w >= 0.5)[1]
-  if (!is.finite(idx) || is.na(idx) || idx < 1L) return(NA_real_)
-  x[idx]
 }
 
 resolve_rank_or_fail <- function(rank_index, n_total, label = "cutoff") {
@@ -289,19 +233,13 @@ resolve_rank_or_fail <- function(rank_index, n_total, label = "cutoff") {
   }
 
   if (!isTRUE(allow_rank_fallback_if_no_valid_changepoint)) {
-    stop(sprintf(
-      "[%s] No valid changepoint rank could be determined, and fallback is disabled.",
-      label
-    ))
+    stop(sprintf("[%s] No valid changepoint rank could be determined, and fallback is disabled.", label))
   }
 
   if (identical(fallback_rank_mode, "top_n")) {
     fallback_rank <- as.integer(fallback_rank_top_n)
     fallback_rank <- max(1L, min(n_total - 1L, fallback_rank))
-    warning(sprintf(
-      "[%s] No valid changepoint rank found. Falling back to fixed top-N rank %d.",
-      label, fallback_rank
-    ))
+    warning(sprintf("[%s] No valid changepoint rank found. Falling back to fixed top-N rank %d.", label, fallback_rank))
     return(fallback_rank)
   }
 
@@ -340,15 +278,9 @@ compute_combined_loading_score <- function(abs_trt, abs_ctrl, rule = combined_lo
   abs_trt <- coalesce_numeric(abs_trt, 0)
   abs_ctrl <- coalesce_numeric(abs_ctrl, 0)
 
-  if (identical(rule, "max")) {
-    return(pmax(abs_trt, abs_ctrl))
-  }
-  if (identical(rule, "sum")) {
-    return(abs_trt + abs_ctrl)
-  }
-  if (identical(rule, "l2")) {
-    return(sqrt(abs_trt^2 + abs_ctrl^2))
-  }
+  if (identical(rule, "max")) return(pmax(abs_trt, abs_ctrl))
+  if (identical(rule, "sum")) return(abs_trt + abs_ctrl)
+  if (identical(rule, "l2"))  return(sqrt(abs_trt^2 + abs_ctrl^2))
   stop(sprintf("Unknown combined_loading_rule: %s", rule))
 }
 
@@ -367,6 +299,98 @@ build_rank_grid <- function(shared_n_total,
   coarse_step <- max(1L, as.integer(coarse_step))
   grid <- unique(c(seq.int(from = start, to = stop_i, by = coarse_step), stop_i))
   as.integer(grid)
+}
+
+match_feature_to_rank <- function(feature_id, feature_vector) {
+  if (!length(feature_id) || is.na(feature_id) || !nzchar(feature_id)) return(NA_integer_)
+  idx <- match(as.character(feature_id)[1], as.character(feature_vector))
+  if (!length(idx) || is.na(idx)) return(NA_integer_)
+  as.integer(idx)
+}
+
+derive_group_cutoff_from_feature <- function(loading_table, selected_feature_id, value_col = "pc1_loading_abs") {
+  idx <- match_feature_to_rank(selected_feature_id, loading_table$feature_id)
+  if (!is.finite(idx) || is.na(idx)) {
+    return(list(
+      cutoff = NA_real_,
+      top_n_used = NA_integer_,
+      cutoff_quantile = NA_real_,
+      split_class = rep("background_loading", nrow(loading_table))
+    ))
+  }
+
+  split_class <- ifelse(seq_len(nrow(loading_table)) <= idx, "high_loading", "background_loading")
+  cutoff_val <- as.numeric(loading_table[[value_col]][idx])
+  cutoff_quantile <- 1 - (idx / nrow(loading_table))
+
+  list(
+    cutoff = cutoff_val,
+    top_n_used = as.integer(idx),
+    cutoff_quantile = cutoff_quantile,
+    split_class = split_class
+  )
+}
+
+resolve_selected_cutoff <- function(comparison_name, precomputed_selection) {
+  cmp_obj <- precomputed_selection$per_comparison[[comparison_name]]
+  if (is.null(cmp_obj)) {
+    stop(sprintf("No precomputed comparison object found for %s", comparison_name))
+  }
+
+  cmp_eval <- cmp_obj$comparison_eval
+  combined_tbl <- cmp_obj$combined_fit$loading_table
+  n_total <- nrow(combined_tbl)
+
+  selected_feature_id <- cmp_eval$best_feature_id
+  selected_full_rank <- cmp_eval$best_rank
+
+  feature_ok <- is.character(selected_feature_id) &&
+    length(selected_feature_id) == 1L &&
+    !is.na(selected_feature_id) &&
+    nzchar(selected_feature_id) &&
+    selected_feature_id %in% combined_tbl$feature_id
+
+  rank_ok <- is.finite(selected_full_rank) &&
+    !is.na(selected_full_rank) &&
+    as.integer(selected_full_rank) >= 1L &&
+    as.integer(selected_full_rank) <= n_total &&
+    identical(
+      as.character(combined_tbl$feature_id[as.integer(selected_full_rank)]),
+      as.character(selected_feature_id)
+    )
+
+  if (feature_ok && rank_ok) {
+    filtered_rank <- match_feature_to_rank(
+      selected_feature_id,
+      cmp_obj$combined_rank_nb_table$feature_id
+    )
+
+    return(list(
+      cutoff_feature_id = as.character(selected_feature_id),
+      full_rank = as.integer(selected_full_rank),
+      filtered_rank = as.integer(filtered_rank),
+      fallback_used = FALSE
+    ))
+  }
+
+  fallback_full_rank <- resolve_rank_or_fail(
+    rank_index = NA_integer_,
+    n_total = n_total,
+    label = paste0(comparison_name, "_fallback")
+  )
+
+  fallback_feature_id <- as.character(combined_tbl$feature_id[fallback_full_rank])
+  fallback_filtered_rank <- match_feature_to_rank(
+    fallback_feature_id,
+    cmp_obj$combined_rank_nb_table$feature_id
+  )
+
+  list(
+    cutoff_feature_id = fallback_feature_id,
+    full_rank = as.integer(fallback_full_rank),
+    filtered_rank = as.integer(fallback_filtered_rank),
+    fallback_used = TRUE
+  )
 }
 
 save_csv <- function(df, path) {
@@ -688,12 +712,7 @@ prepare_comparison_data <- function(comparison_name, group1_prefix, group2_prefi
 
   missing_samples <- setdiff(sample_ids, colnames(WTTS_Seq))
   if (length(missing_samples) > 0) {
-    stop(
-      paste(
-        "Missing samples in WTTS file for", comparison_name, ":",
-        paste(missing_samples, collapse = ", ")
-      )
-    )
+    stop(paste("Missing samples in WTTS file for", comparison_name, ":", paste(missing_samples, collapse = ", ")))
   }
 
   count_sub <- WTTS_Seq[, sample_ids, drop = FALSE]
@@ -855,10 +874,7 @@ build_full_dataset_deseq2_dispersion_table <- function(count_matrix, coldata,
   mm <- as.data.frame(mcols(dds))
   mm$feature_id <- rownames(mm)
 
-  keep_cols <- intersect(
-    c("feature_id", "baseMean", "dispGeneEst", "dispFit", "dispersion"),
-    colnames(mm)
-  )
+  keep_cols <- intersect(c("feature_id", "baseMean", "dispGeneEst", "dispFit", "dispersion"), colnames(mm))
   mm <- mm[, keep_cols, drop = FALSE]
 
   required_cols <- c("feature_id", "baseMean", evs_dispersion_source)
@@ -876,7 +892,6 @@ build_full_dataset_deseq2_dispersion_table <- function(count_matrix, coldata,
   mm$mean_trt <- rowMeans(norm_counts[mm$feature_id, trt_cols, drop = FALSE])
   mm$mean_untrt <- rowMeans(norm_counts[mm$feature_id, untrt_cols, drop = FALSE])
 
-  # comparison-level scoring mean
   mm$baseMean_scoring <- (mm$mean_trt + mm$mean_untrt) / 2
 
   mm <- mm[
@@ -946,11 +961,7 @@ fit_free_slope_segment <- function(x, y) {
 
   n <- length(x)
   if (n < 3L) {
-    return(list(
-      slope = NA_real_,
-      intercept = NA_real_,
-      rss = Inf
-    ))
+    return(list(slope = NA_real_, intercept = NA_real_, rss = Inf))
   }
 
   x_mean <- mean(x)
@@ -967,11 +978,7 @@ fit_free_slope_segment <- function(x, y) {
   resid <- y - (intercept_hat + slope_hat * x)
   rss <- sum(resid^2)
 
-  list(
-    slope = slope_hat,
-    intercept = intercept_hat,
-    rss = rss
-  )
+  list(slope = slope_hat, intercept = intercept_hat, rss = rss)
 }
 
 compute_segmented_model_score <- function(split_rss, null_rss, n_obs,
@@ -1123,9 +1130,7 @@ evaluate_comparison_shared_rank_candidates <- function(raw_count_matrix,
                                                        top_k = evs_top_k_ranks_per_comparison,
                                                        min_segment_size = changepoint_min_segment_size,
                                                        model_modes = resolve_model_selection_ladder()) {
-  combined_rank_ids <- as.character(
-    combined_fit$loading_table$feature_id[order(combined_fit$loading_table$rank)]
-  )
+  combined_rank_ids <- as.character(combined_fit$loading_table$feature_id[order(combined_fit$loading_table$rank)])
 
   full_disp_tbl <- build_full_dataset_deseq2_dispersion_table(
     count_matrix = raw_count_matrix,
@@ -1149,6 +1154,7 @@ evaluate_comparison_shared_rank_candidates <- function(raw_count_matrix,
       best_score = NA_real_,
       best_mode = NA_character_,
       best_feature_id = NA_character_,
+      best_filtered_rank = NA_integer_,
       top_ranks = integer(0),
       top_scores = numeric(0),
       combined_rank_nb_table = combined_nb_tbl,
@@ -1182,6 +1188,7 @@ evaluate_comparison_shared_rank_candidates <- function(raw_count_matrix,
       data.frame(
         comparison_name = comparison_name,
         model_selection_mode = mode_i,
+        search_stage = "coarse",
         filtered_rank_index = s$filtered_rank_index[1],
         cutoff_feature_id = s$cutoff_feature_id[1],
         original_rank_index = s$original_rank_index[1],
@@ -1199,87 +1206,93 @@ evaluate_comparison_shared_rank_candidates <- function(raw_count_matrix,
       )
     })
 
-    mode_grid <- dplyr::bind_rows(score_rows)
-    mode_grid <- mode_grid[order(-mode_grid$objective_score, mode_grid$filtered_rank_index), , drop = FALSE]
-    all_mode_tables[[mode_i]] <- mode_grid
+    coarse_grid <- dplyr::bind_rows(score_rows)
+    coarse_grid <- coarse_grid[order(-coarse_grid$objective_score, coarse_grid$filtered_rank_index), , drop = FALSE]
 
-    mode_diag_tables[[mode_i]] <- data.frame(
+    export_grid <- coarse_grid
+
+    mode_diag_tables[[paste0(mode_i, "_coarse")]] <- data.frame(
       comparison_name = comparison_name,
-      model_selection_mode = mode_i,
-      n_candidates = nrow(mode_grid),
-      n_positive_score = sum(is.finite(mode_grid$objective_score) & mode_grid$objective_score > 0, na.rm = TRUE),
-      n_regime_plausible = sum(mode_grid$regime_plausible, na.rm = TRUE),
-      n_valid_split = sum(mode_grid$valid_split, na.rm = TRUE),
+      model_selection_mode = paste0(mode_i, "_coarse"),
+      n_candidates = nrow(coarse_grid),
+      n_positive_score = sum(is.finite(coarse_grid$objective_score) & coarse_grid$objective_score > 0, na.rm = TRUE),
+      n_regime_plausible = sum(coarse_grid$regime_plausible, na.rm = TRUE),
+      n_valid_split = sum(coarse_grid$valid_split, na.rm = TRUE),
       stringsAsFactors = FALSE
     )
 
-    valid_grid <- mode_grid[
-      mode_grid$valid_split &
-        is.finite(mode_grid$objective_score) &
-        !is.na(mode_grid$cutoff_feature_id),
+    valid_grid <- coarse_grid[
+      coarse_grid$valid_split &
+        is.finite(coarse_grid$objective_score) &
+        !is.na(coarse_grid$cutoff_feature_id),
       ,
       drop = FALSE
     ]
 
-    if (nrow(valid_grid) > 0) {
-      if (isTRUE(use_coarse_to_fine_rank_search) && fine_search_half_window > 0L) {
-        coarse_best <- as.integer(valid_grid$filtered_rank_index[1])
-        lo <- max(min_segment_size, coarse_best - as.integer(fine_search_half_window))
-        hi <- min(shared_n_total - min_segment_size, coarse_best + as.integer(fine_search_half_window))
-        fine_grid <- seq.int(lo, hi, by = 1L)
+    if (nrow(valid_grid) > 0 && isTRUE(use_coarse_to_fine_rank_search) && fine_search_half_window > 0L) {
+      coarse_best <- as.integer(valid_grid$filtered_rank_index[1])
+      lo <- max(min_segment_size, coarse_best - as.integer(fine_search_half_window))
+      hi <- min(shared_n_total - min_segment_size, coarse_best + as.integer(fine_search_half_window))
+      fine_grid_ranks <- seq.int(lo, hi, by = 1L)
 
-        fine_rows <- lapply(fine_grid, function(r) {
-          s <- fit_nb_regime_split_score(
-            rank_tbl = combined_nb_tbl,
-            rank_index = r,
-            min_segment_size = min_segment_size,
-            mode = mode_i,
-            min_delta = min_regime_separation_delta,
-            require_separation = require_regime_separation
-          )
+      fine_rows <- lapply(fine_grid_ranks, function(r) {
+        s <- fit_nb_regime_split_score(
+          rank_tbl = combined_nb_tbl,
+          rank_index = r,
+          min_segment_size = min_segment_size,
+          mode = mode_i,
+          min_delta = min_regime_separation_delta,
+          require_separation = require_regime_separation
+        )
 
-          data.frame(
-            comparison_name = comparison_name,
-            model_selection_mode = mode_i,
-            filtered_rank_index = s$filtered_rank_index[1],
-            cutoff_feature_id = s$cutoff_feature_id[1],
-            original_rank_index = s$original_rank_index[1],
-            objective_score = s$objective_score[1],
-            valid_split = s$valid_split[1],
-            improvement_vs_null = s$improvement_vs_null[1],
-            regime_plausible = s$regime_plausible[1],
-            lead_iod_mean = s$lead_iod_mean[1],
-            rem_iod_mean = s$rem_iod_mean[1],
-            lead_cv2_mean = s$lead_cv2_mean[1],
-            rem_cv2_mean = s$rem_cv2_mean[1],
-            lead_slope = s$lead_slope[1],
-            rem_slope = s$rem_slope[1],
-            stringsAsFactors = FALSE
-          )
-        })
-
-        fine_grid_df <- dplyr::bind_rows(fine_rows)
-        fine_grid_df <- fine_grid_df[order(-fine_grid_df$objective_score, fine_grid_df$filtered_rank_index), , drop = FALSE]
-        mode_grid <- fine_grid_df
-        all_mode_tables[[mode_i]] <- fine_grid_df
-        mode_diag_tables[[mode_i]] <- data.frame(
+        data.frame(
           comparison_name = comparison_name,
-          model_selection_mode = paste0(mode_i, "_refined"),
-          n_candidates = nrow(fine_grid_df),
-          n_positive_score = sum(is.finite(fine_grid_df$objective_score) & fine_grid_df$objective_score > 0, na.rm = TRUE),
-          n_regime_plausible = sum(fine_grid_df$regime_plausible, na.rm = TRUE),
-          n_valid_split = sum(fine_grid_df$valid_split, na.rm = TRUE),
+          model_selection_mode = mode_i,
+          search_stage = "fine",
+          filtered_rank_index = s$filtered_rank_index[1],
+          cutoff_feature_id = s$cutoff_feature_id[1],
+          original_rank_index = s$original_rank_index[1],
+          objective_score = s$objective_score[1],
+          valid_split = s$valid_split[1],
+          improvement_vs_null = s$improvement_vs_null[1],
+          regime_plausible = s$regime_plausible[1],
+          lead_iod_mean = s$lead_iod_mean[1],
+          rem_iod_mean = s$rem_iod_mean[1],
+          lead_cv2_mean = s$lead_cv2_mean[1],
+          rem_cv2_mean = s$rem_cv2_mean[1],
+          lead_slope = s$lead_slope[1],
+          rem_slope = s$rem_slope[1],
           stringsAsFactors = FALSE
         )
-        valid_grid <- fine_grid_df[
-          fine_grid_df$valid_split &
-            is.finite(fine_grid_df$objective_score) &
-            !is.na(fine_grid_df$cutoff_feature_id),
-          ,
-          drop = FALSE
-        ]
-      }
+      })
 
+      fine_grid_df <- dplyr::bind_rows(fine_rows)
+      fine_grid_df <- fine_grid_df[order(-fine_grid_df$objective_score, fine_grid_df$filtered_rank_index), , drop = FALSE]
+
+      export_grid <- dplyr::bind_rows(coarse_grid, fine_grid_df)
+
+      mode_diag_tables[[paste0(mode_i, "_fine")]] <- data.frame(
+        comparison_name = comparison_name,
+        model_selection_mode = paste0(mode_i, "_fine"),
+        n_candidates = nrow(fine_grid_df),
+        n_positive_score = sum(is.finite(fine_grid_df$objective_score) & fine_grid_df$objective_score > 0, na.rm = TRUE),
+        n_regime_plausible = sum(fine_grid_df$regime_plausible, na.rm = TRUE),
+        n_valid_split = sum(fine_grid_df$valid_split, na.rm = TRUE),
+        stringsAsFactors = FALSE
+      )
+
+      valid_grid <- fine_grid_df[
+        fine_grid_df$valid_split &
+          is.finite(fine_grid_df$objective_score) &
+          !is.na(fine_grid_df$cutoff_feature_id),
+        ,
+        drop = FALSE
+      ]
+    }
+
+    all_mode_tables[[mode_i]] <- export_grid
+
+    if (nrow(valid_grid) > 0) {
       winning_mode <- mode_i
       winning_valid_grid <- valid_grid
       break
@@ -1297,6 +1310,9 @@ evaluate_comparison_shared_rank_candidates <- function(raw_count_matrix,
         independently_best_rank = NA_integer_,
         independently_best_local_lagrange_objective = NA_real_,
         model_selection_mode_used = ifelse(length(model_modes), tail(model_modes, 1), NA_character_),
+        filtered_rank_index = NA_integer_,
+        regime_plausible = NA,
+        cutoff_feature_id = NA_character_,
         stringsAsFactors = FALSE
       ),
       candidate_grid = candidate_grid,
@@ -1305,6 +1321,7 @@ evaluate_comparison_shared_rank_candidates <- function(raw_count_matrix,
       best_score = NA_real_,
       best_mode = "fallback_only",
       best_feature_id = NA_character_,
+      best_filtered_rank = NA_integer_,
       top_ranks = integer(0),
       top_scores = numeric(0),
       combined_rank_nb_table = combined_nb_tbl,
@@ -1336,6 +1353,7 @@ evaluate_comparison_shared_rank_candidates <- function(raw_count_matrix,
     best_score = as.numeric(top_rows$objective_score[1]),
     best_mode = winning_mode,
     best_feature_id = as.character(top_rows$cutoff_feature_id[1]),
+    best_filtered_rank = as.integer(top_rows$filtered_rank_index[1]),
     top_ranks = as.integer(top_rows$mapped_full_rank),
     top_scores = as.numeric(top_rows$objective_score),
     combined_rank_nb_table = combined_nb_tbl,
@@ -1438,32 +1456,10 @@ precompute_global_evs_rank_selection <- function(comparison_inputs,
 # FINALIZED EVS SPLIT
 # =============================================================================
 
-choose_final_rank_for_comparison <- function(comparison_name, precomputed_selection) {
-  cmp_obj <- precomputed_selection$per_comparison[[comparison_name]]
-  if (is.null(cmp_obj)) {
-    stop(sprintf("No precomputed comparison object found for %s", comparison_name))
-  }
-
-  cmp_eval <- cmp_obj$comparison_eval
-  n_total <- nrow(cmp_obj$combined_fit$loading_table)
-
-  rank_to_use <- cmp_eval$best_rank
-
-  if (!is.finite(rank_to_use) || is.na(rank_to_use)) {
-    rank_to_use <- resolve_rank_or_fail(
-      rank_index = NA_integer_,
-      n_total = n_total,
-      label = paste0(comparison_name, "_fallback")
-    )
-  }
-
-  make_safe_rank(rank_to_use, n_total)
-}
-
 build_eigenvector_split <- function(count_matrix,
                                     coldata,
                                     comparison_name,
-                                    final_shared_rank = NA_integer_,
+                                    selection_obj = NULL,
                                     precomputed_selection = NULL) {
   precomputed_cmp <- NULL
   if (!is.null(precomputed_selection$per_comparison) &&
@@ -1486,19 +1482,16 @@ build_eigenvector_split <- function(count_matrix,
     stop(sprintf("[%s] Combined loading table has fewer than 2 features; cannot define a cutoff.", comparison_name))
   }
 
-  independently_best_rank <- comparison_eval$best_rank
-
-  if (!is.finite(final_shared_rank) || is.na(final_shared_rank)) {
-    final_shared_rank <- independently_best_rank
+  if (is.null(selection_obj)) {
+    selection_obj <- resolve_selected_cutoff(comparison_name, precomputed_selection)
   }
-  final_shared_rank <- make_safe_rank(final_shared_rank, nrow(combined_fit$loading_table))
 
-  if (!is.finite(final_shared_rank) || is.na(final_shared_rank)) {
-    final_shared_rank <- resolve_rank_or_fail(
-      rank_index = NA_integer_,
-      n_total = nrow(combined_fit$loading_table),
-      label = paste0(comparison_name, "_final_rank")
-    )
+  selected_feature_id <- as.character(selection_obj$cutoff_feature_id)[1]
+  final_full_rank <- as.integer(selection_obj$full_rank)[1]
+  final_filtered_rank <- as.integer(selection_obj$filtered_rank)[1]
+
+  if (!is.finite(final_full_rank) || is.na(final_full_rank)) {
+    stop(sprintf("[%s] Failed to resolve a valid full-rank cutoff.", comparison_name))
   }
 
   final_reason <- if (normalize_before_evs) {
@@ -1507,7 +1500,7 @@ build_eigenvector_split <- function(count_matrix,
     "deseq2_nb_regime_cutoff_selected_from_full_raw_dataset_after_raw_EVS_combined_ranking"
   }
 
-  combined_fit <- apply_combined_loading_cutoff(combined_fit, final_shared_rank, final_reason)
+  combined_fit <- apply_combined_loading_cutoff(combined_fit, final_full_rank, final_reason)
 
   high_ids <- as.character(subset(combined_fit$loading_table, split_class == "high_loading")$feature_id)
 
@@ -1531,36 +1524,58 @@ build_eigenvector_split <- function(count_matrix,
     stop("Leading-edge dataset is empty after final cutoff.")
   }
 
-  # project the combined cutoff value into the per-group plots
-  trt_cutoff_val <- combined_fit$cutoff
-  ctrl_cutoff_val <- combined_fit$cutoff
+  trt_proj <- derive_group_cutoff_from_feature(
+    loading_table = fit_trt$loading_table,
+    selected_feature_id = selected_feature_id,
+    value_col = "pc1_loading_abs"
+  )
+  fit_trt$cutoff <- trt_proj$cutoff
+  fit_trt$top_n_used <- trt_proj$top_n_used
+  fit_trt$cutoff_quantile <- trt_proj$cutoff_quantile
+  fit_trt$selected_reason <- "feature_membership_projected_from_combined_cutoff"
+  fit_trt$loading_table$split_class <- trt_proj$split_class
 
-  fit_trt$cutoff <- trt_cutoff_val
-  fit_trt$top_n_used <- sum(fit_trt$loading_table$pc1_loading_abs >= trt_cutoff_val, na.rm = TRUE)
-  fit_trt$cutoff_quantile <- 1 - (fit_trt$top_n_used / nrow(fit_trt$loading_table))
-  fit_trt$selected_reason <- "projected_from_combined_cutoff"
+  untrt_proj <- derive_group_cutoff_from_feature(
+    loading_table = fit_untrt$loading_table,
+    selected_feature_id = selected_feature_id,
+    value_col = "pc1_loading_abs"
+  )
+  fit_untrt$cutoff <- untrt_proj$cutoff
+  fit_untrt$top_n_used <- untrt_proj$top_n_used
+  fit_untrt$cutoff_quantile <- untrt_proj$cutoff_quantile
+  fit_untrt$selected_reason <- "feature_membership_projected_from_combined_cutoff"
+  fit_untrt$loading_table$split_class <- untrt_proj$split_class
 
-  fit_untrt$cutoff <- ctrl_cutoff_val
-  fit_untrt$top_n_used <- sum(fit_untrt$loading_table$pc1_loading_abs >= ctrl_cutoff_val, na.rm = TRUE)
-  fit_untrt$cutoff_quantile <- 1 - (fit_untrt$top_n_used / nrow(fit_untrt$loading_table))
-  fit_untrt$selected_reason <- "projected_from_combined_cutoff"
+  trt_raw_proj <- derive_group_cutoff_from_feature(
+    loading_table = fit_trt_raw_view$loading_table,
+    selected_feature_id = selected_feature_id,
+    value_col = "pc1_loading_abs"
+  )
+  fit_trt_raw_view$cutoff <- trt_raw_proj$cutoff
+  fit_trt_raw_view$top_n_used <- trt_raw_proj$top_n_used
+  fit_trt_raw_view$cutoff_quantile <- trt_raw_proj$cutoff_quantile
+  fit_trt_raw_view$selected_reason <- "feature_membership_projected_from_combined_cutoff"
+  fit_trt_raw_view$loading_table$split_class <- trt_raw_proj$split_class
 
-  fit_trt_raw_view$cutoff <- trt_cutoff_val
-  fit_trt_raw_view$top_n_used <- sum(fit_trt_raw_view$loading_table$pc1_loading_abs >= trt_cutoff_val, na.rm = TRUE)
-  fit_trt_raw_view$cutoff_quantile <- 1 - (fit_trt_raw_view$top_n_used / nrow(fit_trt_raw_view$loading_table))
-  fit_trt_raw_view$selected_reason <- "projected_from_combined_cutoff"
-
-  fit_untrt_raw_view$cutoff <- ctrl_cutoff_val
-  fit_untrt_raw_view$top_n_used <- sum(fit_untrt_raw_view$loading_table$pc1_loading_abs >= ctrl_cutoff_val, na.rm = TRUE)
-  fit_untrt_raw_view$cutoff_quantile <- 1 - (fit_untrt_raw_view$top_n_used / nrow(fit_untrt_raw_view$loading_table))
-  fit_untrt_raw_view$selected_reason <- "projected_from_combined_cutoff"
+  untrt_raw_proj <- derive_group_cutoff_from_feature(
+    loading_table = fit_untrt_raw_view$loading_table,
+    selected_feature_id = selected_feature_id,
+    value_col = "pc1_loading_abs"
+  )
+  fit_untrt_raw_view$cutoff <- untrt_raw_proj$cutoff
+  fit_untrt_raw_view$top_n_used <- untrt_raw_proj$top_n_used
+  fit_untrt_raw_view$cutoff_quantile <- untrt_raw_proj$cutoff_quantile
+  fit_untrt_raw_view$selected_reason <- "feature_membership_projected_from_combined_cutoff"
+  fit_untrt_raw_view$loading_table$split_class <- untrt_raw_proj$split_class
 
   final_rank_aggregation <- data.frame(
     comparison_name = comparison_name,
-    independently_best_rank = independently_best_rank,
+    independently_best_rank = comparison_eval$best_rank,
     independently_best_local_lagrange_objective = comparison_eval$best_score,
-    final_rank = final_shared_rank,
+    final_rank = final_full_rank,
+    final_filtered_rank = final_filtered_rank,
     final_rank_mode = "comparison_specific_combined_rank",
+    cutoff_feature_id = selected_feature_id,
     aggregation_method = if (normalize_before_evs) {
       "deseq2_nb_regime_scoring_with_normalized_combined_EVS_ranking"
     } else {
@@ -1568,6 +1583,7 @@ build_eigenvector_split <- function(count_matrix,
     },
     model_selection_mode_used = comparison_eval$best_mode,
     combined_loading_rule = combined_loading_rule,
+    fallback_used = isTRUE(selection_obj$fallback_used),
     stringsAsFactors = FALSE
   )
 
@@ -1576,10 +1592,13 @@ build_eigenvector_split <- function(count_matrix,
     group = "comparison_specific_combined_rank",
     cutoff_mode = combined_fit$cutoff_method,
     empiric_rank_selected = combined_fit$top_n_used,
+    filtered_rank_selected = final_filtered_rank,
     cutoff_quantile = combined_fit$cutoff_quantile,
     selected_reason = combined_fit$selected_reason,
+    cutoff_feature_id = selected_feature_id,
     combined_loading_rule = combined_loading_rule,
     model_selection_mode_used = comparison_eval$best_mode,
+    fallback_used = isTRUE(selection_obj$fallback_used),
     stringsAsFactors = FALSE
   )
 
@@ -1591,6 +1610,9 @@ build_eigenvector_split <- function(count_matrix,
     combined_fit = combined_fit,
     final_rank_aggregation = final_rank_aggregation,
     evs_cutoff_summary = evs_cutoff_summary,
+    selected_feature_id = selected_feature_id,
+    final_full_rank = final_full_rank,
+    final_filtered_rank = final_filtered_rank,
     raw_dataset = count_matrix,
     leading_edge_dataset = count_matrix[leading_edge_ids, , drop = FALSE],
     remainder_dataset = if (length(remainder_ids)) count_matrix[remainder_ids, , drop = FALSE] else count_matrix[0, , drop = FALSE]
@@ -1939,14 +1961,8 @@ plot_pca_variance_profile <- function(pca_fit, dataset_name, preprocessing_label
     ) +
     scale_y_continuous(labels = percent_format(accuracy = 1), limits = c(0, 1)) +
     labs(
-      title = compact_title(
-        paste(dataset_name, "|", pretty_group_label(group_label), "| PCA variance profile"),
-        width = 42
-      ),
-      subtitle = compact_caption(
-        paste(preprocessing_label, "|", final_analysis_label()),
-        width = 72
-      ),
+      title = compact_title(paste(dataset_name, "|", pretty_group_label(group_label), "| PCA variance profile"), width = 42),
+      subtitle = compact_caption(paste(preprocessing_label, "|", final_analysis_label()), width = 72),
       x = "Principal component",
       y = "Variance explained"
     ) +
@@ -2012,15 +2028,9 @@ plot_pc1_loading_rank <- function(loading_tbl, cutoff, dataset_label, group_labe
   p <- ggplot(loading_tbl, aes(rank, .data[[value_col]])) +
     geom_line(linewidth = LINE_WIDTH_BOUNDARY, color = "grey35") +
     labs(
-      title = compact_title(
-        paste(dataset_label, "|", pretty_group_label(group_label), "| PC1 loading rank"),
-        width = 36
-      ),
+      title = compact_title(paste(dataset_label, "|", pretty_group_label(group_label), "| PC1 loading rank"), width = 36),
       subtitle = compact_caption(
-        paste0(
-          preprocessing_label,
-          ". Ranked loadings. ", final_analysis_label(), "."
-        ),
+        paste0(preprocessing_label, ". Ranked loadings. ", final_analysis_label(), "."),
         width = 72
       ),
       x = "Ranked PAS feature",
@@ -2043,8 +2053,8 @@ plot_pc1_loading_rank <- function(loading_tbl, cutoff, dataset_label, group_labe
         x     = max(loading_tbl$rank) * 0.70,
         y     = cutoff,
         label = paste0(
-          "Projected cutoff = ", signif(cutoff, 4), "\n",
-          "Approx N = ", ifelse(is.finite(top_n_used), top_n_used, NA_integer_), "\n",
+          "Selected-feature cutoff = ", signif(cutoff, 4), "\n",
+          "N through selected feature = ", ifelse(is.finite(top_n_used), top_n_used, NA_integer_), "\n",
           quantile_label
         ),
         fill  = "white",
@@ -2064,17 +2074,8 @@ plot_pc1_loading_histogram <- function(loading_tbl, cutoff, dataset_label, group
   p <- ggplot(loading_tbl, aes(.data[[value_col]])) +
     geom_histogram(bins = 60, fill = "grey70", color = "white") +
     labs(
-      title = compact_title(
-        paste(dataset_label, "|", pretty_group_label(group_label), "| PC1 loading distribution"),
-        width = 42
-      ),
-      subtitle = compact_caption(
-        paste(
-          preprocessing_label,
-          "|", final_analysis_label()
-        ),
-        width = 78
-      ),
+      title = compact_title(paste(dataset_label, "|", pretty_group_label(group_label), "| PC1 loading distribution"), width = 42),
+      subtitle = compact_caption(paste(preprocessing_label, "|", final_analysis_label()), width = 78),
       x = "Loading magnitude",
       y = "Feature count"
     ) +
@@ -2092,10 +2093,10 @@ plot_pc1_loading_histogram <- function(loading_tbl, cutoff, dataset_label, group
   p
 }
 
-plot_nb_regime_rank_profile <- function(rank_tbl, cutoff_rank, dataset_label, group_label) {
+plot_nb_regime_rank_profile <- function(rank_tbl, cutoff_filtered_rank, dataset_label, group_label) {
   if (is.null(rank_tbl) || !nrow(rank_tbl)) return(NULL)
-  cutoff_rank <- make_safe_rank(cutoff_rank, nrow(rank_tbl))
-  if (!is.finite(cutoff_rank) || is.na(cutoff_rank)) return(NULL)
+  cutoff_filtered_rank <- make_safe_rank(cutoff_filtered_rank, nrow(rank_tbl))
+  if (!is.finite(cutoff_filtered_rank) || is.na(cutoff_filtered_rank)) return(NULL)
 
   plot_df <- data.frame(
     filtered_rank_index = rank_tbl$filtered_rank_index,
@@ -2122,12 +2123,12 @@ plot_nb_regime_rank_profile <- function(rank_tbl, cutoff_rank, dataset_label, gr
 
   ggplot(long_df, aes(filtered_rank_index, value, color = regime)) +
     geom_line(linewidth = 0.65) +
-    geom_vline(xintercept = cutoff_rank, linetype = "dashed", linewidth = 0.8, colour = plot_palette$threshold) +
+    geom_vline(xintercept = cutoff_filtered_rank, linetype = "dashed", linewidth = 0.8, colour = plot_palette$threshold) +
     annotate(
       "label",
-      x = cutoff_rank,
+      x = cutoff_filtered_rank,
       y = max(long_df$value, na.rm = TRUE),
-      label = paste0("Selected rank = ", cutoff_rank),
+      label = paste0("Selected filtered rank = ", cutoff_filtered_rank),
       vjust = -0.4,
       size = 3.0,
       fill = "white",
@@ -2144,7 +2145,7 @@ plot_nb_regime_rank_profile <- function(rank_tbl, cutoff_rank, dataset_label, gr
     labs(
       title = compact_title(paste(dataset_label, "|", pretty_group_label(group_label), "| NB-regime ranked profile"), width = 42),
       subtitle = compact_caption(
-        paste("Full-dataset DESeq2 dispersion structure mapped onto the combined EVS rank order.", final_analysis_label()),
+        paste("Full-dataset DESeq2 dispersion structure mapped onto the filtered combined EVS rank order.", final_analysis_label()),
         width = 72
       ),
       x = "Filtered ranked PAS feature",
@@ -2154,13 +2155,14 @@ plot_nb_regime_rank_profile <- function(rank_tbl, cutoff_rank, dataset_label, gr
     manuscript_theme()
 }
 
-plot_nb_regime_scatter_with_segment_fits <- function(rank_tbl, cutoff_rank, dataset_label, group_label) {
+plot_nb_regime_scatter_with_segment_fits <- function(rank_tbl, cutoff_filtered_rank, dataset_label, group_label) {
   if (is.null(rank_tbl) || !nrow(rank_tbl)) return(NULL)
-  cutoff_rank <- make_safe_rank(cutoff_rank, nrow(rank_tbl))
-  if (!is.finite(cutoff_rank) || is.na(cutoff_rank) || cutoff_rank <= 0L || cutoff_rank >= nrow(rank_tbl)) return(NULL)
+  cutoff_filtered_rank <- make_safe_rank(cutoff_filtered_rank, nrow(rank_tbl))
+  if (!is.finite(cutoff_filtered_rank) || is.na(cutoff_filtered_rank) ||
+      cutoff_filtered_rank <= 0L || cutoff_filtered_rank >= nrow(rank_tbl)) return(NULL)
 
-  lead_df <- rank_tbl[seq_len(cutoff_rank), , drop = FALSE]
-  rem_df  <- rank_tbl[(cutoff_rank + 1L):nrow(rank_tbl), , drop = FALSE]
+  lead_df <- rank_tbl[seq_len(cutoff_filtered_rank), , drop = FALSE]
+  rem_df  <- rank_tbl[(cutoff_filtered_rank + 1L):nrow(rank_tbl), , drop = FALSE]
 
   fit_lead <- fit_free_slope_segment(lead_df$log_baseMean_smooth, lead_df$log_iod_nb_smooth)
   fit_rem  <- fit_free_slope_segment(rem_df$log_baseMean_smooth, rem_df$log_cv2_nb_smooth)
@@ -2208,7 +2210,7 @@ plot_nb_regime_scatter_with_segment_fits <- function(rank_tbl, cutoff_rank, data
     ) +
     labs(
       title = compact_title(paste(dataset_label, "|", pretty_group_label(group_label), "| segment-fit view"), width = 42),
-      subtitle = paste0("Leading-edge ranked top ", cutoff_rank, " features scored on IOD; remainder scored on CV²."),
+      subtitle = paste0("Leading-edge through filtered rank ", cutoff_filtered_rank, " scored on IOD; remainder scored on CV²."),
       x = "Smoothed log(baseMean)",
       y = "Smoothed log-regime metric"
     ) +
@@ -2225,10 +2227,7 @@ plot_combined_pca_scatter_panel <- function(evs, comparison_name) {
   arrangeGrob(
     p1, p2, p3, p4,
     ncol = 2,
-    top = textGrob(
-      paste0(comparison_name, " | EVS PCA"),
-      gp = gpar(fontface = "bold", cex = 1.02)
-    ),
+    top = textGrob(paste0(comparison_name, " | EVS PCA"), gp = gpar(fontface = "bold", cex = 1.02)),
     bottom = textGrob(
       paste0(
         "Top: ", if (normalize_before_evs) "Normalized before EVS." else "Raw counts before EVS.",
@@ -2248,10 +2247,7 @@ plot_combined_pca_variance_panel <- function(evs, comparison_name) {
   arrangeGrob(
     p1, p2, p3, p4,
     ncol = 2,
-    top = textGrob(
-      paste0(comparison_name, " | EVS PCA variance profiles"),
-      gp = gpar(fontface = "bold", cex = 1.02)
-    ),
+    top = textGrob(paste0(comparison_name, " | EVS PCA variance profiles"), gp = gpar(fontface = "bold", cex = 1.02)),
     bottom = textGrob(
       paste0(
         "Top: ", if (normalize_before_evs) "Normalized before EVS." else "Raw counts before EVS.",
@@ -2302,10 +2298,7 @@ plot_combined_pc1_histogram_panel <- function(evs, comparison_name) {
   arrangeGrob(
     p1, p2, p3, p4,
     ncol = 2,
-    top = textGrob(
-      paste0(comparison_name, " | EVS PC1 loading histograms"),
-      gp = gpar(fontface = "bold", cex = 1.02)
-    ),
+    top = textGrob(paste0(comparison_name, " | EVS PC1 loading histograms"), gp = gpar(fontface = "bold", cex = 1.02)),
     bottom = textGrob(
       paste0(
         "Top: ", ranking_space_label(), ". Bottom: raw-count EVS view. ",
@@ -2331,10 +2324,7 @@ plot_combined_rank_panel <- function(evs, comparison_name) {
   arrangeGrob(
     p,
     ncol = 1,
-    top = textGrob(
-      paste0(comparison_name, " | Comparison-specific combined rank"),
-      gp = gpar(fontface = "bold", cex = 1.02)
-    ),
+    top = textGrob(paste0(comparison_name, " | Comparison-specific combined rank"), gp = gpar(fontface = "bold", cex = 1.02)),
     bottom = textGrob(
       paste0("Combined rule: ", evs$combined_fit$combined_rule, " over |PC1 loading| treatment and control."),
       gp = gpar(cex = 0.86)
@@ -2731,10 +2721,7 @@ build_pc1_feature_export <- function(analysis_results, annot_df, comparison_name
   add_dataset_columns <- function(df, key, prefix) {
     if (is.null(analysis_results[[key]]) || is.null(analysis_results[[key]]$results)) return(df)
     src <- analysis_results[[key]]$results
-    keep_cols <- intersect(
-      c("feature_id", "baseMean", "dispGeneEst", "dispFit", "dispersion"),
-      names(src)
-    )
+    keep_cols <- intersect(c("feature_id", "baseMean", "dispGeneEst", "dispFit", "dispersion"), names(src))
     src <- src[, keep_cols, drop = FALSE]
     names(src)[names(src) == "baseMean"]    <- paste0("baseMean_", prefix)
     names(src)[names(src) == "dispGeneEst"] <- paste0("dispGeneEst_", prefix)
@@ -2774,6 +2761,8 @@ build_pc1_feature_export <- function(analysis_results, annot_df, comparison_name
   out$ranking_space <- paste0(ranking_space_label(), " | comparison-specific combined rank")
   out$final_analysis_space <- "Raw counts"
   out$combined_loading_rule <- evs$combined_fit$combined_rule
+  out$cutoff_feature_id <- evs$selected_feature_id
+
   save_csv(out, file.path(tab_dir, paste0(comparison_name, "_PC1_loadings_baseMean_dispersion_export.csv")))
   out
 }
@@ -2795,7 +2784,7 @@ plot_global_cutoff_audit <- function(global_evs_selection) {
       title = "EVS selected cutoff ranks by comparison",
       subtitle = "Comparison-specific combined rank axis with fallback ladder (BIC -> AIC -> RSS -> deterministic fallback).",
       x = "Comparison",
-      y = "Selected cutoff rank"
+      y = "Selected full-table cutoff rank"
     ) +
     manuscript_theme()
 }
@@ -2810,7 +2799,7 @@ run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata,
   tab_dir <- file.path(cmp_dir, "tables")
   dir.create(tab_dir, showWarnings = FALSE, recursive = TRUE)
 
-  final_rank_to_use <- choose_final_rank_for_comparison(
+  selection_obj <- resolve_selected_cutoff(
     comparison_name = comparison_name,
     precomputed_selection = precomputed_selection
   )
@@ -2819,12 +2808,15 @@ run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata,
     count_matrix = count_matrix,
     coldata = coldata,
     comparison_name = comparison_name,
-    final_shared_rank = final_rank_to_use,
+    selection_obj = selection_obj,
     precomputed_selection = precomputed_selection
   )
 
   message(sprintf("[%s] final rank mode: %s", comparison_name, evs_final_rank_mode))
-  message(sprintf("[%s] final rank used: %d", comparison_name, final_rank_to_use))
+  message(sprintf("[%s] cutoff feature: %s", comparison_name, evs$selected_feature_id))
+  message(sprintf("[%s] final full rank used: %d", comparison_name, evs$final_full_rank))
+  message(sprintf("[%s] final filtered rank used: %s", comparison_name,
+                  ifelse(is.finite(evs$final_filtered_rank), evs$final_filtered_rank, NA_integer_)))
   message(sprintf("[%s] raw rows: %d", comparison_name, nrow(evs$raw_dataset)))
   message(sprintf("[%s] leading-edge rows: %d", comparison_name, nrow(evs$leading_edge_dataset)))
   message(sprintf("[%s] remainder rows: %d", comparison_name, nrow(evs$remainder_dataset)))
@@ -2832,7 +2824,8 @@ run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata,
   evs_cutoff_summary_out <- evs$evs_cutoff_summary
   evs_cutoff_summary_out$comparison_name <- comparison_name
   evs_cutoff_summary_out$final_rank_mode <- evs_final_rank_mode
-  evs_cutoff_summary_out$final_rank_used <- final_rank_to_use
+  evs_cutoff_summary_out$final_rank_used <- evs$final_full_rank
+  evs_cutoff_summary_out$final_filtered_rank_used <- evs$final_filtered_rank
   save_csv(evs_cutoff_summary_out, file.path(tab_dir, paste0(comparison_name, "_EVS_cutoff_summary.csv")))
 
   if (!is.null(evs$final_rank_aggregation) && nrow(evs$final_rank_aggregation)) {
@@ -2878,11 +2871,7 @@ run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata,
       paste0(comparison_name, ": EVS PCA scatter panel")
     )
     if (!is.null(evs_pca_scatter)) {
-      save_grob(
-        evs_pca_scatter,
-        file.path(cmp_dir, "EVS_PCA_scatter_combined.png"),
-        width = 18, height = 13
-      )
+      save_grob(evs_pca_scatter, file.path(cmp_dir, "EVS_PCA_scatter_combined.png"), width = 18, height = 13)
     }
 
     variance_panel <- safe_plot_build(
@@ -2890,11 +2879,7 @@ run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata,
       paste0(comparison_name, ": EVS variance panel")
     )
     if (!is.null(variance_panel)) {
-      save_grob(
-        variance_panel,
-        file.path(cmp_dir, "EVS_PCA_variance_profiles_combined.png"),
-        width = 18, height = 13
-      )
+      save_grob(variance_panel, file.path(cmp_dir, "EVS_PCA_variance_profiles_combined.png"), width = 18, height = 13)
     }
 
     pc1_rank_panel <- safe_plot_build(
@@ -2916,53 +2901,34 @@ run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata,
                               preprocessing_label = evs$fit_untrt_raw_view$preprocessing_label,
                               value_col = "pc1_loading_abs"),
         ncol = 2,
-        top = textGrob(
-          paste0(comparison_name, " | EVS PC1 loading ranks"),
-          gp = gpar(fontface = "bold", cex = 1.02)
-        )
+        top = textGrob(paste0(comparison_name, " | EVS PC1 loading ranks"), gp = gpar(fontface = "bold", cex = 1.02))
       ),
       paste0(comparison_name, ": EVS PC1 rank panel")
     )
 
     if (!is.null(pc1_rank_panel)) {
-      save_grob(
-        pc1_rank_panel,
-        file.path(cmp_dir, "EVS_PC1_loading_rank_combined.png"),
-        width = 18, height = 13
-      )
+      save_grob(pc1_rank_panel, file.path(cmp_dir, "EVS_PC1_loading_rank_combined.png"), width = 18, height = 13)
     }
 
     hist_panel <- safe_plot_build(
       plot_combined_pc1_histogram_panel(evs, comparison_name),
       paste0(comparison_name, ": EVS PC1 histogram panel")
     )
-
     if (!is.null(hist_panel)) {
-      save_grob(
-        hist_panel,
-        file.path(cmp_dir, "EVS_PC1_loading_histograms_combined.png"),
-        width = 18,
-        height = 13
-      )
+      save_grob(hist_panel, file.path(cmp_dir, "EVS_PC1_loading_histograms_combined.png"), width = 18, height = 13)
     }
 
     combined_rank_panel <- safe_plot_build(
       plot_combined_rank_panel(evs, comparison_name),
       paste0(comparison_name, ": combined rank panel")
     )
-
     if (!is.null(combined_rank_panel)) {
-      save_grob(
-        combined_rank_panel,
-        file.path(cmp_dir, "EVS_comparison_specific_combined_rank.png"),
-        width = 12,
-        height = 8
-      )
+      save_grob(combined_rank_panel, file.path(cmp_dir, "EVS_comparison_specific_combined_rank.png"), width = 12, height = 8)
     }
 
     nb_rank_profile_panel <- safe_plot_build(
       arrangeGrob(
-        plot_nb_regime_rank_profile(combined_nb_tbl, final_rank_to_use, comparison_name, "combined"),
+        plot_nb_regime_rank_profile(combined_nb_tbl, evs$final_filtered_rank, comparison_name, "combined"),
         ncol = 1,
         top = textGrob(
           paste0(comparison_name, " | DESeq2-informed NB regime ranked profile (comparison-specific combined rank)"),
@@ -2971,18 +2937,13 @@ run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata,
       ),
       paste0(comparison_name, ": NB regime ranked profile panel")
     )
-
     if (!is.null(nb_rank_profile_panel)) {
-      save_grob(
-        nb_rank_profile_panel,
-        file.path(cmp_dir, "EVS_NB_regime_rank_profiles_combined.png"),
-        width = 12, height = 7
-      )
+      save_grob(nb_rank_profile_panel, file.path(cmp_dir, "EVS_NB_regime_rank_profiles_combined.png"), width = 12, height = 7)
     }
 
     nb_segment_fit_panel <- safe_plot_build(
       arrangeGrob(
-        plot_nb_regime_scatter_with_segment_fits(combined_nb_tbl, final_rank_to_use, comparison_name, "combined"),
+        plot_nb_regime_scatter_with_segment_fits(combined_nb_tbl, evs$final_filtered_rank, comparison_name, "combined"),
         ncol = 1,
         top = textGrob(
           paste0(comparison_name, " | DESeq2-informed IOD/CV² segment-fit diagnostics (comparison-specific combined rank)"),
@@ -2991,13 +2952,8 @@ run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata,
       ),
       paste0(comparison_name, ": NB regime segment-fit panel")
     )
-
     if (!is.null(nb_segment_fit_panel)) {
-      save_grob(
-        nb_segment_fit_panel,
-        file.path(cmp_dir, "EVS_NB_regime_segment_fit_combined.png"),
-        width = 12, height = 7
-      )
+      save_grob(nb_segment_fit_panel, file.path(cmp_dir, "EVS_NB_regime_segment_fit_combined.png"), width = 12, height = 7)
     }
   }
 
@@ -3052,13 +3008,16 @@ run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata,
       evs_selection_space    = paste0(ranking_space_label(), " | comparison-specific combined rank"),
       evs_dispersion_source  = evs_dispersion_source,
       evs_final_rank_mode    = "comparison_specific_combined_rank",
-      final_rank_used        = final_rank_to_use,
+      final_rank_used        = evs$final_full_rank,
+      final_filtered_rank_used = evs$final_filtered_rank,
+      cutoff_feature_id      = evs$selected_feature_id,
       combined_loading_rule  = combined_loading_rule,
       model_selection_mode_used = cmp_eval$best_mode,
       cutoff_method          = evs$combined_fit$cutoff_method,
       cutoff_quantile        = evs$combined_fit$cutoff_quantile,
       selected_reason        = evs$combined_fit$selected_reason,
       fallback_rank_mode     = fallback_rank_mode,
+      fallback_used          = isTRUE(selection_obj$fallback_used),
       stringsAsFactors       = FALSE
     )
 
@@ -3210,17 +3169,17 @@ saveRDS(sessionInfo(), file.path(output_dir, "sessionInfo.rds"))
 # AUTO-PUSH EXPORTS TO GITHUB
 # -----------------------------------------------------------------------------
 
-cmd <- paste(
-  "cd", shQuote(repo_dir), "&&",
-  "git add -A exports &&",
-  "branch=$(git rev-parse --abbrev-ref HEAD) &&",
-  "if ! git diff --cached --quiet; then",
-  "git commit -m", shQuote("Auto-update pipeline outputs"), "&&",
-  "git push origin \"$branch\";",
-  "fi"
-)
-
 if (isTRUE(auto_push_exports)) {
+  cmd <- paste(
+    "cd", shQuote(repo_dir), "&&",
+    "git add -A exports &&",
+    "branch=$(git rev-parse --abbrev-ref HEAD) &&",
+    "if ! git diff --cached --quiet; then",
+    "git commit -m", shQuote("Auto-update pipeline outputs"), "&&",
+    "git push origin \"$branch\";",
+    "fi"
+  )
+
   status <- system(cmd)
 
   if (status == 0) {
