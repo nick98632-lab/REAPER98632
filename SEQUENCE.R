@@ -174,6 +174,12 @@ fourier_score_weight_cv2_amp <- 1.0
 fourier_score_weight_center_agreement <- 1.0
 fourier_interval_fraction_of_max <- 0.90
 
+# Number of highest-scoring combined local Fourier candidate windows retained
+# for downstream shared-cutoff selection. The manuscript pipeline ultimately
+# applies one shared cutoff per comparison, so the default is to carry forward
+# only the single best combined Fourier candidate.
+fourier_top_candidate_n_for_deseq2 <- 1L
+
 # Plot settings
 figure_dpi            <- 320
 base_theme_size       <- 10
