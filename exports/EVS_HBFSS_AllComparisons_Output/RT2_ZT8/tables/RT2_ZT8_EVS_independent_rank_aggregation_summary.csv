@@ -1,0 +1,2 @@
+"comparison_name","independently_best_rank","independently_best_local_lagrange_objective","final_shared_rank","final_rank_mode","aggregation_method","model_selection_mode_used","combined_loading_rule"
+"RT2_ZT8",NA,NA,3153,"combined_comparison_rank","deseq2_nb_regime_scoring_with_normalized_combined_EVS_ranking","fraction_fallback","max"

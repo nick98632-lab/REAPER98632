@@ -1,0 +1,46 @@
+converting counts to integer mode
+converting counts to integer mode
+converting counts to integer mode
+converting counts to integer mode
+converting counts to integer mode
+converting counts to integer mode
+converting counts to integer mode
+converting counts to integer mode
+
+=====================================================
+Running comparison: RT0_ZT6
+=====================================================
+
+=====================================================
+Running comparison: RT2_ZT8
+=====================================================
+
+=====================================================
+Running comparison: RT4_ZT10
+=====================================================
+
+=====================================================
+Running comparison: RT8_ZT14
+=====================================================
+
+=====================================================
+Pipeline complete.
+Output directory:
+/root/REAPER98632/exports/EVS_HBFSS_AllComparisons_Output 
+=====================================================
+
+No comparison summaries were written. Check failed_comparisons.csv for the exact error message.
+[index.html 2ded3c2] Auto-update pipeline outputs
+ 4 files changed, 31 insertions(+), 27 deletions(-)
+ create mode 100644 exports/EVS_HBFSS_AllComparisons_Output/failed_comparisons.csv
+ rewrite exports/EVS_HBFSS_AllComparisons_Output/sessionInfo.rds (99%)
+To https://github.com/nick98632-lab/REAPER98632.git
+ ! [rejected]        index.html -> index.html (fetch first)
+error: failed to push some refs to 'https://github.com/nick98632-lab/REAPER98632.git'
+hint: Updates were rejected because the remote contains work that you do
+hint: not have locally. This is usually caused by another repository pushing
+hint: to the same ref. You may want to first integrate the remote changes
+hint: (e.g., 'git pull ...') before pushing again.
+hint: See the 'Note about fast-forwards' in 'git push --help' for details.
+Warning message:
+Git push failed. Check authentication. 

@@ -1,0 +1,109 @@
+converting counts to integer mode
+converting counts to integer mode
+converting counts to integer mode
+converting counts to integer mode
+converting counts to integer mode
+converting counts to integer mode
+converting counts to integer mode
+converting counts to integer mode
+Warning messages:
+1: Removed 4 rows containing missing values or values outside the scale range
+(`geom_point()`). 
+2: Removed 4 rows containing missing values or values outside the scale range
+(`geom_line()`). 
+
+=====================================================
+Running comparison: RT0_ZT6
+=====================================================
+[RT0_ZT6] final rank mode: combined_comparison_rank
+[RT0_ZT6] final rank used: 3155
+[RT0_ZT6] raw rows: 31757
+[RT0_ZT6] leading-edge rows: 3155
+[RT0_ZT6] remainder rows: 28398
+[RT0_ZT6][raw_dataset] rows=31757 cols=10
+converting counts to integer mode
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+[RT0_ZT6][leading_edge_dataset] rows=3155 cols=10
+converting counts to integer mode
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+Some rows did not converge in finding the MAP
+[RT0_ZT6][remainder_dataset] rows=28398 cols=10
+converting counts to integer mode
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+
+=====================================================
+Running comparison: RT2_ZT8
+=====================================================
+[RT2_ZT8] final rank mode: combined_comparison_rank
+[RT2_ZT8] final rank used: 3153
+[RT2_ZT8] raw rows: 31757
+[RT2_ZT8] leading-edge rows: 3153
+[RT2_ZT8] remainder rows: 28381
+[RT2_ZT8][raw_dataset] rows=31757 cols=10
+converting counts to integer mode
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+Some rows did not converge in finding the MAP
+[RT2_ZT8][leading_edge_dataset] rows=3153 cols=10
+converting counts to integer mode
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+Some rows did not converge in finding the MAP
+[RT2_ZT8_leading_edge_dataset] HC threshold rejected for HBFSS calibration (value=0.997924; cutoff=0.95)
+[RT2_ZT8][remainder_dataset] rows=28381 cols=10
+converting counts to integer mode
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+Some rows did not converge in finding the MAP
+
+=====================================================
+Running comparison: RT4_ZT10
+=====================================================
+[RT4_ZT10] final rank mode: combined_comparison_rank
+[RT4_ZT10] final rank used: 3166
+[RT4_ZT10] raw rows: 31757
+[RT4_ZT10] leading-edge rows: 3166
+[RT4_ZT10] remainder rows: 28492
+[RT4_ZT10][raw_dataset] rows=31757 cols=10
+converting counts to integer mode
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+[RT4_ZT10][leading_edge_dataset] rows=3166 cols=10
+converting counts to integer mode
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+Some rows did not converge in finding the MAP
+[RT4_ZT10][remainder_dataset] rows=28492 cols=10
+converting counts to integer mode
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+
+=====================================================
+Running comparison: RT8_ZT14
+=====================================================
+[RT8_ZT14] final rank mode: combined_comparison_rank
+[RT8_ZT14] final rank used: 3158
+[RT8_ZT14] raw rows: 31757
+[RT8_ZT14] leading-edge rows: 3158
+[RT8_ZT14] remainder rows: 28422
