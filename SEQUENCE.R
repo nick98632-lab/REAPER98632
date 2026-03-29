@@ -4,33 +4,40 @@
 # Purpose
 # This script implements the manuscript analysis workflow for the SEQUENCE WTTS-
 # Seq study. It reads raw count data from the repository data/ directory, builds
-# condition-specific eigenvector-ranked feature tables, derives DESeq2-informed
-# dispersion summaries, selects empirical EVS cutoffs separately for each
-# dataset, performs differential-expression testing on the original, leading-
-# edge, and remainder subsets, computes Hybrid Bayesian-Frequentist Significance
-# Scores (HBFSS), and exports manuscript figures and tables into a timestamped
-# exports/ directory inside the same repository.
+# treatment-specific and control-specific eigenvector-ranked feature tables,
+# derives DESeq2-informed dispersion summaries, estimates ranked local Fourier
+# wave structure for the DESeq2-derived index of dispersion (IOD) and squared
+# coefficient of variation (CV2), combines the treatment and control local
+# Fourier maps into one comparison-level transition score, applies one shared
+# EVS cutoff per comparison, performs differential-expression testing on the
+# original, leading-edge, and remainder subsets, computes Hybrid Bayesian-
+# Frequentist Significance Scores (HBFSS), and exports manuscript figures and
+# tables into a timestamped exports/ directory inside the same repository.
 #
 # Method overview
-# 1. For each comparison, treatment and control datasets are prepared
-#    independently in normalized space.
-# 2. Features are ranked by absolute PC1 loading within each dataset.
-# 3. DESeq2-derived index of dispersion (IOD) and squared coefficient of
-#    variation (CV2) are mapped onto that ranked axis.
-# 4. Candidate transition intervals are defined where IOD and CV2 curvature
-#    peaks align within a local tolerance window.
-# 5. Exact cutoff ranks inside those intervals are selected by a wave score that
-#    combines local slope and amplitude contrasts from the smoothed IOD and CV2
-#    curves.
-# 6. The selected cutoff for each dataset is used to define leading-edge and
-#    remainder subsets, which are then analyzed alongside the original dataset.
-# 7. Manuscript figures, cutoff diagnostics, and feature-level result tables are
+# 1. For each comparison, treatment and control datasets are prepared from the
+#    raw count matrix and normalized independently for EVS ranking.
+# 2. Features are ranked by absolute PC1 loading within treatment and control.
+# 3. DESeq2-derived IOD and CV2 are mapped onto those ranked treatment and
+#    control axes.
+# 4. At percentile positions spanning the ranked dataset, local windows are
+#    evaluated with low-order Fourier series for IOD and CV2.
+# 5. Treatment and control local Fourier summaries are combined into one
+#    comparison-level score that identifies the dominant transition interval.
+# 6. One shared comparison-level cutoff rank is selected from that combined
+#    Fourier score and projected back onto the normalized and raw EVS panels.
+# 7. The selected cutoff defines the leading-edge and remainder subsets, which
+#    are then analyzed alongside the original dataset.
+# 8. Manuscript figures, wave diagnostics, and feature-level result tables are
 #    written to the repository exports/ directory.
 #
 # Design principle
-# Every dataset retains its own empirically selected cutoff. Treatment and
-# control cutoffs are not pooled or averaged; they are optimized and reported
-# independently so each dataset preserves its own ranked transition structure.
+# Treatment and control are allowed to exhibit different local wave behavior,
+# but downstream EVS splitting uses one shared cutoff per comparison because the
+# original, leading-edge, and remainder analyses require a single comparison-
+# level split. That shared cutoff is derived from the combined treatment-plus-
+# control local Fourier score rather than from a treatment-only or control-only
+# decision rule.
 # =============================================================================
 
 suppressPackageStartupMessages({
@@ -88,16 +95,17 @@ lfc_boundary <- 1.0
 # when a fixed EVS cutoff is requested.
 
 # Primary EVS pathway used for cutoff selection in the manuscript.
-# Cutoffs are selected separately for each dataset in normalized space and then
-# projected onto the corresponding raw comparison panels for visualization and
-# export.
-
+# The current manuscript method builds separate treatment and control loading
+# tables, estimates local Fourier structure for ranked IOD and CV2 within each,
+# combines those local Fourier summaries into one comparison-level transition
+# score, and selects one shared cutoff rank per comparison.
+#
 # EVS cutoff mode.
-# "matched_curvature_wave" = nominate candidate intervals where the IOD and CV2
-# second-derivative curvature peaks align within a tolerance window, then score
-# exact ranks inside those intervals with the wave criterion.
-# "variance_second_derivative" = legacy manuscript NB2-only curvature method.
-# "fixed_top_n" = manual fixed-rank cutoff.
+# "matched_curvature_wave" now routes to the combined local Fourier shared-
+# cutoff method retained under the legacy option name for backward
+# compatibility with earlier scripts and exports.
+# "variance_second_derivative" retains the earlier NB2-only curvature fallback.
+# "fixed_top_n" uses a user-specified manual rank.
 evs_cutoff_mode_main <- "matched_curvature_wave"
 
 # User-adjustable fixed EVS cutoff. This is used whenever
@@ -108,22 +116,16 @@ evs_fixed_rank_override <- NA_integer_
 evs_use_manual_rank_first <- FALSE
 
 # EVS curve metrics used for adaptive cutoff detection.
-# The current manuscript method uses DESeq2-derived IOD and CV2 curves over the
-# ranked PC1-loading axis. The legacy NB2-only variance method is retained as a
-# fallback but is no longer the default manuscript pathway.
+# The current manuscript pathway uses combined local Fourier summaries of ranked
+# IOD and CV2 as the primary shared-cutoff method. The older curvature-based NB2
+# functions are retained below only as explicit legacy fallback code paths and
+# for method comparison, not as the primary manuscript selector.
 
-# Curvature settings for the empirical EVS cutoff. The second derivative is
-# taken on a smoothed DESeq2-informed NB variance curve rather than on raw
-# unsmoothed gene-wise values, because raw second derivatives are too noisy.
-# evs_curvature_spar controls the smooth.spline() fit on the ranked NB2
-# variance curve: lower values allow a wigglier curve and more local peaks,
-# whereas higher values suppress small oscillations and emphasize only broad
-# inflection structure. The manuscript default of 0.55 is a compromise between
-# sensitivity to real elbows and resistance to noise-driven curvature spikes.
-# evs_curvature_max_rank_frac limits peak search to the upper-ranked portion of
-# the loading table. Restricting the search to the top 50% avoids chasing small
-# curvature changes in the flat tail where NB2 variance differences are usually
-# negligible and biologically uninformative for the leading-edge split.
+# Legacy curvature fallback settings.
+# These parameters are used only if the script is intentionally routed through
+# the older NB2 second-derivative fallback. They are retained so prior methods
+# can still be reproduced, but they do not define the primary local Fourier
+# manuscript workflow.
 evs_curvature_spar          <- 0.55
 evs_curvature_min_rank      <- 50L
 evs_curvature_max_rank_frac <- 0.50
@@ -138,30 +140,39 @@ wave_w_iod_amp   <- 0.50
 wave_w_cv2_amp   <- 1.00
 wave_w_cv2_slope <- 0.50
 
-# Quantile-screened second-derivative EVS cutoff.
-# Candidate peaks come only from local curvature peaks on the smoothed NB2
-# variance curve, screened across the 0.90 to 0.75 quantile grid.
-# In plain terms, the algorithm first finds local curvature peaks, then asks
-# which of those peaks remain if we only keep peaks in the top 90%, 85%, 80%,
-# and 75% of curvature strength. This creates a small, interpretable candidate
-# set rather than treating every local bump as a plausible EVS cutoff.
-# The 0.75 to 0.90 screen focuses the search on strong elbows while still
-# allowing more than one candidate when several peaks are similarly prominent.
+# Legacy quantile-screened second-derivative EVS cutoff.
+# These settings govern the older NB2 curvature fallback only. They are kept for
+# direct comparison against the manuscript's combined local Fourier shared-cutoff
+# workflow and should not be interpreted as the primary manuscript method.
 evs_candidate_min_peak_distance   <- 40L
 evs_peak_quantile_grid            <- seq(0.90, 0.75, by = -0.05)
 evs_peak_quantile_screen_min      <- 0.75
 evs_peak_quantile_screen_max      <- 0.90
-# Discrete exhaustive-search candidate scoring settings.
-# Each dataset is optimized independently. Candidate ranks are evaluated one at a
-# time, the resulting leading-edge subset must comprise no more than 50% of all
-# PAS features in that dataset, and the best valid rank is the one maximizing
-# the summed downstream evidence across the leading-edge and remainder subsets.
-# Each normalized dataset is optimized independently. The treatment and control
-# datasets retain their own best cutoff ranks, and each raw panel inherits the
-# corresponding normalized cutoff from its matched condition-specific dataset.
+# Discrete candidate-scoring settings.
+# The primary workflow first identifies one shared comparison-level cutoff from
+# the combined local Fourier map. The settings below are then used only for the
+# downstream constrained candidate-scoring step applied to the retained shared-
+# cutoff candidate set.
 evs_candidate_max_leading_frac     <- 0.50
 evs_candidate_runtime_seconds_low  <- 12
 evs_candidate_runtime_seconds_high <- 25
+
+# Local Fourier shared-cutoff settings.
+# The ranked DESeq2-derived IOD and CV2 sequences are evaluated across the full
+# ranked dataset at percentile positions. At each percentile position, a local
+# window is extracted and low-order Fourier series are fit for IOD and CV2 in
+# treatment and control separately. Those local treatment and control summaries
+# are then combined into one comparison-level score that defines the single
+# shared EVS cutoff used downstream.
+fourier_percentile_step <- 0.01
+fourier_window_fraction <- 0.08
+fourier_harmonics <- 2L
+fourier_min_rank <- 50L
+fourier_max_rank_frac <- 0.50
+fourier_score_weight_iod_amp <- 1.0
+fourier_score_weight_cv2_amp <- 1.0
+fourier_score_weight_center_agreement <- 1.0
+fourier_interval_fraction_of_max <- 0.90
 
 # Plot settings
 figure_dpi            <- 320
@@ -239,24 +250,23 @@ export_optional_evs_variance_profiles      <- TRUE
 # standard_significant    : DESeq2-positive call: native DESeq2 padj < alpha,
 #                           |rawLFC| >= lfc_boundary, and |lfc_shrunk| >=
 #                           lfc_boundary.
-# evs_cutoff_mode_main    : main EVS split rule. "matched_curvature_wave"
-#                           defines candidate transition intervals where IOD and
-#                           CV2 curvature peaks align over rank, then selects an
-#                           exact cutoff inside those intervals using the local
-#                           wave score. "variance_second_derivative" retains the
-#                           earlier NB2-only curvature approach. "fixed_top_n"
-#                           uses a user-specified manual rank.
+# evs_cutoff_mode_main    : main EVS split rule. In the current manuscript
+#                           workflow, "matched_curvature_wave" routes to the
+#                           combined local Fourier shared-cutoff method for
+#                           backward compatibility. "variance_second_derivative"
+#                           retains the earlier NB2-only curvature fallback.
+#                           "fixed_top_n" uses a user-specified manual rank.
 # evs_fixed_top_n         : user-adjustable manual EVS rank cutoff when a fixed
 #                           cutoff is requested.
-# dataset-specific cutoff methodology :
-#                           each normalized EVS dataset is optimized
-#                           independently. Candidate intervals are derived from
-#                           matched IOD/CV2 curvature events, and exact ranks are
-#                           wave-scored within those intervals using local slope
-#                           and amplitude contrasts. The selected rank for a
-#                           given dataset defines that dataset's leading-edge and
-#                           remainder subsets; no cross-dataset median or pooled
-#                           cutoff is used.
+# comparison-level cutoff methodology :
+#                           treatment and control loading tables are built
+#                           separately, local Fourier wave summaries of ranked
+#                           IOD and CV2 are estimated across percentile windows,
+#                           treatment and control local scores are combined into
+#                           one comparison-level transition score, and one shared
+#                           cutoff rank is selected for the comparison. That rank
+#                           defines the leading-edge and remainder subsets used
+#                           downstream.
 
 # -----------------------------------------------------------------------------
 # MINIMAL EMBEDDED METADATA
@@ -1107,36 +1117,339 @@ resolve_matched_curvature_wave_cutoff <- function(loading_tbl,
   )
 }
 
+# -----------------------------------------------------------------------------
+# LOCAL FOURIER SHARED-CUTOFF METHOD
+# -----------------------------------------------------------------------------
+
+build_ranked_fourier_metric_table <- function(loading_tbl,
+                                              mean_col = "baseMean",
+                                              dispersion_col = "dispGeneEst") {
+  needed <- c("feature_id", "rank", "pc1_loading_abs", mean_col, dispersion_col)
+  if (!all(needed %in% colnames(loading_tbl))) return(NULL)
+
+  df <- loading_tbl[, needed, drop = FALSE]
+  colnames(df)[colnames(df) == mean_col] <- "mean_value"
+  colnames(df)[colnames(df) == dispersion_col] <- "dispersion_value"
+
+  df <- df[
+    is.finite(df$mean_value) & !is.na(df$mean_value) & df$mean_value > 0 &
+      is.finite(df$dispersion_value) & !is.na(df$dispersion_value) & df$dispersion_value > 0,
+    , drop = FALSE
+  ]
+  if (nrow(df) < 25) return(NULL)
+
+  df <- df[order(df$rank), , drop = FALSE]
+  mu <- pmax(df$mean_value, 1e-12)
+  alpha <- pmax(df$dispersion_value, 1e-12)
+
+  df$iod_nb <- 1 + alpha * mu
+  df$cv2_nb <- (1 / mu) + alpha
+  df$log_iod_nb <- log10(df$iod_nb)
+  df$log_cv2_nb <- log10(df$cv2_nb)
+  df
+}
+
+build_percentile_windows_fourier <- function(n_total,
+                                             step = fourier_percentile_step,
+                                             window_fraction = fourier_window_fraction,
+                                             min_rank = fourier_min_rank,
+                                             max_rank_frac = fourier_max_rank_frac) {
+  pct_grid <- seq(step, 1, by = step)
+  center_ranks <- pmax(1L, pmin(n_total, round(pct_grid * n_total)))
+  max_rank <- floor(n_total * max_rank_frac)
+  keep <- center_ranks >= min_rank & center_ranks <= max_rank
+  pct_grid <- pct_grid[keep]
+  center_ranks <- center_ranks[keep]
+  half_window <- max(3L, round((window_fraction * n_total) / 2))
+  data.frame(
+    percentile = pct_grid,
+    center_rank = center_ranks,
+    lo_rank = pmax(1L, center_ranks - half_window),
+    hi_rank = pmin(n_total, center_ranks + half_window),
+    stringsAsFactors = FALSE
+  )
+}
+
+build_local_fourier_design <- function(x, n_harmonics = fourier_harmonics) {
+  x <- as.numeric(x)
+  x01 <- (x - min(x)) / max(1e-12, (max(x) - min(x)))
+  out <- data.frame(x = x01)
+  for (k in seq_len(n_harmonics)) {
+    out[[paste0("sin_", k)]] <- sin(2 * pi * k * x01)
+    out[[paste0("cos_", k)]] <- cos(2 * pi * k * x01)
+  }
+  out
+}
+
+fit_local_fourier <- function(rank_vec, y_vec, n_harmonics = fourier_harmonics) {
+  if (length(rank_vec) < (2 * n_harmonics + 3L)) return(NULL)
+  if (all(!is.finite(y_vec)) || stats::sd(y_vec, na.rm = TRUE) == 0) return(NULL)
+  dd <- build_local_fourier_design(rank_vec, n_harmonics = n_harmonics)
+  dd$y <- as.numeric(y_vec)
+  rhs <- paste(colnames(dd)[colnames(dd) != "y"], collapse = " + ")
+  fm <- stats::as.formula(paste("y ~", rhs))
+  fit <- tryCatch(stats::lm(fm, data = dd), error = function(e) NULL)
+  if (is.null(fit)) return(NULL)
+  fitted_y <- as.numeric(stats::predict(fit, newdata = dd))
+  residual_y <- dd$y - fitted_y
+  amp_components <- numeric(n_harmonics)
+  for (k in seq_len(n_harmonics)) {
+    bsin <- stats::coef(fit)[paste0("sin_", k)]
+    bcos <- stats::coef(fit)[paste0("cos_", k)]
+    bsin <- ifelse(is.na(bsin), 0, bsin)
+    bcos <- ifelse(is.na(bcos), 0, bcos)
+    amp_components[k] <- sqrt(bsin^2 + bcos^2)
+  }
+  peak_idx <- which.max(fitted_y)
+  trough_idx <- which.min(fitted_y)
+  list(
+    total_amplitude = sum(amp_components, na.rm = TRUE),
+    center_rank = mean(c(rank_vec[peak_idx], rank_vec[trough_idx])),
+    residual_sd = stats::sd(residual_y, na.rm = TRUE)
+  )
+}
+
+summarize_local_fourier_window <- function(metric_df, lo_rank, hi_rank) {
+  sub <- metric_df[metric_df$rank >= lo_rank & metric_df$rank <= hi_rank, , drop = FALSE]
+  if (nrow(sub) < 9L) {
+    return(data.frame(
+      iod_amplitude = NA_real_,
+      cv2_amplitude = NA_real_,
+      iod_center = NA_real_,
+      cv2_center = NA_real_,
+      iod_residual_sd = NA_real_,
+      cv2_residual_sd = NA_real_,
+      stringsAsFactors = FALSE
+    ))
+  }
+  iod_fit <- fit_local_fourier(sub$rank, sub$log_iod_nb)
+  cv2_fit <- fit_local_fourier(sub$rank, sub$log_cv2_nb)
+  if (is.null(iod_fit) || is.null(cv2_fit)) {
+    return(data.frame(
+      iod_amplitude = NA_real_,
+      cv2_amplitude = NA_real_,
+      iod_center = NA_real_,
+      cv2_center = NA_real_,
+      iod_residual_sd = NA_real_,
+      cv2_residual_sd = NA_real_,
+      stringsAsFactors = FALSE
+    ))
+  }
+  data.frame(
+    iod_amplitude = iod_fit$total_amplitude,
+    cv2_amplitude = cv2_fit$total_amplitude,
+    iod_center = iod_fit$center_rank,
+    cv2_center = cv2_fit$center_rank,
+    iod_residual_sd = iod_fit$residual_sd,
+    cv2_residual_sd = cv2_fit$residual_sd,
+    stringsAsFactors = FALSE
+  )
+}
+
+build_local_fourier_wave_map <- function(loading_tbl,
+                                         mean_col = "baseMean",
+                                         dispersion_col = "dispGeneEst") {
+  metric_df <- build_ranked_fourier_metric_table(
+    loading_tbl = loading_tbl,
+    mean_col = mean_col,
+    dispersion_col = dispersion_col
+  )
+  if (is.null(metric_df) || !nrow(metric_df)) return(NULL)
+  windows <- build_percentile_windows_fourier(n_total = nrow(metric_df))
+  if (!nrow(windows)) return(NULL)
+  rows <- lapply(seq_len(nrow(windows)), function(i) {
+    ww <- windows[i, , drop = FALSE]
+    ss <- summarize_local_fourier_window(metric_df, ww$lo_rank, ww$hi_rank)
+    cbind(ww, ss, stringsAsFactors = FALSE)
+  })
+  wave_map <- dplyr::bind_rows(rows)
+  wave_map$iod_amp_scaled <- if (all(is.na(wave_map$iod_amplitude))) NA_real_ else scales::rescale(wave_map$iod_amplitude, to = c(0, 1), from = range(wave_map$iod_amplitude, na.rm = TRUE))
+  wave_map$cv2_amp_scaled <- if (all(is.na(wave_map$cv2_amplitude))) NA_real_ else scales::rescale(wave_map$cv2_amplitude, to = c(0, 1), from = range(wave_map$cv2_amplitude, na.rm = TRUE))
+  wave_map$center_distance <- abs(wave_map$iod_center - wave_map$cv2_center)
+  wave_map$center_agreement <- 1 / (1 + wave_map$center_distance)
+  wave_map$local_fourier_score <- (
+    fourier_score_weight_iod_amp * wave_map$iod_amp_scaled +
+      fourier_score_weight_cv2_amp * wave_map$cv2_amp_scaled +
+      fourier_score_weight_center_agreement * wave_map$center_agreement
+  )
+  list(metric_df = metric_df, wave_map = wave_map)
+}
+
+combine_treatment_control_fourier_maps <- function(trt_wave_obj, ctrl_wave_obj) {
+  if (is.null(trt_wave_obj) || is.null(ctrl_wave_obj)) return(NULL)
+  trt_map <- trt_wave_obj$wave_map
+  ctrl_map <- ctrl_wave_obj$wave_map
+  if (is.null(trt_map) || is.null(ctrl_map) || !nrow(trt_map) || !nrow(ctrl_map)) return(NULL)
+  keep_cols <- c("percentile", "center_rank", "local_fourier_score", "iod_amp_scaled", "cv2_amp_scaled", "center_agreement")
+  trt_map2 <- trt_map[, keep_cols, drop = FALSE]
+  ctrl_map2 <- ctrl_map[, keep_cols, drop = FALSE]
+  names(trt_map2)[names(trt_map2) != "percentile"] <- paste0(names(trt_map2)[names(trt_map2) != "percentile"], "_trt")
+  names(ctrl_map2)[names(ctrl_map2) != "percentile"] <- paste0(names(ctrl_map2)[names(ctrl_map2) != "percentile"], "_ctrl")
+  out <- dplyr::inner_join(trt_map2, ctrl_map2, by = "percentile")
+  if (!nrow(out)) return(NULL)
+  out$combined_center_rank <- round((out$center_rank_trt + out$center_rank_ctrl) / 2)
+  out$combined_fourier_score <- out$local_fourier_score_trt + out$local_fourier_score_ctrl
+  out
+}
+
+define_combined_fourier_interval <- function(combined_wave_df) {
+  if (is.null(combined_wave_df) || !nrow(combined_wave_df)) return(data.frame())
+  df <- combined_wave_df[is.finite(combined_wave_df$combined_fourier_score) & !is.na(combined_wave_df$combined_fourier_score), , drop = FALSE]
+  if (!nrow(df)) return(data.frame())
+  max_score <- max(df$combined_fourier_score, na.rm = TRUE)
+  band <- df[df$combined_fourier_score >= (fourier_interval_fraction_of_max * max_score), , drop = FALSE]
+  if (!nrow(band)) return(data.frame())
+  band <- band[order(band$combined_center_rank), , drop = FALSE]
+  peak_rank <- df$combined_center_rank[which.max(df$combined_fourier_score)]
+  runs <- split(band$combined_center_rank, cumsum(c(1, diff(band$combined_center_rank) > 1)))
+  run_containing_peak <- NULL
+  for (r in runs) {
+    if (peak_rank %in% r) { run_containing_peak <- r; break }
+  }
+  if (is.null(run_containing_peak)) run_containing_peak <- runs[[1]]
+  data.frame(
+    interval_lo = min(run_containing_peak),
+    interval_hi = max(run_containing_peak),
+    interval_center = round(mean(run_containing_peak)),
+    peak_rank = peak_rank,
+    peak_score = max_score,
+    stringsAsFactors = FALSE
+  )
+}
+
+resolve_combined_fourier_cutoff <- function(fit_trt_loading_tbl,
+                                            fit_ctrl_loading_tbl,
+                                            fixed_top_n = evs_fixed_top_n) {
+  n_total <- nrow(fit_trt_loading_tbl)
+  fallback <- resolve_top_n_cutoff(fit_trt_loading_tbl$pc1_loading_abs, top_n = fixed_top_n)
+  trt_wave_obj <- build_local_fourier_wave_map(fit_trt_loading_tbl)
+  ctrl_wave_obj <- build_local_fourier_wave_map(fit_ctrl_loading_tbl)
+  if (is.null(trt_wave_obj) || is.null(ctrl_wave_obj)) {
+    fallback$method <- "fixed_top_n_fallback"
+    fallback$trt_wave_obj <- trt_wave_obj
+    fallback$ctrl_wave_obj <- ctrl_wave_obj
+    fallback$combined_wave_map <- data.frame()
+    fallback$combined_interval_table <- data.frame()
+    return(fallback)
+  }
+  combined_wave_df <- combine_treatment_control_fourier_maps(trt_wave_obj, ctrl_wave_obj)
+  if (is.null(combined_wave_df) || !nrow(combined_wave_df)) {
+    fallback$method <- "fixed_top_n_fallback"
+    fallback$trt_wave_obj <- trt_wave_obj
+    fallback$ctrl_wave_obj <- ctrl_wave_obj
+    fallback$combined_wave_map <- data.frame()
+    fallback$combined_interval_table <- data.frame()
+    return(fallback)
+  }
+  interval_df <- define_combined_fourier_interval(combined_wave_df)
+  if (is.null(interval_df) || !nrow(interval_df)) {
+    fallback$method <- "fixed_top_n_fallback"
+    fallback$trt_wave_obj <- trt_wave_obj
+    fallback$ctrl_wave_obj <- ctrl_wave_obj
+    fallback$combined_wave_map <- combined_wave_df
+    fallback$combined_interval_table <- data.frame()
+    return(fallback)
+  }
+  cand_tbl <- combined_wave_df[
+    combined_wave_df$combined_center_rank >= interval_df$interval_lo[1] &
+      combined_wave_df$combined_center_rank <= interval_df$interval_hi[1],
+    , drop = FALSE
+  ]
+  cand_tbl <- cand_tbl[order(-cand_tbl$combined_fourier_score, cand_tbl$combined_center_rank), , drop = FALSE]
+  cand_tbl <- cand_tbl[!duplicated(cand_tbl$combined_center_rank), , drop = FALSE]
+  cand_tbl <- cand_tbl[seq_len(min(fourier_top_candidate_n_for_deseq2, nrow(cand_tbl))), , drop = FALSE]
+  cand_tbl$rank_index <- as.integer(cand_tbl$combined_center_rank)
+  cand_tbl$candidate_id <- paste0("combined_fourier_candidate_", seq_len(nrow(cand_tbl)))
+  cand_tbl$cutoff_value <- fit_trt_loading_tbl$pc1_loading_abs[cand_tbl$rank_index]
+  cand_tbl$cutoff_quantile <- 1 - (cand_tbl$rank_index / n_total)
+  cand_tbl$selected <- FALSE
+  cand_tbl$selected_reason <- "candidate_only"
+  best_idx <- 1L
+  cand_tbl$selected[best_idx] <- TRUE
+  cand_tbl$selected_reason[best_idx] <- "combined_fourier_max"
+  list(
+    top_n_actual = as.integer(cand_tbl$rank_index[best_idx]),
+    cutoff_value = as.numeric(cand_tbl$cutoff_value[best_idx]),
+    cutoff_quantile = as.numeric(cand_tbl$cutoff_quantile[best_idx]),
+    n_total = n_total,
+    method = "combined_local_fourier",
+    trt_wave_obj = trt_wave_obj,
+    ctrl_wave_obj = ctrl_wave_obj,
+    combined_wave_map = combined_wave_df,
+    combined_interval_table = interval_df,
+    candidate_table = cand_tbl,
+    selected_reason = "combined_fourier_max"
+  )
+}
+
+plot_fourier_wave_map_single <- function(wave_obj, comparison_name, group_label) {
+  if (is.null(wave_obj) || is.null(wave_obj$wave_map) || !nrow(wave_obj$wave_map)) return(NULL)
+  df <- wave_obj$wave_map
+  p1 <- ggplot(df, aes(percentile)) +
+    geom_line(aes(y = iod_amp_scaled, color = "IOD amplitude"), linewidth = 0.7) +
+    geom_line(aes(y = cv2_amp_scaled, color = "CV2 amplitude"), linewidth = 0.7) +
+    scale_color_manual(values = c("IOD amplitude" = plot_palette$treatment, "CV2 amplitude" = plot_palette$control)) +
+    labs(title = paste0(pretty_group_label(group_label), " | local Fourier amplitudes"), x = "Percentile", y = "Scaled amplitude", color = NULL) +
+    manuscript_theme()
+  p2 <- ggplot(df, aes(percentile, local_fourier_score)) +
+    geom_line(color = plot_palette$threshold, linewidth = 0.8) +
+    labs(title = paste0(pretty_group_label(group_label), " | local Fourier score"), x = "Percentile", y = "Score") +
+    manuscript_theme()
+  arrangeGrob(p1, p2, ncol = 1, top = textGrob(paste0(comparison_name, " | ", pretty_group_label(group_label), " local Fourier wave map"), gp = gpar(fontface = "bold", cex = 1.0)))
+}
+
+plot_combined_fourier_wave_map <- function(combined_cutoff_info, comparison_name) {
+  df <- combined_cutoff_info$combined_wave_map
+  int_df <- combined_cutoff_info$combined_interval_table
+  cand_df <- combined_cutoff_info$candidate_table
+  if (is.null(df) || !nrow(df)) return(NULL)
+  p <- ggplot(df, aes(percentile, combined_fourier_score)) + geom_line(color = plot_palette$threshold, linewidth = 0.9)
+  if (!is.null(int_df) && nrow(int_df)) {
+    pct_lo <- min(df$percentile[df$combined_center_rank >= int_df$interval_lo[1]], na.rm = TRUE)
+    pct_hi <- max(df$percentile[df$combined_center_rank <= int_df$interval_hi[1]], na.rm = TRUE)
+    p <- p + annotate("rect", xmin = pct_lo, xmax = pct_hi, ymin = -Inf, ymax = Inf, alpha = 0.15, fill = "grey70")
+  }
+  if (!is.null(cand_df) && nrow(cand_df)) {
+    chosen <- cand_df[cand_df$selected, , drop = FALSE]
+    if (nrow(chosen)) {
+      chosen_pct <- df$percentile[match(chosen$rank_index[1], df$combined_center_rank)]
+      p <- p + geom_vline(xintercept = chosen_pct, color = plot_palette$threshold, linewidth = 0.9)
+    }
+  }
+  p + labs(title = paste0(comparison_name, " | combined treatment + control Fourier score"), x = "Percentile", y = "Combined Fourier score") + manuscript_theme()
+}
+
 resolve_evs_cutoff <- function(loading_tbl,
                                mean_col = "baseMean",
                                dispersion_col = "dispGeneEst",
                                fixed_top_n = evs_fixed_top_n) {
-  if (identical(evs_cutoff_mode_main, "matched_curvature_wave")) {
-    return(resolve_matched_curvature_wave_cutoff(loading_tbl, mean_col, dispersion_col, fixed_top_n))
-  }
-  if (identical(evs_cutoff_mode_main, "fixed_top_n")) {
-    fallback <- resolve_top_n_cutoff(loading_tbl$pc1_loading_abs, top_n = fixed_top_n)
+  if (isTRUE(evs_use_manual_rank_first) && is.finite(evs_fixed_rank_override) && !is.na(evs_fixed_rank_override)) {
+    manual_rank <- max(1L, min(as.integer(evs_fixed_rank_override), nrow(loading_tbl)))
     return(list(
-      cutoff_value = fallback$cutoff_value,
-      top_n_actual = fallback$top_n_actual,
-      cutoff_quantile = fallback$cutoff_quantile,
-      method = "fixed_top_n",
+      cutoff_value = loading_tbl$pc1_loading_abs[manual_rank],
+      top_n_actual = manual_rank,
+      cutoff_quantile = 1 - (manual_rank / nrow(loading_tbl)),
+      method = "manual_fixed_rank",
       curve_df = NULL,
       curvature_strength = NA_real_,
       candidate_table = data.frame(),
       quantile_screen_table = data.frame(),
       matched_interval_table = data.frame(),
-      selected_reason = "fixed_top_n"
+      selected_reason = "manual_fixed_rank"
     ))
   }
-  resolve_adaptive_evs_cutoff(
-    loading_tbl,
-    fixed_top_n = fixed_top_n,
-    mean_col = mean_col,
-    dispersion_col = dispersion_col,
-    smoothing_spar = evs_curvature_spar,
-    min_rank = evs_curvature_min_rank,
-    max_rank_frac = evs_curvature_max_rank_frac
+  fallback <- resolve_top_n_cutoff(loading_tbl$pc1_loading_abs, top_n = fixed_top_n)
+  list(
+    cutoff_value = fallback$cutoff_value,
+    top_n_actual = fallback$top_n_actual,
+    cutoff_quantile = fallback$cutoff_quantile,
+    method = "fixed_top_n_initial_placeholder",
+    curve_df = NULL,
+    curvature_strength = NA_real_,
+    candidate_table = data.frame(),
+    quantile_screen_table = data.frame(),
+    matched_interval_table = data.frame(),
+    selected_reason = "fixed_top_n_initial_placeholder"
   )
 }
 
@@ -2030,10 +2343,10 @@ prepare_comparison_data <- function(comparison_name, group1_prefix, group2_prefi
 }
 
 # Estimate DESeq2 mean-dispersion metrics within each condition subset using
-# an intercept-only model. This keeps the EVS NB2 variance curve anchored to
-# within-condition count structure instead of mixing in between-condition signal,
-# which would blur the variance profile that the leading-edge split is meant to
-# detect.
+# an intercept-only model. These within-condition estimates provide the DESeq2-
+# derived mean and dispersion terms used downstream to construct ranked IOD and
+# CV2 for the local Fourier shared-cutoff method, while avoiding contamination
+# from between-condition signal during cutoff estimation.
 compute_condition_feature_metrics <- function(count_submatrix) {
   cd <- S4Vectors::DataFrame(row.names = colnames(count_submatrix))
   dds <- DESeqDataSetFromMatrix(
@@ -2164,7 +2477,9 @@ build_eigenvector_split <- function(count_matrix, coldata, comparison_name) {
     trt_ids,
     top_n = evs_fixed_top_n,
     preprocessing_label = "Normalized before EVS",
-    feature_metrics = feature_metrics_trt
+    feature_metrics = feature_metrics_trt,
+    determine_cutoff = FALSE,
+    cutoff_method_label_if_skipped = "normalized_shared_cutoff_pending"
   )
 
   fit_untrt <- compute_pc1_loading_table(
@@ -2172,7 +2487,9 @@ build_eigenvector_split <- function(count_matrix, coldata, comparison_name) {
     untrt_ids,
     top_n = evs_fixed_top_n,
     preprocessing_label = "Normalized before EVS",
-    feature_metrics = feature_metrics_untrt
+    feature_metrics = feature_metrics_untrt,
+    determine_cutoff = FALSE,
+    cutoff_method_label_if_skipped = "normalized_shared_cutoff_pending"
   )
 
   fit_trt_raw <- compute_pc1_loading_table(
@@ -2198,78 +2515,40 @@ build_eigenvector_split <- function(count_matrix, coldata, comparison_name) {
   primary_trt_fit <- fit_trt
   primary_untrt_fit <- fit_untrt
 
-  normalized_fit_map <- list(
-    normalized_treatment = fit_trt,
-    normalized_control   = fit_untrt
+  combined_cutoff_info <- resolve_combined_fourier_cutoff(
+    fit_trt_loading_tbl = fit_trt$loading_table,
+    fit_ctrl_loading_tbl = fit_untrt$loading_table,
+    fixed_top_n = evs_fixed_top_n
   )
 
-  for (nm in names(normalized_fit_map)) {
-    print_evs_single_dataset_runtime_preview(
-      candidate_tbl = normalized_fit_map[[nm]]$candidate_table,
-      comparison_name = comparison_name,
-      dataset_label = nm
-    )
-  }
+  final_shared_rank <- as.integer(combined_cutoff_info$top_n_actual)
+  final_shared_reason <- combined_cutoff_info$selected_reason
 
-  independent_candidate_evals <- lapply(names(normalized_fit_map), function(nm) {
-    evaluate_single_evs_dataset_candidates(
-      count_matrix = count_matrix,
-      coldata = coldata,
-      comparison_name = comparison_name,
-      fit_obj = normalized_fit_map[[nm]],
-      dataset_label = nm,
-      max_leading_frac = evs_candidate_max_leading_frac
-    )
-  })
-  names(independent_candidate_evals) <- names(normalized_fit_map)
-
-  best_candidate_rows <- lapply(independent_candidate_evals, function(x) x$best_candidate)
-  best_candidate_rows <- best_candidate_rows[!vapply(best_candidate_rows, is.null, logical(1))]
-
-  best_candidate_by_dataset <- stats::setNames(best_candidate_rows, names(best_candidate_rows))
-
-  # Each normalized treatment/control dataset keeps its own best discrete cutoff.
-  # The raw treatment/control panels inherit the matched normalized cutoff from
-  # the same condition-specific dataset rather than sharing a pooled rank.
-  if (!is.null(best_candidate_by_dataset$normalized_treatment) &&
-      nrow(best_candidate_by_dataset$normalized_treatment) > 0 &&
-      is.finite(best_candidate_by_dataset$normalized_treatment$rank_index[1])) {
-    final_rank_trt <- as.integer(best_candidate_by_dataset$normalized_treatment$rank_index[1])
-    final_reason_trt <- "independent_normalized_treatment_discrete_constraint_optimum"
-
-    fit_trt <- apply_loading_cutoff(
-      fit_trt,
-      rank_index = final_rank_trt,
-      selected_reason = final_reason_trt
-    )
-    fit_trt_raw <- apply_loading_cutoff(
-      fit_trt_raw,
-      rank_index = final_rank_trt,
-      selected_reason = paste0(final_reason_trt, "_projected_to_raw")
-    )
-    fit_trt_raw$cutoff_method <- "normalized_rank_projected_to_raw_selected"
-    primary_trt_fit <- fit_trt
-  }
-
-  if (!is.null(best_candidate_by_dataset$normalized_control) &&
-      nrow(best_candidate_by_dataset$normalized_control) > 0 &&
-      is.finite(best_candidate_by_dataset$normalized_control$rank_index[1])) {
-    final_rank_untrt <- as.integer(best_candidate_by_dataset$normalized_control$rank_index[1])
-    final_reason_untrt <- "independent_normalized_control_discrete_constraint_optimum"
-
-    fit_untrt <- apply_loading_cutoff(
-      fit_untrt,
-      rank_index = final_rank_untrt,
-      selected_reason = final_reason_untrt
-    )
-    fit_untrt_raw <- apply_loading_cutoff(
-      fit_untrt_raw,
-      rank_index = final_rank_untrt,
-      selected_reason = paste0(final_reason_untrt, "_projected_to_raw")
-    )
-    fit_untrt_raw$cutoff_method <- "normalized_rank_projected_to_raw_selected"
-    primary_untrt_fit <- fit_untrt
-  }
+  fit_trt <- apply_loading_cutoff(
+    fit_trt,
+    rank_index = final_shared_rank,
+    selected_reason = paste0(final_shared_reason, "_applied_to_treatment")
+  )
+  fit_untrt <- apply_loading_cutoff(
+    fit_untrt,
+    rank_index = final_shared_rank,
+    selected_reason = paste0(final_shared_reason, "_applied_to_control")
+  )
+  fit_trt_raw <- apply_loading_cutoff(
+    fit_trt_raw,
+    rank_index = final_shared_rank,
+    selected_reason = paste0(final_shared_reason, "_projected_to_raw_treatment")
+  )
+  fit_trt_raw$cutoff_method <- "combined_fourier_rank_projected_to_raw_selected"
+  fit_untrt_raw <- apply_loading_cutoff(
+    fit_untrt_raw,
+    rank_index = final_shared_rank,
+    selected_reason = paste0(final_shared_reason, "_projected_to_raw_control")
+  )
+  fit_untrt_raw$cutoff_method <- "combined_fourier_rank_projected_to_raw_selected"
+  primary_trt_fit <- fit_trt
+  primary_untrt_fit <- fit_untrt
+  independent_candidate_evals <- list()
 
   trt_high   <- as.character(subset(primary_trt_fit$loading_table,   split_class == "high_loading")$feature_id)
   untrt_high <- as.character(subset(primary_untrt_fit$loading_table, split_class == "high_loading")$feature_id)
@@ -2282,53 +2561,27 @@ build_eigenvector_split <- function(count_matrix, coldata, comparison_name) {
     stop("Leading-edge dataset is empty. Check sample mapping or EVS cutoff settings.")
   }
 
-  # Export a single cutoff summary row per preprocessing × group combination.
-  # After the final cutoff is projected back onto the normalized loading tables,
-  # the "primary" and "comparison_panel" normalized fits converge by design.
-  # Collapsing to four rows avoids exporting duplicate normalized summaries.
   evs_cutoff_summary <- dplyr::bind_rows(
     data.frame(
       preprocessing = "normalized",
-      group = "treatment",
-      cutoff_mode = fit_trt$cutoff_method,
+      group = "shared_comparison_cutoff",
+      cutoff_mode = combined_cutoff_info$method,
       fixed_top_n_requested = evs_fixed_top_n,
-      empiric_rank_selected = fit_trt$top_n_used,
+      empiric_rank_selected = final_shared_rank,
       cutoff_quantile = fit_trt$cutoff_quantile,
-      curvature_strength = fit_trt$curvature_strength,
-      selected_reason = fit_trt$selected_reason,
-      stringsAsFactors = FALSE
-    ),
-    data.frame(
-      preprocessing = "normalized",
-      group = "control",
-      cutoff_mode = fit_untrt$cutoff_method,
-      fixed_top_n_requested = evs_fixed_top_n,
-      empiric_rank_selected = fit_untrt$top_n_used,
-      cutoff_quantile = fit_untrt$cutoff_quantile,
-      curvature_strength = fit_untrt$curvature_strength,
-      selected_reason = fit_untrt$selected_reason,
+      curvature_strength = NA_real_,
+      selected_reason = combined_cutoff_info$selected_reason,
       stringsAsFactors = FALSE
     ),
     data.frame(
       preprocessing = "raw",
-      group = "treatment",
-      cutoff_mode = fit_trt_raw$cutoff_method,
+      group = "shared_comparison_cutoff",
+      cutoff_mode = "combined_fourier_rank_projected_to_raw_selected",
       fixed_top_n_requested = evs_fixed_top_n,
-      empiric_rank_selected = fit_trt_raw$top_n_used,
+      empiric_rank_selected = final_shared_rank,
       cutoff_quantile = fit_trt_raw$cutoff_quantile,
-      curvature_strength = fit_trt_raw$curvature_strength,
-      selected_reason = fit_trt_raw$selected_reason,
-      stringsAsFactors = FALSE
-    ),
-    data.frame(
-      preprocessing = "raw",
-      group = "control",
-      cutoff_mode = fit_untrt_raw$cutoff_method,
-      fixed_top_n_requested = evs_fixed_top_n,
-      empiric_rank_selected = fit_untrt_raw$top_n_used,
-      cutoff_quantile = fit_untrt_raw$cutoff_quantile,
-      curvature_strength = fit_untrt_raw$curvature_strength,
-      selected_reason = fit_untrt_raw$selected_reason,
+      curvature_strength = NA_real_,
+      selected_reason = paste0(combined_cutoff_info$selected_reason, "_projected_to_raw"),
       stringsAsFactors = FALSE
     )
   )
@@ -2341,6 +2594,7 @@ build_eigenvector_split <- function(count_matrix, coldata, comparison_name) {
     primary_trt_fit       = primary_trt_fit,
     primary_untrt_fit     = primary_untrt_fit,
     independent_candidate_evals = independent_candidate_evals,
+    combined_cutoff_info  = combined_cutoff_info,
     evs_cutoff_summary    = evs_cutoff_summary,
     normalized_counts     = norm_counts_init,
     raw_dataset           = count_matrix,
@@ -2650,7 +2904,7 @@ plot_primary_evs_candidate_panel <- function(evs, comparison_name) {
       gp = gpar(fontface = "bold", cex = 1.02)
     ),
     bottom = textGrob(
-      "Candidate cutoffs were nominated where the IOD and CV2 second-derivative curvature peaks aligned within a rank interval. Exact ranks inside those intervals were wave-scored using both slope and amplitude terms for IOD and CV2. The normalized treatment and normalized control EVS datasets were each optimized independently under the <=50% leading-edge constraint, and each raw EVS panel inherited the matched condition-specific normalized cutoff rank.",
+      "The current manuscript workflow uses local Fourier summaries of ranked IOD and CV2 across percentile windows in treatment and control separately, combines those local treatment and control scores into one comparison-level transition score, and selects one shared cutoff rank for the comparison. This legacy curve panel is retained only as a supplemental descriptive diagnostic.",
       gp = gpar(cex = 0.86)
     )
   )
@@ -3865,6 +4119,44 @@ run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata,
   evs_cutoff_summary_out <- evs$evs_cutoff_summary
   evs_cutoff_summary_out$comparison_name <- comparison_name
   save_csv(evs_cutoff_summary_out, file.path(tab_dir, paste0(comparison_name, "_EVS_cutoff_summary.csv")))
+
+  if (!is.null(evs$combined_cutoff_info$trt_wave_obj$wave_map) && nrow(evs$combined_cutoff_info$trt_wave_obj$wave_map)) {
+    save_csv(evs$combined_cutoff_info$trt_wave_obj$wave_map, file.path(tab_dir, paste0(comparison_name, "_treatment_local_fourier_map.csv")))
+  }
+  if (!is.null(evs$combined_cutoff_info$ctrl_wave_obj$wave_map) && nrow(evs$combined_cutoff_info$ctrl_wave_obj$wave_map)) {
+    save_csv(evs$combined_cutoff_info$ctrl_wave_obj$wave_map, file.path(tab_dir, paste0(comparison_name, "_control_local_fourier_map.csv")))
+  }
+  if (!is.null(evs$combined_cutoff_info$combined_wave_map) && nrow(evs$combined_cutoff_info$combined_wave_map)) {
+    save_csv(evs$combined_cutoff_info$combined_wave_map, file.path(tab_dir, paste0(comparison_name, "_combined_local_fourier_map.csv")))
+  }
+  if (!is.null(evs$combined_cutoff_info$combined_interval_table) && nrow(evs$combined_cutoff_info$combined_interval_table)) {
+    save_csv(evs$combined_cutoff_info$combined_interval_table, file.path(tab_dir, paste0(comparison_name, "_combined_local_fourier_interval.csv")))
+  }
+  if (!is.null(evs$combined_cutoff_info$candidate_table) && nrow(evs$combined_cutoff_info$candidate_table)) {
+    save_csv(evs$combined_cutoff_info$candidate_table, file.path(tab_dir, paste0(comparison_name, "_combined_local_fourier_candidates.csv")))
+  }
+
+  trt_fourier_plot <- safe_plot_build(
+    plot_fourier_wave_map_single(evs$combined_cutoff_info$trt_wave_obj, comparison_name, "treatment"),
+    paste0(comparison_name, ": treatment local fourier wave map")
+  )
+  if (!is.null(trt_fourier_plot)) {
+    save_grob(trt_fourier_plot, file.path(cmp_dir, paste0(comparison_name, "_treatment_local_fourier_wave_map.png")), width = 12, height = 10)
+  }
+  ctrl_fourier_plot <- safe_plot_build(
+    plot_fourier_wave_map_single(evs$combined_cutoff_info$ctrl_wave_obj, comparison_name, "control"),
+    paste0(comparison_name, ": control local fourier wave map")
+  )
+  if (!is.null(ctrl_fourier_plot)) {
+    save_grob(ctrl_fourier_plot, file.path(cmp_dir, paste0(comparison_name, "_control_local_fourier_wave_map.png")), width = 12, height = 10)
+  }
+  combined_fourier_plot <- safe_plot_build(
+    plot_combined_fourier_wave_map(evs$combined_cutoff_info, comparison_name),
+    paste0(comparison_name, ": combined local fourier wave map")
+  )
+  if (!is.null(combined_fourier_plot)) {
+    save_grob(combined_fourier_plot, file.path(cmp_dir, paste0(comparison_name, "_combined_local_fourier_wave_map.png")), width = 12, height = 6)
+  }
   
 
   evs_pca_scatter <- safe_plot_build(
@@ -4148,14 +4440,10 @@ run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata,
       evs_fixed_top_n        = evs_fixed_top_n,
       evs_cutoff_mode_main   = evs_cutoff_mode_main,
       evs_primary_preprocessing = "normalized",
-      trt_top_n_used         = evs$fit_trt$top_n_used,
-      ctrl_top_n_used        = evs$fit_untrt$top_n_used,
-      trt_cutoff_method      = evs$fit_trt$cutoff_method,
-      ctrl_cutoff_method     = evs$fit_untrt$cutoff_method,
-      trt_cutoff_quantile    = evs$fit_trt$cutoff_quantile,
-      ctrl_cutoff_quantile   = evs$fit_untrt$cutoff_quantile,
-      trt_selected_reason    = evs$primary_trt_fit$selected_reason,
-      ctrl_selected_reason   = evs$primary_untrt_fit$selected_reason,
+      shared_cutoff_rank     = evs$combined_cutoff_info$top_n_actual,
+      shared_cutoff_method   = evs$combined_cutoff_info$method,
+      shared_cutoff_quantile = evs$fit_trt$cutoff_quantile,
+      shared_selected_reason = evs$combined_cutoff_info$selected_reason,
       stringsAsFactors       = FALSE
     )
     
