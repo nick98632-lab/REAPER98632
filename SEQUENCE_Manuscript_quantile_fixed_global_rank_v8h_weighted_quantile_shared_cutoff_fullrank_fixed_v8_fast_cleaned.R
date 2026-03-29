@@ -4,6 +4,32 @@
 # REVISED: COMPARISON-SPECIFIC COMBINED RANK AXIS
 # FIXED: FEATURE-ID-BASED CUTOFF PROPAGATION
 # FIXED: COARSE/FINE CANDIDATE GRID EXPORT
+# FIXED: HBFSS VOLCANO DECISION-BOUNDARY DISPLAY
+# FIXED: VOLCANO LABEL FILTER TO EXCLUDE PLACEHOLDER SYMBOLS
+# =============================================================================
+#
+# WHAT THIS SCRIPT DOES
+# 1. Reads a raw WTTS-Seq count matrix.
+# 2. Builds comparison-specific EVS rankings from treatment and control PC1 loadings.
+# 3. Uses a DESeq2-informed changepoint procedure on a combined ranking axis to choose
+#    a leading-edge cutoff.
+# 4. Splits each comparison into:
+#      - original dataset
+#      - leading-edge dataset
+#      - remainder dataset
+# 5. Runs DESeq2 and HBFSS on raw counts for each dataset.
+# 6. Exports summary tables, result tables, diagnostics, and publication-style plots.
+#
+# IMPORTANT INTERPRETIVE NOTES
+# - EVS ranking may be computed on normalized counts when normalize_before_evs = TRUE,
+#   but final DESeq2/HBFSS inference is always performed on raw counts.
+# - The HBFSS decision rule requires BOTH:
+#      empirical_p < hc_p_threshold_dataset
+#      HBFSS >= hbfss_threshold_dataset
+# - Therefore, the HBFSS volcano boundary must display the upper envelope of:
+#      y = -log10(hc_p_threshold_dataset)
+#      y = hbfss_threshold_dataset / |lfc_shrunk|
+#   rather than the hyperbola alone.
 # =============================================================================
 
 suppressPackageStartupMessages({
@@ -2374,9 +2400,14 @@ build_reviewer_volcano_classes <- function(df) {
     levels = c("Neither", "DESeq2 weak only", "DESeq2 strong only", "HBFSS only", "Overlap")
   )
 
-  df$has_valid_gene_symbol <- !is.na(df$gene_symbol) &
-    grepl("^[A-Za-z0-9._-]+$", trimws(df$gene_symbol))
-  df$gene_symbol_plot <- ifelse(df$has_valid_gene_symbol, trimws(df$gene_symbol), NA_character_)
+  cleaned_symbol <- trimws(as.character(df$gene_symbol))
+
+  df$has_valid_gene_symbol <- !is.na(cleaned_symbol) &
+    nzchar(cleaned_symbol) &
+    grepl("^[A-Za-z0-9._-]+$", cleaned_symbol) &
+    !grepl("^[-.]+$", cleaned_symbol)
+
+  df$gene_symbol_plot <- ifelse(df$has_valid_gene_symbol, cleaned_symbol, NA_character_)
   df
 }
 
@@ -2514,30 +2545,61 @@ plot_standard_volcano <- function(df, dataset_name) {
 
 add_hbfss_boundary_layer <- function(p, df) {
   threshold <- suppressWarnings(as.numeric(df$hbfss_threshold_dataset[1]))
+  hc_p <- suppressWarnings(as.numeric(df$hc_p_threshold_dataset[1]))
+
   if (!is.finite(threshold) || is.na(threshold) || threshold <= 0) return(p)
+  if (!is.finite(hc_p) || is.na(hc_p) || hc_p <= 0 || hc_p >= 1) return(p)
+
+  hc_y <- -log10(hc_p)
 
   finite_lfc <- suppressWarnings(as.numeric(df$lfc_shrunk))
   finite_lfc <- finite_lfc[is.finite(finite_lfc) & !is.na(finite_lfc)]
   max_abs_lfc <- max(abs(finite_lfc), na.rm = TRUE)
-  if (!is.finite(max_abs_lfc) || is.na(max_abs_lfc) || max_abs_lfc <= 0) max_abs_lfc <- lfc_boundary * 3
 
-  x_abs <- seq(from = max(0.05, min(lfc_boundary, max_abs_lfc)), to = max_abs_lfc, length.out = 400)
+  if (!is.finite(max_abs_lfc) || is.na(max_abs_lfc) || max_abs_lfc <= 0) {
+    max_abs_lfc <- lfc_boundary * 3
+  }
+
+  x_abs <- seq(
+    from = max(0.05, min(lfc_boundary, max_abs_lfc)),
+    to = max_abs_lfc,
+    length.out = 400
+  )
+
+  # True HBFSS display boundary is the upper envelope of the empirical HC gate
+  # and the HBFSS hyperbola, because both decision criteria are required.
+  y_curve <- pmax(hc_y, threshold / x_abs)
+
   boundary_df <- data.frame(
     lfc_shrunk = c(-rev(x_abs), x_abs),
-    neglog10_empirical_p = c(rev(threshold / x_abs), threshold / x_abs),
+    neglog10_empirical_p = c(rev(y_curve), y_curve),
     stringsAsFactors = FALSE
   )
-  boundary_df <- boundary_df[is.finite(boundary_df$neglog10_empirical_p) & !is.na(boundary_df$neglog10_empirical_p), , drop = FALSE]
+
+  boundary_df <- boundary_df[
+    is.finite(boundary_df$neglog10_empirical_p) &
+      !is.na(boundary_df$neglog10_empirical_p),
+    ,
+    drop = FALSE
+  ]
+
   if (!nrow(boundary_df)) return(p)
 
-  p + geom_path(
-    data = boundary_df,
-    aes(x = lfc_shrunk, y = neglog10_empirical_p),
-    inherit.aes = FALSE,
-    linetype = "dashed",
-    linewidth = LINE_WIDTH_BOUNDARY,
-    colour = plot_palette$threshold
-  )
+  p +
+    geom_path(
+      data = boundary_df,
+      aes(x = lfc_shrunk, y = neglog10_empirical_p),
+      inherit.aes = FALSE,
+      linetype = "dashed",
+      linewidth = LINE_WIDTH_BOUNDARY,
+      colour = plot_palette$threshold
+    ) +
+    geom_hline(
+      yintercept = hc_y,
+      linetype = "dotted",
+      linewidth = LINE_WIDTH_ZERO,
+      colour = plot_palette$threshold
+    )
 }
 
 plot_hbfss_volcano_panel <- function(df, dataset_name) {
@@ -2557,7 +2619,7 @@ plot_hbfss_volcano_panel <- function(df, dataset_name) {
   p <- add_hbfss_boundary_layer(p, df) +
     labs(
       title   = paste(pretty_dataset_label(dataset_name), "| HBFSS volcano"),
-      subtitle = compact_caption("Dashed curve marks the HBFSS decision boundary implied by the empirical HC threshold.", width = 76),
+      subtitle = compact_caption("Dashed boundary is the upper envelope of the HC gate and the HBFSS equality curve; dotted line marks the HC gate alone.", width = 76),
       x       = "Shrunken log2 fold change (β̂shrunk)",
       y       = expression(-log[10](p[empirical]))
     ) +
