@@ -2341,7 +2341,6 @@ build_eigenvector_split <- function(count_matrix, coldata, comparison_name) {
     primary_trt_fit       = primary_trt_fit,
     primary_untrt_fit     = primary_untrt_fit,
     independent_candidate_evals = independent_candidate_evals,
-    final_rank_aggregation = final_rank_aggregation,
     evs_cutoff_summary    = evs_cutoff_summary,
     normalized_counts     = norm_counts_init,
     raw_dataset           = count_matrix,
@@ -4060,10 +4059,6 @@ run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata,
       }
     }
   }
-  if (!is.null(evs$final_rank_aggregation$summary_table) && nrow(evs$final_rank_aggregation$summary_table)) {
-    save_csv(evs$final_rank_aggregation$summary_table, file.path(tab_dir, paste0(comparison_name, "_EVS_independent_rank_aggregation_summary.csv")))
-  }
-
   primary_candidate_panel <- safe_plot_build(
     plot_primary_evs_candidate_panel(evs, comparison_name),
     paste0(comparison_name, ": primary EVS candidate panel")
