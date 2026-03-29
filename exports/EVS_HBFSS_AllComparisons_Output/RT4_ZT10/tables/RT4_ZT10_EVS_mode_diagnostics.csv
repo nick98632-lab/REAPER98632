@@ -1,0 +1,4 @@
+"comparison_name","model_selection_mode","n_candidates","n_positive_score","n_regime_plausible","n_valid_split"
+"RT4_ZT10","bic_coarse",31159,31159,0,0
+"RT4_ZT10","aic_coarse",31159,31159,0,0
+"RT4_ZT10","none_coarse",31159,31159,0,0

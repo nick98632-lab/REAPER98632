@@ -1,0 +1,2 @@
+"comparison_name","independently_best_rank","independently_best_local_lagrange_objective","final_rank","final_filtered_rank","final_rank_mode","cutoff_feature_id","aggregation_method","model_selection_mode_used","combined_loading_rule","fallback_used"
+"RT8_ZT14",NA,NA,5000,5000,"comparison_specific_combined_rank","533419","deseq2_nb_regime_scoring_with_normalized_combined_EVS_ranking","fallback_only","max",TRUE
