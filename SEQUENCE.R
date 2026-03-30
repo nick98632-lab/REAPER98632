@@ -158,27 +158,30 @@ evs_candidate_runtime_seconds_low  <- 12
 evs_candidate_runtime_seconds_high <- 25
 
 # Local Fourier shared-cutoff settings.
-# The ranked DESeq2-derived IOD and CV2 sequences are evaluated across the full
-# ranked dataset at percentile positions. At each percentile position, a local
-# window is extracted and low-order Fourier series are fit for IOD and CV2 in
-# treatment and control separately. Those local treatment and control summaries
-# are then combined into one comparison-level score that defines the single
-# shared EVS cutoff used downstream.
+# The Fourier grid is evaluated over the full ranked dataset using 100
+# percentile-centered overlapping local fits. Treatment and control are modeled
+# separately within each metric, then combined at the waveform level to form a
+# composite IOD wave and a composite CV² wave. These composite waves are the
+# primary interpretive objects. A separate percentile-indexed score is then
+# derived from the composite waves for cutoff selection. The score is a
+# decision statistic, not itself the biological waveform.
 fourier_percentile_step <- 0.01
-fourier_window_fraction <- 0.08
+fourier_window_fraction <- 0.12
 fourier_harmonics <- 2L
-fourier_min_rank <- 50L
-fourier_max_rank_frac <- 0.50
+fourier_top_candidate_n_for_deseq2 <- 1L
+
+# Evaluate the full ranked domain with 100 overlapping percentile-centered
+# local fits. The resulting waveform panels display the local Fourier-derived
+# amplitudes across the entire ranked dataset rather than only the upper tail.
+fourier_min_rank <- 1L
+fourier_max_rank_frac <- 1.00
+
+# The score panel is a percentile-indexed decision statistic derived from the
+# composite waveform objects. It is not itself treated as the biological wave.
 fourier_score_weight_iod_amp <- 1.0
 fourier_score_weight_cv2_amp <- 1.0
 fourier_score_weight_center_agreement <- 1.0
 fourier_interval_fraction_of_max <- 0.90
-
-# Number of highest-scoring combined local Fourier candidate windows retained
-# for downstream shared-cutoff selection. The manuscript pipeline ultimately
-# applies one shared cutoff per comparison, so the default is to carry forward
-# only the single best combined Fourier candidate.
-fourier_top_candidate_n_for_deseq2 <- 1L
 
 # Plot settings
 figure_dpi            <- 320
@@ -1162,11 +1165,15 @@ build_percentile_windows_fourier <- function(n_total,
                                              max_rank_frac = fourier_max_rank_frac) {
   pct_grid <- seq(step, 1, by = step)
   center_ranks <- pmax(1L, pmin(n_total, round(pct_grid * n_total)))
+
   max_rank <- floor(n_total * max_rank_frac)
   keep <- center_ranks >= min_rank & center_ranks <= max_rank
+
   pct_grid <- pct_grid[keep]
   center_ranks <- center_ranks[keep]
-  half_window <- max(3L, round((window_fraction * n_total) / 2))
+
+  half_window <- max(5L, round((window_fraction * n_total) / 2))
+
   data.frame(
     percentile = pct_grid,
     center_rank = center_ranks,
@@ -1188,29 +1195,34 @@ build_local_fourier_design <- function(x, n_harmonics = fourier_harmonics) {
 }
 
 fit_local_fourier <- function(rank_vec, y_vec, n_harmonics = fourier_harmonics) {
-  if (length(rank_vec) < (2 * n_harmonics + 3L)) return(NULL)
+  if (length(rank_vec) < (2 * n_harmonics + 5L)) return(NULL)
   if (all(!is.finite(y_vec)) || stats::sd(y_vec, na.rm = TRUE) == 0) return(NULL)
+
   dd <- build_local_fourier_design(rank_vec, n_harmonics = n_harmonics)
   dd$y <- as.numeric(y_vec)
+
   rhs <- paste(colnames(dd)[colnames(dd) != "y"], collapse = " + ")
   fm <- stats::as.formula(paste("y ~", rhs))
+
   fit <- tryCatch(stats::lm(fm, data = dd), error = function(e) NULL)
   if (is.null(fit)) return(NULL)
+
   fitted_y <- as.numeric(stats::predict(fit, newdata = dd))
   residual_y <- dd$y - fitted_y
-  amp_components <- numeric(n_harmonics)
-  for (k in seq_len(n_harmonics)) {
-    bsin <- stats::coef(fit)[paste0("sin_", k)]
-    bcos <- stats::coef(fit)[paste0("cos_", k)]
-    bsin <- ifelse(is.na(bsin), 0, bsin)
-    bcos <- ifelse(is.na(bcos), 0, bcos)
-    amp_components[k] <- sqrt(bsin^2 + bcos^2)
-  }
+
+  local_amplitude <- 0.5 * (max(fitted_y, na.rm = TRUE) - min(fitted_y, na.rm = TRUE))
   peak_idx <- which.max(fitted_y)
   trough_idx <- which.min(fitted_y)
+  center_rank <- mean(c(rank_vec[peak_idx], rank_vec[trough_idx]))
+
   list(
-    total_amplitude = sum(amp_components, na.rm = TRUE),
-    center_rank = mean(c(rank_vec[peak_idx], rank_vec[trough_idx])),
+    fit = fit,
+    fitted_y = fitted_y,
+    residual_y = residual_y,
+    local_amplitude = local_amplitude,
+    peak_rank = rank_vec[peak_idx],
+    trough_rank = rank_vec[trough_idx],
+    center_rank = center_rank,
     residual_sd = stats::sd(residual_y, na.rm = TRUE)
   )
 }
@@ -1228,6 +1240,7 @@ summarize_local_fourier_window <- function(metric_df, lo_rank, hi_rank) {
       stringsAsFactors = FALSE
     ))
   }
+
   iod_fit <- fit_local_fourier(sub$rank, sub$log_iod_nb)
   cv2_fit <- fit_local_fourier(sub$rank, sub$log_cv2_nb)
   if (is.null(iod_fit) || is.null(cv2_fit)) {
@@ -1241,9 +1254,10 @@ summarize_local_fourier_window <- function(metric_df, lo_rank, hi_rank) {
       stringsAsFactors = FALSE
     ))
   }
+
   data.frame(
-    iod_amplitude = iod_fit$total_amplitude,
-    cv2_amplitude = cv2_fit$total_amplitude,
+    iod_amplitude = iod_fit$local_amplitude,
+    cv2_amplitude = cv2_fit$local_amplitude,
     iod_center = iod_fit$center_rank,
     cv2_center = cv2_fit$center_rank,
     iod_residual_sd = iod_fit$residual_sd,
@@ -1261,24 +1275,42 @@ build_local_fourier_wave_map <- function(loading_tbl,
     dispersion_col = dispersion_col
   )
   if (is.null(metric_df) || !nrow(metric_df)) return(NULL)
+
   windows <- build_percentile_windows_fourier(n_total = nrow(metric_df))
   if (!nrow(windows)) return(NULL)
+
   rows <- lapply(seq_len(nrow(windows)), function(i) {
     ww <- windows[i, , drop = FALSE]
     ss <- summarize_local_fourier_window(metric_df, ww$lo_rank, ww$hi_rank)
     cbind(ww, ss, stringsAsFactors = FALSE)
   })
+
   wave_map <- dplyr::bind_rows(rows)
-  wave_map$iod_amp_scaled <- if (all(is.na(wave_map$iod_amplitude))) NA_real_ else scales::rescale(wave_map$iod_amplitude, to = c(0, 1), from = range(wave_map$iod_amplitude, na.rm = TRUE))
-  wave_map$cv2_amp_scaled <- if (all(is.na(wave_map$cv2_amplitude))) NA_real_ else scales::rescale(wave_map$cv2_amplitude, to = c(0, 1), from = range(wave_map$cv2_amplitude, na.rm = TRUE))
+
+  iod_amp_scaled <- if (all(is.na(wave_map$iod_amplitude))) {
+    rep(NA_real_, nrow(wave_map))
+  } else {
+    scales::rescale(wave_map$iod_amplitude, to = c(0, 1), from = range(wave_map$iod_amplitude, na.rm = TRUE))
+  }
+
+  cv2_amp_scaled <- if (all(is.na(wave_map$cv2_amplitude))) {
+    rep(NA_real_, nrow(wave_map))
+  } else {
+    scales::rescale(wave_map$cv2_amplitude, to = c(0, 1), from = range(wave_map$cv2_amplitude, na.rm = TRUE))
+  }
+
   wave_map$center_distance <- abs(wave_map$iod_center - wave_map$cv2_center)
   wave_map$center_agreement <- 1 / (1 + wave_map$center_distance)
   wave_map$local_fourier_score <- (
-    fourier_score_weight_iod_amp * wave_map$iod_amp_scaled +
-      fourier_score_weight_cv2_amp * wave_map$cv2_amp_scaled +
+    fourier_score_weight_iod_amp * iod_amp_scaled +
+      fourier_score_weight_cv2_amp * cv2_amp_scaled +
       fourier_score_weight_center_agreement * wave_map$center_agreement
   )
-  list(metric_df = metric_df, wave_map = wave_map)
+
+  list(
+    metric_df = metric_df,
+    wave_map = wave_map
+  )
 }
 
 combine_treatment_control_fourier_maps <- function(trt_wave_obj, ctrl_wave_obj) {
@@ -1286,15 +1318,45 @@ combine_treatment_control_fourier_maps <- function(trt_wave_obj, ctrl_wave_obj) 
   trt_map <- trt_wave_obj$wave_map
   ctrl_map <- ctrl_wave_obj$wave_map
   if (is.null(trt_map) || is.null(ctrl_map) || !nrow(trt_map) || !nrow(ctrl_map)) return(NULL)
-  keep_cols <- c("percentile", "center_rank", "local_fourier_score", "iod_amp_scaled", "cv2_amp_scaled", "center_agreement")
+
+  keep_cols <- c("percentile", "center_rank", "iod_amplitude", "cv2_amplitude", "iod_center", "cv2_center", "local_fourier_score")
   trt_map2 <- trt_map[, keep_cols, drop = FALSE]
   ctrl_map2 <- ctrl_map[, keep_cols, drop = FALSE]
+
   names(trt_map2)[names(trt_map2) != "percentile"] <- paste0(names(trt_map2)[names(trt_map2) != "percentile"], "_trt")
   names(ctrl_map2)[names(ctrl_map2) != "percentile"] <- paste0(names(ctrl_map2)[names(ctrl_map2) != "percentile"], "_ctrl")
+
   out <- dplyr::inner_join(trt_map2, ctrl_map2, by = "percentile")
   if (!nrow(out)) return(NULL)
+
   out$combined_center_rank <- round((out$center_rank_trt + out$center_rank_ctrl) / 2)
-  out$combined_fourier_score <- out$local_fourier_score_trt + out$local_fourier_score_ctrl
+  out$combined_iod_amplitude <- out$iod_amplitude_trt + out$iod_amplitude_ctrl
+  out$combined_cv2_amplitude <- out$cv2_amplitude_trt + out$cv2_amplitude_ctrl
+
+  out$combined_center_distance <- abs(
+    ((out$iod_center_trt + out$iod_center_ctrl) / 2) -
+      ((out$cv2_center_trt + out$cv2_center_ctrl) / 2)
+  )
+  out$combined_center_agreement <- 1 / (1 + out$combined_center_distance)
+
+  iod_amp_scaled <- if (all(is.na(out$combined_iod_amplitude))) {
+    rep(NA_real_, nrow(out))
+  } else {
+    scales::rescale(out$combined_iod_amplitude, to = c(0, 1), from = range(out$combined_iod_amplitude, na.rm = TRUE))
+  }
+
+  cv2_amp_scaled <- if (all(is.na(out$combined_cv2_amplitude))) {
+    rep(NA_real_, nrow(out))
+  } else {
+    scales::rescale(out$combined_cv2_amplitude, to = c(0, 1), from = range(out$combined_cv2_amplitude, na.rm = TRUE))
+  }
+
+  out$combined_fourier_score <- (
+    fourier_score_weight_iod_amp * iod_amp_scaled +
+      fourier_score_weight_cv2_amp * cv2_amp_scaled +
+      fourier_score_weight_center_agreement * out$combined_center_agreement
+  )
+
   out
 }
 
@@ -1391,30 +1453,53 @@ resolve_combined_fourier_cutoff <- function(fit_trt_loading_tbl,
 plot_fourier_wave_map_single <- function(wave_obj, comparison_name, group_label) {
   if (is.null(wave_obj) || is.null(wave_obj$wave_map) || !nrow(wave_obj$wave_map)) return(NULL)
   df <- wave_obj$wave_map
-  p1 <- ggplot(df, aes(percentile)) +
-    geom_line(aes(y = iod_amp_scaled, color = "IOD amplitude"), linewidth = 0.7) +
-    geom_line(aes(y = cv2_amp_scaled, color = "CV2 amplitude"), linewidth = 0.7) +
-    scale_color_manual(values = c("IOD amplitude" = plot_palette$treatment, "CV2 amplitude" = plot_palette$control)) +
-    labs(title = paste0(pretty_group_label(group_label), " | local Fourier amplitudes"), x = "Percentile", y = "Scaled amplitude", color = NULL) +
+
+  ggplot(df, aes(percentile)) +
+    geom_line(aes(y = iod_amplitude, color = "IOD amplitude"), linewidth = 0.8) +
+    geom_line(aes(y = cv2_amplitude, color = "CV² amplitude"), linewidth = 0.8) +
+    scale_color_manual(values = c("IOD amplitude" = plot_palette$treatment, "CV² amplitude" = plot_palette$control)) +
+    labs(
+      title = paste0(pretty_group_label(group_label), " | local Fourier amplitudes"),
+      x = "Percentile center",
+      y = "Local amplitude",
+      color = NULL
+    ) +
     manuscript_theme()
-  p2 <- ggplot(df, aes(percentile, local_fourier_score)) +
-    geom_line(color = plot_palette$threshold, linewidth = 0.8) +
-    labs(title = paste0(pretty_group_label(group_label), " | local Fourier score"), x = "Percentile", y = "Score") +
-    manuscript_theme()
-  arrangeGrob(p1, p2, ncol = 1, top = textGrob(paste0(comparison_name, " | ", pretty_group_label(group_label), " local Fourier wave map"), gp = gpar(fontface = "bold", cex = 1.0)))
 }
 
 plot_combined_fourier_wave_map <- function(combined_cutoff_info, comparison_name) {
   df <- combined_cutoff_info$combined_wave_map
+  if (is.null(df) || !nrow(df)) return(NULL)
+
+  ggplot(df, aes(percentile)) +
+    geom_line(aes(y = combined_iod_amplitude, color = "Composite IOD amplitude"), linewidth = 0.9) +
+    geom_line(aes(y = combined_cv2_amplitude, color = "Composite CV² amplitude"), linewidth = 0.9) +
+    scale_color_manual(values = c("Composite IOD amplitude" = plot_palette$treatment,
+                                  "Composite CV² amplitude" = plot_palette$control)) +
+    labs(
+      title = paste0(comparison_name, " | combined composite wave map"),
+      x = "Percentile center",
+      y = "Composite local amplitude",
+      color = NULL
+    ) +
+    manuscript_theme()
+}
+
+plot_combined_fourier_score <- function(combined_cutoff_info, comparison_name) {
+  df <- combined_cutoff_info$combined_wave_map
   int_df <- combined_cutoff_info$combined_interval_table
   cand_df <- combined_cutoff_info$candidate_table
   if (is.null(df) || !nrow(df)) return(NULL)
-  p <- ggplot(df, aes(percentile, combined_fourier_score)) + geom_line(color = plot_palette$threshold, linewidth = 0.9)
+
+  p <- ggplot(df, aes(percentile, combined_fourier_score)) +
+    geom_col(width = 0.008, fill = plot_palette$threshold)
+
   if (!is.null(int_df) && nrow(int_df)) {
     pct_lo <- min(df$percentile[df$combined_center_rank >= int_df$interval_lo[1]], na.rm = TRUE)
     pct_hi <- max(df$percentile[df$combined_center_rank <= int_df$interval_hi[1]], na.rm = TRUE)
     p <- p + annotate("rect", xmin = pct_lo, xmax = pct_hi, ymin = -Inf, ymax = Inf, alpha = 0.15, fill = "grey70")
   }
+
   if (!is.null(cand_df) && nrow(cand_df)) {
     chosen <- cand_df[cand_df$selected, , drop = FALSE]
     if (nrow(chosen)) {
@@ -1422,7 +1507,12 @@ plot_combined_fourier_wave_map <- function(combined_cutoff_info, comparison_name
       p <- p + geom_vline(xintercept = chosen_pct, color = plot_palette$threshold, linewidth = 0.9)
     }
   }
-  p + labs(title = paste0(comparison_name, " | combined treatment + control Fourier score"), x = "Percentile", y = "Combined Fourier score") + manuscript_theme()
+
+  p + labs(
+    title = paste0(comparison_name, " | combined cutoff-selection score"),
+    x = "Percentile center",
+    y = "Score"
+  ) + manuscript_theme()
 }
 
 resolve_evs_cutoff <- function(loading_tbl,
@@ -4162,6 +4252,14 @@ run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata,
   )
   if (!is.null(combined_fourier_plot)) {
     save_grob(combined_fourier_plot, file.path(cmp_dir, paste0(comparison_name, "_combined_local_fourier_wave_map.png")), width = 12, height = 6)
+  }
+
+  combined_score_plot <- safe_plot_build(
+    plot_combined_fourier_score(evs$combined_cutoff_info, comparison_name),
+    paste0(comparison_name, ": combined local fourier score")
+  )
+  if (!is.null(combined_score_plot)) {
+    save_grob(combined_score_plot, file.path(cmp_dir, paste0(comparison_name, "_combined_local_fourier_score.png")), width = 12, height = 6)
   }
   
 
