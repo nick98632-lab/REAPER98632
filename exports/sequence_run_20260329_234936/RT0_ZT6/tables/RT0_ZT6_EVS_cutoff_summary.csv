@@ -1,0 +1,3 @@
+"preprocessing","group","cutoff_mode","fixed_top_n_requested","empiric_rank_selected","cutoff_quantile","curvature_strength","selected_reason","comparison_name"
+"normalized","shared_comparison_cutoff","combined_local_fourier",5000,913,0.971064558045194,NA,"combined_fourier_max","RT0_ZT6"
+"raw","shared_comparison_cutoff","combined_fourier_rank_projected_to_raw_selected",5000,913,0.971064558045194,NA,"combined_fourier_max_projected_to_raw","RT0_ZT6"
