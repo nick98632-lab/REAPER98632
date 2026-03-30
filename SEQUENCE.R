@@ -2795,8 +2795,24 @@ plot_pca_scatter <- function(pca_fit, dataset_label, group_label) {
       point.padding      = 0.10,
       min.segment.length = 0
     ) +
-    scale_shape_manual(values = condition_shapes, labels = condition_labels, name = "Condition") +
-    scale_fill_manual(values  = condition_fills,  labels = condition_labels, name = "Condition") +
+    scale_shape_manual(
+      values = condition_shapes,
+      labels = condition_labels,
+      name   = "Condition",
+      guide  = guide_legend(
+        override.aes = list(
+          size   = 3.0,
+          fill   = unname(condition_fills),
+          colour = "white"
+        )
+      )
+    ) +
+    scale_fill_manual(
+      values = condition_fills,
+      labels = condition_labels,
+      name   = "Condition",
+      guide  = "none"
+    ) +
     labs(
       title = pretty_group_label(group_label),
       subtitle = NULL,
@@ -2809,10 +2825,7 @@ plot_pca_scatter <- function(pca_fit, dataset_label, group_label) {
       plot.title  = element_text(margin = margin(b = 4)),
       plot.margin = margin(t = 12, r = 18, b = 16, l = 16)
     ) +
-    guides(
-      fill  = guide_legend(override.aes = list(size = 3.0, shape = 21, colour = "white")),
-      shape = guide_legend(override.aes = list(size = 3.0, fill  = "grey70", colour = "white"))
-    )
+    guides(shape = guide_legend(order = 1))
 }
 
 plot_pc1_loading_rank <- function(loading_tbl, cutoff, dataset_label, group_label,
@@ -3819,8 +3832,24 @@ compute_dataset_pca_plot <- function(count_df, coldata, dataset_name,
       point.padding      = 0.10,
       min.segment.length = 0
     ) +
-    scale_shape_manual(values = condition_shapes, labels = condition_labels, name = "Condition") +
-    scale_fill_manual(values  = condition_fills,  labels = condition_labels, name = "Condition") +
+    scale_shape_manual(
+      values = condition_shapes,
+      labels = condition_labels,
+      name   = "Condition",
+      guide  = guide_legend(
+        override.aes = list(
+          size   = 3.0,
+          fill   = unname(condition_fills),
+          colour = "white"
+        )
+      )
+    ) +
+    scale_fill_manual(
+      values = condition_fills,
+      labels = condition_labels,
+      name   = "Condition",
+      guide  = "none"
+    ) +
     labs(
       title    = compact_title(pretty_dataset_label(dataset_name)),
       subtitle = NULL,
@@ -3833,10 +3862,7 @@ compute_dataset_pca_plot <- function(count_df, coldata, dataset_name,
       legend.position = "none",
       plot.margin = margin(t = 12, r = 18, b = 16, l = 16)
     ) +
-    guides(
-      fill  = guide_legend(override.aes = list(size = 3.0, shape = 21, colour = "white")),
-      shape = guide_legend(override.aes = list(size = 3.0, fill  = "grey70", colour = "white"))
-    )
+    guides(shape = guide_legend(order = 1))
 }
 
 
