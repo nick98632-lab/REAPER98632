@@ -1,2 +1,0 @@
-"comparison_name","dataset_name","n_features","hc_p_threshold","hbfss_threshold","n_standard_significant","n_HBFSS_significant","n_overlap_significant","n_strong_effect","n_weak_effect","evs_fixed_top_n","evs_cutoff_mode_main","evs_primary_preprocessing","shared_cutoff_rank","shared_cutoff_method","shared_cutoff_quantile","shared_selected_reason"
-"RT8_ZT14","RT8_ZT14_remainder_dataset",30271,0.0188100826492383,1.72560929620777,4,79,4,0,4941,5000,"matched_curvature_wave","normalized",928,"combined_local_fourier",0.970614312856238,"combined_fourier_max"

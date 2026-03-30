@@ -1,4 +1,0 @@
-"comparison_name","model_selection_mode","n_candidates","n_positive_score","n_regime_plausible","n_valid_split"
-"RT2_ZT8","bic_coarse",31035,31035,0,0
-"RT2_ZT8","aic_coarse",31035,31035,0,0
-"RT2_ZT8","none_coarse",31035,31035,0,0
