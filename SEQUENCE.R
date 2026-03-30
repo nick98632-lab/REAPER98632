@@ -157,14 +157,14 @@ evs_candidate_max_leading_frac     <- 0.50
 evs_candidate_runtime_seconds_low  <- 12
 evs_candidate_runtime_seconds_high <- 25
 
-# Local Fourier shared-cutoff settings.
+# Local Fourier regime-shift settings.
 # The Fourier grid is evaluated over the full ranked dataset using 100
 # percentile-centered overlapping local fits. Treatment and control are modeled
 # separately within each metric, then combined at the waveform level to form a
-# composite IOD wave and a composite CV² wave. These composite waves are the
-# primary interpretive objects. A separate percentile-indexed score is then
-# derived from the composite waves for cutoff selection. The score is a
-# decision statistic, not itself the biological waveform.
+# composite IOD curve and a composite CV² curve. The primary EVS cutoff is the
+# first stable crossing between these two lines. The percentile-indexed score
+# is retained as a descriptive summary, but the crossing itself is the regime
+# shift and therefore the splitting cutoff.
 fourier_percentile_step <- 0.01
 fourier_window_fraction <- 0.12
 fourier_harmonics <- 2L
@@ -182,6 +182,14 @@ fourier_score_weight_iod_amp <- 1.0
 fourier_score_weight_cv2_amp <- 1.0
 fourier_score_weight_center_agreement <- 1.0
 fourier_interval_fraction_of_max <- 0.90
+
+crossing_min_percentile <- 0.05
+crossing_max_percentile <- 0.95
+crossing_stability_window_n <- 3L
+crossing_plot_line_width <- 0.95
+crossing_plot_vline_width <- 0.95
+crossing_plot_hline_width <- 0.65
+crossing_plot_point_size <- 1.8
 
 # Plot settings
 figure_dpi            <- 320
@@ -1360,28 +1368,140 @@ combine_treatment_control_fourier_maps <- function(trt_wave_obj, ctrl_wave_obj) 
   out
 }
 
-define_combined_fourier_interval <- function(combined_wave_df) {
-  if (is.null(combined_wave_df) || !nrow(combined_wave_df)) return(data.frame())
-  df <- combined_wave_df[is.finite(combined_wave_df$combined_fourier_score) & !is.na(combined_wave_df$combined_fourier_score), , drop = FALSE]
-  if (!nrow(df)) return(data.frame())
-  max_score <- max(df$combined_fourier_score, na.rm = TRUE)
-  band <- df[df$combined_fourier_score >= (fourier_interval_fraction_of_max * max_score), , drop = FALSE]
-  if (!nrow(band)) return(data.frame())
-  band <- band[order(band$combined_center_rank), , drop = FALSE]
-  peak_rank <- df$combined_center_rank[which.max(df$combined_fourier_score)]
-  runs <- split(band$combined_center_rank, cumsum(c(1, diff(band$combined_center_rank) > 1)))
-  run_containing_peak <- NULL
-  for (r in runs) {
-    if (peak_rank %in% r) { run_containing_peak <- r; break }
+
+compute_regime_difference_curve <- function(combined_wave_df) {
+  df <- as.data.frame(combined_wave_df, stringsAsFactors = FALSE)
+  required_cols <- c(
+    "percentile", "combined_center_rank",
+    "combined_iod_amplitude", "combined_cv2_amplitude"
+  )
+  assert_required_columns(df, required_cols, object_name = "combined_wave_df")
+
+  df$regime_difference <- df$combined_iod_amplitude - df$combined_cv2_amplitude
+  df$regime_direction <- ifelse(
+    is.na(df$regime_difference),
+    NA_character_,
+    ifelse(df$regime_difference > 0, "IOD_dominant",
+           ifelse(df$regime_difference < 0, "CV2_dominant", "balanced"))
+  )
+  df
+}
+
+find_crossing_intervals <- function(diff_df,
+                                    min_percentile = crossing_min_percentile,
+                                    max_percentile = crossing_max_percentile) {
+  df <- as.data.frame(diff_df, stringsAsFactors = FALSE)
+  df <- df[order(df$percentile), , drop = FALSE]
+  keep <- is.finite(df$percentile) & !is.na(df$percentile) &
+    is.finite(df$regime_difference) & !is.na(df$regime_difference) &
+    df$percentile >= min_percentile & df$percentile <= max_percentile
+  df <- df[keep, , drop = FALSE]
+  if (nrow(df) < 2L) return(data.frame())
+
+  rows <- list()
+  kk <- 1L
+  for (i in seq_len(nrow(df) - 1L)) {
+    y1 <- df$regime_difference[i]
+    y2 <- df$regime_difference[i + 1L]
+    if (!is.finite(y1) || !is.finite(y2)) next
+    crossed <- (y1 == 0) || (y2 == 0) || ((y1 > 0) && (y2 < 0)) || ((y1 < 0) && (y2 > 0))
+    if (!crossed) next
+
+    x1 <- df$percentile[i]
+    x2 <- df$percentile[i + 1L]
+    r1 <- df$combined_center_rank[i]
+    r2 <- df$combined_center_rank[i + 1L]
+
+    if (isTRUE(all.equal(y1, y2))) {
+      crossing_percentile <- mean(c(x1, x2))
+      crossing_rank <- round(mean(c(r1, r2)))
+    } else {
+      crossing_percentile <- x1 + (0 - y1) * (x2 - x1) / (y2 - y1)
+      crossing_rank <- round(r1 + (0 - y1) * (r2 - r1) / (y2 - y1))
+    }
+
+    rows[[kk]] <- data.frame(
+      crossing_id = paste0("crossing_", kk),
+      idx_left = i,
+      idx_right = i + 1L,
+      percentile_left = x1,
+      percentile_right = x2,
+      rank_left = r1,
+      rank_right = r2,
+      regime_difference_left = y1,
+      regime_difference_right = y2,
+      crossing_percentile = crossing_percentile,
+      crossing_rank = as.integer(crossing_rank),
+      stringsAsFactors = FALSE
+    )
+    kk <- kk + 1L
   }
-  if (is.null(run_containing_peak)) run_containing_peak <- runs[[1]]
-  data.frame(
-    interval_lo = min(run_containing_peak),
-    interval_hi = max(run_containing_peak),
-    interval_center = round(mean(run_containing_peak)),
-    peak_rank = peak_rank,
-    peak_score = max_score,
-    stringsAsFactors = FALSE
+  if (!length(rows)) return(data.frame())
+  dplyr::bind_rows(rows)
+}
+
+label_stable_crossings <- function(diff_df,
+                                   crossing_tbl,
+                                   stability_window_n = crossing_stability_window_n) {
+  if (is.null(crossing_tbl) || !nrow(crossing_tbl)) return(data.frame())
+  df <- as.data.frame(diff_df, stringsAsFactors = FALSE)
+  out <- crossing_tbl
+  out$left_window_positive_frac <- NA_real_
+  out$right_window_negative_frac <- NA_real_
+  out$stable_crossing <- FALSE
+
+  for (i in seq_len(nrow(out))) {
+    il <- out$idx_left[i]
+    ir <- out$idx_right[i]
+
+    left_idx <- seq.int(max(1L, il - stability_window_n + 1L), il, by = 1L)
+    right_idx <- seq.int(ir, min(nrow(df), ir + stability_window_n - 1L), by = 1L)
+
+    left_vals <- df$regime_difference[left_idx]
+    right_vals <- df$regime_difference[right_idx]
+
+    left_pos_frac <- mean(left_vals > 0, na.rm = TRUE)
+    right_neg_frac <- mean(right_vals < 0, na.rm = TRUE)
+
+    out$left_window_positive_frac[i] <- left_pos_frac
+    out$right_window_negative_frac[i] <- right_neg_frac
+    out$stable_crossing[i] <- isTRUE(
+      is.finite(left_pos_frac) && is.finite(right_neg_frac) &&
+        left_pos_frac >= 0.67 && right_neg_frac >= 0.67
+    )
+  }
+
+  out
+}
+
+select_regime_shift_crossing <- function(combined_wave_df) {
+  diff_df <- compute_regime_difference_curve(combined_wave_df)
+  crossing_tbl <- find_crossing_intervals(diff_df)
+  crossing_tbl <- label_stable_crossings(diff_df, crossing_tbl)
+
+  if (!nrow(crossing_tbl)) {
+    return(list(
+      diff_df = diff_df,
+      crossing_table = crossing_tbl,
+      selected_crossing = NULL,
+      selected_reason = "no_crossings_found"
+    ))
+  }
+
+  stable_tbl <- crossing_tbl[crossing_tbl$stable_crossing, , drop = FALSE]
+  if (nrow(stable_tbl)) {
+    selected <- stable_tbl[order(stable_tbl$crossing_percentile), , drop = FALSE][1, , drop = FALSE]
+    reason <- "first_stable_crossing"
+  } else {
+    selected <- crossing_tbl[order(crossing_tbl$crossing_percentile), , drop = FALSE][1, , drop = FALSE]
+    reason <- "first_crossing_fallback"
+  }
+
+  list(
+    diff_df = diff_df,
+    crossing_table = crossing_tbl,
+    selected_crossing = selected,
+    selected_reason = reason
   )
 }
 
@@ -1390,6 +1510,7 @@ resolve_combined_fourier_cutoff <- function(fit_trt_loading_tbl,
                                             fixed_top_n = evs_fixed_top_n) {
   n_total <- nrow(fit_trt_loading_tbl)
   fallback <- resolve_top_n_cutoff(fit_trt_loading_tbl$pc1_loading_abs, top_n = fixed_top_n)
+
   trt_wave_obj <- build_local_fourier_wave_map(fit_trt_loading_tbl)
   ctrl_wave_obj <- build_local_fourier_wave_map(fit_ctrl_loading_tbl)
   if (is.null(trt_wave_obj) || is.null(ctrl_wave_obj)) {
@@ -1398,8 +1519,12 @@ resolve_combined_fourier_cutoff <- function(fit_trt_loading_tbl,
     fallback$ctrl_wave_obj <- ctrl_wave_obj
     fallback$combined_wave_map <- data.frame()
     fallback$combined_interval_table <- data.frame()
+    fallback$crossing_table <- data.frame()
+    fallback$selected_crossing <- NULL
+    fallback$selected_reason <- "combined_wave_map_missing"
     return(fallback)
   }
+
   combined_wave_df <- combine_treatment_control_fourier_maps(trt_wave_obj, ctrl_wave_obj)
   if (is.null(combined_wave_df) || !nrow(combined_wave_df)) {
     fallback$method <- "fixed_top_n_fallback"
@@ -1407,46 +1532,57 @@ resolve_combined_fourier_cutoff <- function(fit_trt_loading_tbl,
     fallback$ctrl_wave_obj <- ctrl_wave_obj
     fallback$combined_wave_map <- data.frame()
     fallback$combined_interval_table <- data.frame()
+    fallback$crossing_table <- data.frame()
+    fallback$selected_crossing <- NULL
+    fallback$selected_reason <- "combined_wave_map_missing"
     return(fallback)
   }
-  interval_df <- define_combined_fourier_interval(combined_wave_df)
-  if (is.null(interval_df) || !nrow(interval_df)) {
+
+  crossing_info <- select_regime_shift_crossing(combined_wave_df)
+  selected_crossing <- crossing_info$selected_crossing
+
+  if (is.null(selected_crossing) || !nrow(selected_crossing)) {
     fallback$method <- "fixed_top_n_fallback"
     fallback$trt_wave_obj <- trt_wave_obj
     fallback$ctrl_wave_obj <- ctrl_wave_obj
-    fallback$combined_wave_map <- combined_wave_df
+    fallback$combined_wave_map <- crossing_info$diff_df
     fallback$combined_interval_table <- data.frame()
+    fallback$crossing_table <- crossing_info$crossing_table
+    fallback$selected_crossing <- NULL
+    fallback$selected_reason <- crossing_info$selected_reason
     return(fallback)
   }
-  cand_tbl <- combined_wave_df[
-    combined_wave_df$combined_center_rank >= interval_df$interval_lo[1] &
-      combined_wave_df$combined_center_rank <= interval_df$interval_hi[1],
-    , drop = FALSE
-  ]
-  cand_tbl <- cand_tbl[order(-cand_tbl$combined_fourier_score, cand_tbl$combined_center_rank), , drop = FALSE]
-  cand_tbl <- cand_tbl[!duplicated(cand_tbl$combined_center_rank), , drop = FALSE]
-  cand_tbl <- cand_tbl[seq_len(min(fourier_top_candidate_n_for_deseq2, nrow(cand_tbl))), , drop = FALSE]
-  cand_tbl$rank_index <- as.integer(cand_tbl$combined_center_rank)
-  cand_tbl$candidate_id <- paste0("combined_fourier_candidate_", seq_len(nrow(cand_tbl)))
-  cand_tbl$cutoff_value <- fit_trt_loading_tbl$pc1_loading_abs[cand_tbl$rank_index]
-  cand_tbl$cutoff_quantile <- 1 - (cand_tbl$rank_index / n_total)
-  cand_tbl$selected <- FALSE
-  cand_tbl$selected_reason <- "candidate_only"
-  best_idx <- 1L
-  cand_tbl$selected[best_idx] <- TRUE
-  cand_tbl$selected_reason[best_idx] <- "combined_fourier_max"
+
+  selected_rank <- as.integer(selected_crossing$crossing_rank[1])
+  selected_rank <- min(max(1L, selected_rank), n_total)
+  cutoff_value <- fit_trt_loading_tbl$pc1_loading_abs[selected_rank]
+  cutoff_quantile <- 1 - (selected_rank / n_total)
+
+  candidate_table <- data.frame(
+    candidate_id = selected_crossing$crossing_id[1],
+    rank_index = selected_rank,
+    percentile = selected_crossing$crossing_percentile[1],
+    cutoff_value = cutoff_value,
+    cutoff_quantile = cutoff_quantile,
+    selected = TRUE,
+    selected_reason = crossing_info$selected_reason,
+    stringsAsFactors = FALSE
+  )
+
   list(
-    top_n_actual = as.integer(cand_tbl$rank_index[best_idx]),
-    cutoff_value = as.numeric(cand_tbl$cutoff_value[best_idx]),
-    cutoff_quantile = as.numeric(cand_tbl$cutoff_quantile[best_idx]),
+    top_n_actual = selected_rank,
+    cutoff_value = cutoff_value,
+    cutoff_quantile = cutoff_quantile,
     n_total = n_total,
-    method = "combined_local_fourier",
+    method = "first_stable_crossing",
     trt_wave_obj = trt_wave_obj,
     ctrl_wave_obj = ctrl_wave_obj,
-    combined_wave_map = combined_wave_df,
-    combined_interval_table = interval_df,
-    candidate_table = cand_tbl,
-    selected_reason = "combined_fourier_max"
+    combined_wave_map = crossing_info$diff_df,
+    combined_interval_table = data.frame(),
+    crossing_table = crossing_info$crossing_table,
+    selected_crossing = selected_crossing,
+    candidate_table = candidate_table,
+    selected_reason = crossing_info$selected_reason
   )
 }
 
@@ -1455,11 +1591,12 @@ plot_fourier_wave_map_single <- function(wave_obj, comparison_name, group_label)
   df <- wave_obj$wave_map
 
   ggplot(df, aes(percentile)) +
-    geom_line(aes(y = iod_amplitude, color = "IOD amplitude"), linewidth = 0.8) +
-    geom_line(aes(y = cv2_amplitude, color = "CV² amplitude"), linewidth = 0.8) +
-    scale_color_manual(values = c("IOD amplitude" = plot_palette$treatment, "CV² amplitude" = plot_palette$control)) +
+    geom_line(aes(y = iod_amplitude, color = "IOD"), linewidth = 0.9) +
+    geom_line(aes(y = cv2_amplitude, color = "CV²"), linewidth = 0.9) +
+    scale_color_manual(values = c("IOD" = plot_palette$treatment, "CV²" = plot_palette$control)) +
     labs(
-      title = paste0(pretty_group_label(group_label), " | local Fourier amplitudes"),
+      title = paste0(pretty_group_label(group_label), " | local regime lines"),
+      subtitle = compact_caption("Two lines are shown: local IOD and local CV². Their first meaningful crossing is evaluated at the combined comparison level and defines the EVS regime shift.", width = 88),
       x = "Percentile center",
       y = "Local amplitude",
       color = NULL
@@ -1471,13 +1608,29 @@ plot_combined_fourier_wave_map <- function(combined_cutoff_info, comparison_name
   df <- combined_cutoff_info$combined_wave_map
   if (is.null(df) || !nrow(df)) return(NULL)
 
+  sc <- combined_cutoff_info$selected_crossing
+  crossing_pct <- if (!is.null(sc) && nrow(sc)) sc$crossing_percentile[1] else NA_real_
+
   ggplot(df, aes(percentile)) +
-    geom_line(aes(y = combined_iod_amplitude, color = "Composite IOD amplitude"), linewidth = 0.9) +
-    geom_line(aes(y = combined_cv2_amplitude, color = "Composite CV² amplitude"), linewidth = 0.9) +
-    scale_color_manual(values = c("Composite IOD amplitude" = plot_palette$treatment,
-                                  "Composite CV² amplitude" = plot_palette$control)) +
+    geom_line(aes(y = combined_iod_amplitude, color = "Composite IOD"), linewidth = crossing_plot_line_width) +
+    geom_line(aes(y = combined_cv2_amplitude, color = "Composite CV²"), linewidth = crossing_plot_line_width) +
+    geom_vline(xintercept = crossing_pct, linetype = "dashed", linewidth = crossing_plot_vline_width, colour = plot_palette$threshold) +
+    annotate(
+      "label",
+      x = crossing_pct,
+      y = max(c(df$combined_iod_amplitude, df$combined_cv2_amplitude), na.rm = TRUE),
+      label = paste0("Regime-shift crossing
+p = ", signif(crossing_pct, 4)),
+      fill = "white",
+      colour = plot_palette$threshold,
+      size = 3.0,
+      label.size = 0.15,
+      vjust = -0.5
+    ) +
+    scale_color_manual(values = c("Composite IOD" = plot_palette$treatment, "Composite CV²" = plot_palette$control)) +
     labs(
-      title = paste0(comparison_name, " | combined composite wave map"),
+      title = paste0(comparison_name, " | two-line regime crossing"),
+      subtitle = compact_caption("The dashed vertical line marks the first stable crossing between the composite local IOD and composite local CV² lines. This crossing defines the EVS cutoff.", width = 90),
       x = "Percentile center",
       y = "Composite local amplitude",
       color = NULL
@@ -1487,32 +1640,87 @@ plot_combined_fourier_wave_map <- function(combined_cutoff_info, comparison_name
 
 plot_combined_fourier_score <- function(combined_cutoff_info, comparison_name) {
   df <- combined_cutoff_info$combined_wave_map
-  int_df <- combined_cutoff_info$combined_interval_table
   cand_df <- combined_cutoff_info$candidate_table
-  if (is.null(df) || !nrow(df)) return(NULL)
+  if (is.null(df) || !nrow(df) || !"combined_fourier_score" %in% names(df)) return(NULL)
 
   p <- ggplot(df, aes(percentile, combined_fourier_score)) +
     geom_col(width = 0.008, fill = plot_palette$threshold)
 
-  if (!is.null(int_df) && nrow(int_df)) {
-    pct_lo <- min(df$percentile[df$combined_center_rank >= int_df$interval_lo[1]], na.rm = TRUE)
-    pct_hi <- max(df$percentile[df$combined_center_rank <= int_df$interval_hi[1]], na.rm = TRUE)
-    p <- p + annotate("rect", xmin = pct_lo, xmax = pct_hi, ymin = -Inf, ymax = Inf, alpha = 0.15, fill = "grey70")
-  }
-
   if (!is.null(cand_df) && nrow(cand_df)) {
-    chosen <- cand_df[cand_df$selected, , drop = FALSE]
-    if (nrow(chosen)) {
-      chosen_pct <- df$percentile[match(chosen$rank_index[1], df$combined_center_rank)]
-      p <- p + geom_vline(xintercept = chosen_pct, color = plot_palette$threshold, linewidth = 0.9)
-    }
+    chosen_pct <- cand_df$percentile[1]
+    p <- p + geom_vline(xintercept = chosen_pct, color = plot_palette$threshold, linewidth = 0.9)
   }
 
-  p + labs(
-    title = paste0(comparison_name, " | combined cutoff-selection score"),
-    x = "Percentile center",
-    y = "Score"
-  ) + manuscript_theme()
+  p +
+    labs(
+      title = paste0(comparison_name, " | descriptive score profile"),
+      subtitle = compact_caption("The score profile is descriptive only. The EVS cutoff is determined by the first stable crossing of the two regime lines, not by the global score maximum.", width = 90),
+      x = "Percentile center",
+      y = "Score"
+    ) +
+    manuscript_theme()
+}
+
+plot_regime_difference_curve <- function(combined_cutoff_info, comparison_name) {
+  df <- combined_cutoff_info$combined_wave_map
+  if (is.null(df) || !nrow(df) || !"regime_difference" %in% names(df)) return(NULL)
+
+  sc <- combined_cutoff_info$selected_crossing
+  crossing_pct <- if (!is.null(sc) && nrow(sc)) sc$crossing_percentile[1] else NA_real_
+
+  ggplot(df, aes(percentile, regime_difference)) +
+    geom_hline(yintercept = 0, linewidth = crossing_plot_hline_width, colour = "grey50") +
+    geom_line(linewidth = crossing_plot_line_width, colour = plot_palette$threshold) +
+    geom_vline(xintercept = crossing_pct, linetype = "dashed", linewidth = crossing_plot_vline_width, colour = plot_palette$threshold) +
+    geom_point(data = data.frame(percentile = crossing_pct, regime_difference = 0), aes(x = percentile, y = regime_difference), inherit.aes = FALSE, size = crossing_plot_point_size, colour = plot_palette$threshold) +
+    labs(
+      title = paste0(comparison_name, " | regime-difference curve"),
+      subtitle = compact_caption("Positive values indicate local IOD dominance and negative values indicate local CV² dominance. The first stable zero-crossing is the EVS cutoff.", width = 90),
+      x = "Percentile center",
+      y = "IOD − CV²"
+    ) +
+    manuscript_theme()
+}
+
+plot_crossing_summary_panel <- function(combined_cutoff_info, comparison_name) {
+  p1 <- plot_combined_fourier_wave_map(combined_cutoff_info, comparison_name)
+  p2 <- plot_regime_difference_curve(combined_cutoff_info, comparison_name)
+  if (is.null(p1) || is.null(p2)) return(NULL)
+
+  arrangeGrob(
+    p1, p2,
+    ncol = 1,
+    top = textGrob(
+      paste0(comparison_name, " | regime-shift crossing summary"),
+      gp = gpar(fontface = "bold", cex = 1.04)
+    )
+  )
+}
+
+build_crossing_summary_table <- function(combined_cutoff_info, comparison_name) {
+  sc <- combined_cutoff_info$selected_crossing
+  if (is.null(sc) || !nrow(sc)) {
+    return(data.frame(
+      comparison_name = comparison_name,
+      selected_reason = combined_cutoff_info$selected_reason,
+      crossing_percentile = NA_real_,
+      crossing_rank = NA_integer_,
+      stringsAsFactors = FALSE
+    ))
+  }
+
+  data.frame(
+    comparison_name = comparison_name,
+    selected_reason = combined_cutoff_info$selected_reason,
+    crossing_id = sc$crossing_id[1],
+    crossing_percentile = sc$crossing_percentile[1],
+    crossing_rank = sc$crossing_rank[1],
+    percentile_left = sc$percentile_left[1],
+    percentile_right = sc$percentile_right[1],
+    regime_difference_left = sc$regime_difference_left[1],
+    regime_difference_right = sc$regime_difference_right[1],
+    stringsAsFactors = FALSE
+  )
 }
 
 resolve_evs_cutoff <- function(loading_tbl,
@@ -2635,13 +2843,13 @@ build_eigenvector_split <- function(count_matrix, coldata, comparison_name) {
     rank_index = final_shared_rank,
     selected_reason = paste0(final_shared_reason, "_projected_to_raw_treatment")
   )
-  fit_trt_raw$cutoff_method <- "combined_fourier_rank_projected_to_raw_selected"
+  fit_trt_raw$cutoff_method <- "crossing_rank_projected_to_raw_selected"
   fit_untrt_raw <- apply_loading_cutoff(
     fit_untrt_raw,
     rank_index = final_shared_rank,
     selected_reason = paste0(final_shared_reason, "_projected_to_raw_control")
   )
-  fit_untrt_raw$cutoff_method <- "combined_fourier_rank_projected_to_raw_selected"
+  fit_untrt_raw$cutoff_method <- "crossing_rank_projected_to_raw_selected"
   primary_trt_fit <- fit_trt
   primary_untrt_fit <- fit_untrt
   independent_candidate_evals <- list()
@@ -2660,7 +2868,7 @@ build_eigenvector_split <- function(count_matrix, coldata, comparison_name) {
   evs_cutoff_summary <- dplyr::bind_rows(
     data.frame(
       preprocessing = "normalized",
-      group = "shared_comparison_cutoff",
+      group = "regime_shift_crossing",
       cutoff_mode = combined_cutoff_info$method,
       fixed_top_n_requested = evs_fixed_top_n,
       empiric_rank_selected = final_shared_rank,
@@ -2671,8 +2879,8 @@ build_eigenvector_split <- function(count_matrix, coldata, comparison_name) {
     ),
     data.frame(
       preprocessing = "raw",
-      group = "shared_comparison_cutoff",
-      cutoff_mode = "combined_fourier_rank_projected_to_raw_selected",
+      group = "regime_shift_crossing",
+      cutoff_mode = "crossing_rank_projected_to_raw_selected",
       fixed_top_n_requested = evs_fixed_top_n,
       empiric_rank_selected = final_shared_rank,
       cutoff_quantile = fit_trt_raw$cutoff_quantile,
@@ -4249,14 +4457,16 @@ run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata,
     save_csv(evs$combined_cutoff_info$ctrl_wave_obj$wave_map, file.path(tab_dir, paste0(comparison_name, "_control_local_fourier_map.csv")))
   }
   if (!is.null(evs$combined_cutoff_info$combined_wave_map) && nrow(evs$combined_cutoff_info$combined_wave_map)) {
-    save_csv(evs$combined_cutoff_info$combined_wave_map, file.path(tab_dir, paste0(comparison_name, "_combined_local_fourier_map.csv")))
+    save_csv(evs$combined_cutoff_info$combined_wave_map, file.path(tab_dir, paste0(comparison_name, "_first_stable_crossing_map.csv")))
   }
-  if (!is.null(evs$combined_cutoff_info$combined_interval_table) && nrow(evs$combined_cutoff_info$combined_interval_table)) {
-    save_csv(evs$combined_cutoff_info$combined_interval_table, file.path(tab_dir, paste0(comparison_name, "_combined_local_fourier_interval.csv")))
+  if (!is.null(evs$combined_cutoff_info$crossing_table) && nrow(evs$combined_cutoff_info$crossing_table)) {
+    save_csv(evs$combined_cutoff_info$crossing_table, file.path(tab_dir, paste0(comparison_name, "_all_regime_crossings.csv")))
   }
   if (!is.null(evs$combined_cutoff_info$candidate_table) && nrow(evs$combined_cutoff_info$candidate_table)) {
-    save_csv(evs$combined_cutoff_info$candidate_table, file.path(tab_dir, paste0(comparison_name, "_combined_local_fourier_candidates.csv")))
+    save_csv(evs$combined_cutoff_info$candidate_table, file.path(tab_dir, paste0(comparison_name, "_selected_regime_crossing.csv")))
   }
+  crossing_summary_df <- build_crossing_summary_table(evs$combined_cutoff_info, comparison_name)
+  save_csv(crossing_summary_df, file.path(tab_dir, paste0(comparison_name, "_regime_shift_crossing_summary.csv")))
 
   trt_fourier_plot <- safe_plot_build(
     plot_fourier_wave_map_single(evs$combined_cutoff_info$trt_wave_obj, comparison_name, "treatment"),
