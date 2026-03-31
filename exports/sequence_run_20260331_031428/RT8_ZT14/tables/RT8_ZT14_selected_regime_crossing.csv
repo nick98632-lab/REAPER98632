@@ -1,0 +1,2 @@
+"candidate_id","rank_index","percentile","cutoff_value","cutoff_quantile","selected","selected_reason"
+"crossing_1",4557,0.14720018720268,0.000654022150812918,0.855699810006333,TRUE,"first_composite_crossing_inside_group_bracket"
