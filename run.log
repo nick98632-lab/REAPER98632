@@ -1,0 +1,253 @@
+
+=====================================================
+Running comparison: RT0_ZT6
+=====================================================
+converting counts to integer mode
+converting counts to integer mode
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+[RT0_ZT6_raw_dataset] Mean Wald stat sent to fdrtool: 0.0832  (computed only on finite DESeq2 Wald statistics)
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+[RT0_ZT6_raw_dataset] HC threshold rejected for HBFSS calibration (value=0.99; cutoff=0.95)
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+[RT0_ZT6_leading_edge_dataset] Mean Wald stat sent to fdrtool: 0.0858  (computed only on finite DESeq2 Wald statistics)
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+[RT0_ZT6_leading_edge_dataset] HC threshold rejected for HBFSS calibration (value=0.99; cutoff=0.95)
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+-- note: fitType='parametric', but the dispersion trend was not well captured by the
+   function: y = a/x + b, and a local regression fit was automatically substituted.
+   specify fitType='local' or 'mean' to avoid this message next time.
+final dispersion estimates
+fitting model and testing
+[RT0_ZT6_remainder_dataset] Mean Wald stat sent to fdrtool: 0.0828  (computed only on finite DESeq2 Wald statistics)
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+[RT0_ZT6_remainder_dataset] HC threshold rejected for HBFSS calibration (value=0.99; cutoff=0.95)
+
+=====================================================
+Running comparison: RT2_ZT8
+=====================================================
+converting counts to integer mode
+converting counts to integer mode
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+[RT2_ZT8_raw_dataset] Mean Wald stat sent to fdrtool: -0.0180  (computed only on finite DESeq2 Wald statistics)
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+[RT2_ZT8_raw_dataset] HC threshold rejected for HBFSS calibration (value=0.99; cutoff=0.95)
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+[RT2_ZT8_leading_edge_dataset] Mean Wald stat sent to fdrtool: 0.0065  (computed only on finite DESeq2 Wald statistics)
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+[RT2_ZT8_leading_edge_dataset] HC threshold rejected for HBFSS calibration (value=0.99; cutoff=0.95)
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+-- note: fitType='parametric', but the dispersion trend was not well captured by the
+   function: y = a/x + b, and a local regression fit was automatically substituted.
+   specify fitType='local' or 'mean' to avoid this message next time.
+final dispersion estimates
+fitting model and testing
+[RT2_ZT8_remainder_dataset] Mean Wald stat sent to fdrtool: -0.0254  (computed only on finite DESeq2 Wald statistics)
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+[RT2_ZT8_remainder_dataset] HC threshold rejected for HBFSS calibration (value=0.99; cutoff=0.95)
+
+=====================================================
+Running comparison: RT4_ZT10
+=====================================================
+converting counts to integer mode
+converting counts to integer mode
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+[RT4_ZT10_raw_dataset] Mean Wald stat sent to fdrtool: 0.0808  (computed only on finite DESeq2 Wald statistics)
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+[RT4_ZT10_raw_dataset] HC threshold rejected for HBFSS calibration (value=0.99; cutoff=0.95)
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+[RT4_ZT10_leading_edge_dataset] Mean Wald stat sent to fdrtool: -0.0819  (computed only on finite DESeq2 Wald statistics)
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+[RT4_ZT10_leading_edge_dataset] HC threshold rejected for HBFSS calibration (value=0.99; cutoff=0.95)
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+-- note: fitType='parametric', but the dispersion trend was not well captured by the
+   function: y = a/x + b, and a local regression fit was automatically substituted.
+   specify fitType='local' or 'mean' to avoid this message next time.
+final dispersion estimates
+fitting model and testing
+[RT4_ZT10_remainder_dataset] Mean Wald stat sent to fdrtool: 0.0983  (computed only on finite DESeq2 Wald statistics)
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+[RT4_ZT10_remainder_dataset] HC threshold rejected for HBFSS calibration (value=0.99; cutoff=0.95)
+
+=====================================================
+Running comparison: RT8_ZT14
+=====================================================
+converting counts to integer mode
+converting counts to integer mode
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+[RT8_ZT14_raw_dataset] Mean Wald stat sent to fdrtool: -0.0282  (computed only on finite DESeq2 Wald statistics)
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+[RT8_ZT14_raw_dataset] HC threshold rejected for HBFSS calibration (value=0.99; cutoff=0.95)
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+[RT8_ZT14_leading_edge_dataset] Mean Wald stat sent to fdrtool: 0.0117  (computed only on finite DESeq2 Wald statistics)
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+[RT8_ZT14_leading_edge_dataset] HC threshold rejected for HBFSS calibration (value=0.99; cutoff=0.95)
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+-- note: fitType='parametric', but the dispersion trend was not well captured by the
+   function: y = a/x + b, and a local regression fit was automatically substituted.
+   specify fitType='local' or 'mean' to avoid this message next time.
+final dispersion estimates
+fitting model and testing
+[RT8_ZT14_remainder_dataset] Mean Wald stat sent to fdrtool: -0.0348  (computed only on finite DESeq2 Wald statistics)
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+[RT8_ZT14_remainder_dataset] HC threshold rejected for HBFSS calibration (value=0.99; cutoff=0.95)
+There were 50 or more warnings (use warnings() to see the first 50)
+
+=====================================================
+Pipeline complete.
+Output directory:
+/root/REAPER98632/exports/sequence_run_20260331_201425 
+=====================================================
+
+   comparison_name                  dataset_name n_features hc_p_threshold
+1          RT0_ZT6           RT0_ZT6_raw_dataset      31553             NA
+2          RT0_ZT6  RT0_ZT6_leading_edge_dataset       6850             NA
+3          RT0_ZT6     RT0_ZT6_remainder_dataset      24703             NA
+4          RT2_ZT8           RT2_ZT8_raw_dataset      31534             NA
+5          RT2_ZT8  RT2_ZT8_leading_edge_dataset       5267             NA
+6          RT2_ZT8     RT2_ZT8_remainder_dataset      26267             NA
+7         RT4_ZT10          RT4_ZT10_raw_dataset      31658             NA
+8         RT4_ZT10 RT4_ZT10_leading_edge_dataset       6689             NA
+9         RT4_ZT10    RT4_ZT10_remainder_dataset      24969             NA
+10        RT8_ZT14          RT8_ZT14_raw_dataset      31580             NA
+11        RT8_ZT14 RT8_ZT14_leading_edge_dataset       6212             NA
+12        RT8_ZT14    RT8_ZT14_remainder_dataset      25368             NA
+   hbfss_threshold n_standard_significant n_HBFSS_significant
+1               NA                      9                   0
+2               NA                      3                   0
+3               NA                     47                   0
+4               NA                      0                   0
+5               NA                      0                   0
+6               NA                      0                   0
+7               NA                    743                   0
+8               NA                    270                   0
+9               NA                    701                   0
+10              NA                      4                   0
+11              NA                      1                   0
+12              NA                     28                   0
+   n_overlap_significant n_strong_effect n_weak_effect evs_fixed_top_n
+1                      0               3          3469            5000
+2                      0               1          2173            5000
+3                      0               2          2091            5000
+4                      0               0          7704            5000
+5                      0               0          3856            5000
+6                      0               0          4669            5000
+7                      0              41          6128            5000
+8                      0              15          3613            5000
+9                      0              54          3086            5000
+10                     0               0          8714            5000
+11                     0               0          4615            5000
+12                     0               0          4945            5000
+     evs_cutoff_mode_main evs_primary_preprocessing shared_cutoff_rank
+1  matched_curvature_wave                normalized               5101
+2  matched_curvature_wave                normalized               5101
+3  matched_curvature_wave                normalized               5101
+4  matched_curvature_wave                normalized               3646
+5  matched_curvature_wave                normalized               3646
+6  matched_curvature_wave                normalized               3646
+7  matched_curvature_wave                normalized               4698
+8  matched_curvature_wave                normalized               4698
+9  matched_curvature_wave                normalized               4698
+10 matched_curvature_wave                normalized               4557
+11 matched_curvature_wave                normalized               4557
+12 matched_curvature_wave                normalized               4557
+    shared_cutoff_method shared_cutoff_quantile shared_selected_reason
+1  first_stable_crossing              0.8383355  first_stable_crossing
+2  first_stable_crossing              0.8383355  first_stable_crossing
+3  first_stable_crossing              0.8383355  first_stable_crossing
+4  first_stable_crossing              0.8843788  first_stable_crossing
+5  first_stable_crossing              0.8843788  first_stable_crossing
+6  first_stable_crossing              0.8843788  first_stable_crossing
+7  first_stable_crossing              0.8516015  first_stable_crossing
+8  first_stable_crossing              0.8516015  first_stable_crossing
+9  first_stable_crossing              0.8516015  first_stable_crossing
+10 first_stable_crossing              0.8556998  first_stable_crossing
+11 first_stable_crossing              0.8556998  first_stable_crossing
+12 first_stable_crossing              0.8556998  first_stable_crossing
