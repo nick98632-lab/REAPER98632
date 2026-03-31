@@ -76,7 +76,20 @@ twas_file        <- file.path(input_dir, "3aTWAS_genes_of_11_brain_disorders.csv
 
 # Significance threshold for all DESeq2 calls and effect-class classification.
 alpha_level <- 0.10
-max_usable_hc_p_threshold <- 0.99
+
+crossing_min_percentile <- 0.00
+crossing_max_percentile <- 0.99
+crossing_rule <- "first_left_crossing"
+
+use_group_crossing_bracket <- TRUE
+group_bracket_fallback <- "midpoint"   # "midpoint" or "composite_first_inside"
+
+fdr_clip_floor <- 1e-300
+fdr_clip_ceiling <- 0.99
+hc_threshold_upper_cap <- 0.99
+fdrtool_pct0 <- 0.75
+
+max_usable_hc_p_threshold <- 0.95
 
 # HC safeguard used by HBFSS:
 # When hc.thresh returns a p-threshold too close to 1, that usually indicates
@@ -183,12 +196,7 @@ fourier_score_weight_cv2_amp <- 1.0
 fourier_score_weight_center_agreement <- 1.0
 fourier_interval_fraction_of_max <- 0.90
 
-crossing_min_percentile <- 0.05
-crossing_max_percentile <- 0.99
-crossing_stability_window_n <- 1L
-crossing_rule <- "first_left_crossing"
-use_group_crossing_bracket <- TRUE
-group_bracket_fallback <- "midpoint"
+crossing_stability_window_n <- 3L
 crossing_plot_line_width <- 0.95
 crossing_plot_vline_width <- 0.95
 crossing_plot_hline_width <- 0.65
@@ -417,7 +425,6 @@ compact_caption <- function(x, width = 120) {
   paste(strwrap(as.character(x), width = width), collapse = "\n")
 }
 
-
 clip_probabilities <- function(x,
                                eps = fdr_clip_floor,
                                upper = fdr_clip_ceiling) {
@@ -444,7 +451,7 @@ run_empirical_null_fdrtool <- function(stat_vec, dataset_name) {
       plot          = FALSE,
       verbose       = FALSE,
       cutoff.method = "fndr",
-      pct0          = 0.75
+      pct0          = fdrtool_pct0
     ),
     error = function(e1) {
       message(sprintf("[%s] Primary fdrtool call failed: %s", dataset_name, conditionMessage(e1)))
@@ -455,7 +462,7 @@ run_empirical_null_fdrtool <- function(stat_vec, dataset_name) {
           plot          = FALSE,
           verbose       = FALSE,
           cutoff.method = "pct0",
-          pct0          = 0.75
+          pct0          = fdrtool_pct0
         ),
         error = function(e2) {
           stop(sprintf("[%s] fdrtool failed after retry: %s", dataset_name, conditionMessage(e2)))
@@ -498,12 +505,12 @@ safe_hc_thresh <- function(empirical_p, dataset_name) {
   # as the score anchor. If hc_p_threshold_dataset is too close to 1, that anchor
   # collapses toward 0 and can massively inflate HBFSS calls. Therefore, near-1
   # HC thresholds are treated as invalid for HBFSS calibration and are not used.
-  if (!is.finite(out) || out <= 0 || out >= hc_threshold_upper_cap) {
+  if (!is.finite(out) || out <= 0 || out >= max_usable_hc_p_threshold) {
     message(sprintf(
       "[%s] HC threshold rejected for HBFSS calibration (value=%s; cutoff=%s)",
       dataset_name,
       ifelse(is.finite(out), signif(out, 6), "NA"),
-      hc_threshold_upper_cap
+      max_usable_hc_p_threshold
     ))
     return(NA_real_)
   }
@@ -1366,7 +1373,6 @@ combine_treatment_control_fourier_maps <- function(trt_wave_obj, ctrl_wave_obj) 
 }
 
 
-
 compute_regime_difference_curve <- function(combined_wave_df) {
   df <- as.data.frame(combined_wave_df, stringsAsFactors = FALSE)
   required_cols <- c(
@@ -1374,44 +1380,47 @@ compute_regime_difference_curve <- function(combined_wave_df) {
     "combined_iod_amplitude", "combined_cv2_amplitude"
   )
   assert_required_columns(df, required_cols, object_name = "combined_wave_df")
-  df <- df[order(df$percentile), , drop = FALSE]
+
   df$regime_difference <- df$combined_iod_amplitude - df$combined_cv2_amplitude
+  df$regime_direction <- ifelse(
+    is.na(df$regime_difference),
+    NA_character_,
+    ifelse(df$regime_difference > 0, "IOD_dominant",
+           ifelse(df$regime_difference < 0, "CV2_dominant", "balanced"))
+  )
   df
 }
 
-find_all_crossings <- function(diff_df,
-                               x_col = "percentile",
-                               y_col = "regime_difference",
-                               rank_col = "combined_center_rank",
-                               min_x = crossing_min_percentile,
-                               max_x = crossing_max_percentile) {
+find_crossing_intervals <- function(diff_df,
+                                    min_percentile = crossing_min_percentile,
+                                    max_percentile = crossing_max_percentile) {
   df <- as.data.frame(diff_df, stringsAsFactors = FALSE)
-  df <- df[order(df[[x_col]]), , drop = FALSE]
-  keep <- is.finite(df[[x_col]]) &
-    is.finite(df[[y_col]]) &
-    is.finite(df[[rank_col]]) &
-    df[[x_col]] >= min_x &
-    df[[x_col]] <= max_x
+  df <- df[order(df$percentile), , drop = FALSE]
+  keep <- is.finite(df$percentile) & !is.na(df$percentile) &
+    is.finite(df$regime_difference) & !is.na(df$regime_difference) &
+    df$percentile >= min_percentile & df$percentile <= max_percentile
   df <- df[keep, , drop = FALSE]
   if (nrow(df) < 2L) return(data.frame())
 
   rows <- list()
   kk <- 1L
   for (i in seq_len(nrow(df) - 1L)) {
-    y1 <- df[[y_col]][i]
-    y2 <- df[[y_col]][i + 1L]
+    y1 <- df$regime_difference[i]
+    y2 <- df$regime_difference[i + 1L]
+    if (!is.finite(y1) || !is.finite(y2)) next
     crossed <- (y1 == 0) || (y2 == 0) || ((y1 > 0) && (y2 < 0)) || ((y1 < 0) && (y2 > 0))
     if (!crossed) next
 
-    x1 <- df[[x_col]][i]
-    x2 <- df[[x_col]][i + 1L]
-    r1 <- df[[rank_col]][i]
-    r2 <- df[[rank_col]][i + 1L]
+    x1 <- df$percentile[i]
+    x2 <- df$percentile[i + 1L]
+    r1 <- df$combined_center_rank[i]
+    r2 <- df$combined_center_rank[i + 1L]
+
     if (isTRUE(all.equal(y1, y2))) {
-      crossing_x <- mean(c(x1, x2))
+      crossing_percentile <- mean(c(x1, x2))
       crossing_rank <- round(mean(c(r1, r2)))
     } else {
-      crossing_x <- x1 + (0 - y1) * (x2 - x1) / (y2 - y1)
+      crossing_percentile <- x1 + (0 - y1) * (x2 - x1) / (y2 - y1)
       crossing_rank <- round(r1 + (0 - y1) * (r2 - r1) / (y2 - y1))
     }
 
@@ -1425,7 +1434,7 @@ find_all_crossings <- function(diff_df,
       rank_right = r2,
       regime_difference_left = y1,
       regime_difference_right = y2,
-      crossing_percentile = crossing_x,
+      crossing_percentile = crossing_percentile,
       crossing_rank = as.integer(crossing_rank),
       stringsAsFactors = FALSE
     )
@@ -1435,91 +1444,70 @@ find_all_crossings <- function(diff_df,
   dplyr::bind_rows(rows)
 }
 
-select_first_left_crossing <- function(diff_df) {
-  crossing_tbl <- find_all_crossings(diff_df)
-  if (!nrow(crossing_tbl)) return(NULL)
-  crossing_tbl[order(crossing_tbl$crossing_percentile), , drop = FALSE][1, , drop = FALSE]
+label_stable_crossings <- function(diff_df,
+                                   crossing_tbl,
+                                   stability_window_n = crossing_stability_window_n) {
+  if (is.null(crossing_tbl) || !nrow(crossing_tbl)) return(data.frame())
+  df <- as.data.frame(diff_df, stringsAsFactors = FALSE)
+  out <- crossing_tbl
+  out$left_window_positive_frac <- NA_real_
+  out$right_window_negative_frac <- NA_real_
+  out$stable_crossing <- FALSE
+
+  for (i in seq_len(nrow(out))) {
+    il <- out$idx_left[i]
+    ir <- out$idx_right[i]
+
+    left_idx <- seq.int(max(1L, il - stability_window_n + 1L), il, by = 1L)
+    right_idx <- seq.int(ir, min(nrow(df), ir + stability_window_n - 1L), by = 1L)
+
+    left_vals <- df$regime_difference[left_idx]
+    right_vals <- df$regime_difference[right_idx]
+
+    left_pos_frac <- mean(left_vals > 0, na.rm = TRUE)
+    right_neg_frac <- mean(right_vals < 0, na.rm = TRUE)
+
+    out$left_window_positive_frac[i] <- left_pos_frac
+    out$right_window_negative_frac[i] <- right_neg_frac
+    out$stable_crossing[i] <- isTRUE(
+      is.finite(left_pos_frac) && is.finite(right_neg_frac) &&
+        left_pos_frac >= 0.67 && right_neg_frac >= 0.67
+    )
+  }
+
+  out
 }
 
-compute_single_group_difference_curve <- function(wave_obj) {
-  df <- as.data.frame(wave_obj$wave_map, stringsAsFactors = FALSE)
-  required_cols <- c("percentile", "center_rank", "iod_amplitude", "cv2_amplitude")
-  assert_required_columns(df, required_cols, object_name = "wave_obj$wave_map")
-  df <- df[order(df$percentile), , drop = FALSE]
-  df$regime_difference <- df$iod_amplitude - df$cv2_amplitude
-  df$combined_center_rank <- df$center_rank
-  df
-}
-
-select_group_crossing <- function(wave_obj) {
-  df <- compute_single_group_difference_curve(wave_obj)
-  select_first_left_crossing(df)
-}
-
-select_bracketed_composite_crossing <- function(combined_wave_df,
-                                                trt_crossing,
-                                                ctrl_crossing) {
+select_regime_shift_crossing <- function(combined_wave_df) {
   diff_df <- compute_regime_difference_curve(combined_wave_df)
-  all_crossings <- find_all_crossings(diff_df)
+  crossing_tbl <- find_crossing_intervals(diff_df)
+  crossing_tbl <- label_stable_crossings(diff_df, crossing_tbl)
 
-  if (is.null(trt_crossing) || is.null(ctrl_crossing) ||
-      !nrow(as.data.frame(trt_crossing)) || !nrow(as.data.frame(ctrl_crossing))) {
-    sel <- select_first_left_crossing(diff_df)
+  if (!nrow(crossing_tbl)) {
     return(list(
       diff_df = diff_df,
-      crossing_table = all_crossings,
-      selected_crossing = sel,
-      selected_reason = "first_left_crossing_no_group_bracket"
+      crossing_table = crossing_tbl,
+      selected_crossing = NULL,
+      selected_reason = "no_crossings_found"
     ))
   }
 
-  lo <- min(trt_crossing$crossing_percentile[1], ctrl_crossing$crossing_percentile[1], na.rm = TRUE)
-  hi <- max(trt_crossing$crossing_percentile[1], ctrl_crossing$crossing_percentile[1], na.rm = TRUE)
-
-  inside <- all_crossings[
-    all_crossings$crossing_percentile >= lo &
-      all_crossings$crossing_percentile <= hi,
-    , drop = FALSE
-  ]
-
-  if (nrow(inside)) {
-    sel <- inside[order(inside$crossing_percentile), , drop = FALSE][1, , drop = FALSE]
-    return(list(
-      diff_df = diff_df,
-      crossing_table = all_crossings,
-      selected_crossing = sel,
-      selected_reason = "first_composite_crossing_inside_group_bracket",
-      bracket_lo = lo,
-      bracket_hi = hi
-    ))
+  stable_tbl <- crossing_tbl[crossing_tbl$stable_crossing, , drop = FALSE]
+  if (nrow(stable_tbl)) {
+    selected <- stable_tbl[order(stable_tbl$crossing_percentile), , drop = FALSE][1, , drop = FALSE]
+    reason <- "first_stable_crossing"
+  } else {
+    selected <- crossing_tbl[order(crossing_tbl$crossing_percentile), , drop = FALSE][1, , drop = FALSE]
+    reason <- "first_crossing_fallback"
   }
 
-  midpoint_pct <- mean(c(lo, hi))
-  midpoint_rank <- round(mean(c(trt_crossing$crossing_rank[1], ctrl_crossing$crossing_rank[1])))
-  sel <- data.frame(
-    crossing_id = "midpoint_fallback",
-    idx_left = NA_integer_,
-    idx_right = NA_integer_,
-    percentile_left = NA_real_,
-    percentile_right = NA_real_,
-    rank_left = NA_integer_,
-    rank_right = NA_integer_,
-    regime_difference_left = NA_real_,
-    regime_difference_right = NA_real_,
-    crossing_percentile = midpoint_pct,
-    crossing_rank = as.integer(midpoint_rank),
-    stringsAsFactors = FALSE
-  )
   list(
     diff_df = diff_df,
-    crossing_table = all_crossings,
-    selected_crossing = sel,
-    selected_reason = "group_bracket_midpoint_fallback",
-    bracket_lo = lo,
-    bracket_hi = hi
+    crossing_table = crossing_tbl,
+    selected_crossing = selected,
+    selected_reason = reason
   )
 }
-
 
 resolve_combined_fourier_cutoff <- function(fit_trt_loading_tbl,
                                             fit_ctrl_loading_tbl,
@@ -1534,6 +1522,7 @@ resolve_combined_fourier_cutoff <- function(fit_trt_loading_tbl,
     fallback$trt_wave_obj <- trt_wave_obj
     fallback$ctrl_wave_obj <- ctrl_wave_obj
     fallback$combined_wave_map <- data.frame()
+    fallback$combined_interval_table <- data.frame()
     fallback$crossing_table <- data.frame()
     fallback$selected_crossing <- NULL
     fallback$selected_reason <- "combined_wave_map_missing"
@@ -1546,35 +1535,22 @@ resolve_combined_fourier_cutoff <- function(fit_trt_loading_tbl,
     fallback$trt_wave_obj <- trt_wave_obj
     fallback$ctrl_wave_obj <- ctrl_wave_obj
     fallback$combined_wave_map <- data.frame()
+    fallback$combined_interval_table <- data.frame()
     fallback$crossing_table <- data.frame()
     fallback$selected_crossing <- NULL
     fallback$selected_reason <- "combined_wave_map_missing"
     return(fallback)
   }
 
-  trt_crossing <- select_group_crossing(trt_wave_obj)
-  ctrl_crossing <- select_group_crossing(ctrl_wave_obj)
-
-  crossing_info <- if (isTRUE(use_group_crossing_bracket)) {
-    select_bracketed_composite_crossing(combined_wave_df, trt_crossing, ctrl_crossing)
-  } else {
-    diff_df <- compute_regime_difference_curve(combined_wave_df)
-    list(
-      diff_df = diff_df,
-      crossing_table = find_all_crossings(diff_df),
-      selected_crossing = select_first_left_crossing(diff_df),
-      selected_reason = "first_left_crossing"
-    )
-  }
-
+  crossing_info <- select_regime_shift_crossing(combined_wave_df)
   selected_crossing <- crossing_info$selected_crossing
+
   if (is.null(selected_crossing) || !nrow(selected_crossing)) {
     fallback$method <- "fixed_top_n_fallback"
     fallback$trt_wave_obj <- trt_wave_obj
     fallback$ctrl_wave_obj <- ctrl_wave_obj
-    fallback$trt_crossing <- trt_crossing
-    fallback$ctrl_crossing <- ctrl_crossing
     fallback$combined_wave_map <- crossing_info$diff_df
+    fallback$combined_interval_table <- data.frame()
     fallback$crossing_table <- crossing_info$crossing_table
     fallback$selected_crossing <- NULL
     fallback$selected_reason <- crossing_info$selected_reason
@@ -1602,18 +1578,15 @@ resolve_combined_fourier_cutoff <- function(fit_trt_loading_tbl,
     cutoff_value = cutoff_value,
     cutoff_quantile = cutoff_quantile,
     n_total = n_total,
-    method = "first_left_crossing",
+    method = "first_stable_crossing",
     trt_wave_obj = trt_wave_obj,
     ctrl_wave_obj = ctrl_wave_obj,
-    trt_crossing = trt_crossing,
-    ctrl_crossing = ctrl_crossing,
     combined_wave_map = crossing_info$diff_df,
+    combined_interval_table = data.frame(),
     crossing_table = crossing_info$crossing_table,
     selected_crossing = selected_crossing,
     candidate_table = candidate_table,
-    selected_reason = crossing_info$selected_reason,
-    bracket_lo = if ("bracket_lo" %in% names(crossing_info)) crossing_info$bracket_lo else NA_real_,
-    bracket_hi = if ("bracket_hi" %in% names(crossing_info)) crossing_info$bracket_hi else NA_real_
+    selected_reason = crossing_info$selected_reason
   )
 }
 
@@ -1661,7 +1634,7 @@ p = ", signif(crossing_pct, 4)),
     scale_color_manual(values = c("Composite IOD" = plot_palette$treatment, "Composite CV²" = plot_palette$control)) +
     labs(
       title = paste0(comparison_name, " | two-line regime crossing"),
-      subtitle = compact_caption("The dashed vertical line marks the final shared EVS cutoff. The cutoff is defined by the first left-to-right composite crossing, constrained by the treatment-control crossing bracket when available.", width = 90),
+      subtitle = compact_caption("The dashed vertical line marks the first stable crossing between the composite local IOD and composite local CV² lines. This crossing defines the EVS cutoff.", width = 90),
       x = "Percentile center",
       y = "Composite local amplitude",
       color = NULL
@@ -1706,50 +1679,15 @@ plot_regime_difference_curve <- function(combined_cutoff_info, comparison_name) 
     geom_point(data = data.frame(percentile = crossing_pct, regime_difference = 0), aes(x = percentile, y = regime_difference), inherit.aes = FALSE, size = crossing_plot_point_size, colour = plot_palette$threshold) +
     labs(
       title = paste0(comparison_name, " | regime-difference curve"),
-      subtitle = compact_caption("Positive values indicate local IOD dominance and negative values indicate local CV² dominance. The first left-to-right zero-crossing is the EVS cutoff.", width = 90),
+      subtitle = compact_caption("Positive values indicate local IOD dominance and negative values indicate local CV² dominance. The first stable zero-crossing is the EVS cutoff.", width = 90),
       x = "Percentile center",
       y = "IOD − CV²"
     ) +
     manuscript_theme()
 }
 
-
-plot_primary_crossing_panel <- function(combined_cutoff_info, comparison_name) {
-  df <- combined_cutoff_info$combined_wave_map
-  if (is.null(df) || !nrow(df)) return(NULL)
-
-  sc <- combined_cutoff_info$selected_crossing
-  trt_cross <- combined_cutoff_info$trt_crossing
-  ctrl_cross <- combined_cutoff_info$ctrl_crossing
-  final_pct <- if (!is.null(sc) && nrow(sc)) sc$crossing_percentile[1] else NA_real_
-  trt_pct <- if (!is.null(trt_cross) && nrow(trt_cross)) trt_cross$crossing_percentile[1] else NA_real_
-  ctrl_pct <- if (!is.null(ctrl_cross) && nrow(ctrl_cross)) ctrl_cross$crossing_percentile[1] else NA_real_
-  bracket_lo <- min(c(trt_pct, ctrl_pct), na.rm = TRUE)
-  bracket_hi <- max(c(trt_pct, ctrl_pct), na.rm = TRUE)
-
-  ggplot(df, aes(x = percentile)) +
-    annotate("rect", xmin = bracket_lo, xmax = bracket_hi, ymin = -Inf, ymax = Inf, alpha = 0.10, fill = "grey70") +
-    geom_line(aes(y = combined_iod_amplitude, color = "Composite IOD"), linewidth = 0.95) +
-    geom_line(aes(y = combined_cv2_amplitude, color = "Composite CV²"), linewidth = 0.95) +
-    geom_vline(xintercept = final_pct, linetype = "dashed", linewidth = 0.95, colour = plot_palette$threshold) +
-    geom_vline(xintercept = trt_pct, linetype = "dotted", linewidth = 0.75, colour = plot_palette$treatment) +
-    geom_vline(xintercept = ctrl_pct, linetype = "dotted", linewidth = 0.75, colour = plot_palette$control) +
-    scale_color_manual(values = c("Composite IOD" = plot_palette$treatment, "Composite CV²" = plot_palette$control)) +
-    labs(
-      title = paste0(comparison_name, " | two-line regime crossing"),
-      subtitle = compact_caption(
-        "The dotted lines mark the first treatment and control crossings. The shaded band is the treatment-control crossing bracket. The dashed line is the final shared EVS cutoff.",
-        width = 95
-      ),
-      x = "Percentile center",
-      y = "Composite local amplitude",
-      color = NULL
-    ) +
-    manuscript_theme()
-}
-
 plot_crossing_summary_panel <- function(combined_cutoff_info, comparison_name) {
-  p1 <- plot_primary_crossing_panel(combined_cutoff_info, comparison_name)
+  p1 <- plot_combined_fourier_wave_map(combined_cutoff_info, comparison_name)
   p2 <- plot_regime_difference_curve(combined_cutoff_info, comparison_name)
   if (is.null(p1) || is.null(p2)) return(NULL)
 
@@ -1781,10 +1719,10 @@ build_crossing_summary_table <- function(combined_cutoff_info, comparison_name) 
     crossing_id = sc$crossing_id[1],
     crossing_percentile = sc$crossing_percentile[1],
     crossing_rank = sc$crossing_rank[1],
-    percentile_left = if ("percentile_left" %in% names(sc)) sc$percentile_left[1] else NA_real_,
-    percentile_right = if ("percentile_right" %in% names(sc)) sc$percentile_right[1] else NA_real_,
-    regime_difference_left = if ("regime_difference_left" %in% names(sc)) sc$regime_difference_left[1] else NA_real_,
-    regime_difference_right = if ("regime_difference_right" %in% names(sc)) sc$regime_difference_right[1] else NA_real_,
+    percentile_left = sc$percentile_left[1],
+    percentile_right = sc$percentile_right[1],
+    regime_difference_left = sc$regime_difference_left[1],
+    regime_difference_right = sc$regime_difference_right[1],
     stringsAsFactors = FALSE
   )
 }
@@ -2645,13 +2583,13 @@ WTTS_Seq <- read.csv(
 )
 
 WTTS_Seq <- as.data.frame(WTTS_Seq, stringsAsFactors = FALSE)
-WTTS_Seq$OrigID <- as.character(WTTS_Seq$OrigID)
-WTTS_Seq$Symbol <- as.character(WTTS_Seq$Symbol)
-
 assert_required_columns(WTTS_Seq, c("OrigID", "Symbol"), object_name = "WTTS count file")
 assert_required_columns(WTTS_Seq, meta_all$id, object_name = "WTTS count file sample columns")
 
-WTTS_Seq <- WTTS_Seq[!is.na(WTTS_Seq$OrigID) & !is.na(WTTS_Seq$Symbol), , drop = FALSE]
+WTTS_Seq$OrigID <- as.character(WTTS_Seq$OrigID)
+WTTS_Seq$Symbol <- as.character(WTTS_Seq$Symbol)
+
+WTTS_Seq <- WTTS_Seq[!is.na(WTTS_Seq$OrigID) & nzchar(trimws(WTTS_Seq$OrigID)), , drop = FALSE]
 
 sample_na <- rowSums(is.na(WTTS_Seq[, meta_all$id, drop = FALSE])) > 0
 WTTS_Seq  <- WTTS_Seq[!sample_na, , drop = FALSE]
@@ -3591,6 +3529,30 @@ run_core_analysis <- function(count_mat, coldata, dataset_name, annot_df) {
 # COLOUR / SHAPE SCALES
 # -----------------------------------------------------------------------------
 
+method_call_colors <- c(
+  "Neither"            = "grey70",
+  "DESeq2 weak only"   = plot_palette$weak,
+  "DESeq2 strong only" = plot_palette$deseq2,
+  "HBFSS only"         = plot_palette$hbfss,
+  "Overlap"            = plot_palette$overlap
+)
+
+method_call_shapes <- c(
+  "Neither"            = 21,
+  "DESeq2 weak only"   = 22,
+  "DESeq2 strong only" = 24,
+  "HBFSS only"         = 23,
+  "Overlap"            = 25
+)
+
+method_fill_colors <- method_call_colors
+method_border_colors <- c(
+  "Neither"            = "grey40",
+  "DESeq2 weak only"   = "grey15",
+  "DESeq2 strong only" = "grey15",
+  "HBFSS only"         = "grey15",
+  "Overlap"            = "grey15"
+)
 
 # -----------------------------------------------------------------------------
 # PLOT HELPER FUNCTIONS
@@ -3616,92 +3578,75 @@ run_core_analysis <- function(count_mat, coldata, dataset_name, annot_df) {
 # remains in the weak tier even if it also satisfies stronger HBFSS evidence.
 # -----------------------------------------------------------------------------
 
-
 build_reviewer_volcano_classes <- function(df) {
-  df <- as.data.frame(df, stringsAsFactors = FALSE)
+  df <- as.data.frame(df)
 
   required_cols <- c(
-    "gene_symbol", "lfc_shrunk", "padj", "empirical_p",
-    "hc_p_threshold_dataset", "HBFSS_significant",
-    "resGA_padj", "resLA_padj",
-    "standard_significant"
+    "overlap_call", "deseq2_strong_call", "deseq2_weak_call", "HBFSS_only_call",
+    "resLA_padj", "resGA_padj", "gene_symbol"
   )
-  assert_required_columns(df, required_cols, object_name = "volcano input")
+  missing_cols <- setdiff(required_cols, names(df))
+  if (length(missing_cols)) {
+    stop(
+      sprintf(
+        "build_reviewer_volcano_classes missing required columns: %s",
+        paste(missing_cols, collapse = ", ")
+      ),
+      call. = FALSE
+    )
+  }
 
-  df$effect_tier <- dplyr::case_when(
-    !is.na(df$resGA_padj) &
-      df$resGA_padj < alpha_level &
-      !is.na(df$lfc_shrunk) &
-      abs(df$lfc_shrunk) >= lfc_boundary ~ "Strong effect",
+  df$effect_color_class <- dplyr::case_when(
+    !is.na(df$resGA_padj) & df$resGA_padj < alpha_level ~ "Strong effect",
     (
-      !is.na(df$resLA_padj) &
-        df$resLA_padj < alpha_level &
-        !is.na(df$lfc_shrunk) &
-        abs(df$lfc_shrunk) < lfc_boundary
-    ) |
-      (
-        !is.na(df$HBFSS_significant) & df$HBFSS_significant &
-          !is.na(df$lfc_shrunk) &
-          abs(df$lfc_shrunk) < lfc_boundary
-      ) ~ "Weak effect",
+      !is.na(df$resLA_padj) & df$resLA_padj < alpha_level
+    ) | (
+      !is.na(df$HBFSS_significant) & df$HBFSS_significant &
+        !is.na(df$empirical_p) &
+        !is.na(df$hc_p_threshold_dataset) &
+        df$empirical_p <= df$hc_p_threshold_dataset
+    ) ~ "Weak effect",
+    TRUE ~ "Intermediate effect"
+  )
+
+  df$effect_color_class <- factor(
+    df$effect_color_class,
+    levels = c("Strong effect", "Intermediate effect", "Weak effect")
+  )
+
+  df$method_call_class <- dplyr::case_when(
+    !is.na(df$overlap_call)      & df$overlap_call      ~ "Overlap",
+    !is.na(df$deseq2_strong_call)& df$deseq2_strong_call~ "DESeq2 strong only",
+    !is.na(df$deseq2_weak_call)  & df$deseq2_weak_call  ~ "DESeq2 weak only",
+    !is.na(df$HBFSS_only_call)   & df$HBFSS_only_call   ~ "HBFSS only",
     TRUE ~ "Neither"
   )
-  df$effect_tier <- factor(df$effect_tier, levels = c("Neither", "Weak effect", "Strong effect"))
 
-  df$deseq2_strong_call <- !is.na(df$resGA_padj) &
-    (df$resGA_padj < alpha_level) &
-    !is.na(df$lfc_shrunk) &
-    (abs(df$lfc_shrunk) >= lfc_boundary)
-
-  df$deseq2_weak_call <- !is.na(df$resLA_padj) &
-    (df$resLA_padj < alpha_level) &
-    !is.na(df$lfc_shrunk) &
-    (abs(df$lfc_shrunk) < lfc_boundary)
-
-  df$HBFSS_only_call <- ifelse(
-    is.na(df$HBFSS_significant),
-    FALSE,
-    df$HBFSS_significant & !df$standard_significant
-  )
-  df$overlap_call <- ifelse(
-    is.na(df$HBFSS_significant),
-    FALSE,
-    df$HBFSS_significant & df$standard_significant
-  )
-
-  df$evidence_class <- dplyr::case_when(
-    df$overlap_call ~ "Overlap",
-    df$deseq2_strong_call ~ "DESeq2 strong only",
-    df$deseq2_weak_call ~ "DESeq2 weak only",
-    df$HBFSS_only_call ~ "HBFSS only",
-    TRUE ~ "Neither"
-  )
-  df$evidence_class <- factor(
-    df$evidence_class,
+  df$method_call_class <- factor(
+    df$method_call_class,
     levels = c("Neither", "DESeq2 weak only", "DESeq2 strong only", "HBFSS only", "Overlap")
   )
 
   df$has_valid_gene_symbol <- !is.na(df$gene_symbol) &
-    grepl("^[A-Za-z0-9._-]+$", trimws(df$gene_symbol))
+    grepl('^[A-Za-z0-9._-]+$', trimws(df$gene_symbol))
   df$gene_symbol_plot <- ifelse(df$has_valid_gene_symbol, trimws(df$gene_symbol), NA_character_)
   df
 }
 
-
 select_volcano_labels <- function(df, y_col = "neglog10_empirical_p", n_labels = 20) {
-  df <- as.data.frame(df, stringsAsFactors = FALSE)
+  df <- as.data.frame(df)
   if (!nrow(df)) return(df[0, , drop = FALSE])
 
   df <- df[df$has_valid_gene_symbol, , drop = FALSE]
   if (!nrow(df)) return(df[0, , drop = FALSE])
 
-  df <- df[df$evidence_class %in% c("Overlap", "DESeq2 strong only", "HBFSS only"), , drop = FALSE]
+  df <- df[df$method_call_class %in% c("Overlap", "DESeq2 strong only", "HBFSS only"), , drop = FALSE]
   if (!nrow(df)) return(df[0, , drop = FALSE])
 
   df$label_priority <- dplyr::case_when(
-    df$evidence_class == "Overlap" ~ 1,
-    df$evidence_class == "DESeq2 strong only" ~ 2,
-    df$evidence_class == "HBFSS only" ~ 3,
+    df$method_call_class == "Overlap"            ~ 1,
+    df$method_call_class == "DESeq2 strong only" ~ 2,
+    df$method_call_class == "HBFSS only"         ~ 3,
     TRUE ~ 9
   )
 
@@ -3711,8 +3656,8 @@ select_volcano_labels <- function(df, y_col = "neglog10_empirical_p", n_labels =
   metric_h[!is.finite(metric_h)] <- -Inf
 
   ord <- order(df$label_priority, -metric_h, -metric_y, -abs(df$lfc_shrunk), na.last = TRUE)
-  df <- df[ord, , drop = FALSE]
-  df <- df[!duplicated(df$gene_symbol_plot), , drop = FALSE]
+  df  <- df[ord, , drop = FALSE]
+  df  <- df[!duplicated(df$gene_symbol_plot), , drop = FALSE]
   df[seq_len(min(n_labels, nrow(df))), , drop = FALSE]
 }
 
@@ -3720,18 +3665,16 @@ volcano_top_caption <- function() {
   paste0("DESeq2: padj < ", percent(alpha_level, accuracy = 1), ". HBFSS: empirical p + HC threshold.")
 }
 
-
 volcano_count_caption <- function(df) {
-  method_counts <- table(factor(df$evidence_class, levels = levels(df$evidence_class)))
+  method_counts <- table(factor(df$method_call_class, levels = levels(df$method_call_class)))
   paste0(
     "Neither=", method_counts["Neither"],
-    " | Weak DESeq2=", method_counts["DESeq2 weak only"],
-    " | Strong DESeq2=", method_counts["DESeq2 strong only"],
+    " | Weak=", method_counts["DESeq2 weak only"],
+    " | Strong=", method_counts["DESeq2 strong only"],
     " | HBFSS=", method_counts["HBFSS only"],
     " | Overlap=", method_counts["Overlap"]
   )
 }
-
 
 .volcano_base_layers <- function() {
   list(
@@ -3747,25 +3690,26 @@ volcano_count_caption <- function(df) {
       linewidth  = LINE_WIDTH_ZERO,
       colour     = "grey45"
     ),
-    scale_fill_manual(values = effect_tier_fill_colors, drop = FALSE, name = "Effect tier"),
-    scale_color_manual(values = evidence_border_colors, drop = FALSE, name = "Evidence source"),
-    scale_shape_manual(values = evidence_shapes, drop = FALSE, name = "Evidence source")
+    scale_fill_manual(values = method_fill_colors, drop = FALSE, name = "Interpretive tier"),
+    scale_color_manual(values = method_border_colors, drop = FALSE, name = "Interpretive tier"),
+    scale_shape_manual(values = method_call_shapes, drop = FALSE, name = "Interpretive tier")
   )
 }
 
 volcano_guides <- function() {
   guides(
-    fill = guide_legend(order = 1, nrow = 1, byrow = TRUE),
     color = "none",
+    fill  = "none",
     shape = guide_legend(
-      order = 2,
-      nrow = 2,
+      order = 1,
+      nrow  = 2,
       byrow = TRUE,
       override.aes = list(
-        size = 3.5,
-        stroke = 0.75,
-        fill = "white",
-        colour = unname(evidence_border_colors)
+        size   = 3.5,
+        stroke = 0.72,
+        alpha  = 1,
+        fill   = unname(method_fill_colors),
+        colour = unname(method_border_colors)
       )
     )
   )
@@ -3792,11 +3736,11 @@ volcano_label_layer <- function(lab_df) {
 }
 
 .volcano_overlap_layer <- function(df, size_add = 0.9, stroke_add = 0.3) {
-  ov <- df[!is.na(df$evidence_class) & df$evidence_class == "Overlap", , drop = FALSE]
+  ov <- df[!is.na(df$method_call_class) & df$method_call_class == "Overlap", , drop = FALSE]
   if (!nrow(ov)) return(NULL)
   geom_point(
     data        = ov,
-    aes(fill = effect_tier, color = evidence_class, shape = evidence_class),
+    aes(fill = method_call_class, color = method_call_class, shape = method_call_class),
     alpha       = 1,
     size        = POINT_SIZE_PRIMARY + size_add,
     stroke      = POINT_STROKE + stroke_add,
@@ -3804,14 +3748,13 @@ volcano_label_layer <- function(lab_df) {
   )
 }
 
-
 plot_standard_volcano <- function(df, dataset_name) {
-  df <- build_reviewer_volcano_classes(df)
+  df     <- build_reviewer_volcano_classes(df)
   lab_df <- select_volcano_labels(df, y_col = "neglog10_padj", n_labels = 20)
 
   ggplot(df, aes(lfc_shrunk, neglog10_padj)) +
     geom_point(
-      aes(fill = effect_tier, color = evidence_class, shape = evidence_class),
+      aes(fill = method_call_class, color = method_call_class, shape = method_call_class),
       alpha  = POINT_ALPHA_PRIMARY,
       size   = POINT_SIZE_PRIMARY + 0.45,
       stroke = POINT_STROKE + 0.12
@@ -3828,15 +3771,11 @@ plot_standard_volcano <- function(df, dataset_name) {
       title   = pretty_dataset_label(dataset_name),
       x       = "Shrunken log2 fold change (β̂shrunk)",
       y       = expression(-log[10](padj)),
-      caption = compact_caption(
-        paste0(
-          "DESeq2 standard significance uses adjusted p-values (padj < ", alpha_level, "). ",
-          "Fill color shows effect tier. Border color and point shape show evidence source. ",
-          "Weak-effect points remain blue when |β̂shrunk| < ", lfc_boundary,
-          ", including weak-effect HBFSS-positive points."
-        ),
-        width = 110
-      )
+      caption = compact_caption(paste0(
+        volcano_top_caption(), "\n",
+        volcano_count_caption(df),
+        "  |  LFC lines = ±", lfc_boundary
+      ))
     ) +
     coord_cartesian(clip = "off") +
     plot_expand_xy() +
@@ -3844,6 +3783,17 @@ plot_standard_volcano <- function(df, dataset_name) {
     volcano_guides() +
     volcano_label_layer(lab_df)
 }
+
+
+# -----------------------------------------------------------------------------
+# MANUSCRIPT HBFSS DECISION BOUNDARY
+# -----------------------------------------------------------------------------
+# The HBFSS volcano uses a composite boundary rather than a single hyperbola.
+# A feature must satisfy both the HBFSS product threshold and the empirical-p
+# floor implied by the dataset-specific HC threshold. The plotted boundary is
+# therefore the upper envelope of the hyperbolic HBFSS curve and the horizontal
+# empirical-p cutoff.
+# -----------------------------------------------------------------------------
 
 add_hbfss_boundary_layer <- function(p, df) {
   threshold <- suppressWarnings(as.numeric(df$hbfss_threshold_dataset[1]))
@@ -3895,18 +3845,18 @@ add_hbfss_boundary_layer <- function(p, df) {
   p
 }
 
-
 plot_hbfss_volcano <- function(df, dataset_name) {
-  df <- build_reviewer_volcano_classes(df)
+  df     <- build_reviewer_volcano_classes(df)
   lab_df <- select_volcano_labels(df, y_col = "neglog10_empirical_p", n_labels = 20)
 
   p <- ggplot(df, aes(lfc_shrunk, neglog10_empirical_p)) +
     geom_point(
-      aes(fill = effect_tier, color = evidence_class, shape = evidence_class),
+      aes(fill = method_call_class, color = method_call_class, shape = method_call_class),
       alpha  = POINT_ALPHA_PRIMARY,
       size   = POINT_SIZE_PRIMARY + 0.45,
       stroke = POINT_STROKE + 0.12
     ) +
+    .volcano_overlap_layer(df, size_add = 1.05, stroke_add = 0.42) +
     .volcano_base_layers()
 
   p <- add_hbfss_boundary_layer(p, df) +
@@ -3914,15 +3864,11 @@ plot_hbfss_volcano <- function(df, dataset_name) {
       title   = pretty_dataset_label(dataset_name),
       x       = "Shrunken log2 fold change (β̂shrunk)",
       y       = expression(-log[10](p[empirical])),
-      caption = compact_caption(
-        paste0(
-          "Hybrid Bayesian-Frequentist Significance Scores use empirical-null p-values from fdrtool/Strimmer, ",
-          "the dataset-specific HC threshold, and shrunken |β̂|. ",
-          "The dashed boundary is the HBFSS decision boundary. ",
-          "Fill color shows effect tier. Border color and shape show evidence source."
-        ),
-        width = 110
-      )
+      caption = compact_caption(paste0(
+        volcano_top_caption(),
+        "\n",
+        volcano_count_caption(df)
+      ))
     ) +
     coord_cartesian(clip = "off") +
     manuscript_theme() +
@@ -3939,7 +3885,7 @@ plot_publication_volcano_panel <- function(df, dataset_name) {
 
   p <- ggplot(build, aes(lfc_shrunk, neglog10_empirical_p)) +
     geom_point(
-      aes(fill = effect_tier, color = evidence_class, shape = evidence_class),
+      aes(fill = method_call_class, color = method_call_class, shape = method_call_class),
       alpha  = POINT_ALPHA_PRIMARY,
       size   = POINT_SIZE_PRIMARY + 0.55,
       stroke = POINT_STROKE + 0.14
@@ -4526,15 +4472,6 @@ run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata,
   crossing_summary_df <- build_crossing_summary_table(evs$combined_cutoff_info, comparison_name)
   save_csv(crossing_summary_df, file.path(tab_dir, paste0(comparison_name, "_regime_shift_crossing_summary.csv")))
 
-  primary_crossing_plot <- safe_plot_build(
-    plot_primary_crossing_panel(evs$combined_cutoff_info, comparison_name),
-    paste0(comparison_name, ": primary crossing panel")
-  )
-  if (!is.null(primary_crossing_plot)) {
-    save_grob(primary_crossing_plot, file.path(cmp_dir, paste0(comparison_name, "_primary_crossing_panel.png")), width = 12, height = 6.5)
-  }
-
-
   trt_fourier_plot <- safe_plot_build(
     plot_fourier_wave_map_single(evs$combined_cutoff_info$trt_wave_obj, comparison_name, "treatment"),
     paste0(comparison_name, ": treatment local fourier wave map")
@@ -5056,3 +4993,27 @@ if (nrow(all_summaries) > 0) {
 session_info_txt <- capture.output(sessionInfo())
 writeLines(session_info_txt, file.path(output_dir, "sessionInfo.txt"))
 saveRDS(sessionInfo(), file.path(output_dir, "sessionInfo.rds"))
+
+
+# =============================================================================
+# MANUSCRIPT METHOD WORDING
+# =============================================================================
+
+# PRIMARY EVS CUTOFF RULE
+# Two ordered local regime-summary lines are constructed over the ranked feature
+# axis: a composite local IOD line and a composite local CV² line. The EVS
+# cutoff is defined as the first stable left-to-right crossing encountered from
+# the leading-edge side of the ranked axis. Treatment and control crossings are
+# also computed separately and used to define a bracketing interval for the
+# shared cutoff. The final shared cutoff is the selected stable composite
+# crossing retained by the current working Fourier EVS workflow.
+
+# STANDARD DESeq2 VOLCANO
+# The standard DESeq2 volcano uses -log10(adjusted p-value) on the y-axis and
+# draws the horizontal threshold at -log10(alpha_level), where alpha_level is
+# the DESeq2 target FDR.
+
+# HBFSS VOLCANO
+# The HBFSS volcano uses empirical-null p-values on the y-axis together with the
+# dataset-specific higher-criticism threshold and the shrunken log2 fold-change
+# requirement.
