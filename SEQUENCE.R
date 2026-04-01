@@ -475,13 +475,7 @@ safe_hc_thresh <- function(empirical_p, dataset_name) {
 
   out <- as.numeric(out[1])
 
-  if (!is.finite(out) || out <= 0 || out >= max_usable_hc_p_threshold) {
-    message(sprintf(
-      "[%s] HC threshold rejected for HBFSS calibration (value=%s; cutoff=%s)",
-      dataset_name,
-      ifelse(is.finite(out), signif(out, 6), "NA"),
-      max_usable_hc_p_threshold
-    ))
+  if (!is.finite(out) || is.na(out) || out <= 0) {
     return(NA_real_)
   }
 
@@ -1457,24 +1451,18 @@ compute_pc1_loading_table <- function(count_df,
     x <- counts(dds_tmp, normalized = TRUE)
   }
 
-  x_log <- log2(x + 1)
+  max_pcs <- min(5L, ncol(x))
+  pca_fit <- prcomp(t(x), scale. = FALSE, rank. = max_pcs)
 
-  if (nrow(x_log) < 2 || ncol(x_log) < 2) {
-    stop("compute_pc1_loading_table() requires at least 2 features and 2 samples.", call. = FALSE)
-  }
-
-  pca_fit <- prcomp(x_log, center = TRUE, scale. = FALSE, rank. = 1)
-  pc1_load <- as.numeric(pca_fit$x[, 1])
-  names(pc1_load) <- rownames(x_log)
-
+  loading_abs <- abs(pca_fit$rotation[, 1])
   loading_tbl <- data.frame(
-    feature_id       = names(pc1_load),
-    pc1_loading      = pc1_load,
-    pc1_loading_abs  = abs(pc1_load),
+    feature_id       = names(loading_abs),
+    pc1_loading      = unname(pca_fit$rotation[, 1]),
+    pc1_loading_abs  = unname(loading_abs),
     stringsAsFactors = FALSE
   )
 
-  loading_tbl <- loading_tbl[order(-loading_tbl$pc1_loading_abs, loading_tbl$feature_id), , drop = FALSE]
+  loading_tbl <- loading_tbl[order(loading_tbl$pc1_loading_abs, decreasing = TRUE), , drop = FALSE]
   loading_tbl$rank <- seq_len(nrow(loading_tbl))
 
   if (!is.null(feature_annotation) && "feature_id" %in% names(feature_annotation)) {
@@ -1610,7 +1598,7 @@ run_core_analysis <- function(count_mat, coldata, dataset_name, annot_df) {
   count_mat <- count_mat[keep_nonzero, , drop = FALSE]
 
   if (nrow(count_mat) == 0) {
-    stop(sprintf("[%s] count_mat is empty before DESeq2.", dataset_name), call. = FALSE)
+    stop(sprintf("[%s] all rows were zero after split and zero-row filtering.", dataset_name), call. = FALSE)
   }
 
   if (!is.null(annot_df) && "feature_id" %in% names(annot_df)) {
