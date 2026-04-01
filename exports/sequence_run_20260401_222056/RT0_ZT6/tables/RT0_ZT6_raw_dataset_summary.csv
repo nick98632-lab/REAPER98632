@@ -1,0 +1,2 @@
+"comparison_name","dataset_name","n_features","hc_p_threshold","hbfss_threshold","n_standard_significant","n_HBFSS_significant","n_overlap_significant","n_strong_effect","n_weak_effect","evs_fixed_top_n","evs_cutoff_mode_main","evs_primary_preprocessing"
+"RT0_ZT6","RT0_ZT6_raw_dataset",31553,0.000532546091058572,3.27364279873213,9,61,9,3,3469,5000,"matched_curvature_wave","normalized"

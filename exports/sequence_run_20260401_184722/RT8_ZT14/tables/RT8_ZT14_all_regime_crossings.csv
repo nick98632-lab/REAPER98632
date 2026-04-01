@@ -1,4 +1,0 @@
-"crossing_id","idx_left","idx_right","percentile_left","percentile_right","rank_left","rank_right","regime_difference_left","regime_difference_right","crossing_percentile","crossing_rank","left_window_positive_frac","right_window_negative_frac","stable_crossing","n_later_recrossings","terminal_crossing"
-"crossing_1",10,11,0.14,0.15,4334,4644,0.0312765117214872,-0.0121619584752967,0.14720018720268,4557,1,0,FALSE,2,FALSE
-"crossing_2",82,83,0.86,0.87,26626,26935,-0.360065522075389,0.0146729168635262,0.869608449111731,26923,0,1,FALSE,1,FALSE
-"crossing_3",83,84,0.87,0.88,26935,27244,0.0146729168635262,-0.263649256541946,0.8705271918038,26951,0,1,FALSE,0,TRUE

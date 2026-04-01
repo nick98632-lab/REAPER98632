@@ -21,7 +21,7 @@ gene-wise dispersion estimates
 mean-dispersion relationship
 final dispersion estimates
 fitting model and testing
-[RT0_ZT6_leading_edge_dataset] Mean Wald stat sent to fdrtool: 0.0890  (computed only on finite DESeq2 Wald statistics)
+[RT0_ZT6_leading_edge_dataset] Mean Wald stat sent to fdrtool: 0.0857  (computed only on finite DESeq2 Wald statistics)
 using 'apeglm' for LFC shrinkage. If used in published research, please cite:
     Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
     sequence count data: removing the noise and preserving large differences.
@@ -35,7 +35,7 @@ mean-dispersion relationship
    specify fitType='local' or 'mean' to avoid this message next time.
 final dispersion estimates
 fitting model and testing
-[RT0_ZT6_remainder_dataset] Mean Wald stat sent to fdrtool: -0.1411  (computed only on finite DESeq2 Wald statistics)
+[RT0_ZT6_remainder_dataset] Mean Wald stat sent to fdrtool: 0.0858  (computed only on finite DESeq2 Wald statistics)
 using 'apeglm' for LFC shrinkage. If used in published research, please cite:
     Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
     sequence count data: removing the noise and preserving large differences.
@@ -63,7 +63,7 @@ gene-wise dispersion estimates
 mean-dispersion relationship
 final dispersion estimates
 fitting model and testing
-[RT2_ZT8_leading_edge_dataset] Mean Wald stat sent to fdrtool: -0.0139  (computed only on finite DESeq2 Wald statistics)
+[RT2_ZT8_leading_edge_dataset] Mean Wald stat sent to fdrtool: 0.0065  (computed only on finite DESeq2 Wald statistics)
 using 'apeglm' for LFC shrinkage. If used in published research, please cite:
     Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
     sequence count data: removing the noise and preserving large differences.
@@ -77,7 +77,7 @@ mean-dispersion relationship
    specify fitType='local' or 'mean' to avoid this message next time.
 final dispersion estimates
 fitting model and testing
-[RT2_ZT8_remainder_dataset] Mean Wald stat sent to fdrtool: -0.0885  (computed only on finite DESeq2 Wald statistics)
+[RT2_ZT8_remainder_dataset] Mean Wald stat sent to fdrtool: -0.0254  (computed only on finite DESeq2 Wald statistics)
 using 'apeglm' for LFC shrinkage. If used in published research, please cite:
     Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
     sequence count data: removing the noise and preserving large differences.
@@ -147,11 +147,12 @@ gene-wise dispersion estimates
 mean-dispersion relationship
 final dispersion estimates
 fitting model and testing
-[RT8_ZT14_leading_edge_dataset] Mean Wald stat sent to fdrtool: -0.0295  (computed only on finite DESeq2 Wald statistics)
+[RT8_ZT14_leading_edge_dataset] Mean Wald stat sent to fdrtool: 0.0117  (computed only on finite DESeq2 Wald statistics)
 using 'apeglm' for LFC shrinkage. If used in published research, please cite:
     Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
     sequence count data: removing the noise and preserving large differences.
     Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+[RT8_ZT14_leading_edge_dataset] HC threshold rejected for HBFSS calibration (value=0.999162; cutoff=0.95)
 estimating size factors
 estimating dispersions
 gene-wise dispersion estimates
@@ -161,7 +162,7 @@ mean-dispersion relationship
    specify fitType='local' or 'mean' to avoid this message next time.
 final dispersion estimates
 fitting model and testing
-[RT8_ZT14_remainder_dataset] Mean Wald stat sent to fdrtool: 0.0688  (computed only on finite DESeq2 Wald statistics)
+[RT8_ZT14_remainder_dataset] Mean Wald stat sent to fdrtool: -0.0348  (computed only on finite DESeq2 Wald statistics)
 using 'apeglm' for LFC shrinkage. If used in published research, please cite:
     Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
     sequence count data: removing the noise and preserving large differences.
@@ -171,71 +172,58 @@ There were 50 or more warnings (use warnings() to see the first 50)
 =====================================================
 Pipeline complete.
 Output directory:
-/root/REAPER98632/exports/sequence_run_20260401_184722 
+/root/REAPER98632/exports/sequence_run_20260401_222056 
 =====================================================
 
    comparison_name                  dataset_name n_features hc_p_threshold
 1          RT0_ZT6           RT0_ZT6_raw_dataset      31553   0.0005325461
-2          RT0_ZT6  RT0_ZT6_leading_edge_dataset      30724   0.0005647939
-3          RT0_ZT6     RT0_ZT6_remainder_dataset        829   0.8884272228
+2          RT0_ZT6  RT0_ZT6_leading_edge_dataset       8280   0.0295068850
+3          RT0_ZT6     RT0_ZT6_remainder_dataset      23273   0.0350950314
 4          RT2_ZT8           RT2_ZT8_raw_dataset      31534   0.0136775582
-5          RT2_ZT8  RT2_ZT8_leading_edge_dataset      29603   0.0137143825
-6          RT2_ZT8     RT2_ZT8_remainder_dataset       1931   0.5747121551
+5          RT2_ZT8  RT2_ZT8_leading_edge_dataset       5267   0.0218811990
+6          RT2_ZT8     RT2_ZT8_remainder_dataset      26267   0.0140791262
 7         RT4_ZT10          RT4_ZT10_raw_dataset      31658   0.0223630002
 8         RT4_ZT10 RT4_ZT10_leading_edge_dataset       6689   0.0184548920
 9         RT4_ZT10    RT4_ZT10_remainder_dataset      24969   0.0396761514
 10        RT8_ZT14          RT8_ZT14_raw_dataset      31580   0.0186581006
-11        RT8_ZT14 RT8_ZT14_leading_edge_dataset      30518   0.0183274854
-12        RT8_ZT14    RT8_ZT14_remainder_dataset       1062   0.7547526286
+11        RT8_ZT14 RT8_ZT14_leading_edge_dataset       6212             NA
+12        RT8_ZT14    RT8_ZT14_remainder_dataset      25368   0.0207083122
    hbfss_threshold n_standard_significant n_HBFSS_significant
-1       3.27364280                      9                  61
-2       3.24811002                      9                  58
-3       0.05137814                     51                 507
-4       1.86399143                      0                   8
-5       1.86282374                      0                   7
-6       0.24054962                      2                   3
-7       1.65046993                    743                1100
-8       1.73388849                    270                 332
-9       1.40147046                    701                1127
-10      1.72913257                      4                  76
-11      1.73689712                      4                  76
-12      0.12219537                      7                  70
+1         3.273643                      9                  61
+2         1.530077                      5                  24
+3         1.454754                     46                 174
+4         1.863991                      0                   8
+5         1.659929                      0                   3
+6         1.851424                      0                  20
+7         1.650470                    743                1100
+8         1.733888                    270                 332
+9         1.401470                    701                1127
+10        1.729133                      4                  76
+11              NA                      1                   0
+12        1.683855                     28                 138
    n_overlap_significant n_strong_effect n_weak_effect evs_fixed_top_n
 1                      9               3          3469            5000
-2                      9               3          3487            5000
-3                     51               0             1            5000
+2                      5               1          2474            5000
+3                     46               2          1552            5000
 4                      0               0          7704            5000
-5                      0               0          4648            5000
-6                      2               0            23            5000
+5                      0               0          3856            5000
+6                      0               0          4669            5000
 7                    743              41          6128            5000
 8                    263              15          3613            5000
 9                    701              54          3086            5000
 10                     4               0          8714            5000
-11                     4               0          8712            5000
-12                     7               0            45            5000
-     evs_cutoff_mode_main evs_primary_preprocessing shared_cutoff_rank
-1  matched_curvature_wave                normalized              27514
-2  matched_curvature_wave                normalized              27514
-3  matched_curvature_wave                normalized              27514
-4  matched_curvature_wave                normalized              24890
-5  matched_curvature_wave                normalized              24890
-6  matched_curvature_wave                normalized              24890
-7  matched_curvature_wave                normalized               4698
-8  matched_curvature_wave                normalized               4698
-9  matched_curvature_wave                normalized               4698
-10 matched_curvature_wave                normalized              26951
-11 matched_curvature_wave                normalized              26951
-12 matched_curvature_wave                normalized              26951
-   shared_cutoff_method shared_cutoff_quantile  shared_selected_reason
-1     terminal_crossing              0.1280068 first_terminal_crossing
-2     terminal_crossing              0.1280068 first_terminal_crossing
-3     terminal_crossing              0.1280068 first_terminal_crossing
-4     terminal_crossing              0.2106932 first_terminal_crossing
-5     terminal_crossing              0.2106932 first_terminal_crossing
-6     terminal_crossing              0.2106932 first_terminal_crossing
-7     terminal_crossing              0.8516015 first_terminal_crossing
-8     terminal_crossing              0.8516015 first_terminal_crossing
-9     terminal_crossing              0.8516015 first_terminal_crossing
-10    terminal_crossing              0.1465801 first_terminal_crossing
-11    terminal_crossing              0.1465801 first_terminal_crossing
-12    terminal_crossing              0.1465801 first_terminal_crossing
+11                     0               0          4615            5000
+12                    28               0          4945            5000
+     evs_cutoff_mode_main evs_primary_preprocessing
+1  matched_curvature_wave                normalized
+2  matched_curvature_wave                normalized
+3  matched_curvature_wave                normalized
+4  matched_curvature_wave                normalized
+5  matched_curvature_wave                normalized
+6  matched_curvature_wave                normalized
+7  matched_curvature_wave                normalized
+8  matched_curvature_wave                normalized
+9  matched_curvature_wave                normalized
+10 matched_curvature_wave                normalized
+11 matched_curvature_wave                normalized
+12 matched_curvature_wave                normalized
