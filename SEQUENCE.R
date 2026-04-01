@@ -1,4 +1,3 @@
-Here is the full repaired script.
 
 # =============================================================================
 # SEQUENCE MANUSCRIPT PIPELINE
