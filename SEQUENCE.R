@@ -3834,7 +3834,7 @@ volcano_label_layer <- function(lab_df) {
 }
 
 .volcano_overlap_layer <- function(df, size_add = 0.9, stroke_add = 0.3) {
-  ov <- df[!is.na(df$method_call_class) & grepl("\+ HBFSS$", as.character(df$method_call_class)), , drop = FALSE]
+  ov <- df[!is.na(df$method_call_class) & grepl("\\+ HBFSS$", as.character(df$method_call_class)), , drop = FALSE]
   if (!nrow(ov)) return(NULL)
   geom_point(
     data        = ov,
