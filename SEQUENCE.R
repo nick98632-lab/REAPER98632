@@ -1595,6 +1595,24 @@ compute_thresholded_effect_tests <- function(res_df, lfc_threshold = lfc_boundar
 run_core_analysis <- function(count_mat, coldata, dataset_name, annot_df) {
   design_formula <- make_design_formula()
 
+  count_mat <- round(as.matrix(count_mat))
+  storage.mode(count_mat) <- "numeric"
+
+  if (nrow(count_mat) == 0 || ncol(count_mat) == 0) {
+    stop(sprintf("[%s] count_mat is empty before DESeq2.", dataset_name), call. = FALSE)
+  }
+
+  keep_nonzero <- rowSums(count_mat, na.rm = TRUE) > 0
+  count_mat <- count_mat[keep_nonzero, , drop = FALSE]
+
+  if (nrow(count_mat) == 0) {
+    stop(sprintf("[%s] all rows were zero after split and zero-row filtering.", dataset_name), call. = FALSE)
+  }
+
+  if (!is.null(annot_df) && "feature_id" %in% names(annot_df)) {
+    annot_df <- annot_df[match(rownames(count_mat), annot_df$feature_id), , drop = FALSE]
+  }
+
   dds <- DESeqDataSetFromMatrix(
     countData = count_mat,
     colData   = coldata,
