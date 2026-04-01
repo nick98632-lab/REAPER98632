@@ -1,7 +1,7 @@
 SEQUENCE manuscript analysis run summary
 
 Analysis name: EVS_HBFSS_AllComparisons_Output
-Runtime: ~11.9 min
+Runtime: ~12.3 min
 Output directory: /root/REAPER98632/exports/EVS_HBFSS_AllComparisons_Output
 
 Core rules
@@ -12,10 +12,10 @@ Core rules
   Crossing stability window: 3
 
 Comparison cutoffs
-  RT0_ZT6 | method = first_stable_crossing | selected_reason = first_stable_crossing | rank = 2130 | quantile = 0.9325 | cutoff_value = 8.98183
-  RT2_ZT8 | method = first_stable_crossing | selected_reason = first_stable_crossing | rank = 1840 | quantile = 0.9417 | cutoff_value = 9.2649
-  RT4_ZT10 | method = first_stable_crossing | selected_reason = first_stable_crossing | rank = 1840 | quantile = 0.9419 | cutoff_value = 9.54883
-  RT8_ZT14 | method = first_stable_crossing | selected_reason = first_stable_crossing | rank = 1548 | quantile = 0.951 | cutoff_value = 9.98193
+  RT0_ZT6 | method = first_stable_crossing | selected_reason = first_stable_crossing | rank = 4870 | quantile = 0.8457 | cutoff_value = 0.00120729
+  RT2_ZT8 | method = first_stable_crossing | selected_reason = first_stable_crossing | rank = 3372 | quantile = 0.8931 | cutoff_value = 0.00116006
+  RT4_ZT10 | method = first_stable_crossing | selected_reason = first_stable_crossing | rank = 4599 | quantile = 0.8547 | cutoff_value = 0.00098214
+  RT8_ZT14 | method = first_stable_crossing | selected_reason = first_stable_crossing | rank = 4334 | quantile = 0.8628 | cutoff_value = 0.00119603
 
 Export families
   figures/

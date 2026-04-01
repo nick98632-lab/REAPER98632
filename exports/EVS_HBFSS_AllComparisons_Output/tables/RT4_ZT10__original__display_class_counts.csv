@@ -1,6 +1,6 @@
 "comparison_name","dataset_name","display_class","n_features"
-"RT4_ZT10","original","strong_and_hbfss",0
-"RT4_ZT10","original","strong_deseq2_only",67
+"RT4_ZT10","original","strong_and_hbfss",825
+"RT4_ZT10","original","strong_deseq2_only",0
 "RT4_ZT10","original","weak_deseq2_effect",8366
-"RT4_ZT10","original","hbfss_only",0
-"RT4_ZT10","original","background",23225
+"RT4_ZT10","original","hbfss_only",15954
+"RT4_ZT10","original","background",6513

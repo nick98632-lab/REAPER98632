@@ -1,6 +1,6 @@
 "comparison_name","dataset_name","display_class","n_features"
-"RT8_ZT14","remainder","strong_and_hbfss",0
+"RT8_ZT14","remainder","strong_and_hbfss",36
 "RT8_ZT14","remainder","strong_deseq2_only",0
-"RT8_ZT14","remainder","weak_deseq2_effect",9793
-"RT8_ZT14","remainder","hbfss_only",0
-"RT8_ZT14","remainder","background",20239
+"RT8_ZT14","remainder","weak_deseq2_effect",6993
+"RT8_ZT14","remainder","hbfss_only",6937
+"RT8_ZT14","remainder","background",11701
