@@ -1459,9 +1459,13 @@ compute_pc1_loading_table <- function(count_df,
 
   x_log <- log2(x + 1)
 
+  if (nrow(x_log) < 2 || ncol(x_log) < 2) {
+    stop("compute_pc1_loading_table() requires at least 2 features and 2 samples.", call. = FALSE)
+  }
+
   pca_fit <- prcomp(x_log, center = TRUE, scale. = FALSE, rank. = 1)
-  pc1_load <- as.numeric(pca_fit$rotation[, 1])
-  names(pc1_load) <- rownames(pca_fit$rotation)
+  pc1_load <- as.numeric(pca_fit$x[, 1])
+  names(pc1_load) <- rownames(x_log)
 
   loading_tbl <- data.frame(
     feature_id       = names(pc1_load),
@@ -1594,6 +1598,24 @@ compute_thresholded_effect_tests <- function(res_df, lfc_threshold = lfc_boundar
 
 run_core_analysis <- function(count_mat, coldata, dataset_name, annot_df) {
   design_formula <- make_design_formula()
+
+  count_mat <- round(as.matrix(count_mat))
+  storage.mode(count_mat) <- "numeric"
+
+  if (nrow(count_mat) == 0 || ncol(count_mat) == 0) {
+    stop(sprintf("[%s] count_mat is empty before DESeq2.", dataset_name), call. = FALSE)
+  }
+
+  keep_nonzero <- rowSums(count_mat, na.rm = TRUE) > 0
+  count_mat <- count_mat[keep_nonzero, , drop = FALSE]
+
+  if (nrow(count_mat) == 0) {
+    stop(sprintf("[%s] count_mat is empty before DESeq2.", dataset_name), call. = FALSE)
+  }
+
+  if (!is.null(annot_df) && "feature_id" %in% names(annot_df)) {
+    annot_df <- annot_df[match(rownames(count_mat), annot_df$feature_id), , drop = FALSE]
+  }
 
   dds <- DESeqDataSetFromMatrix(
     countData = count_mat,
@@ -1848,35 +1870,19 @@ split_by_evs_rank <- function(count_df,
 
   cutoff_rank <- max(1L, min(as.integer(cutoff_rank), nrow(merged_loading_tbl)))
 
-  count_df <- as.matrix(count_df)
-  rownames(count_df) <- trimws(as.character(rownames(count_df)))
-  merged_loading_tbl$feature_id <- trimws(as.character(merged_loading_tbl$feature_id))
-  annotation_df$feature_id <- trimws(as.character(annotation_df$feature_id))
+  leading_ids <- merged_loading_tbl$feature_id[merged_loading_tbl$combined_rank <= cutoff_rank]
+  remainder_ids <- merged_loading_tbl$feature_id[merged_loading_tbl$combined_rank > cutoff_rank]
 
-  leading_ids_all <- merged_loading_tbl$feature_id[merged_loading_tbl$combined_rank <= cutoff_rank]
-  remainder_ids_all <- merged_loading_tbl$feature_id[merged_loading_tbl$combined_rank > cutoff_rank]
-
-  leading_ids <- intersect(leading_ids_all, rownames(count_df))
-  remainder_ids <- intersect(remainder_ids_all, rownames(count_df))
-
-  leading_counts <- count_df[leading_ids, , drop = FALSE]
-  remainder_counts <- count_df[remainder_ids, , drop = FALSE]
-
-  leading_counts <- leading_counts[rowSums(leading_counts, na.rm = TRUE) > 0, , drop = FALSE]
-  remainder_counts <- remainder_counts[rowSums(remainder_counts, na.rm = TRUE) > 0, , drop = FALSE]
+  leading_counts <- count_df[rownames(count_df) %in% leading_ids, , drop = FALSE]
+  remainder_counts <- count_df[rownames(count_df) %in% remainder_ids, , drop = FALSE]
 
   leading_annot <- annotation_df[match(rownames(leading_counts), annotation_df$feature_id), , drop = FALSE]
   remainder_annot <- annotation_df[match(rownames(remainder_counts), annotation_df$feature_id), , drop = FALSE]
-  original_annot <- annotation_df[match(rownames(count_df), annotation_df$feature_id), , drop = FALSE]
-
-  message(sprintf("[%s | split] cutoff_rank=%d", comparison_name, cutoff_rank))
-  message(sprintf("[%s | split] requested leading ids=%d matched leading ids=%d", comparison_name, length(leading_ids_all), length(leading_ids)))
-  message(sprintf("[%s | split] requested remainder ids=%d matched remainder ids=%d", comparison_name, length(remainder_ids_all), length(remainder_ids)))
 
   list(
     original = list(
       count_df = count_df,
-      annotation_df = original_annot,
+      annotation_df = annotation_df,
       dataset_name = "original",
       comparison_name = comparison_name
     ),
