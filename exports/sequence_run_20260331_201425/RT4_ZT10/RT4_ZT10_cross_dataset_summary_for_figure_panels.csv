@@ -1,4 +1,0 @@
-"comparison_name","dataset_key","dataset_label","dataset_name","n_features","n_standard_significant","n_HBFSS_significant","n_overlap","n_strong_effect","n_weak_effect","hc_p_threshold","hbfss_threshold","evs_fixed_top_n","evs_cutoff_mode_main","evs_primary_preprocessing"
-"RT4_ZT10","raw_dataset","Original dataset","RT4_ZT10_raw_dataset",31658,743,0,0,41,6128,NA,NA,5000,"matched_curvature_wave","normalized"
-"RT4_ZT10","leading_edge_dataset","Leading-edge dataset","RT4_ZT10_leading_edge_dataset",6689,270,0,0,15,3613,NA,NA,5000,"matched_curvature_wave","normalized"
-"RT4_ZT10","remainder_dataset","Remainder dataset","RT4_ZT10_remainder_dataset",24969,701,0,0,54,3086,NA,NA,5000,"matched_curvature_wave","normalized"
