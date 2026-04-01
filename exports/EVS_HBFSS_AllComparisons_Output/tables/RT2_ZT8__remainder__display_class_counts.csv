@@ -1,6 +1,0 @@
-"comparison_name","dataset_name","display_class","n_features"
-"RT2_ZT8","remainder","strong_and_hbfss",2
-"RT2_ZT8","remainder","strong_deseq2_only",0
-"RT2_ZT8","remainder","weak_deseq2_effect",3737
-"RT2_ZT8","remainder","hbfss_only",25
-"RT2_ZT8","remainder","background",22902

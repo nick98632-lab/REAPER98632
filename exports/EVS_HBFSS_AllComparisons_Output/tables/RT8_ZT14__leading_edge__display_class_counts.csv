@@ -1,6 +1,0 @@
-"comparison_name","dataset_name","display_class","n_features"
-"RT8_ZT14","leading_edge","strong_and_hbfss",3
-"RT8_ZT14","leading_edge","strong_deseq2_only",0
-"RT8_ZT14","leading_edge","weak_deseq2_effect",5086
-"RT8_ZT14","leading_edge","hbfss_only",525
-"RT8_ZT14","leading_edge","background",299

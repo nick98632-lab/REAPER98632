@@ -1,5 +1,0 @@
-"comparison_name","cutoff_method","selected_reason","top_n_actual","cutoff_quantile","cutoff_value"
-"RT0_ZT6","first_stable_crossing","first_stable_crossing",4870,0.845656514436028,0.00120728565889996
-"RT2_ZT8","first_stable_crossing","first_stable_crossing",3372,0.893067799835099,0.00116006310156822
-"RT4_ZT10","first_stable_crossing","first_stable_crossing",4599,0.854728662581338,0.000982140289897462
-"RT8_ZT14","first_stable_crossing","first_stable_crossing",4334,0.862761241291957,0.00119602742891858
