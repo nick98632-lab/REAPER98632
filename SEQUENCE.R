@@ -2935,12 +2935,12 @@ build_eigenvector_split <- function(count_matrix, coldata, comparison_name) {
     empiric_rank_selected = final_shared_rank,
     normalized_cutoff_quantile = fit_trt$cutoff_quantile,
     raw_cutoff_quantile = fit_trt_raw$cutoff_quantile,
-    treatment_cutoff_normalized = fit_trt$cutoff_value,
-    control_cutoff_normalized = fit_untrt$cutoff_value,
-    composite_cutoff_normalized = mean(c(fit_trt$cutoff_value, fit_untrt$cutoff_value), na.rm = TRUE),
-    treatment_cutoff_raw = fit_trt_raw$cutoff_value,
-    control_cutoff_raw = fit_untrt_raw$cutoff_value,
-    composite_cutoff_raw = mean(c(fit_trt_raw$cutoff_value, fit_untrt_raw$cutoff_value), na.rm = TRUE),
+    treatment_cutoff_normalized = fit_trt$cutoff,
+    control_cutoff_normalized = fit_untrt$cutoff,
+    composite_cutoff_normalized = mean(c(fit_trt$cutoff, fit_untrt$cutoff), na.rm = TRUE),
+    treatment_cutoff_raw = fit_trt_raw$cutoff,
+    control_cutoff_raw = fit_untrt_raw$cutoff,
+    composite_cutoff_raw = mean(c(fit_trt_raw$cutoff, fit_untrt_raw$cutoff), na.rm = TRUE),
     selected_reason = combined_cutoff_info$selected_reason,
     stringsAsFactors = FALSE
   )
