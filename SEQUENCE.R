@@ -1,6 +1,8 @@
+Here is the full repaired script.
+
 # =============================================================================
 # SEQUENCE MANUSCRIPT PIPELINE
-# PART 1 OF 5
+# FULL REPAIRED SCRIPT
 # =============================================================================
 # PURPOSE
 # This script implements the final manuscript analysis workflow for the
@@ -12,11 +14,6 @@
 # 3. DESeq2 significance uses Benjamini Hochberg adjusted p value < 0.20.
 # 4. Volcano plots must reflect the actual analysis classes exactly.
 # 5. Cross comparison exports are written to one stable repository folder.
-#
-# DESIGN INTENT
-# The code below is written only for the methods retained for the manuscript.
-# Legacy curvature based cutoff paths are not part of the active workflow.
-# They should not drive selection, figures, or exported summary tables.
 # =============================================================================
 
 suppressPackageStartupMessages({
@@ -59,22 +56,16 @@ twas_file <- file.path(input_dir, "3aTWAS_genes_of_11_brain_disorders.csv")
 # PRIMARY SIGNIFICANCE AND CUTOFF SETTINGS
 # =============================================================================
 
-# DESeq2 manuscript threshold
 alpha_level <- 0.20
-
-# Strong effect boundary on the log2 scale
 lfc_boundary <- 1.0
 
-# EVS cutoff selection
 evs_cutoff_mode_main   <- "fourier_shared_cutoff"
 evs_backup_cutoff_mode <- "fixed_top_n"
 
-# Backup fixed rank cutoff
 evs_fixed_top_n <- 5000L
 evs_fixed_rank_override <- NA_integer_
 evs_use_manual_rank_first <- FALSE
 
-# Shared Fourier regime crossing settings
 crossing_min_percentile <- 0.00
 crossing_max_percentile <- 0.99
 crossing_rule <- "first_left_crossing"
@@ -99,7 +90,6 @@ crossing_plot_vline_width <- 0.95
 crossing_plot_hline_width <- 0.65
 crossing_plot_point_size <- 1.8
 
-# Empirical null and HBFSS safeguards
 fdr_clip_floor <- 1e-300
 fdr_clip_ceiling <- 0.99
 hc_threshold_upper_cap <- 0.99
@@ -109,9 +99,6 @@ max_usable_hc_p_threshold <- 0.95
 # =============================================================================
 # FIGURE EXPORT CONTROLS
 # =============================================================================
-# Keep only figure families that support the manuscript.
-# Optional diagnostics remain available but default to FALSE unless they are
-# directly relevant to the final methods narrative.
 
 export_optional_mean_histograms        <- FALSE
 export_optional_empirical_p_histograms <- FALSE
@@ -152,28 +139,6 @@ plot_palette <- list(
   control      = "#4D4D4D",
   treatment    = "#1F78B4"
 )
-
-# =============================================================================
-# CODE NOTATION AND COLUMN GLOSSARY
-# =============================================================================
-# feature_id               : PAS level feature identifier from the raw count file
-# gene_symbol              : gene symbol annotation
-# stat                     : DESeq2 Wald statistic
-# pvalue                   : raw DESeq2 p value
-# padj                     : DESeq2 BH adjusted p value
-# empirical_p              : empirical null p value from fdrtool
-# empirical_q              : empirical null q value from fdrtool
-# lfdr                     : local false discovery rate from fdrtool
-# lfc_shrunk               : apeglm shrunken log2 fold change
-# resGA_padj               : greaterAbs composite null adjusted p value
-# resLA_padj               : lessAbs composite null adjusted p value
-# standard_significant     : DESeq2 manuscript positive call
-# HBFSS_significant        : hybrid Bayesian frequentist positive call
-# hc_p_threshold_dataset   : empirical null HC threshold for the dataset
-# hbfss_threshold_dataset  : abs(log10(HC)) multiplied by the LFC boundary
-# effect_class             : strong effect, weak effect, or intermediate effect
-# effect_color_class       : color tier on volcano figures
-# method_call_class        : method support class on volcano and dispersion plots
 
 # =============================================================================
 # EMBEDDED METADATA
@@ -276,17 +241,6 @@ preprocessing_panel_label <- function(x) {
   )
 }
 
-evs_preproc_short <- function(x) {
-  x <- preprocessing_panel_label(x)
-  if (identical(x, "Normalized prior to eigenvector splitting")) {
-    "Normalized before EVS"
-  } else if (identical(x, "Eigenvector splitting without prior normalization")) {
-    "Raw counts before EVS"
-  } else {
-    x
-  }
-}
-
 # =============================================================================
 # GENERAL HELPER FUNCTIONS
 # =============================================================================
@@ -366,13 +320,6 @@ safe_plot_build <- function(expr, label = "plot") {
       warning(sprintf("%s failed: %s", label, conditionMessage(e)), call. = FALSE)
       NULL
     }
-  )
-}
-
-plot_expand_xy <- function() {
-  list(
-    scale_x_continuous(expand = expansion(mult = c(0.12, 0.24))),
-    scale_y_continuous(expand = expansion(mult = c(0.10, 0.30)))
   )
 }
 
@@ -670,23 +617,7 @@ compute_dataset_pca_plot <- function(count_df,
 }
 
 # =============================================================================
-# END OF PART 1
-# =============================================================================
-
-# =============================================================================
-# SEQUENCE MANUSCRIPT PIPELINE
-# PART 2 OF 5
-# =============================================================================
-# This section contains:
-# 1. DESeq2-informed feature-level variance metrics used for EVS diagnostics
-# 2. Local Fourier window fitting for ranked IOD and CV² structure
-# 3. Composite treatment-control regime crossing logic
-# 4. Stable crossing selection for the shared EVS cutoff
-# 5. Regime plot functions with explicit cutoff labeling
-# =============================================================================
-
-# =============================================================================
-# FEATURE-LEVEL DESEQ2 METRICS FOR EVS RANK TABLES
+# PART 2
 # =============================================================================
 
 estimate_feature_metrics_for_loading <- function(count_df, coldata) {
@@ -713,10 +644,6 @@ estimate_feature_metrics_for_loading <- function(count_df, coldata) {
   md <- md[!duplicated(md$feature_id), , drop = FALSE]
   md
 }
-
-# =============================================================================
-# FOURIER METRIC TABLE ON THE EVS RANK AXIS
-# =============================================================================
 
 build_ranked_fourier_metric_table <- function(loading_tbl,
                                               mean_col = "baseMean",
@@ -780,10 +707,6 @@ build_percentile_windows_fourier <- function(n_total,
     stringsAsFactors = FALSE
   )
 }
-
-# =============================================================================
-# LOCAL FOURIER FITTING
-# =============================================================================
 
 build_local_fourier_design <- function(x, n_harmonics = fourier_harmonics) {
   x <- as.numeric(x)
@@ -932,10 +855,6 @@ build_local_fourier_wave_map <- function(loading_tbl,
   )
 }
 
-# =============================================================================
-# COMPOSITE TREATMENT-CONTROL REGIME MAP
-# =============================================================================
-
 combine_treatment_control_fourier_maps <- function(trt_wave_obj, ctrl_wave_obj) {
   if (is.null(trt_wave_obj) || is.null(ctrl_wave_obj)) return(NULL)
 
@@ -998,10 +917,6 @@ combine_treatment_control_fourier_maps <- function(trt_wave_obj, ctrl_wave_obj) 
   df$regime_difference <- df$combined_iod_amplitude - df$combined_cv2_amplitude
   df
 }
-
-# =============================================================================
-# STABLE CROSSING DETECTION
-# =============================================================================
 
 find_regime_difference_crossings <- function(diff_df) {
   stopifnot("regime_difference" %in% names(diff_df))
@@ -1120,10 +1035,6 @@ select_regime_shift_crossing <- function(combined_wave_df) {
   )
 }
 
-# =============================================================================
-# FINAL EVS CUTOFF RESOLUTION
-# =============================================================================
-
 resolve_combined_fourier_cutoff <- function(fit_trt_loading_tbl,
                                             fit_ctrl_loading_tbl,
                                             fixed_top_n = evs_fixed_top_n) {
@@ -1210,84 +1121,6 @@ resolve_combined_fourier_cutoff <- function(fit_trt_loading_tbl,
   )
 }
 
-resolve_evs_cutoff <- function(loading_tbl,
-                               mean_col = "baseMean",
-                               dispersion_col = "dispGeneEst",
-                               fixed_top_n = evs_fixed_top_n) {
-  if (isTRUE(evs_use_manual_rank_first) &&
-      is.finite(evs_fixed_rank_override) &&
-      !is.na(evs_fixed_rank_override)) {
-    manual_rank <- max(1L, min(as.integer(evs_fixed_rank_override), nrow(loading_tbl)))
-
-    return(list(
-      cutoff_value          = loading_tbl$pc1_loading_abs[manual_rank],
-      top_n_actual          = manual_rank,
-      cutoff_quantile       = 1 - (manual_rank / nrow(loading_tbl)),
-      method                = "manual_fixed_rank",
-      curve_df              = NULL,
-      curvature_strength    = NA_real_,
-      candidate_table       = data.frame(),
-      quantile_screen_table = data.frame(),
-      matched_interval_table = data.frame(),
-      selected_reason       = "manual_fixed_rank"
-    ))
-  }
-
-  fallback <- resolve_top_n_cutoff(loading_tbl$pc1_loading_abs, top_n = fixed_top_n)
-
-  list(
-    cutoff_value          = fallback$cutoff_value,
-    top_n_actual          = fallback$top_n_actual,
-    cutoff_quantile       = fallback$cutoff_quantile,
-    method                = "fixed_top_n_initial_placeholder",
-    curve_df              = NULL,
-    curvature_strength    = NA_real_,
-    candidate_table       = data.frame(),
-    quantile_screen_table = data.frame(),
-    matched_interval_table = data.frame(),
-    selected_reason       = "fixed_top_n_initial_placeholder"
-  )
-}
-
-# =============================================================================
-# REGIME PLOT FUNCTIONS
-# =============================================================================
-
-plot_fourier_wave_map_single <- function(wave_obj, comparison_name, group_label) {
-  if (is.null(wave_obj) || is.null(wave_obj$wave_map) || !nrow(wave_obj$wave_map)) {
-    return(NULL)
-  }
-
-  df <- wave_obj$wave_map
-
-  ggplot(df, aes(percentile)) +
-    geom_line(
-      aes(y = iod_amplitude, color = "IOD"),
-      linewidth = 0.9
-    ) +
-    geom_line(
-      aes(y = cv2_amplitude, color = "CV²"),
-      linewidth = 0.9
-    ) +
-    scale_color_manual(
-      values = c(
-        "IOD" = plot_palette$treatment,
-        "CV²" = plot_palette$control
-      )
-    ) +
-    labs(
-      title = paste0(pretty_group_label(group_label), " | local regime lines"),
-      subtitle = compact_caption(
-        "These local Fourier amplitude lines summarize ranked IOD and ranked CV² structure within one condition. The shared EVS cutoff is selected later at the combined comparison level.",
-        width = 90
-      ),
-      x = "Percentile center",
-      y = "Local amplitude",
-      color = NULL
-    ) +
-    manuscript_theme()
-}
-
 plot_combined_fourier_wave_map <- function(combined_cutoff_info, comparison_name) {
   df <- combined_cutoff_info$combined_wave_map
   if (is.null(df) || !nrow(df)) return(NULL)
@@ -1299,14 +1132,8 @@ plot_combined_fourier_wave_map <- function(combined_cutoff_info, comparison_name
   ymax <- max(c(df$combined_iod_amplitude, df$combined_cv2_amplitude), na.rm = TRUE)
 
   ggplot(df, aes(percentile)) +
-    geom_line(
-      aes(y = combined_iod_amplitude, color = "Composite IOD"),
-      linewidth = crossing_plot_line_width
-    ) +
-    geom_line(
-      aes(y = combined_cv2_amplitude, color = "Composite CV²"),
-      linewidth = crossing_plot_line_width
-    ) +
+    geom_line(aes(y = combined_iod_amplitude, color = "Composite IOD"), linewidth = crossing_plot_line_width) +
+    geom_line(aes(y = combined_cv2_amplitude, color = "Composite CV²"), linewidth = crossing_plot_line_width) +
     geom_vline(
       xintercept = crossing_pct,
       linetype = "dashed",
@@ -1390,15 +1217,8 @@ plot_regime_difference_curve <- function(combined_cutoff_info, comparison_name) 
   crossing_rank <- if (!is.null(sc) && nrow(sc)) sc$crossing_rank[1] else NA_integer_
 
   ggplot(df, aes(percentile, regime_difference)) +
-    geom_hline(
-      yintercept = 0,
-      linewidth = crossing_plot_hline_width,
-      colour = "grey50"
-    ) +
-    geom_line(
-      linewidth = crossing_plot_line_width,
-      colour = plot_palette$threshold
-    ) +
+    geom_hline(yintercept = 0, linewidth = crossing_plot_hline_width, colour = "grey50") +
+    geom_line(linewidth = crossing_plot_line_width, colour = plot_palette$threshold) +
     geom_vline(
       xintercept = crossing_pct,
       linetype = "dashed",
@@ -1406,10 +1226,7 @@ plot_regime_difference_curve <- function(combined_cutoff_info, comparison_name) 
       colour = plot_palette$threshold
     ) +
     geom_point(
-      data = data.frame(
-        percentile = crossing_pct,
-        regime_difference = 0
-      ),
+      data = data.frame(percentile = crossing_pct, regime_difference = 0),
       aes(x = percentile, y = regime_difference),
       inherit.aes = FALSE,
       size = crossing_plot_point_size,
@@ -1482,24 +1299,25 @@ build_crossing_summary_table <- function(combined_cutoff_info, comparison_name) 
 }
 
 # =============================================================================
-# END OF PART 2
-# =============================================================================
-# =============================================================================
-# SEQUENCE MANUSCRIPT PIPELINE
-# PART 3 OF 5
-# =============================================================================
-# This section contains:
-# 1. Raw count import and comparison-specific extraction
-# 2. EVS PC1 loading computation
-# 3. DESeq2 model fitting with apeglm shrinkage
-# 4. Empirical-null and HBFSS calibration
-# 5. Leading-edge and remainder dataset splitting
-# 6. Final manuscript call classes for tables and volcano plots
+# PART 3
 # =============================================================================
 
-# =============================================================================
-# RAW COUNT IMPORT
-# =============================================================================
+get_condition_coef <- function(dds) {
+  rn <- resultsNames(dds)
+  hit <- grep("condition.*trt.*untrt", rn, value = TRUE)
+  if (!length(hit)) {
+    stop("Could not locate the DESeq2 treatment-versus-control coefficient.", call. = FALSE)
+  }
+  hit[1]
+}
+
+classify_effect_strength <- function(res_strong_padj, res_weak_padj, alpha = alpha_level) {
+  dplyr::case_when(
+    !is.na(res_strong_padj) & (res_strong_padj < alpha) ~ "strong_effect",
+    !is.na(res_weak_padj)   & (res_weak_padj   < alpha) ~ "weak_effect",
+    TRUE ~ "intermediate_or_nonsignificant"
+  )
+}
 
 read_sequence_count_matrix <- function(file_path = count_file) {
   raw_df <- utils::read.csv(
@@ -1558,10 +1376,6 @@ read_sequence_count_matrix <- function(file_path = count_file) {
   )
 }
 
-# =============================================================================
-# COMPARISON EXTRACTION
-# =============================================================================
-
 get_comparison_sample_ids <- function(group1_prefix, group2_prefix, sample_ids) {
   group1_ids <- grep(paste0("^", group1_prefix, "_"), sample_ids, value = TRUE)
   group2_ids <- grep(paste0("^", group2_prefix, "_"), sample_ids, value = TRUE)
@@ -1615,10 +1429,6 @@ build_comparison_count_set <- function(full_count_mat,
     control_ids = cmp_ids$control_ids
   )
 }
-
-# =============================================================================
-# EVS LOADING TABLES
-# =============================================================================
 
 compute_pc1_loading_table <- function(count_df,
                                       condition_vector,
@@ -1718,10 +1528,6 @@ build_comparison_loading_pair <- function(comparison_obj,
   )
 }
 
-# =============================================================================
-# COMBINED EVS RANK
-# =============================================================================
-
 merge_loading_pair_to_combined_rank <- function(trt_tbl, ctrl_tbl) {
   keep_cols <- intersect(
     c("feature_id", "pc1_loading", "pc1_loading_abs", "rank"),
@@ -1750,95 +1556,6 @@ merge_loading_pair_to_combined_rank <- function(trt_tbl, ctrl_tbl) {
 
   merged
 }
-
-# =============================================================================
-# DESEQ2 FIT
-# =============================================================================
-
-run_deseq2_analysis <- function(count_df,
-                                coldata,
-                                annotation_df = NULL,
-                                comparison_name = NULL,
-                                dataset_name = "original") {
-  design_formula <- make_design_formula()
-
-  dds <- DESeqDataSetFromMatrix(
-    countData = round(as.matrix(count_df)),
-    colData   = coldata,
-    design    = design_formula
-  )
-
-  dds <- dds[rowSums(counts(dds)) > 0, ]
-  dds <- DESeq(dds, quiet = TRUE)
-
-  res <- results(
-    dds,
-    contrast = c("condition", "trt", "untrt"),
-    independentFiltering = FALSE,
-    alpha = alpha_level
-  )
-
-  coef_name <- grep("condition.*trt.*untrt", resultsNames(dds), value = TRUE)
-  if (!length(coef_name)) {
-    stop(
-      sprintf("[%s | %s] Could not locate DESeq2 coefficient name.", comparison_name, dataset_name),
-      call. = FALSE
-    )
-  }
-  coef_name <- coef_name[1]
-
-  res_shrunk <- lfcShrink(
-    dds,
-    coef = coef_name,
-    type = "apeglm"
-  )
-
-  res_df <- as.data.frame(res, stringsAsFactors = FALSE)
-  shrink_df <- as.data.frame(res_shrunk, stringsAsFactors = FALSE)
-
-  res_df$feature_id <- rownames(res_df)
-  shrink_df$feature_id <- rownames(shrink_df)
-
-  mcols_df <- as.data.frame(SummarizedExperiment::mcols(dds), stringsAsFactors = FALSE)
-  mcols_df$feature_id <- rownames(mcols_df)
-
-  keep_mcols <- intersect(
-    c("feature_id", "baseMean", "dispGeneEst", "dispFit", "dispersion"),
-    names(mcols_df)
-  )
-  mcols_df <- mcols_df[, keep_mcols, drop = FALSE]
-
-  merged <- dplyr::left_join(
-    res_df,
-    shrink_df[, c("feature_id", "log2FoldChange", "lfcSE"), drop = FALSE],
-    by = "feature_id",
-    suffix = c("", "_shrunk")
-  )
-
-  merged <- dplyr::left_join(merged, mcols_df, by = "feature_id")
-
-  if ("log2FoldChange_shrunk" %in% names(merged)) {
-    merged$lfc_shrunk <- merged$log2FoldChange_shrunk
-  } else {
-    merged$lfc_shrunk <- merged$log2FoldChange
-  }
-
-  if (!"lfcSE_shrunk" %in% names(merged)) {
-    merged$lfcSE_shrunk <- merged$lfcSE
-  }
-
-  if (!is.null(annotation_df) && "feature_id" %in% names(annotation_df)) {
-    merged <- dplyr::left_join(merged, annotation_df, by = "feature_id")
-  }
-
-  merged$comparison_name <- comparison_name
-  merged$dataset_name <- dataset_name
-  merged
-}
-
-# =============================================================================
-# GREATERABS AND LESSABS TESTS
-# =============================================================================
 
 compute_thresholded_effect_tests <- function(res_df, lfc_threshold = lfc_boundary) {
   assert_required_columns(
@@ -1876,146 +1593,248 @@ compute_thresholded_effect_tests <- function(res_df, lfc_threshold = lfc_boundar
   )
 }
 
-# =============================================================================
-# EMPIRICAL NULL HBFSS CALIBRATION
-# =============================================================================
+run_core_analysis <- function(count_mat, coldata, dataset_name, annot_df) {
+  design_formula <- make_design_formula()
 
-append_empirical_null_and_hbfss <- function(res_df, dataset_name) {
-  assert_required_columns(res_df, c("feature_id", "stat", "lfc_shrunk"), "res_df")
+  dds <- DESeqDataSetFromMatrix(
+    countData = count_mat,
+    colData   = coldata,
+    design    = design_formula
+  )
 
-  finite_stat <- is.finite(res_df$stat) & !is.na(res_df$stat)
-  if (sum(finite_stat) < 5) {
-    res_df$empirical_p <- NA_real_
-    res_df$empirical_q <- NA_real_
-    res_df$lfdr <- NA_real_
-    res_df$hc_p_threshold_dataset <- NA_real_
-    res_df$hbfss_threshold_dataset <- NA_real_
-    res_df$HBFSS_significant <- FALSE
-    res_df$hybrid_score <- NA_real_
-    return(res_df)
+  dds <- dds[rowSums(counts(dds)) > 0, ]
+  dds <- DESeq(dds, betaPrior = FALSE)
+
+  res <- results(dds, contrast = c("condition", "trt", "untrt"), alpha = alpha_level)
+
+  res_strong <- results(
+    dds,
+    contrast      = c("condition", "trt", "untrt"),
+    lfcThreshold  = lfc_boundary,
+    altHypothesis = "greaterAbs"
+  )
+
+  res_weak <- results(
+    dds,
+    contrast      = c("condition", "trt", "untrt"),
+    lfcThreshold  = lfc_boundary,
+    altHypothesis = "lessAbs"
+  )
+
+  res_all_df            <- as.data.frame(res)
+  res_all_df$feature_id <- as.character(rownames(res_all_df))
+
+  valid_stat <- is.finite(res_all_df$stat) & !is.na(res_all_df$stat)
+  stat_vec   <- as.numeric(res_all_df$stat[valid_stat])
+  stat_vec   <- stat_vec[is.finite(stat_vec) & !is.na(stat_vec)]
+
+  stat_mean <- mean(stat_vec, na.rm = TRUE)
+  message(
+    sprintf(
+      "[%s] Mean Wald stat sent to fdrtool: %.4f  (computed only on finite DESeq2 Wald statistics)",
+      dataset_name, stat_mean
+    )
+  )
+
+  fdr_fit <- run_empirical_null_fdrtool(stat_vec, dataset_name = dataset_name)
+
+  res_df  <- res_all_df
+  n_valid <- sum(valid_stat)
+
+  if (length(fdr_fit$pval) != n_valid || length(fdr_fit$qval) != n_valid || length(fdr_fit$lfdr) != n_valid) {
+    stop(
+      sprintf(
+        "[%s] fdrtool output length mismatch: n_valid=%d, length(pval)=%d, length(qval)=%d, length(lfdr)=%d.",
+        dataset_name, n_valid, length(fdr_fit$pval), length(fdr_fit$qval), length(fdr_fit$lfdr)
+      ),
+      call. = FALSE
+    )
   }
-
-  fit <- run_empirical_null_fdrtool(res_df$stat[finite_stat], dataset_name = dataset_name)
 
   res_df$empirical_p <- NA_real_
   res_df$empirical_q <- NA_real_
-  res_df$lfdr <- NA_real_
+  res_df$lfdr        <- NA_real_
 
-  res_df$empirical_p[finite_stat] <- clip_probabilities(fit$pval)
-  res_df$empirical_q[finite_stat] <- clip_probabilities(fit$qval)
-  res_df$lfdr[finite_stat]        <- as.numeric(fit$lfdr)
+  res_df$empirical_p[valid_stat] <- as.numeric(fdr_fit$pval)
+  res_df$empirical_q[valid_stat] <- as.numeric(fdr_fit$qval)
+  res_df$lfdr[valid_stat]        <- as.numeric(fdr_fit$lfdr)
 
-  hc_p_threshold <- safe_hc_thresh(res_df$empirical_p[finite_stat], dataset_name = dataset_name)
+  coef_name <- get_condition_coef(dds)
+  shr       <- lfcShrink(dds, coef = coef_name, type = "apeglm", res = res)
+  shr_df    <- as.data.frame(shr)
+  shr_df$feature_id <- as.character(rownames(shr_df))
 
-  res_df$hc_p_threshold_dataset <- hc_p_threshold
-  res_df$hbfss_threshold_dataset <- if (is.finite(hc_p_threshold) && !is.na(hc_p_threshold)) {
-    abs(log10(hc_p_threshold)) * lfc_boundary
+  res_df <- dplyr::left_join(
+    res_df,
+    shr_df[, c("feature_id", "log2FoldChange", "lfcSE"), drop = FALSE],
+    by     = "feature_id",
+    suffix = c("", "_shrunk")
+  )
+
+  if ("log2FoldChange_shrunk" %in% colnames(res_df)) {
+    colnames(res_df)[colnames(res_df) == "log2FoldChange_shrunk"] <- "lfc_shrunk"
   } else {
-    NA_real_
+    res_df$lfc_shrunk <- res_df$log2FoldChange
   }
 
-  res_df$hybrid_score <- abs(res_df$lfc_shrunk) * safe_neglog10(res_df$empirical_p)
+  if ("lfcSE_shrunk" %in% colnames(res_df)) {
+    colnames(res_df)[colnames(res_df) == "lfcSE_shrunk"] <- "lfcSE_shrunk"
+  } else if ("lfcSE" %in% colnames(res_df)) {
+    res_df$lfcSE_shrunk <- res_df$lfcSE
+  }
 
-  hbfss_positive <- rep(FALSE, nrow(res_df))
-  valid_hbfss <- (
-    is.finite(res_df$hybrid_score) &
-      !is.na(res_df$hybrid_score) &
-      is.finite(res_df$hbfss_threshold_dataset) &
-      !is.na(res_df$hbfss_threshold_dataset)
+  hc_p_threshold_dataset <- safe_hc_thresh(res_df$empirical_p, dataset_name = dataset_name)
+
+  empirical_p_floored <- ifelse(
+    is.na(res_df$empirical_p),
+    NA_real_,
+    pmax(res_df$empirical_p, 1e-300)
+  )
+  res_df$HBFSS <- abs(res_df$lfc_shrunk * log10(empirical_p_floored))
+
+  if (is.na(hc_p_threshold_dataset)) {
+    hbfss_threshold_dataset  <- NA_real_
+    res_df$HBFSS_significant <- FALSE
+  } else {
+    hbfss_threshold_dataset  <- abs(log10(hc_p_threshold_dataset)) * lfc_boundary
+    res_df$HBFSS_significant <- ifelse(
+      is.na(res_df$HBFSS),
+      FALSE,
+      res_df$HBFSS >= hbfss_threshold_dataset
+    )
+  }
+
+  res_df$regulation_direction <- ifelse(
+    is.na(res_df$lfc_shrunk),
+    NA_character_,
+    ifelse(
+      res_df$lfc_shrunk > 0, "upregulated",
+      ifelse(res_df$lfc_shrunk < 0, "downregulated", "no_change")
+    )
   )
 
-  hbfss_positive[valid_hbfss] <- (
-    res_df$hybrid_score[valid_hbfss] >= res_df$hbfss_threshold_dataset[valid_hbfss]
+  res_df$raw_lfc_pass    <- !is.na(res_df$log2FoldChange) & (abs(res_df$log2FoldChange) >= lfc_boundary)
+  res_df$shrunk_lfc_pass <- !is.na(res_df$lfc_shrunk)     & (abs(res_df$lfc_shrunk)     >= lfc_boundary)
+
+  res_df$standard_significant <- !is.na(res_df$padj) &
+    (res_df$padj < alpha_level) &
+    res_df$raw_lfc_pass &
+    res_df$shrunk_lfc_pass
+
+  res_strong_df            <- as.data.frame(res_strong)
+  res_strong_df$feature_id <- as.character(rownames(res_strong_df))
+
+  res_weak_df            <- as.data.frame(res_weak)
+  res_weak_df$feature_id <- as.character(rownames(res_weak_df))
+
+  res_df <- dplyr::left_join(
+    res_df,
+    res_strong_df[, c("feature_id", "padj")],
+    by     = "feature_id",
+    suffix = c("", "_strong")
   )
 
-  res_df$HBFSS_significant <- hbfss_positive
-  res_df
+  res_df <- dplyr::left_join(
+    res_df,
+    res_weak_df[, c("feature_id", "padj")],
+    by     = "feature_id",
+    suffix = c("", "_weak")
+  )
+
+  colnames(res_df)[colnames(res_df) == "padj_strong"] <- "padj_strong_effect"
+  colnames(res_df)[colnames(res_df) == "padj_weak"]   <- "padj_weak_effect"
+
+  res_df$effect_class <- classify_effect_strength(
+    res_df$padj_strong_effect,
+    res_df$padj_weak_effect,
+    alpha = alpha_level
+  )
+
+  res_df$resGA_padj <- res_df$padj_strong_effect
+  res_df$resLA_padj <- res_df$padj_weak_effect
+
+  res_df$deseq2_strong_call <- !is.na(res_df$resGA_padj) &
+    (res_df$resGA_padj < alpha_level) &
+    res_df$shrunk_lfc_pass
+
+  res_df$deseq2_weak_call <- !is.na(res_df$resLA_padj) &
+    (res_df$resLA_padj < alpha_level) &
+    !res_df$shrunk_lfc_pass
+
+  res_df$HBFSS_only_call <- res_df$HBFSS_significant & !res_df$standard_significant
+  res_df$overlap_call    <- res_df$HBFSS_significant &  res_df$standard_significant
+
+  base_mean_vec  <- res_df$baseMean[!is.na(res_df$baseMean)]
+  norm_counts    <- as.data.frame(counts(dds, normalized = TRUE))
+  norm_counts$feature_id <- as.character(rownames(norm_counts))
+
+  mm            <- as.data.frame(mcols(dds))
+  mm$feature_id <- as.character(rownames(mm))
+
+  disp_cols_available <- intersect(
+    c("feature_id", "dispGeneEst", "dispFit", "dispersion", "dispIter", "baseMean", "dispOutlier"),
+    colnames(mm)
+  )
+
+  disp_df <- mm[, disp_cols_available, drop = FALSE]
+
+  if ("baseMean" %in% colnames(disp_df)) {
+    disp_df <- disp_df[, setdiff(colnames(disp_df), "baseMean"), drop = FALSE]
+  }
+
+  annot_df$feature_id  <- as.character(annot_df$feature_id)
+  if ("gene_symbol" %in% names(annot_df)) {
+    annot_df$gene_symbol <- as.character(annot_df$gene_symbol)
+  } else {
+    annot_df$gene_symbol <- NA_character_
+  }
+
+  annot_df <- annot_df %>%
+    dplyr::mutate(gene_symbol = dplyr::if_else(is.na(gene_symbol), "", trimws(gene_symbol))) %>%
+    dplyr::arrange(feature_id, dplyr::desc(gene_symbol != ""), gene_symbol) %>%
+    dplyr::distinct(feature_id, .keep_all = TRUE) %>%
+    dplyr::mutate(gene_symbol = dplyr::na_if(gene_symbol, ""))
+
+  res_df$feature_id      <- as.character(res_df$feature_id)
+  norm_counts$feature_id <- as.character(norm_counts$feature_id)
+  disp_df$feature_id     <- as.character(disp_df$feature_id)
+
+  norm_counts <- norm_counts[!duplicated(norm_counts$feature_id), , drop = FALSE]
+  disp_df     <- disp_df[!duplicated(disp_df$feature_id), , drop = FALSE]
+
+  final_df <- res_df %>%
+    dplyr::left_join(annot_df,    by = "feature_id") %>%
+    dplyr::left_join(norm_counts, by = "feature_id") %>%
+    dplyr::left_join(disp_df,     by = "feature_id")
+
+  final_df$neglog10_padj        <- safe_neglog10(final_df$padj)
+  final_df$neglog10_empirical_p <- safe_neglog10(final_df$empirical_p)
+
+  final_df$dataset_name            <- dataset_name
+  final_df$hc_p_threshold_dataset  <- hc_p_threshold_dataset
+  final_df$hbfss_threshold_dataset <- hbfss_threshold_dataset
+
+  preferred_cols <- c(
+    "dataset_name", "feature_id", "gene_symbol", "baseMean",
+    "lfc_shrunk", "regulation_direction",
+    "lfdr",
+    "pvalue", "padj", "empirical_p", "empirical_q",
+    "HBFSS", "hc_p_threshold_dataset", "hbfss_threshold_dataset",
+    "resLA_padj", "resGA_padj",
+    "standard_significant", "HBFSS_significant", "effect_class"
+  )
+
+  final_df <- final_df[, c(intersect(preferred_cols, names(final_df)),
+                           setdiff(names(final_df), preferred_cols)), drop = FALSE]
+
+  list(
+    dds             = dds,
+    results         = final_df,
+    base_mean_vec   = base_mean_vec,
+    hc_p_threshold  = hc_p_threshold_dataset,
+    hbfss_threshold = hbfss_threshold_dataset
+  )
 }
-
-# =============================================================================
-# FINAL MANUSCRIPT CLASSIFICATION
-# =============================================================================
-
-append_manuscript_call_classes <- function(res_df) {
-  needed <- c(
-    "padj", "lfc_shrunk", "resGA_padj", "resLA_padj",
-    "HBFSS_significant", "hybrid_score", "hbfss_threshold_dataset"
-  )
-  assert_required_columns(res_df, c("feature_id", needed), "res_df for manuscript call classes")
-
-  res_df$padj <- clip_probabilities(res_df$padj)
-  res_df$resGA_padj <- clip_probabilities(res_df$resGA_padj)
-  res_df$resLA_padj <- clip_probabilities(res_df$resLA_padj)
-
-  abs_lfc <- abs(res_df$lfc_shrunk)
-
-  res_df$standard_significant <- is.finite(res_df$padj) & !is.na(res_df$padj) & (res_df$padj < alpha_level)
-  res_df$deseq2_strong_call <- isTRUE(TRUE) & (
-    is.finite(res_df$resGA_padj) & !is.na(res_df$resGA_padj) & (res_df$resGA_padj < alpha_level)
-  )
-  res_df$deseq2_weak_call <- isTRUE(TRUE) & (
-    res_df$standard_significant &
-      is.finite(res_df$resLA_padj) &
-      !is.na(res_df$resLA_padj) &
-      (res_df$resLA_padj < alpha_level)
-  )
-
-  res_df$effect_class <- dplyr::case_when(
-    res_df$deseq2_strong_call ~ "strong_effect",
-    res_df$deseq2_weak_call   ~ "weak_effect",
-    TRUE                      ~ "intermediate_or_nonsignificant"
-  )
-
-  res_df$effect_color_class <- dplyr::case_when(
-    res_df$deseq2_strong_call ~ "strong_effect",
-    res_df$deseq2_weak_call   ~ "weak_effect",
-    TRUE                      ~ "background"
-  )
-
-  res_df$method_call_class <- dplyr::case_when(
-    res_df$deseq2_strong_call & res_df$HBFSS_significant ~ "overlap",
-    res_df$deseq2_strong_call & !res_df$HBFSS_significant ~ "deseq2_only",
-    !res_df$deseq2_strong_call & res_df$HBFSS_significant ~ "hbfss_only",
-    res_df$deseq2_weak_call & !res_df$HBFSS_significant ~ "weak_effect",
-    TRUE ~ "background"
-  )
-
-  res_df$volcano_display_class <- dplyr::case_when(
-    res_df$deseq2_strong_call & res_df$HBFSS_significant ~ "strong_and_hbfss",
-    res_df$deseq2_strong_call & !res_df$HBFSS_significant ~ "strong_deseq2_only",
-    res_df$deseq2_weak_call ~ "weak_deseq2_effect",
-    !res_df$deseq2_strong_call & res_df$HBFSS_significant ~ "hbfss_only",
-    TRUE ~ "background"
-  )
-
-  res_df$volcano_color <- dplyr::case_when(
-    res_df$volcano_display_class %in% c("strong_and_hbfss")      ~ "overlap",
-    res_df$volcano_display_class %in% c("strong_deseq2_only")    ~ "strong",
-    res_df$volcano_display_class %in% c("weak_deseq2_effect")    ~ "weak",
-    res_df$volcano_display_class %in% c("hbfss_only")            ~ "hbfss",
-    TRUE                                                         ~ "background"
-  )
-
-  res_df$volcano_shape <- dplyr::case_when(
-    res_df$volcano_display_class %in% c("strong_and_hbfss")      ~ "overlap",
-    res_df$volcano_display_class %in% c("strong_deseq2_only")    ~ "deseq2_only",
-    res_df$volcano_display_class %in% c("weak_deseq2_effect")    ~ "weak_effect",
-    res_df$volcano_display_class %in% c("hbfss_only")            ~ "hbfss_only",
-    TRUE                                                         ~ "background"
-  )
-
-  res_df$label_candidate <- (
-    res_df$volcano_display_class != "background" &
-      is.finite(abs_lfc) &
-      !is.na(abs_lfc)
-  )
-
-  res_df
-}
-
-# =============================================================================
-# DATASET SPLITTING
-# =============================================================================
 
 split_by_evs_rank <- function(count_df,
                               annotation_df,
@@ -2061,10 +1880,6 @@ split_by_evs_rank <- function(count_df,
   )
 }
 
-# =============================================================================
-# ATTACH EVS METADATA TO RESULTS
-# =============================================================================
-
 append_loading_metadata_to_results <- function(res_df, merged_loading_tbl) {
   keep_cols <- intersect(
     c(
@@ -2083,51 +1898,39 @@ append_loading_metadata_to_results <- function(res_df, merged_loading_tbl) {
   )
 }
 
-# =============================================================================
-# FULL DATASET ANALYSIS WRAPPER
-# =============================================================================
-
 run_single_dataset_analysis <- function(dataset_obj,
                                         coldata,
                                         merged_loading_tbl,
                                         comparison_name,
                                         dataset_name) {
-  res_df <- run_deseq2_analysis(
-    count_df        = dataset_obj$count_df,
-    coldata         = coldata,
-    annotation_df   = dataset_obj$annotation_df,
-    comparison_name = comparison_name,
-    dataset_name    = dataset_name
+  core <- run_core_analysis(
+    count_mat   = round(as.matrix(dataset_obj$count_df)),
+    coldata     = coldata,
+    dataset_name = paste(comparison_name, dataset_name, sep = " | "),
+    annot_df    = dataset_obj$annotation_df
   )
 
-  thresh_df <- compute_thresholded_effect_tests(res_df, lfc_threshold = lfc_boundary)
-  res_df <- dplyr::left_join(res_df, thresh_df, by = "feature_id")
-  res_df <- append_empirical_null_and_hbfss(res_df, dataset_name = paste(comparison_name, dataset_name, sep = " | "))
-  res_df <- append_manuscript_call_classes(res_df)
+  res_df <- core$results
   res_df <- append_loading_metadata_to_results(res_df, merged_loading_tbl)
 
   res_df
 }
 
-# =============================================================================
-# SUMMARY TABLES
-# =============================================================================
-
 build_dataset_summary_table <- function(res_df, comparison_name, dataset_name) {
+  hc_vals <- stats::na.omit(res_df$hc_p_threshold_dataset)
+  hbfss_vals <- stats::na.omit(res_df$hbfss_threshold_dataset)
+
   data.frame(
-    comparison_name       = comparison_name,
-    dataset_name          = dataset_name,
-    n_features            = nrow(res_df),
+    comparison_name        = comparison_name,
+    dataset_name           = dataset_name,
+    n_features             = nrow(res_df),
     n_standard_significant = sum(res_df$standard_significant, na.rm = TRUE),
-    n_deseq2_strong       = sum(res_df$deseq2_strong_call, na.rm = TRUE),
-    n_deseq2_weak         = sum(res_df$deseq2_weak_call, na.rm = TRUE),
-    n_hbfss               = sum(res_df$HBFSS_significant, na.rm = TRUE),
-    n_overlap_strong_hbfss = sum(
-      res_df$deseq2_strong_call & res_df$HBFSS_significant,
-      na.rm = TRUE
-    ),
-    hc_p_threshold_dataset = suppressWarnings(unique(stats::na.omit(res_df$hc_p_threshold_dataset))[1]),
-    hbfss_threshold_dataset = suppressWarnings(unique(stats::na.omit(res_df$hbfss_threshold_dataset))[1]),
+    n_deseq2_strong        = sum(res_df$deseq2_strong_call, na.rm = TRUE),
+    n_deseq2_weak          = sum(res_df$deseq2_weak_call, na.rm = TRUE),
+    n_hbfss                = sum(res_df$HBFSS_significant, na.rm = TRUE),
+    n_overlap_strong_hbfss = sum(res_df$overlap_call, na.rm = TRUE),
+    hc_p_threshold_dataset = if (length(hc_vals)) hc_vals[1] else NA_real_,
+    hbfss_threshold_dataset = if (length(hbfss_vals)) hbfss_vals[1] else NA_real_,
     stringsAsFactors = FALSE
   )
 }
@@ -2137,28 +1940,25 @@ build_minimal_results_export <- function(res_df) {
     c(
       "feature_id",
       "gene_symbol",
-      "comparison_name",
       "dataset_name",
       "baseMean",
       "lfc_shrunk",
-      "lfcSE_shrunk",
-      "stat",
+      "regulation_direction",
+      "lfdr",
       "pvalue",
       "padj",
       "empirical_p",
       "empirical_q",
-      "lfdr",
-      "resGA_padj",
-      "resLA_padj",
+      "HBFSS",
       "hc_p_threshold_dataset",
       "hbfss_threshold_dataset",
-      "hybrid_score",
+      "resLA_padj",
+      "resGA_padj",
       "standard_significant",
       "deseq2_strong_call",
       "deseq2_weak_call",
       "HBFSS_significant",
       "effect_class",
-      "volcano_display_class",
       "combined_rank",
       "combined_loading"
     ),
@@ -2171,70 +1971,99 @@ build_minimal_results_export <- function(res_df) {
 }
 
 # =============================================================================
-# END OF PART 3
-# =============================================================================
-
-# =============================================================================
-# SEQUENCE MANUSCRIPT PIPELINE
-# PART 4 OF 5
-# =============================================================================
-# This section contains:
-# 1. Volcano plot appearance maps
-# 2. Volcano, dispersion, PCA, and histogram figure builders
-# 3. Reduced manuscript-focused table builders
-# 4. Figure and table export helpers
-# =============================================================================
-
-# =============================================================================
-# VOLCANO APPEARANCE MAPS
+# PART 4
 # =============================================================================
 
 volcano_color_values <- c(
-  "background"         = plot_palette$background,
-  "strong"             = plot_palette$strong,
-  "weak"               = plot_palette$weak,
-  "hbfss"              = plot_palette$hbfss,
-  "overlap"            = plot_palette$overlap
+  "background" = plot_palette$background,
+  "strong"     = plot_palette$strong,
+  "weak"       = plot_palette$weak,
+  "hbfss"      = plot_palette$hbfss,
+  "overlap"    = plot_palette$overlap
 )
 
 volcano_color_labels <- c(
-  "background"         = "Background or nonsignificant",
-  "strong"             = "DESeq2 strong effect",
-  "weak"               = "DESeq2 weak effect",
-  "hbfss"              = "HBFSS only",
-  "overlap"            = "DESeq2 strong and HBFSS"
+  "background" = "Background or nonsignificant",
+  "strong"     = "DESeq2 strong effect",
+  "weak"       = "DESeq2 weak effect",
+  "hbfss"      = "HBFSS only",
+  "overlap"    = "DESeq2 standard and HBFSS"
 )
 
 volcano_shape_values <- c(
-  "background"         = 16,
-  "deseq2_only"        = 17,
-  "weak_effect"        = 15,
-  "hbfss_only"         = 18,
-  "overlap"            = 23
+  "background"  = 16,
+  "deseq2_only" = 17,
+  "weak_effect" = 15,
+  "hbfss_only"  = 18,
+  "overlap"     = 23
 )
 
 volcano_shape_labels <- c(
-  "background"         = "Background",
-  "deseq2_only"        = "DESeq2 strong only",
-  "weak_effect"        = "DESeq2 weak effect",
-  "hbfss_only"         = "HBFSS only",
-  "overlap"            = "DESeq2 strong and HBFSS"
+  "background"  = "Background",
+  "deseq2_only" = "DESeq2 standard only",
+  "weak_effect" = "DESeq2 weak effect",
+  "hbfss_only"  = "HBFSS only",
+  "overlap"     = "DESeq2 standard and HBFSS"
 )
 
-# =============================================================================
-# VOLCANO LABEL SELECTION
-# =============================================================================
+derive_plot_classes <- function(res_df) {
+  df <- res_df
+
+  if (!"standard_significant" %in% names(df)) {
+    df$standard_significant <- FALSE
+  }
+  if (!"HBFSS_significant" %in% names(df)) {
+    df$HBFSS_significant <- FALSE
+  }
+  if (!"deseq2_strong_call" %in% names(df)) {
+    df$deseq2_strong_call <- FALSE
+  }
+  if (!"deseq2_weak_call" %in% names(df)) {
+    df$deseq2_weak_call <- FALSE
+  }
+  if (!"overlap_call" %in% names(df)) {
+    df$overlap_call <- df$standard_significant & df$HBFSS_significant
+  }
+  if (!"HBFSS_only_call" %in% names(df)) {
+    df$HBFSS_only_call <- df$HBFSS_significant & !df$standard_significant
+  }
+
+  df$volcano_display_class <- dplyr::case_when(
+    df$overlap_call ~ "strong_and_hbfss",
+    df$deseq2_strong_call & !df$HBFSS_significant ~ "strong_deseq2_only",
+    df$deseq2_weak_call ~ "weak_deseq2_effect",
+    df$HBFSS_only_call ~ "hbfss_only",
+    TRUE ~ "background"
+  )
+
+  df$volcano_color <- dplyr::case_when(
+    df$volcano_display_class == "strong_and_hbfss"   ~ "overlap",
+    df$volcano_display_class == "strong_deseq2_only" ~ "strong",
+    df$volcano_display_class == "weak_deseq2_effect" ~ "weak",
+    df$volcano_display_class == "hbfss_only"         ~ "hbfss",
+    TRUE                                             ~ "background"
+  )
+
+  df$volcano_shape <- dplyr::case_when(
+    df$volcano_display_class == "strong_and_hbfss"   ~ "overlap",
+    df$volcano_display_class == "strong_deseq2_only" ~ "deseq2_only",
+    df$volcano_display_class == "weak_deseq2_effect" ~ "weak_effect",
+    df$volcano_display_class == "hbfss_only"         ~ "hbfss_only",
+    TRUE                                             ~ "background"
+  )
+
+  df$label_candidate <- df$volcano_display_class != "background"
+
+  df
+}
 
 pick_volcano_labels <- function(res_df,
                                 max_labels = 18L,
-                                ranking_mode = c("hybrid_then_lfc", "lfc_then_p")) {
+                                ranking_mode = c("HBFSS_then_lfc", "lfc_then_p")) {
   ranking_mode <- match.arg(ranking_mode)
 
-  if (!"label_candidate" %in% names(res_df)) {
-    res_df$label_candidate <- FALSE
-  }
-
-  lab_df <- res_df[res_df$label_candidate, , drop = FALSE]
+  df <- derive_plot_classes(res_df)
+  lab_df <- df[df$label_candidate, , drop = FALSE]
   if (!nrow(lab_df)) return(lab_df[0, , drop = FALSE])
 
   if (!"gene_symbol" %in% names(lab_df)) {
@@ -2246,9 +2075,15 @@ pick_volcano_labels <- function(res_df,
 
   lab_df$plot_label <- ifelse(usable_label, lab_df$gene_symbol, lab_df$feature_id)
 
-  if (ranking_mode == "hybrid_then_lfc") {
+  signal_vec <- if ("HBFSS" %in% names(lab_df)) {
+    ifelse(is.finite(lab_df$HBFSS), lab_df$HBFSS, -Inf)
+  } else {
+    ifelse(is.finite(lab_df$neglog10_empirical_p), lab_df$neglog10_empirical_p, -Inf)
+  }
+
+  if (ranking_mode == "HBFSS_then_lfc") {
     ord <- order(
-      -ifelse(is.finite(lab_df$hybrid_score), lab_df$hybrid_score, -Inf),
+      -signal_vec,
       -abs(ifelse(is.finite(lab_df$lfc_shrunk), lab_df$lfc_shrunk, 0)),
       ifelse(is.finite(lab_df$padj), lab_df$padj, Inf)
     )
@@ -2264,21 +2099,15 @@ pick_volcano_labels <- function(res_df,
   utils::head(lab_df, max_labels)
 }
 
-# =============================================================================
-# VOLCANO DATA PREP
-# =============================================================================
-
 prepare_volcano_df <- function(res_df) {
+  df <- derive_plot_classes(res_df)
+
   assert_required_columns(
-    res_df,
-    c(
-      "feature_id", "lfc_shrunk", "empirical_p", "padj",
-      "volcano_color", "volcano_shape", "volcano_display_class"
-    ),
+    df,
+    c("feature_id", "lfc_shrunk", "empirical_p", "padj", "volcano_color", "volcano_shape"),
     "res_df for volcano plotting"
   )
 
-  df <- res_df
   df$x_value <- as.numeric(df$lfc_shrunk)
   df$y_value <- safe_neglog10(ifelse(is.finite(df$empirical_p), df$empirical_p, df$padj))
   df$y_value[!is.finite(df$y_value) | is.na(df$y_value)] <- 0
@@ -2296,10 +2125,6 @@ prepare_volcano_df <- function(res_df) {
   df
 }
 
-# =============================================================================
-# VOLCANO PLOT
-# =============================================================================
-
 plot_volcano_manuscript <- function(res_df,
                                     comparison_name,
                                     dataset_name,
@@ -2307,7 +2132,9 @@ plot_volcano_manuscript <- function(res_df,
   df <- prepare_volcano_df(res_df)
   lab_df <- pick_volcano_labels(df, max_labels = max_labels)
 
-  hbfss_thr <- suppressWarnings(unique(stats::na.omit(df$hbfss_threshold_dataset))[1])
+  thr_vals <- stats::na.omit(df$hbfss_threshold_dataset)
+  hbfss_thr <- if (length(thr_vals)) thr_vals[1] else NA_real_
+
   x_max <- max(abs(df$x_value), na.rm = TRUE)
   x_max <- max(1.25, x_max * 1.08)
 
@@ -2345,11 +2172,9 @@ plot_volcano_manuscript <- function(res_df,
       title = paste0(comparison_name, " | ", pretty_dataset_label(dataset_name)),
       subtitle = compact_caption(
         paste0(
-          "Color reflects the final manuscript display class. Blue marks DESeq2 weak effects with adjusted p value below ",
-          alpha_level,
-          " and absolute shrunken log2 fold change below ",
+          "Blue marks DESeq2 weak effects below the absolute log2 fold-change boundary of ",
           lfc_boundary,
-          ". Red marks DESeq2 strong effects. Orange marks HBFSS only. Purple marks strong DESeq2 and HBFSS overlap."
+          ". Red marks DESeq2 strong effects. Orange marks HBFSS only. Purple marks DESeq2 standard significance with HBFSS overlap."
         ),
         width = 105
       ),
@@ -2363,30 +2188,23 @@ plot_volcano_manuscript <- function(res_df,
     )
 
   if (is.finite(hbfss_thr) && !is.na(hbfss_thr) && hbfss_thr > 0) {
-    x_seq <- seq(0.05, x_max, length.out = 400)
-    boundary_y <- hbfss_thr / x_seq
-    boundary_df <- data.frame(
-      x = c(-rev(x_seq), x_seq),
-      y = c(rev(boundary_y), boundary_y)
-    )
-
     p <- p +
-      geom_line(
-        data = boundary_df,
-        aes(x = x, y = y),
-        inherit.aes = FALSE,
-        colour = plot_palette$hbfss,
-        linewidth = LINE_WIDTH_BOUNDARY
+      geom_hline(
+        yintercept = abs(log10(hbfss_thr)),
+        linetype = "dotted",
+        linewidth = LINE_WIDTH_BOUNDARY,
+        colour = plot_palette$hbfss
       ) +
       annotate(
         "label",
-        x = x_max * 0.80,
-        y = min(max(boundary_y, na.rm = TRUE), max(df$y_value, na.rm = TRUE) * 0.92),
-        label = paste0("HBFSS = ", signif(hbfss_thr, 4), " / |LFC|"),
+        x = x_max * 0.78,
+        y = abs(log10(hbfss_thr)),
+        label = paste0("HC p = ", signif(hbfss_thr, 4)),
         colour = plot_palette$hbfss,
         fill = "white",
         size = 2.8,
-        label.size = 0.15
+        label.size = 0.15,
+        vjust = -0.6
       )
   }
 
@@ -2408,26 +2226,26 @@ plot_volcano_manuscript <- function(res_df,
   p
 }
 
-# =============================================================================
-# DISPERSION PLOT
-# =============================================================================
-
 plot_dispersion_manuscript <- function(res_df,
                                        comparison_name,
                                        dataset_name) {
+  df <- derive_plot_classes(res_df)
+
   assert_required_columns(
-    res_df,
-    c("baseMean", "dispGeneEst", "dispFit", "dispersion", "volcano_color", "volcano_shape"),
+    df,
+    c("baseMean", "dispGeneEst", "dispFit", "volcano_color", "volcano_shape"),
     "res_df for dispersion plotting"
   )
 
-  df <- res_df
-  df$log_baseMean <- safe_log10(df$baseMean + 1)
+  df$log_baseMean   <- safe_log10(df$baseMean + 1)
   df$log_dispGeneEst <- safe_log10(df$dispGeneEst)
-  df$log_dispFit <- safe_log10(df$dispFit)
-  df$log_dispersion <- safe_log10(df$dispersion)
+  df$log_dispFit     <- safe_log10(df$dispFit)
 
-  fit_line_df <- df[is.finite(df$log_baseMean) & is.finite(df$log_dispFit), c("log_baseMean", "log_dispFit"), drop = FALSE]
+  fit_line_df <- df[
+    is.finite(df$log_baseMean) & is.finite(df$log_dispFit),
+    c("log_baseMean", "log_dispFit"),
+    drop = FALSE
+  ]
   fit_line_df <- fit_line_df[order(fit_line_df$log_baseMean), , drop = FALSE]
 
   ggplot(df, aes(log_baseMean, log_dispGeneEst)) +
@@ -2468,10 +2286,6 @@ plot_dispersion_manuscript <- function(res_df,
     manuscript_theme()
 }
 
-# =============================================================================
-# PCA PANELS
-# =============================================================================
-
 plot_pca_panel_pair <- function(dataset_obj,
                                 coldata,
                                 comparison_name,
@@ -2508,10 +2322,6 @@ plot_pca_panel_pair <- function(dataset_obj,
   )
 }
 
-# =============================================================================
-# EMPIRICAL P HISTOGRAM
-# =============================================================================
-
 plot_empirical_p_histogram <- function(res_df,
                                        comparison_name,
                                        dataset_name) {
@@ -2522,7 +2332,8 @@ plot_empirical_p_histogram <- function(res_df,
   df <- df[is.finite(df$empirical_p) & !is.na(df$empirical_p), , drop = FALSE]
   if (!nrow(df)) return(NULL)
 
-  hc_p_threshold <- suppressWarnings(unique(stats::na.omit(res_df$hc_p_threshold_dataset))[1])
+  hc_vals <- stats::na.omit(res_df$hc_p_threshold_dataset)
+  hc_p_threshold <- if (length(hc_vals)) hc_vals[1] else NA_real_
 
   p <- ggplot(df, aes(empirical_p)) +
     geom_histogram(
@@ -2565,35 +2376,32 @@ plot_empirical_p_histogram <- function(res_df,
   p
 }
 
-# =============================================================================
-# HYBRID SCORE HISTOGRAM
-# =============================================================================
-
-plot_hybrid_score_histogram <- function(res_df,
-                                        comparison_name,
-                                        dataset_name) {
+plot_hbfss_histogram <- function(res_df,
+                                 comparison_name,
+                                 dataset_name) {
   if (!export_optional_hbfss_distributions) return(NULL)
-  if (!"hybrid_score" %in% names(res_df)) return(NULL)
+  if (!"HBFSS" %in% names(res_df)) return(NULL)
 
-  df <- data.frame(hybrid_score = res_df$hybrid_score)
-  df <- df[is.finite(df$hybrid_score) & !is.na(df$hybrid_score), , drop = FALSE]
+  df <- data.frame(HBFSS = res_df$HBFSS)
+  df <- df[is.finite(df$HBFSS) & !is.na(df$HBFSS), , drop = FALSE]
   if (!nrow(df)) return(NULL)
 
-  thr <- suppressWarnings(unique(stats::na.omit(res_df$hbfss_threshold_dataset))[1])
+  thr_vals <- stats::na.omit(res_df$hbfss_threshold_dataset)
+  thr <- if (length(thr_vals)) thr_vals[1] else NA_real_
 
-  p <- ggplot(df, aes(hybrid_score)) +
+  p <- ggplot(df, aes(HBFSS)) +
     geom_histogram(
       bins = HIST_BINS,
       fill = plot_palette$histogram,
       color = HIST_COLOR
     ) +
     labs(
-      title = paste0(comparison_name, " | ", pretty_dataset_label(dataset_name), " hybrid score"),
+      title = paste0(comparison_name, " | ", pretty_dataset_label(dataset_name), " HBFSS"),
       subtitle = compact_caption(
-        "Hybrid score equals absolute shrunken log2 fold change multiplied by negative log10 empirical p value.",
+        "HBFSS equals the absolute value of shrunken log2 fold change multiplied by log10 empirical p signal.",
         width = 92
       ),
-      x = "Hybrid score",
+      x = "HBFSS",
       y = "Count"
     ) +
     manuscript_theme()
@@ -2622,17 +2430,42 @@ plot_hybrid_score_histogram <- function(res_df,
   p
 }
 
-# =============================================================================
-# MANUSCRIPT TABLE BUILDERS
-# =============================================================================
-
 build_manuscript_gene_table <- function(res_df,
                                         comparison_name,
                                         dataset_name) {
-  out <- build_minimal_results_export(res_df)
+  df <- derive_plot_classes(res_df)
 
-  out$comparison_name <- comparison_name
-  out$dataset_name <- dataset_name
+  keep_cols <- intersect(
+    c(
+      "feature_id",
+      "gene_symbol",
+      "dataset_name",
+      "baseMean",
+      "lfc_shrunk",
+      "regulation_direction",
+      "lfdr",
+      "pvalue",
+      "padj",
+      "empirical_p",
+      "empirical_q",
+      "HBFSS",
+      "hc_p_threshold_dataset",
+      "hbfss_threshold_dataset",
+      "resLA_padj",
+      "resGA_padj",
+      "standard_significant",
+      "deseq2_strong_call",
+      "deseq2_weak_call",
+      "HBFSS_significant",
+      "effect_class",
+      "volcano_display_class",
+      "combined_rank",
+      "combined_loading"
+    ),
+    names(df)
+  )
+
+  out <- df[, keep_cols, drop = FALSE]
 
   out <- out[order(
     factor(out$volcano_display_class,
@@ -2653,9 +2486,11 @@ build_manuscript_gene_table <- function(res_df,
 build_manuscript_class_counts <- function(res_df,
                                           comparison_name,
                                           dataset_name) {
+  df <- derive_plot_classes(res_df)
+
   tab <- table(
     factor(
-      res_df$volcano_display_class,
+      df$volcano_display_class,
       levels = c(
         "strong_and_hbfss",
         "strong_deseq2_only",
@@ -2678,19 +2513,15 @@ build_manuscript_class_counts <- function(res_df,
 build_cutoff_manifest_row <- function(comparison_name,
                                       cutoff_info) {
   data.frame(
-    comparison_name        = comparison_name,
-    cutoff_method          = cutoff_info$method,
-    selected_reason        = cutoff_info$selected_reason,
-    top_n_actual           = cutoff_info$top_n_actual,
-    cutoff_quantile        = cutoff_info$cutoff_quantile,
-    cutoff_value           = cutoff_info$cutoff_value,
+    comparison_name = comparison_name,
+    cutoff_method = cutoff_info$method,
+    selected_reason = cutoff_info$selected_reason,
+    top_n_actual = cutoff_info$top_n_actual,
+    cutoff_quantile = cutoff_info$cutoff_quantile,
+    cutoff_value = cutoff_info$cutoff_value,
     stringsAsFactors = FALSE
   )
 }
-
-# =============================================================================
-# EXPORT HELPERS
-# =============================================================================
 
 export_single_dataset_tables <- function(res_df,
                                          comparison_name,
@@ -2752,9 +2583,9 @@ export_single_dataset_figures <- function(res_df,
     label = paste(base_stub, "empirical p histogram")
   )
 
-  hyb_hist <- safe_plot_build(
-    plot_hybrid_score_histogram(res_df, comparison_name, dataset_name),
-    label = paste(base_stub, "hybrid score histogram")
+  hbfss_hist <- safe_plot_build(
+    plot_hbfss_histogram(res_df, comparison_name, dataset_name),
+    label = paste(base_stub, "HBFSS histogram")
   )
 
   if (!is.null(volc)) {
@@ -2793,10 +2624,10 @@ export_single_dataset_figures <- function(res_df,
     )
   }
 
-  if (!is.null(hyb_hist)) {
+  if (!is.null(hbfss_hist)) {
     save_grob(
-      hyb_hist,
-      file.path(figure_dir_local, paste0(base_stub, "__hybrid_score_histogram.png")),
+      hbfss_hist,
+      file.path(figure_dir_local, paste0(base_stub, "__HBFSS_histogram.png")),
       width = 7.2,
       height = 5.2
     )
@@ -2808,7 +2639,7 @@ export_single_dataset_figures <- function(res_df,
       dispersion = disp,
       pca = pca_panel,
       empirical_p_hist = emp_hist,
-      hybrid_score_hist = hyb_hist
+      HBFSS_hist = hbfss_hist
     )
   )
 }
@@ -2866,10 +2697,6 @@ export_comparison_cutoff_figures <- function(combined_cutoff_info,
   )
 }
 
-# =============================================================================
-# MULTI-COMPARISON COMBINERS
-# =============================================================================
-
 bind_dataset_summary_rows <- function(summary_rows) {
   if (!length(summary_rows)) return(data.frame())
   dplyr::bind_rows(summary_rows)
@@ -2886,22 +2713,7 @@ bind_cutoff_manifest_rows <- function(cutoff_rows) {
 }
 
 # =============================================================================
-# END OF PART 4
-# =============================================================================
-
-# =============================================================================
-# SEQUENCE MANUSCRIPT PIPELINE
-# PART 5 OF 5
-# =============================================================================
-# This section contains:
-# 1. Comparison-level execution wrapper
-# 2. Full pipeline runner across all comparisons
-# 3. Reduced manuscript export manifest
-# 4. Session summary and completion message
-# =============================================================================
-
-# =============================================================================
-# COMPARISON RUNNER
+# PART 5
 # =============================================================================
 
 run_single_comparison_pipeline <- function(comparison_row,
@@ -2962,11 +2774,13 @@ run_single_comparison_pipeline <- function(comparison_row,
       !is.na(evs_fixed_rank_override)) {
     manual_rank <- max(1L, min(as.integer(evs_fixed_rank_override), nrow(merged_loading_tbl)))
     cutoff_info$top_n_actual <- manual_rank
-    cutoff_info$cutoff_value <- merged_loading_tbl$combined_loading[manual_rank]
-    cutoff_info$cutoff_quantile <- 1 - (manual_rank / nrow(merged_loading_tbl))
     cutoff_info$method <- "manual_fixed_rank"
     cutoff_info$selected_reason <- "manual_fixed_rank"
   }
+
+  cutoff_info$top_n_actual <- max(1L, min(as.integer(cutoff_info$top_n_actual), nrow(merged_loading_tbl)))
+  cutoff_info$cutoff_value <- merged_loading_tbl$combined_loading[cutoff_info$top_n_actual]
+  cutoff_info$cutoff_quantile <- 1 - (cutoff_info$top_n_actual / nrow(merged_loading_tbl))
 
   cutoff_rank <- cutoff_info$top_n_actual
 
@@ -3060,10 +2874,6 @@ run_single_comparison_pipeline <- function(comparison_row,
   )
 }
 
-# =============================================================================
-# RUN MANIFEST HELPERS
-# =============================================================================
-
 build_run_manifest <- function(runtime_seconds,
                                comparison_results) {
   cutoff_rows <- lapply(comparison_results, function(x) {
@@ -3076,6 +2886,7 @@ build_run_manifest <- function(runtime_seconds,
   cutoff_manifest <- bind_cutoff_manifest_rows(cutoff_rows)
 
   data.frame(
+    cutoff_manifest_present          = nrow(cutoff_manifest) > 0,
     analysis_name                    = analysis_name,
     runtime_readable                 = format_runtime_minutes(runtime_seconds),
     runtime_seconds                  = runtime_seconds,
@@ -3083,11 +2894,7 @@ build_run_manifest <- function(runtime_seconds,
     lfc_boundary                     = lfc_boundary,
     main_cutoff_mode                 = evs_cutoff_mode_main,
     backup_cutoff_mode               = evs_backup_cutoff_mode,
-    manual_fixed_rank_override       = ifelse(
-      isTRUE(is.na(evs_fixed_rank_override)),
-      NA_integer_,
-      as.integer(evs_fixed_rank_override)
-    ),
+    manual_fixed_rank_override       = if (is.na(evs_fixed_rank_override)) NA_integer_ else as.integer(evs_fixed_rank_override),
     fixed_top_n_backup               = evs_fixed_top_n,
     fourier_percentile_step          = fourier_percentile_step,
     fourier_window_fraction          = fourier_window_fraction,
@@ -3099,14 +2906,7 @@ build_run_manifest <- function(runtime_seconds,
     n_comparisons                    = length(comparison_results),
     output_dir                       = output_dir,
     stringsAsFactors = FALSE
-  ) |>
-    cbind(
-      data.frame(
-        cutoff_manifest_present = nrow(cutoff_manifest) > 0,
-        stringsAsFactors = FALSE
-      ),
-      .
-    )
+  )
 }
 
 write_readme_summary <- function(comparison_results,
@@ -3164,10 +2964,6 @@ write_readme_summary <- function(comparison_results,
   writeLines(lines, con = output_file)
   invisible(output_file)
 }
-
-# =============================================================================
-# FULL PIPELINE
-# =============================================================================
 
 run_sequence_manuscript_pipeline <- function() {
   run_start <- Sys.time()
@@ -3260,10 +3056,6 @@ run_sequence_manuscript_pipeline <- function() {
   )
 }
 
-# =============================================================================
-# OPTIONAL GENE OVERLAP WITH TWAS
-# =============================================================================
-
 run_twas_overlap_summary <- function(all_results_object,
                                      twas_csv = twas_file) {
   if (!isTRUE(run_twas_overlap)) {
@@ -3296,10 +3088,12 @@ run_twas_overlap_summary <- function(all_results_object,
 
       if (!"gene_symbol" %in% names(res_df)) next
 
-      hit_df <- res_df[
-        !is.na(res_df$gene_symbol) &
-          res_df$gene_symbol %in% twas_genes &
-          res_df$volcano_display_class != "background",
+      plot_df <- derive_plot_classes(res_df)
+
+      hit_df <- plot_df[
+        !is.na(plot_df$gene_symbol) &
+          plot_df$gene_symbol %in% twas_genes &
+          plot_df$volcano_display_class != "background",
         ,
         drop = FALSE
       ]
@@ -3310,12 +3104,11 @@ run_twas_overlap_summary <- function(all_results_object,
         c(
           "feature_id",
           "gene_symbol",
-          "comparison_name",
           "dataset_name",
           "lfc_shrunk",
           "padj",
           "empirical_p",
-          "hybrid_score",
+          "HBFSS",
           "volcano_display_class",
           "combined_rank"
         ),
@@ -3340,17 +3133,8 @@ run_twas_overlap_summary <- function(all_results_object,
   invisible(overlap_tbl)
 }
 
-# =============================================================================
-# MAIN EXECUTION
-# =============================================================================
-
 sequence_pipeline_results <- run_sequence_manuscript_pipeline()
 
 if (isTRUE(run_twas_overlap)) {
   run_twas_overlap_summary(sequence_pipeline_results, twas_csv = twas_file)
 }
-
-# =============================================================================
-# END OF PART 5
-# =============================================================================
-
