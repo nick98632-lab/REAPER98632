@@ -467,7 +467,6 @@ safe_hc_thresh <- function(empirical_p, dataset_name) {
     tryCatch(
       fdrtool::hc.thresh(as.vector(sorted_empirical_p)),
       error = function(e) {
-        message(sprintf("[%s] hc.thresh failed: %s", dataset_name, conditionMessage(e)))
         NA_real_
       }
     )
@@ -1423,37 +1422,103 @@ build_comparison_count_set <- function(full_count_mat,
   )
 }
 
-compute_pc1_loading_table <- function(count_df,
-                                      condition_vector,
-                                      preprocess_mode = c("normalized", "raw_counts"),
-                                      feature_annotation = NULL,
-                                      comparison_name = NULL,
-                                      group_label = NULL) {
-  preprocess_mode <- match.arg(preprocess_mode)
+apply_loading_cutoff <- function(fit_obj, rank_index, selected_reason = "manual_override") {
+  fit_obj <- as.list(fit_obj)
+  loading_tbl <- as.data.frame(fit_obj$loading_table, stringsAsFactors = FALSE)
+  if (is.null(loading_tbl) || !nrow(loading_tbl)) {
+    stop("apply_loading_cutoff() requires a non-empty loading_table.")
+  }
+  required_cols <- c("feature_id", "pc1_loading_abs")
+  assert_required_columns(loading_tbl, required_cols, object_name = "fit_obj$loading_table")
 
-  x <- as.matrix(count_df)
-  storage.mode(x) <- "numeric"
-
-  if (preprocess_mode == "normalized") {
-    tmp_coldata <- data.frame(
-      condition = factor(as.character(condition_vector), levels = c("untrt", "trt")),
-      row.names = colnames(x),
-      stringsAsFactors = FALSE
-    )
-
-    dds_tmp <- DESeqDataSetFromMatrix(
-      countData = round(x),
-      colData = tmp_coldata,
-      design = ~ 1
-    )
-    dds_tmp <- dds_tmp[rowSums(counts(dds_tmp)) > 0, ]
-    dds_tmp <- estimateSizeFactors(dds_tmp)
-    x <- counts(dds_tmp, normalized = TRUE)
+  if (!("rank" %in% colnames(loading_tbl)) ||
+      anyNA(loading_tbl$rank) ||
+      !identical(as.integer(loading_tbl$rank), seq_len(nrow(loading_tbl)))) {
+    loading_tbl <- loading_tbl[order(loading_tbl$pc1_loading_abs, decreasing = TRUE, na.last = NA), , drop = FALSE]
+    loading_tbl$rank <- seq_len(nrow(loading_tbl))
+  } else {
+    loading_tbl <- loading_tbl[order(loading_tbl$rank), , drop = FALSE]
   }
 
+  fit_obj$loading_table <- loading_tbl
+  n_total <- nrow(loading_tbl)
+  rank_index <- as.integer(rank_index)[1]
+  if (!is.finite(rank_index) || is.na(rank_index)) {
+    stop("apply_loading_cutoff() requires rank_index to be a finite integer.")
+  }
+  rank_index <- min(max(1L, rank_index), n_total)
+  row_idx <- match(rank_index, loading_tbl$rank)
+  if (is.na(row_idx) || length(row_idx) != 1L) {
+    stop(sprintf(
+      "apply_loading_cutoff() could not locate rank %d in the loading_table after sorting.",
+      rank_index
+    ))
+  }
+  cutoff_value <- as.numeric(loading_tbl$pc1_loading_abs[row_idx])
+  if (!is.finite(cutoff_value) || is.na(cutoff_value)) {
+    stop(sprintf(
+      "apply_loading_cutoff() produced an invalid cutoff_value for rank %d.",
+      rank_index
+    ))
+  }
+  cutoff_quantile <- 1 - (rank_index / n_total)
+
+  fit_obj$cutoff <- cutoff_value
+  fit_obj$top_n_used <- rank_index
+  fit_obj$cutoff_quantile <- cutoff_quantile
+  fit_obj$curvature_strength <- suppressWarnings({
+    tbl <- fit_obj$candidate_table
+    if (!is.null(tbl) && nrow(tbl) && any(tbl$rank_index == rank_index)) tbl$curvature_strength[match(rank_index, tbl$rank_index)] else NA_real_
+  })
+  fit_obj$cutoff_method <- paste0(fit_obj$cutoff_method, "_selected")
+  fit_obj$selected_reason <- selected_reason
+  fit_obj$loading_table$split_class <- ifelse(
+    fit_obj$loading_table$pc1_loading_abs >= cutoff_value,
+    "high_loading",
+    "background_loading"
+  )
+
+  if (!is.null(fit_obj$candidate_table) && nrow(fit_obj$candidate_table)) {
+    fit_obj$candidate_table$selected <- fit_obj$candidate_table$rank_index == rank_index
+    fit_obj$candidate_table$selected_reason <- ifelse(
+      fit_obj$candidate_table$selected,
+      selected_reason,
+      "candidate_only"
+    )
+  }
+
+  fit_obj
+}
+
+compute_condition_feature_metrics <- function(count_submatrix) {
+  cd <- S4Vectors::DataFrame(row.names = colnames(count_submatrix))
+  dds <- DESeqDataSetFromMatrix(
+    countData = round(as.matrix(count_submatrix)),
+    colData   = cd,
+    design    = ~ 1
+  )
+  dds <- dds[rowSums(counts(dds)) > 0, ]
+  dds <- estimateSizeFactors(dds)
+  dds <- estimateDispersionsGeneEst(dds, quiet = TRUE)
+  dds <- estimateDispersionsFit(dds, quiet = TRUE)
+
+  md <- as.data.frame(SummarizedExperiment::mcols(dds), stringsAsFactors = FALSE)
+  md$feature_id <- rownames(md)
+  keep_cols <- intersect(c("feature_id", "baseMean", "dispGeneEst", "dispFit", "dispersion"), colnames(md))
+  md <- md[, keep_cols, drop = FALSE]
+  md
+}
+
+compute_pc1_loading_table <- function(value_df, sample_names, top_n = evs_fixed_top_n,
+                                      preprocessing_label = "Normalized prior to eigenvector splitting",
+                                      feature_metrics = NULL,
+                                      determine_cutoff = TRUE,
+                                      cutoff_method_label_if_skipped = "inherited_from_normalized") {
+  x <- as.matrix(value_df[, sample_names, drop = FALSE])
+  
   max_pcs <- min(5L, ncol(x))
   pca_fit <- prcomp(t(x), scale. = FALSE, rank. = max_pcs)
-
+  
   loading_abs <- abs(pca_fit$rotation[, 1])
   loading_tbl <- data.frame(
     feature_id       = names(loading_abs),
@@ -1461,26 +1526,224 @@ compute_pc1_loading_table <- function(count_df,
     pc1_loading_abs  = unname(loading_abs),
     stringsAsFactors = FALSE
   )
-
-  loading_tbl <- loading_tbl[order(loading_tbl$pc1_loading_abs, decreasing = TRUE), , drop = FALSE]
+  
+  if (!is.null(feature_metrics) && nrow(feature_metrics) > 0) {
+    fm <- as.data.frame(feature_metrics, stringsAsFactors = FALSE)
+    if (!"feature_id" %in% colnames(fm)) stop("feature_metrics must contain feature_id.")
+    keep_cols <- intersect(c("feature_id", "baseMean", "dispGeneEst", "dispFit", "dispersion"), colnames(fm))
+    fm <- fm[, keep_cols, drop = FALSE]
+    fm <- fm[!duplicated(fm$feature_id), , drop = FALSE]
+    loading_tbl <- dplyr::left_join(loading_tbl, fm, by = "feature_id")
+  }
+  
+  loading_tbl <- loading_tbl[order(loading_tbl$pc1_loading_abs, decreasing = TRUE), ]
   loading_tbl$rank <- seq_len(nrow(loading_tbl))
-
-  if (!is.null(feature_annotation) && "feature_id" %in% names(feature_annotation)) {
-    loading_tbl <- dplyr::left_join(
+  
+  cutoff_info <- if (!isTRUE(determine_cutoff)) {
+    list(
+      cutoff_value          = NA_real_,
+      top_n_actual          = NA_integer_,
+      cutoff_quantile       = NA_real_,
+      method                = cutoff_method_label_if_skipped,
+      curve_df              = NULL,
+      curvature_strength    = NA_real_,
+      candidate_table       = data.frame(),
+      quantile_screen_table = data.frame(),
+      matched_interval_table = data.frame(),
+      selected_reason       = cutoff_method_label_if_skipped
+    )
+  } else {
+    resolve_evs_cutoff(
       loading_tbl,
-      feature_annotation,
-      by = "feature_id"
+      fixed_top_n = top_n,
+      mean_col = "baseMean",
+      dispersion_col = "dispGeneEst"
     )
   }
-
-  if (!is.null(comparison_name)) {
-    loading_tbl$comparison_name <- comparison_name
+  cutoff <- cutoff_info$cutoff_value
+  
+  loading_tbl$split_class <- if (is.finite(cutoff)) {
+    ifelse(
+      loading_tbl$pc1_loading_abs >= cutoff,
+      "high_loading",
+      "background_loading"
+    )
+  } else {
+    rep("background_loading", nrow(loading_tbl))
   }
-  if (!is.null(group_label)) {
-    loading_tbl$group_label <- group_label
+  
+  list(
+    pca_fit              = pca_fit,
+    loading_table        = loading_tbl,
+    cutoff               = cutoff,
+    top_n_used           = cutoff_info$top_n_actual,
+    cutoff_quantile      = cutoff_info$cutoff_quantile,
+    cutoff_method        = cutoff_info$method,
+    cutoff_curve_df      = cutoff_info$curve_df,
+    curvature_strength   = cutoff_info$curvature_strength,
+    candidate_table      = cutoff_info$candidate_table,
+    quantile_screen_table = cutoff_info$quantile_screen_table,
+    matched_interval_table = cutoff_info$matched_interval_table,
+    selected_reason      = cutoff_info$selected_reason,
+    preprocessing_label  = preprocessing_label
+  )
+}
+
+build_eigenvector_split <- function(count_matrix, coldata, comparison_name) {
+  design_formula <- make_design_formula()
+
+  dds_init <- DESeqDataSetFromMatrix(
+    countData = count_matrix,
+    colData   = coldata,
+    design    = design_formula
+  )
+
+  dds_init <- dds_init[rowSums(counts(dds_init)) > 0, ]
+  dds_init <- estimateSizeFactors(dds_init)
+
+  # Keep raw and normalized EVS preprocessing on the same feature universe.
+  # DESeq2 drops all-zero rows before normalization, so the raw panel must be
+  # restricted to those same retained features before PCA/loading ranking.
+  retained_feature_ids <- rownames(dds_init)
+  norm_counts_init <- as.data.frame(counts(dds_init, normalized = TRUE))
+  raw_counts_init  <- as.data.frame(count_matrix[retained_feature_ids, , drop = FALSE])
+
+  sample_ids <- colnames(count_matrix)
+  trt_ids    <- sample_ids[coldata$condition == "trt"]
+  untrt_ids  <- sample_ids[coldata$condition == "untrt"]
+
+  feature_metrics_trt <- compute_condition_feature_metrics(count_matrix[, trt_ids, drop = FALSE])
+  feature_metrics_untrt <- compute_condition_feature_metrics(count_matrix[, untrt_ids, drop = FALSE])
+
+  fit_trt <- compute_pc1_loading_table(
+    norm_counts_init,
+    trt_ids,
+    top_n = evs_fixed_top_n,
+    preprocessing_label = "Normalized before EVS",
+    feature_metrics = feature_metrics_trt,
+    determine_cutoff = FALSE,
+    cutoff_method_label_if_skipped = "normalized_shared_cutoff_pending"
+  )
+
+  fit_untrt <- compute_pc1_loading_table(
+    norm_counts_init,
+    untrt_ids,
+    top_n = evs_fixed_top_n,
+    preprocessing_label = "Normalized before EVS",
+    feature_metrics = feature_metrics_untrt,
+    determine_cutoff = FALSE,
+    cutoff_method_label_if_skipped = "normalized_shared_cutoff_pending"
+  )
+
+  fit_trt_raw <- compute_pc1_loading_table(
+    raw_counts_init,
+    trt_ids,
+    top_n = evs_fixed_top_n,
+    preprocessing_label = "Raw counts before EVS",
+    feature_metrics = feature_metrics_trt,
+    determine_cutoff = FALSE,
+    cutoff_method_label_if_skipped = "raw_cutoff_inherited_from_normalized"
+  )
+
+  fit_untrt_raw <- compute_pc1_loading_table(
+    raw_counts_init,
+    untrt_ids,
+    top_n = evs_fixed_top_n,
+    preprocessing_label = "Raw counts before EVS",
+    feature_metrics = feature_metrics_untrt,
+    determine_cutoff = FALSE,
+    cutoff_method_label_if_skipped = "raw_cutoff_inherited_from_normalized"
+  )
+
+  primary_trt_fit <- fit_trt
+  primary_untrt_fit <- fit_untrt
+
+  combined_cutoff_info <- resolve_combined_fourier_cutoff(
+    fit_trt_loading_tbl = fit_trt$loading_table,
+    fit_ctrl_loading_tbl = fit_untrt$loading_table,
+    fixed_top_n = evs_fixed_top_n
+  )
+
+  final_shared_rank <- as.integer(combined_cutoff_info$top_n_actual)
+  final_shared_reason <- combined_cutoff_info$selected_reason
+
+  fit_trt <- apply_loading_cutoff(
+    fit_trt,
+    rank_index = final_shared_rank,
+    selected_reason = paste0(final_shared_reason, "_applied_to_treatment")
+  )
+  fit_untrt <- apply_loading_cutoff(
+    fit_untrt,
+    rank_index = final_shared_rank,
+    selected_reason = paste0(final_shared_reason, "_applied_to_control")
+  )
+  fit_trt_raw <- apply_loading_cutoff(
+    fit_trt_raw,
+    rank_index = final_shared_rank,
+    selected_reason = paste0(final_shared_reason, "_projected_to_raw_treatment")
+  )
+  fit_trt_raw$cutoff_method <- "crossing_rank_projected_to_raw_selected"
+  fit_untrt_raw <- apply_loading_cutoff(
+    fit_untrt_raw,
+    rank_index = final_shared_rank,
+    selected_reason = paste0(final_shared_reason, "_projected_to_raw_control")
+  )
+  fit_untrt_raw$cutoff_method <- "crossing_rank_projected_to_raw_selected"
+  primary_trt_fit <- fit_trt
+  primary_untrt_fit <- fit_untrt
+  independent_candidate_evals <- list()
+
+  trt_high   <- as.character(subset(primary_trt_fit$loading_table,   split_class == "high_loading")$feature_id)
+  untrt_high <- as.character(subset(primary_untrt_fit$loading_table, split_class == "high_loading")$feature_id)
+
+  leading_edge_ids <- union(trt_high, untrt_high)
+  analyzed_feature_ids <- union(as.character(fit_trt$loading_table$feature_id), as.character(fit_untrt$loading_table$feature_id))
+  remainder_ids    <- setdiff(analyzed_feature_ids, leading_edge_ids)
+
+  if (length(leading_edge_ids) == 0) {
+    stop("Leading-edge dataset is empty. Check sample mapping or EVS cutoff settings.")
   }
 
-  loading_tbl
+  evs_cutoff_summary <- dplyr::bind_rows(
+    data.frame(
+      preprocessing = "normalized",
+      group = "regime_shift_crossing",
+      cutoff_mode = combined_cutoff_info$method,
+      fixed_top_n_requested = evs_fixed_top_n,
+      empiric_rank_selected = final_shared_rank,
+      cutoff_quantile = fit_trt$cutoff_quantile,
+      curvature_strength = NA_real_,
+      selected_reason = combined_cutoff_info$selected_reason,
+      stringsAsFactors = FALSE
+    ),
+    data.frame(
+      preprocessing = "raw",
+      group = "regime_shift_crossing",
+      cutoff_mode = "crossing_rank_projected_to_raw_selected",
+      fixed_top_n_requested = evs_fixed_top_n,
+      empiric_rank_selected = final_shared_rank,
+      cutoff_quantile = fit_trt_raw$cutoff_quantile,
+      curvature_strength = NA_real_,
+      selected_reason = paste0(combined_cutoff_info$selected_reason, "_projected_to_raw"),
+      stringsAsFactors = FALSE
+    )
+  )
+
+  list(
+    fit_trt               = fit_trt,
+    fit_untrt             = fit_untrt,
+    fit_trt_raw           = fit_trt_raw,
+    fit_untrt_raw         = fit_untrt_raw,
+    primary_trt_fit       = primary_trt_fit,
+    primary_untrt_fit     = primary_untrt_fit,
+    independent_candidate_evals = independent_candidate_evals,
+    combined_cutoff_info  = combined_cutoff_info,
+    evs_cutoff_summary    = evs_cutoff_summary,
+    normalized_counts     = norm_counts_init,
+    raw_dataset           = count_matrix,
+    leading_edge_dataset  = count_matrix[leading_edge_ids, , drop = FALSE],
+    remainder_dataset     = count_matrix[remainder_ids,    , drop = FALSE]
+  )
 }
 
 build_comparison_loading_pair <- function(comparison_obj,
@@ -1589,15 +1852,9 @@ run_core_analysis <- function(count_mat, coldata, dataset_name, annot_df) {
 
   count_mat <- round(as.matrix(count_mat))
   storage.mode(count_mat) <- "numeric"
-
-  if (nrow(count_mat) == 0 || ncol(count_mat) == 0) {
-    stop(sprintf("[%s] count_mat is empty before DESeq2.", dataset_name), call. = FALSE)
-  }
-
   keep_nonzero <- rowSums(count_mat, na.rm = TRUE) > 0
   count_mat <- count_mat[keep_nonzero, , drop = FALSE]
-
-  if (nrow(count_mat) == 0) {
+  if (nrow(count_mat) == 0 || ncol(count_mat) == 0) {
     stop(sprintf("[%s] all rows were zero after split and zero-row filtering.", dataset_name), call. = FALSE)
   }
 
@@ -2745,38 +3002,18 @@ run_single_comparison_pipeline <- function(comparison_row,
     group2_prefix        = grp2
   )
 
-  loading_pair <- build_comparison_loading_pair(
-    comparison_obj = comparison_obj,
-    preprocess_mode = "normalized"
-  )
-
-  feature_metric_tbl <- estimate_feature_metrics_for_loading(
-    count_df = comparison_obj$count_df,
-    coldata  = comparison_obj$coldata
-  )
-
-  trt_loading_tbl <- dplyr::left_join(
-    loading_pair$treatment_loading,
-    feature_metric_tbl,
-    by = "feature_id"
-  )
-
-  ctrl_loading_tbl <- dplyr::left_join(
-    loading_pair$control_loading,
-    feature_metric_tbl,
-    by = "feature_id"
+  evs <- build_eigenvector_split(
+    count_matrix = comparison_obj$count_df,
+    coldata = comparison_obj$coldata,
+    comparison_name = cmp_name
   )
 
   merged_loading_tbl <- merge_loading_pair_to_combined_rank(
-    trt_tbl  = trt_loading_tbl,
-    ctrl_tbl = ctrl_loading_tbl
+    trt_tbl  = evs$primary_trt_fit$loading_table,
+    ctrl_tbl = evs$primary_untrt_fit$loading_table
   )
 
-  cutoff_info <- resolve_combined_fourier_cutoff(
-    fit_trt_loading_tbl  = trt_loading_tbl,
-    fit_ctrl_loading_tbl = ctrl_loading_tbl,
-    fixed_top_n          = evs_fixed_top_n
-  )
+  cutoff_info <- evs$combined_cutoff_info
 
   if (isTRUE(evs_use_manual_rank_first) &&
       is.finite(evs_fixed_rank_override) &&
@@ -2791,14 +3028,25 @@ run_single_comparison_pipeline <- function(comparison_row,
   cutoff_info$cutoff_value <- merged_loading_tbl$combined_loading[cutoff_info$top_n_actual]
   cutoff_info$cutoff_quantile <- 1 - (cutoff_info$top_n_actual / nrow(merged_loading_tbl))
 
-  cutoff_rank <- cutoff_info$top_n_actual
-
-  dataset_split <- split_by_evs_rank(
-    count_df            = comparison_obj$count_df,
-    annotation_df       = comparison_obj$annotation_df,
-    merged_loading_tbl  = merged_loading_tbl,
-    cutoff_rank         = cutoff_rank,
-    comparison_name     = cmp_name
+  dataset_split <- list(
+    original = list(
+      count_df = comparison_obj$count_df,
+      annotation_df = comparison_obj$annotation_df,
+      dataset_name = "original",
+      comparison_name = cmp_name
+    ),
+    leading_edge = list(
+      count_df = evs$leading_edge_dataset,
+      annotation_df = comparison_obj$annotation_df[match(rownames(evs$leading_edge_dataset), comparison_obj$annotation_df$feature_id), , drop = FALSE],
+      dataset_name = "leading_edge",
+      comparison_name = cmp_name
+    ),
+    remainder = list(
+      count_df = evs$remainder_dataset,
+      annotation_df = comparison_obj$annotation_df[match(rownames(evs$remainder_dataset), comparison_obj$annotation_df$feature_id), , drop = FALSE],
+      dataset_name = "remainder",
+      comparison_name = cmp_name
+    )
   )
 
   dataset_results <- list()
@@ -2860,12 +3108,12 @@ run_single_comparison_pipeline <- function(comparison_row,
   )
 
   save_csv(
-    trt_loading_tbl,
+    evs$fit_trt$loading_table,
     file.path(table_dir, paste0(cmp_name, "__treatment_loading_table.csv"))
   )
 
   save_csv(
-    ctrl_loading_tbl,
+    evs$fit_untrt$loading_table,
     file.path(table_dir, paste0(cmp_name, "__control_loading_table.csv"))
   )
 
@@ -2873,8 +3121,8 @@ run_single_comparison_pipeline <- function(comparison_row,
     comparison_name       = cmp_name,
     comparison_obj        = comparison_obj,
     merged_loading_tbl    = merged_loading_tbl,
-    treatment_loading_tbl = trt_loading_tbl,
-    control_loading_tbl   = ctrl_loading_tbl,
+    treatment_loading_tbl = evs$fit_trt$loading_table,
+    control_loading_tbl   = evs$fit_untrt$loading_table,
     cutoff_info           = cutoff_info,
     dataset_split         = dataset_split,
     dataset_results       = dataset_results,
