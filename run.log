@@ -1,2 +1,212 @@
-Error: unexpected symbol in "Here is"
-Execution halted
+
+============================================================
+Running comparison: RT0_ZT6 (R0 vs ZT6)
+============================================================
+converting counts to integer mode
+converting counts to integer mode
+converting counts to integer mode
+converting counts to integer mode
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+[RT0_ZT6 | original] Mean Wald stat sent to fdrtool: 0.0832  (computed only on finite DESeq2 Wald statistics)
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+[RT0_ZT6 | original] HC threshold rejected for HBFSS calibration (value=0.99; cutoff=0.95)
+converting counts to integer mode
+converting counts to integer mode
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+-- note: fitType='parametric', but the dispersion trend was not well captured by the
+   function: y = a/x + b, and a local regression fit was automatically substituted.
+   specify fitType='local' or 'mean' to avoid this message next time.
+final dispersion estimates
+fitting model and testing
+[RT0_ZT6 | leading_edge] Mean Wald stat sent to fdrtool: 0.0906  (computed only on finite DESeq2 Wald statistics)
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+converting counts to integer mode
+converting counts to integer mode
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+[RT0_ZT6 | remainder] Mean Wald stat sent to fdrtool: 0.0744  (computed only on finite DESeq2 Wald statistics)
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+[RT0_ZT6 | remainder] HC threshold rejected for HBFSS calibration (value=0.99; cutoff=0.95)
+converting counts to integer mode
+
+============================================================
+Running comparison: RT2_ZT8 (R2 vs ZT8)
+============================================================
+converting counts to integer mode
+converting counts to integer mode
+converting counts to integer mode
+converting counts to integer mode
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+[RT2_ZT8 | original] Mean Wald stat sent to fdrtool: -0.0180  (computed only on finite DESeq2 Wald statistics)
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+[RT2_ZT8 | original] HC threshold rejected for HBFSS calibration (value=0.99; cutoff=0.95)
+converting counts to integer mode
+converting counts to integer mode
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+-- note: fitType='parametric', but the dispersion trend was not well captured by the
+   function: y = a/x + b, and a local regression fit was automatically substituted.
+   specify fitType='local' or 'mean' to avoid this message next time.
+final dispersion estimates
+fitting model and testing
+[RT2_ZT8 | leading_edge] Mean Wald stat sent to fdrtool: 0.0780  (computed only on finite DESeq2 Wald statistics)
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+[RT2_ZT8 | leading_edge] HC threshold rejected for HBFSS calibration (value=0.99; cutoff=0.95)
+converting counts to integer mode
+converting counts to integer mode
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+[RT2_ZT8 | remainder] Mean Wald stat sent to fdrtool: -0.0261  (computed only on finite DESeq2 Wald statistics)
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+[RT2_ZT8 | remainder] HC threshold rejected for HBFSS calibration (value=0.99; cutoff=0.95)
+converting counts to integer mode
+
+============================================================
+Running comparison: RT4_ZT10 (R4 vs ZT10)
+============================================================
+converting counts to integer mode
+converting counts to integer mode
+converting counts to integer mode
+converting counts to integer mode
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+[RT4_ZT10 | original] Mean Wald stat sent to fdrtool: 0.0808  (computed only on finite DESeq2 Wald statistics)
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+[RT4_ZT10 | original] HC threshold rejected for HBFSS calibration (value=0.99; cutoff=0.95)
+converting counts to integer mode
+converting counts to integer mode
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+-- note: fitType='parametric', but the dispersion trend was not well captured by the
+   function: y = a/x + b, and a local regression fit was automatically substituted.
+   specify fitType='local' or 'mean' to avoid this message next time.
+final dispersion estimates
+fitting model and testing
+[RT4_ZT10 | leading_edge] Mean Wald stat sent to fdrtool: -0.0152  (computed only on finite DESeq2 Wald statistics)
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+[RT4_ZT10 | leading_edge] HC threshold rejected for HBFSS calibration (value=0.99; cutoff=0.95)
+converting counts to integer mode
+converting counts to integer mode
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+[RT4_ZT10 | remainder] Mean Wald stat sent to fdrtool: 0.0854  (computed only on finite DESeq2 Wald statistics)
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+[RT4_ZT10 | remainder] HC threshold rejected for HBFSS calibration (value=0.99; cutoff=0.95)
+converting counts to integer mode
+
+============================================================
+Running comparison: RT8_ZT14 (R8 vs ZT14)
+============================================================
+converting counts to integer mode
+converting counts to integer mode
+converting counts to integer mode
+converting counts to integer mode
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+[RT8_ZT14 | original] Mean Wald stat sent to fdrtool: -0.0282  (computed only on finite DESeq2 Wald statistics)
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+[RT8_ZT14 | original] HC threshold rejected for HBFSS calibration (value=0.99; cutoff=0.95)
+converting counts to integer mode
+converting counts to integer mode
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+-- note: fitType='parametric', but the dispersion trend was not well captured by the
+   function: y = a/x + b, and a local regression fit was automatically substituted.
+   specify fitType='local' or 'mean' to avoid this message next time.
+final dispersion estimates
+fitting model and testing
+[RT8_ZT14 | leading_edge] Mean Wald stat sent to fdrtool: 0.0064  (computed only on finite DESeq2 Wald statistics)
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+[RT8_ZT14 | leading_edge] HC threshold rejected for HBFSS calibration (value=0.99; cutoff=0.95)
+converting counts to integer mode
+converting counts to integer mode
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+[RT8_ZT14 | remainder] Mean Wald stat sent to fdrtool: -0.0279  (computed only on finite DESeq2 Wald statistics)
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+[RT8_ZT14 | remainder] HC threshold rejected for HBFSS calibration (value=0.99; cutoff=0.95)
+converting counts to integer mode
+
+Analysis complete.
+Output directory: /root/REAPER98632/exports/EVS_HBFSS_AllComparisons_Output
+Runtime: ~11.9 min
+There were 50 or more warnings (use warnings() to see the first 50)
