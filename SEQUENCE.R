@@ -77,6 +77,19 @@ twas_file        <- file.path(input_dir, "3aTWAS_genes_of_11_brain_disorders.csv
 # Significance threshold for all DESeq2 calls and effect-class classification.
 alpha_level <- 0.20
 max_usable_hc_p_threshold <- 0.99
+runtime_debug_mode <- TRUE
+
+log_debug <- function(..., .timestamp = TRUE) {
+  if (!isTRUE(runtime_debug_mode)) return(invisible(NULL))
+  msg <- paste(..., collapse = "")
+  if (.timestamp) {
+    message(format(Sys.time(), "%Y-%m-%d %H:%M:%S"), " | ", msg)
+  } else {
+    message(msg)
+  }
+  invisible(NULL)
+}
+
 
 # HC configuration used by HBFSS:
 # The manuscript pipeline derives empirical-null p-values from DESeq2 Wald
@@ -1770,13 +1783,13 @@ resolve_evs_cutoff <- function(loading_tbl,
     cutoff_value = fallback$cutoff_value,
     top_n_actual = fallback$top_n_actual,
     cutoff_quantile = fallback$cutoff_quantile,
-    method = "fixed_top_n_initial_placeholder",
+    method = "fixed_top_n_initial_seed",
     curve_df = NULL,
     curvature_strength = NA_real_,
     candidate_table = data.frame(),
     quantile_screen_table = data.frame(),
     matched_interval_table = data.frame(),
-    selected_reason = "fixed_top_n_initial_placeholder"
+    selected_reason = "fixed_top_n_initial_seed"
   )
 }
 
@@ -2474,6 +2487,7 @@ save_csv <- function(df, path) {
 save_grob <- function(g, path, width = 16.4, height = 9.9, dpi = figure_dpi, bg = "white") {
   tryCatch(
     {
+      log_debug("Exporting plot: ", basename(path))
       ggsave(
         filename  = path,
         plot      = g,
@@ -2484,11 +2498,11 @@ save_grob <- function(g, path, width = 16.4, height = 9.9, dpi = figure_dpi, bg 
         bg        = bg,
         limitsize = FALSE
       )
+      log_debug("Finished plot export: ", basename(path))
       invisible(TRUE)
     },
     error = function(e) {
-      warning(paste0("Panel export failed for ", basename(path), ": ", conditionMessage(e)))
-      invisible(FALSE)
+      stop(paste0("Panel export failed for ", basename(path), ": ", conditionMessage(e)))
     }
   )
 }
@@ -3389,7 +3403,19 @@ run_core_analysis <- function(count_mat, coldata, dataset_name, annot_df) {
   
   
   coef_name <- get_condition_coef(dds)
-  shr       <- lfcShrink(dds, coef = coef_name, type = "apeglm", res = res)
+  if (!is.character(coef_name) || length(coef_name) != 1L || !nzchar(coef_name)) {
+    stop(sprintf("[%s] Invalid coefficient name passed to lfcShrink().", dataset_name))
+  }
+  log_debug(sprintf("[%s] Starting apeglm shrinkage on %d rows.", dataset_name, nrow(res_df)))
+  shrink_start_time <- Sys.time()
+  shr <- tryCatch(
+    lfcShrink(dds, coef = coef_name, type = "apeglm", res = res),
+    error = function(e) {
+      stop(sprintf("[%s] apeglm shrinkage failed: %s", dataset_name, conditionMessage(e)))
+    }
+  )
+  shrink_elapsed_seconds <- as.numeric(difftime(Sys.time(), shrink_start_time, units = "secs"))
+  log_debug(sprintf("[%s] Finished apeglm shrinkage in %.2f seconds.", dataset_name, shrink_elapsed_seconds))
   shr_df    <- as.data.frame(shr)
   shr_df$feature_id <- as.character(rownames(shr_df))
   
