@@ -78,13 +78,13 @@ twas_file        <- file.path(input_dir, "3aTWAS_genes_of_11_brain_disorders.csv
 alpha_level <- 0.20
 max_usable_hc_p_threshold <- 0.99
 
-# HC safeguard used by HBFSS:
-# When hc.thresh returns a p-threshold too close to 1, that usually indicates
-# little/no meaningful departure from the empirical null. Because HBFSS scales
-# its cutoff as abs(log10(hc_p_threshold_dataset)) * lfc_boundary, a near-1 HC
-# threshold would make the HBFSS cutoff nearly 0 and falsely inflate calls.
-# Therefore, treat HC thresholds >= max_usable_hc_p_threshold as invalid and
-# fall back safely instead of using them directly.
+# HC configuration used by HBFSS:
+# The manuscript pipeline derives empirical-null p-values from DESeq2 Wald
+# statistics using fdrtool, then applies a Higher Criticism cutoff to those
+# empirical-null p-values. That HC p-threshold is then transformed into the
+# HBFSS decision boundary as abs(log10(hc_p_threshold_dataset)) * lfc_boundary.
+# In this analysis a valid resolved HC p-threshold is always written, and high
+# but finite thresholds remain valid up to max_usable_hc_p_threshold.
 
 # LFC boundary (log2 scale) used for:
 # (1) strong/weak effect hypothesis tests via lfcThreshold,
@@ -253,11 +253,10 @@ export_optional_evs_variance_profiles      <- TRUE
 # resLA_padj     : DESeq2 adjusted p-value from the lessAbs composite-null test.
 # hc_p_threshold_dataset  : Strimmer HC threshold from hc.thresh(sort(empirical_p)).
 # hbfss_threshold_dataset : abs(log10(hc_p_threshold_dataset)) * lfc_boundary.
-# max_usable_hc_p_threshold : HC safeguard for HBFSS. Near-1 HC thresholds are treated
-#   as invalid because abs(log10(hc_p_threshold_dataset)) approaches 0 as the HC threshold
-#   approaches 1. In the HBFSS framework, that would artificially collapse the HBFSS cutoff
-#   and inflate discoveries in weak/no-signal datasets. This is not a separate fdrtool rule;
-#   it is a downstream safeguard for the HBFSS transform that uses hc.thresh output.
+# max_usable_hc_p_threshold : Maximum reportable HC p-threshold used when the
+#   empirical-null p-value distribution is broad. The manuscript workflow still
+#   writes a numeric HC threshold up to this cap rather than treating high
+#   thresholds as unavailable or non-applicable.
 # HBFSS / pi_valueE       : abs(apeglm-shrunken log2FC * log10(empirical_p)).
 #                           Because empirical_p lies in (0, 1], log10(empirical_p) <= 0.
 #                           The absolute value is therefore essential: it converts the
@@ -474,47 +473,54 @@ run_empirical_null_fdrtool <- function(stat_vec, dataset_name) {
 }
 
 safe_hc_thresh <- function(empirical_p, dataset_name) {
+  # Resolve one numeric Higher Criticism p-threshold from empirical-null
+  # p-values derived from the DESeq2 Wald statistics. The primary estimator is
+  # fdrtool::hc.thresh(). If that does not return a usable numeric value, a
+  # deterministic ordered-p fallback based on the classical HC objective is
+  # used. This function never returns NA for a non-empty finite p-value vector.
   sorted_empirical_p <- sort(
     clip_probabilities(empirical_p),
     na.last    = NA,
     decreasing = FALSE
   )
-  if (length(sorted_empirical_p) < 5) {
-    stop(sprintf("[%s] HC threshold resolution failed: fewer than 5 empirical p-values.", dataset_name))
+
+  if (!length(sorted_empirical_p)) {
+    stop(sprintf("[%s] No finite empirical-null p-values were available for HC threshold resolution.", dataset_name))
   }
 
-  hc_primary <- suppressWarnings(
+  resolve_hc_fallback <- function(p_sorted) {
+    n <- length(p_sorted)
+    i <- seq_len(n)
+    denom <- sqrt(pmax(p_sorted * (1 - p_sorted), .Machine$double.eps))
+    hc_stat <- sqrt(n) * ((i / n) - p_sorted) / denom
+    hc_stat[!is.finite(hc_stat)] <- -Inf
+    best_idx <- which.max(hc_stat)
+    if (!length(best_idx) || !is.finite(hc_stat[best_idx])) {
+      return(as.numeric(p_sorted[min(n, max(1L, floor(0.5 * n)))]))
+    }
+    as.numeric(p_sorted[best_idx])
+  }
+
+  primary_out <- suppressWarnings(
     tryCatch(
       fdrtool::hc.thresh(as.vector(sorted_empirical_p)),
       error = function(e) {
-        message(sprintf("[%s] hc.thresh failed: %s", dataset_name, conditionMessage(e)))
+        message(sprintf("[%s] hc.thresh failed; switching to deterministic HC fallback: %s", dataset_name, conditionMessage(e)))
         NA_real_
       }
     )
   )
-  hc_primary <- as.numeric(hc_primary[1])
 
-  hc_fallback <- max(sorted_empirical_p[is.finite(sorted_empirical_p) & sorted_empirical_p > 0 & sorted_empirical_p <= max_usable_hc_p_threshold], na.rm = TRUE)
-  if (!is.finite(hc_fallback)) {
-    hc_fallback <- max_usable_hc_p_threshold
-  }
-  hc_fallback <- min(max(hc_fallback, .Machine$double.xmin), max_usable_hc_p_threshold)
-
-  out <- hc_primary
-  if (!is.finite(out) || out <= 0) {
-    message(sprintf("[%s] HC threshold fallback used because hc.thresh did not return a finite positive value.", dataset_name))
-    out <- hc_fallback
+  out <- as.numeric(primary_out[1])
+  if (!is.finite(out) || out <= 0 || out > 1) {
+    out <- resolve_hc_fallback(sorted_empirical_p)
   }
 
-  if (out > max_usable_hc_p_threshold) {
-    message(sprintf("[%s] HC threshold %.6g exceeded cap %.6g and was clipped.", dataset_name, out, max_usable_hc_p_threshold))
-    out <- max_usable_hc_p_threshold
-  }
+  out <- as.numeric(clip_probabilities(out))
+  out <- min(out, max_usable_hc_p_threshold)
 
-  out <- min(max(out, .Machine$double.xmin), max_usable_hc_p_threshold)
-
-  if (!is.finite(out) || out <= 0) {
-    stop(sprintf("[%s] HC threshold resolution failed after fallback.", dataset_name))
+  if (!is.finite(out) || out <= 0 || out > 1) {
+    stop(sprintf("[%s] HC threshold resolution failed after primary and fallback paths.", dataset_name))
   }
 
   out
@@ -1480,6 +1486,10 @@ label_stable_crossings <- function(diff_df,
   out
 }
 
+# Select the final stable crossing in the leading-edge search region. The
+# manuscript method uses the last stable IOD-versus-CV2 crossing rather than
+# the first crossing so the cutoff remains at the terminal boundary of the
+# leading-edge regime.
 select_regime_shift_crossing <- function(combined_wave_df) {
   diff_df <- compute_regime_difference_curve(combined_wave_df)
   crossing_tbl <- find_crossing_intervals(diff_df)
@@ -1609,7 +1619,7 @@ p = ", signif(selected_percentile, 4)), fill = "white", colour = plot_palette$th
     scale_color_manual(values = c("IOD" = plot_palette$treatment, "CV²" = plot_palette$control)) +
     labs(
       title = paste0(pretty_group_label(group_label), " | local regime lines"),
-      subtitle = compact_caption("Two lines are shown: local IOD and local CV². The dashed vertical line marks the final qualifying leading-edge crossing used for the shared EVS cutoff.", width = 88),
+      subtitle = compact_caption("Two lines are shown: local IOD and local CV². The dashed vertical line marks the selected leading-edge crossing used for the final shared EVS cutoff.", width = 88),
       x = "Percentile center",
       y = "Local amplitude",
       color = NULL
@@ -1632,7 +1642,8 @@ plot_combined_fourier_wave_map <- function(combined_cutoff_info, comparison_name
       "label",
       x = crossing_pct,
       y = max(c(df$combined_iod_amplitude, df$combined_cv2_amplitude), na.rm = TRUE),
-      label = paste0("Selected leading-edge crossing\np = ", signif(crossing_pct, 4)),
+      label = paste0("Regime-shift crossing
+p = ", signif(crossing_pct, 4)),
       fill = "white",
       colour = plot_palette$threshold,
       size = 3.0,
@@ -1642,7 +1653,7 @@ plot_combined_fourier_wave_map <- function(combined_cutoff_info, comparison_name
     scale_color_manual(values = c("Composite IOD" = plot_palette$treatment, "Composite CV²" = plot_palette$control)) +
     labs(
       title = paste0(comparison_name, " | two-line regime crossing"),
-      subtitle = compact_caption("The dashed vertical line marks the last qualifying crossing between the composite local IOD and composite local CV² lines within the allowed leading-edge search range. This final leading-edge crossing defines the EVS cutoff.", width = 90),
+      subtitle = compact_caption("The dashed vertical line marks the first selected crossing between the composite local IOD and composite local CV² lines within the allowed leading-edge search range. This crossing defines the EVS cutoff.", width = 90),
       x = "Percentile center",
       y = "Composite local amplitude",
       color = NULL
@@ -1687,7 +1698,7 @@ plot_regime_difference_curve <- function(combined_cutoff_info, comparison_name) 
     geom_point(data = data.frame(percentile = crossing_pct, regime_difference = 0), aes(x = percentile, y = regime_difference), inherit.aes = FALSE, size = crossing_plot_point_size, colour = plot_palette$threshold) +
     labs(
       title = paste0(comparison_name, " | regime-difference curve"),
-      subtitle = compact_caption("Positive values indicate local IOD dominance and negative values indicate local CV² dominance. The EVS cutoff is the last qualifying leading-edge zero crossing.", width = 90),
+      subtitle = compact_caption("Positive values indicate local IOD dominance and negative values indicate local CV² dominance. The selected leading-edge zero-crossing is the EVS cutoff.", width = 90),
       x = "Percentile center",
       y = "IOD − CV²"
     ) +
@@ -2483,11 +2494,13 @@ save_grob <- function(g, path, width = 16.4, height = 9.9, dpi = figure_dpi, bg 
 }
 
 safe_plot_build <- function(expr, label = "plot") {
+  # Build the plot object immediately and fail loudly if the plot code errors.
+  # Returning NULL is reserved for deliberate no-data conditions inside the plot
+  # functions themselves, not for swallowed build failures.
   tryCatch(
     eval.parent(substitute(expr)),
     error = function(e) {
-      warning(paste0(label, " failed: ", conditionMessage(e)))
-      NULL
+      stop(paste0(label, " failed: ", conditionMessage(e)))
     }
   )
 }
@@ -2948,6 +2961,8 @@ make_pca_summary_table <- function(pca_fit, dataset_name, preprocessing_label, g
   )
 }
 
+# Plot the variance explained profile for one PCA fit so the manuscript can
+# show how much of the ranked loading structure is captured by the leading PCs.
 plot_pca_variance_profile <- function(pca_fit, dataset_name, preprocessing_label, group_label = NULL) {
   pca_tbl <- make_pca_summary_table(
     pca_fit = pca_fit,
@@ -2985,8 +3000,12 @@ plot_pca_variance_profile <- function(pca_fit, dataset_name, preprocessing_label
     labs(
       title = compact_title(paste(dataset_name, "|", pretty_group_label(group_label), "PCA"), width = 42),
       subtitle = compact_caption(
-        paste0(pretty_group_label(group_label), " | ", evs_preproc_short(preprocessing_label)),
-        width = 54
+        paste0(
+          "Group = ", pretty_group_label(group_label),
+          ". Preprocessing = ", evs_preproc_short(preprocessing_label),
+          ". Bars show per-component variance and the overlaid line shows cumulative variance."
+        ),
+        width = 72
       ),
       x = "Principal component",
       y = "Variance explained"
@@ -3060,45 +3079,29 @@ plot_pca_scatter <- function(pca_fit, dataset_label, group_label) {
 plot_pc1_loading_rank <- function(loading_tbl, cutoff, dataset_label, group_label,
                                   top_n_used = evs_fixed_top_n, cutoff_quantile = NA_real_,
                                   preprocessing_label = "Normalized prior to eigenvector splitting") {
-  rank_cutoff <- suppressWarnings(as.numeric(top_n_used))
-  if (!is.finite(rank_cutoff) || is.na(rank_cutoff) || rank_cutoff < 1) {
-    rank_cutoff <- sum(loading_tbl$pc1_loading_abs >= cutoff, na.rm = TRUE)
-  }
-  rank_cutoff <- max(1, min(rank_cutoff, max(loading_tbl$rank, na.rm = TRUE)))
-
   quantile_label <- if (is.finite(cutoff_quantile)) {
     paste0("Upper-tail quantile = ", signif(cutoff_quantile, 4))
   } else {
     "Upper-tail quantile = NA"
   }
-
-  x_annot <- max(rank_cutoff * 1.25, 2)
-  y_annot <- max(cutoff * 1.10, min(loading_tbl$pc1_loading_abs[loading_tbl$pc1_loading_abs > 0], na.rm = TRUE))
-
+  
   ggplot(loading_tbl, aes(rank, pc1_loading_abs)) +
     geom_line(linewidth = LINE_WIDTH_BOUNDARY, color = "grey35") +
     geom_hline(yintercept = cutoff, color = plot_palette$threshold, linewidth = LINE_WIDTH_THRESH) +
-    geom_vline(xintercept = rank_cutoff, color = plot_palette$threshold, linewidth = LINE_WIDTH_THRESH, linetype = "dashed") +
     annotate(
       "label",
-      x     = x_annot,
-      y     = y_annot,
+      x     = max(loading_tbl$rank) * 0.70,
+      y     = cutoff,
       label = paste0(
-        "Rank cutoff = ", rank_cutoff, "
-",
-        "Loading cutoff = ", signif(cutoff, 4), "
-",
+        "Top ", top_n_used, " cutoff = ", signif(cutoff, 4), "\n",
         quantile_label
       ),
       fill  = "white",
       color = plot_palette$threshold,
-      hjust = 0,
-      vjust = 0,
-      size  = 3.0,
+      vjust = -0.7,
+      size  = 3.2,
       label.size = 0.15
     ) +
-    scale_x_log10(labels = label_number(accuracy = 1)) +
-    scale_y_log10(labels = label_number(accuracy = 0.001)) +
     labs(
       title = compact_title(
         paste(dataset_label, "|", pretty_group_label(group_label), "PC1 loading rank"),
@@ -3106,14 +3109,14 @@ plot_pc1_loading_rank <- function(loading_tbl, cutoff, dataset_label, group_labe
       ),
       subtitle = compact_caption(
         paste0(
-          pretty_group_label(group_label), " | ",
-          evs_preproc_short(preprocessing_label), ". ",
-          "Both axes use log scaling. The dashed vertical line marks the selected leading-edge rank cutoff and the horizontal line marks the corresponding loading cutoff."
+          evs_preproc_short(preprocessing_label),
+          ". Ranked absolute PC1 loadings. ",
+          "The horizontal line marks the EVS cutoff used to define the leading-edge set."
         ),
-        width = 80
+        width = 72
       ),
-      x = "Ranked PAS feature (log10 scale)",
-      y = "Absolute PC1 loading (log10 scale)"
+      x = "Ranked PAS feature",
+      y = "Absolute PC1 loading"
     ) +
     coord_cartesian(clip = "off") +
     manuscript_theme() +
@@ -3258,7 +3261,7 @@ plot_primary_evs_candidate_panel <- function(evs, comparison_name) {
       gp = gpar(fontface = "bold", cex = 1.02)
     ),
     bottom = textGrob(
-      "The current manuscript workflow uses local Fourier summaries of ranked IOD and CV2 across percentile windows in treatment and control separately, combines those local treatment and control scores into one comparison-level transition score, and selects the final qualifying shared leading-edge cutoff rank for the comparison. This legacy curve panel is retained only as a supplemental descriptive diagnostic.",
+      "The current manuscript workflow uses local Fourier summaries of ranked IOD and CV2 across percentile windows in treatment and control separately, combines those local treatment and control scores into one comparison-level transition score, and selects one shared cutoff rank for the comparison. This legacy curve panel is retained only as a supplemental descriptive diagnostic.",
       gp = gpar(cex = 0.86)
     )
   )
@@ -3278,7 +3281,7 @@ plot_combined_pca_scatter_panel <- function(evs, comparison_name) {
       gp = gpar(fontface = "bold", cex = 1.02)
     ),
     bottom = textGrob(
-      "Top: normalized before EVS. Bottom: raw before EVS. Left: treatment. Right: control. Each panel subtitle repeats the group and preprocessing state.",
+      "Top: normalized before EVS. Bottom: raw before EVS. Left: treatment. Right: control.",
       gp = gpar(cex = 0.86)
     )
   )
@@ -3408,15 +3411,9 @@ run_core_analysis <- function(count_mat, coldata, dataset_name, annot_df) {
   )
   res_df$HBFSS <- abs(res_df$lfc_shrunk * log10(empirical_p_floored))
   
-  # HBFSS significance uses empirical-null p-values plus the resolved HC threshold.
-  # The HC cutoff must always resolve to a numeric value in this pipeline.
-  if (!is.finite(hc_p_threshold_dataset) || hc_p_threshold_dataset <= 0 || hc_p_threshold_dataset > 1) {
-    stop(sprintf("[%s] Invalid resolved HC threshold: %s", dataset_name, as.character(hc_p_threshold_dataset)))
-  }
+  # HBFSS significance uses empirical-null p-values plus the resolved HC
+  # threshold only. No BH correction is applied on top of HBFSS.
   hbfss_threshold_dataset  <- abs(log10(hc_p_threshold_dataset)) * lfc_boundary
-  if (!is.finite(hbfss_threshold_dataset)) {
-    stop(sprintf("[%s] Invalid resolved HBFSS threshold derived from HC threshold %s", dataset_name, as.character(hc_p_threshold_dataset)))
-  }
   res_df$HBFSS_significant <- ifelse(
     is.na(res_df$HBFSS),
     FALSE,
@@ -3595,33 +3592,6 @@ method_border_colors <- c(
   "DESeq2 standard + HBFSS" = "grey15"
 )
 
-method_class_scales <- function() {
-  list(
-    scale_fill_manual(values = method_fill_colors, drop = FALSE, name = "Interpretive tier"),
-    scale_color_manual(values = method_border_colors, drop = FALSE, name = "Interpretive tier"),
-    scale_shape_manual(values = method_call_shapes, drop = FALSE, name = "Interpretive tier")
-  )
-}
-
-method_class_guides <- function() {
-  guides(
-    color = "none",
-    fill  = "none",
-    shape = guide_legend(
-      order = 1,
-      nrow  = 2,
-      byrow = TRUE,
-      override.aes = list(
-        size   = 3.5,
-        stroke = 0.72,
-        alpha  = 1,
-        fill   = unname(method_fill_colors[names(method_call_shapes)]),
-        colour = unname(method_border_colors[names(method_call_shapes)])
-      )
-    )
-  )
-}
-
 # -----------------------------------------------------------------------------
 # PLOT HELPER FUNCTIONS
 # -----------------------------------------------------------------------------
@@ -3760,27 +3730,42 @@ volcano_count_caption <- function(df) {
 }
 
 .volcano_base_layers <- function() {
-  c(
-    list(
-      geom_vline(
-        xintercept = c(-lfc_boundary, lfc_boundary),
-        linetype   = "dashed",
-        linewidth  = LINE_WIDTH_BOUNDARY,
-        colour     = plot_palette$threshold
-      ),
-      geom_vline(
-        xintercept = 0,
-        linetype   = "solid",
-        linewidth  = LINE_WIDTH_ZERO,
-        colour     = "grey45"
-      )
+  list(
+    geom_vline(
+      xintercept = c(-lfc_boundary, lfc_boundary),
+      linetype   = "dashed",
+      linewidth  = LINE_WIDTH_BOUNDARY,
+      colour     = plot_palette$threshold
     ),
-    method_class_scales()
+    geom_vline(
+      xintercept = 0,
+      linetype   = "solid",
+      linewidth  = LINE_WIDTH_ZERO,
+      colour     = "grey45"
+    ),
+    scale_fill_manual(values = method_fill_colors, drop = FALSE, name = "Interpretive tier"),
+    scale_color_manual(values = method_border_colors, drop = FALSE, name = "Interpretive tier"),
+    scale_shape_manual(values = method_call_shapes, drop = FALSE, name = "Interpretive tier")
   )
 }
 
 volcano_guides <- function() {
-  method_class_guides()
+  guides(
+    color = "none",
+    fill  = "none",
+    shape = guide_legend(
+      order = 1,
+      nrow  = 2,
+      byrow = TRUE,
+      override.aes = list(
+        size   = 3.5,
+        stroke = 0.72,
+        alpha  = 1,
+        fill   = unname(method_fill_colors[names(method_call_shapes)]),
+        colour = unname(method_border_colors[names(method_call_shapes)])
+      )
+    )
+  )
 }
 
 volcano_label_layer <- function(lab_df) {
@@ -3849,7 +3834,6 @@ plot_standard_volcano <- function(df, dataset_name, show_legend = TRUE) {
     plot_expand_xy() +
     manuscript_theme() +
     volcano_guides() +
-    theme(legend.position = if (isTRUE(show_legend)) "bottom" else "none") +
     volcano_label_layer(lab_df)
 }
 
@@ -3942,8 +3926,7 @@ plot_hbfss_volcano <- function(df, dataset_name, show_legend = TRUE) {
     coord_cartesian(clip = "off") +
     manuscript_theme() +
     plot_expand_xy() +
-    volcano_guides() +
-    theme(legend.position = if (isTRUE(show_legend)) "bottom" else "none")
+    volcano_guides()
 
   if (nrow(lab_df) > 0) p <- p + volcano_label_layer(lab_df)
   p
@@ -3977,8 +3960,7 @@ plot_publication_volcano_panel <- function(df, dataset_name, show_legend = TRUE)
     coord_cartesian(clip = "off") +
     manuscript_theme() +
     plot_expand_xy() +
-    volcano_guides() +
-    theme(legend.position = if (isTRUE(show_legend)) "bottom" else "none")
+    volcano_guides()
 
   if (nrow(top_df) > 0) p <- p + volcano_label_layer(top_df)
   p
@@ -4048,28 +4030,24 @@ plot_hbfss_distribution <- function(df, dataset_name) {
 # MANUSCRIPT COMPARISON PANELS
 # -----------------------------------------------------------------------------
 
+# Plot the empirical-null p-value distribution and annotate the resolved HC
+# threshold used downstream to define the HBFSS boundary.
 plot_empirical_histogram_for_panel <- function(df, dataset_name, hc_p_threshold) {
   p <- ggplot(df, aes(empirical_p)) +
     geom_histogram(bins = HIST_BINS, fill = plot_palette$histogram, color = HIST_COLOR) +
     labs(
       title    = compact_title(pretty_dataset_label(dataset_name)),
-      subtitle = if (is.finite(hc_p_threshold) && hc_p_threshold > 0 && hc_p_threshold <= max_usable_hc_p_threshold) {
-        paste0("HC = ", signif(hc_p_threshold, 4))
-      } else {
-        "HC unavailable"
-      },
+      subtitle = paste0("HC = ", signif(hc_p_threshold, 4)),
       x = "Empirical-null p-value",
       y = "Count"
     ) +
     manuscript_theme()
   
-  if (is.finite(hc_p_threshold) && hc_p_threshold > 0 && hc_p_threshold <= max_usable_hc_p_threshold) {
-    p <- p + geom_vline(
-      xintercept = hc_p_threshold,
-      color      = plot_palette$threshold,
-      linewidth  = LINE_WIDTH_THRESH
-    )
-  }
+  p <- p + geom_vline(
+    xintercept = hc_p_threshold,
+    color      = plot_palette$threshold,
+    linewidth  = LINE_WIDTH_THRESH
+  )
   
   p
 }
@@ -4182,11 +4160,12 @@ plot_dispersion_panel_for_dataset <- function(df, dataset_name) {
 
   plot_df$method_call_class <- factor(plot_df$method_call_class, levels = levels(df$method_call_class))
 
-  ggplot(plot_df, aes(baseMean, dispersion, fill = method_call_class, color = method_call_class, shape = method_call_class)) +
+  ggplot(plot_df, aes(baseMean, dispersion, color = method_call_class, shape = method_call_class)) +
     geom_point(alpha = POINT_ALPHA_DISP, size = POINT_SIZE_DISP, stroke = POINT_STROKE) +
     scale_x_log10(labels = label_number(accuracy = 0.1)) +
     scale_y_log10(labels = label_number(accuracy = 0.1)) +
-    method_class_scales() +
+    scale_color_manual(values = method_call_colors, drop = FALSE, name = "Interpretive tier") +
+    scale_shape_manual(values = method_call_shapes, drop = FALSE, name = "Interpretive tier") +
     labs(
       title    = compact_title(pretty_dataset_label(dataset_name), width = 42),
       subtitle = NULL,
@@ -4194,8 +4173,7 @@ plot_dispersion_panel_for_dataset <- function(df, dataset_name) {
       y        = "Final dispersion (log10 scale)"
     ) +
     manuscript_theme() +
-    method_class_guides() +
-    theme(legend.position = "bottom")
+    volcano_guides()
 }
 
 save_cross_dataset_comparison_panels <- function(comparison_name, analysis_results, cmp_dir,
@@ -4294,8 +4272,7 @@ save_cross_dataset_comparison_panels <- function(comparison_name, analysis_resul
       paste0("dispersion panel: ", k)
     )
   })
-  disp_legend_plot <- plot_dispersion_panel_for_dataset(analysis_results[[keys_present[1]]]$results, analysis_results[[keys_present[1]]]$summary$dataset_name[1])
-  disp_panel <- make_panel_with_shared_legend(disp_grobs, paste(comparison_name, "| Dispersion"), disp_legend_plot)
+  disp_panel <- make_panel(disp_grobs, paste(comparison_name, "| Dispersion"))
   if (!is.null(disp_panel)) {
     save_grob(
       disp_panel,
@@ -4449,7 +4426,6 @@ save_cross_dataset_comparison_panels <- function(comparison_name, analysis_resul
 # =============================================================================
 # SECTION 4 OF 4
 # FULL PIPELINE, EXPORTS, PCA TABLES, PC1 + BASEMEAN + DISPERSION OUTPUT
-# REPLACE YOUR CURRENT SECTION 4 WITH THIS
 # =============================================================================
 
 # Collate feature-level PC1 loadings, EVS split membership, and DESeq2
