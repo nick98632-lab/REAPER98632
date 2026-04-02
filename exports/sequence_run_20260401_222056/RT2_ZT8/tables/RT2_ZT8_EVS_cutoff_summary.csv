@@ -1,3 +1,0 @@
-"preprocessing","group","cutoff_mode","fixed_top_n_requested","empiric_rank_selected","cutoff_quantile","treatment_cutoff_value","control_cutoff_value","composite_cutoff_value","curvature_strength","selected_reason","comparison_name"
-"normalized","regime_shift_crossing","first_stable_crossing",5000,3646,0.884378765776622,0.000695319500987645,0.00073949015863673,0.000717404829812187,NA,"first_crossing_fallback","RT2_ZT8"
-"raw","regime_shift_crossing","crossing_rank_projected_to_raw_selected",5000,3646,0.884378765776622,0.000662752067663083,0.000899870376202403,0.000781311221932743,NA,"first_crossing_fallback_projected_to_raw","RT2_ZT8"
