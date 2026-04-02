@@ -79,10 +79,12 @@ alpha_level <- 0.20
 max_usable_hc_p_threshold <- 0.99
 
 # HC safeguard used by HBFSS:
-# The manuscript permits HC thresholds up to 0.99. If hc.thresh() fails or
-# returns an unusable value, the code applies a deterministic HC fallback on the
-# sorted empirical-null p-values and stops the run if no numeric cutoff can be
-# resolved.
+# When hc.thresh returns a p-threshold too close to 1, that usually indicates
+# little/no meaningful departure from the empirical null. Because HBFSS scales
+# its cutoff as abs(log10(hc_p_threshold_dataset)) * lfc_boundary, a near-1 HC
+# threshold would make the HBFSS cutoff nearly 0 and falsely inflate calls.
+# Therefore, treat HC thresholds >= max_usable_hc_p_threshold as invalid and
+# fall back safely instead of using them directly.
 
 # LFC boundary (log2 scale) used for:
 # (1) strong/weak effect hypothesis tests via lfcThreshold,
@@ -98,24 +100,26 @@ lfc_boundary <- 1.0
 # combines those local Fourier summaries into one comparison-level transition
 # score, and selects one shared cutoff rank per comparison.
 #
-# EVS cutoff mode used in the manuscript.
-# Only two manuscript methods are permitted:
-# "fourier_wave"  : comparison-level cutoff chosen from the treatment/control
-#                   local Fourier regime-line crossing analysis.
-# "manual_cutoff" : user-specified shared rank used when a manual cutoff is
-#                   intentionally requested.
+# EVS cutoff mode.
+# "fourier_wave" now routes to the combined local Fourier shared-
+# cutoff method retained under the legacy option name for backward
+# compatibility with earlier scripts and exports.
+# "variance_second_derivative" retains the earlier NB2-only curvature fallback.
+# "fixed_top_n" uses a user-specified manual rank.
 evs_cutoff_mode_main <- "fourier_wave"
 
-# User-adjustable fixed EVS cutoff. This rank is used only when the manuscript
-# is intentionally run in manual_cutoff mode or when a deterministic manual
-# fallback is required to keep the pipeline running.
+# User-adjustable fixed EVS cutoff. This is used whenever
+# evs_cutoff_mode_main == "fixed_top_n" and is also retained in summaries so a
+# reader can compare the manual rank choice with the empirically derived rank.
 evs_fixed_top_n <- 5000
 evs_fixed_rank_override <- NA_integer_
 evs_use_manual_rank_first <- FALSE
 
-# EVS local-curve settings used by the manuscript Fourier-wave cutoff path.
-# Older curvature-based selector code has been retained only where needed for
-# backwards reproducibility of archived exports and is not a manuscript method.
+# EVS curve metrics used for adaptive cutoff detection.
+# The current manuscript pathway uses combined local Fourier summaries of ranked
+# IOD and CV2 as the primary shared-cutoff method. The older curvature-based NB2
+# functions are retained below only as explicit legacy fallback code paths and
+# for method comparison, not as the primary manuscript selector.
 
 # Legacy curvature fallback settings.
 # These parameters are used only if the script is intentionally routed through
@@ -158,7 +162,7 @@ evs_candidate_runtime_seconds_high <- 25
 # percentile-centered overlapping local fits. Treatment and control are modeled
 # separately within each metric, then combined at the waveform level to form a
 # composite IOD curve and a composite CV² curve. The primary EVS cutoff is the
-# first stable crossing between these two lines. The percentile-indexed score
+# last valid leading-edge crossing between these two lines. The percentile-indexed score
 # is retained as a descriptive summary, but the crossing itself is the regime
 # shift and therefore the splitting cutoff.
 fourier_percentile_step <- 0.01
@@ -263,10 +267,12 @@ export_optional_evs_variance_profiles      <- TRUE
 # standard_significant    : DESeq2-positive call: native DESeq2 padj < alpha,
 #                           |rawLFC| >= lfc_boundary, and |lfc_shrunk| >=
 #                           lfc_boundary.
-# evs_cutoff_mode_main    : main EVS split rule. Only two manuscript modes are
-#                           valid here: "fourier_wave" for the comparison-level
-#                           local Fourier crossing method, and "manual_cutoff"
-#                           for an intentional user-specified shared rank.
+# evs_cutoff_mode_main    : main EVS split rule. In the current manuscript
+#                           workflow, "fourier_wave" routes to the
+#                           combined local Fourier shared-cutoff method for
+#                           backward compatibility. "variance_second_derivative"
+#                           retains the earlier NB2-only curvature fallback.
+#                           "fixed_top_n" uses a user-specified manual rank.
 # evs_fixed_top_n         : user-adjustable manual EVS rank cutoff when a fixed
 #                           cutoff is requested.
 # comparison-level cutoff methodology :
@@ -467,53 +473,59 @@ run_empirical_null_fdrtool <- function(stat_vec, dataset_name) {
   fit
 }
 
+
 safe_hc_thresh <- function(empirical_p, dataset_name) {
   sorted_empirical_p <- sort(
     clip_probabilities(empirical_p),
     na.last    = NA,
     decreasing = FALSE
   )
-  n_obs <- length(sorted_empirical_p)
-  if (n_obs < 5L) {
-    stop(sprintf("[%s] safe_hc_thresh received fewer than 5 finite empirical p values.", dataset_name))
+
+  if (length(sorted_empirical_p) < 5L) {
+    stop(sprintf("[%s] Fewer than 5 empirical-null p-values were available for HC thresholding.", dataset_name))
   }
 
-  primary_out <- suppressWarnings(
+  hc_primary <- suppressWarnings(
     tryCatch(
       fdrtool::hc.thresh(as.vector(sorted_empirical_p)),
       error = function(e) {
-        message(sprintf("[%s] hc.thresh failed; using deterministic HC fallback. Details: %s", dataset_name, conditionMessage(e)))
+        message(sprintf("[%s] hc.thresh failed; using deterministic HC fallback: %s", dataset_name, conditionMessage(e)))
         NA_real_
       }
     )
   )
-  primary_out <- as.numeric(primary_out[1])
+  hc_primary <- as.numeric(hc_primary[1])
 
-  if (is.finite(primary_out) && !is.na(primary_out) && primary_out > 0 && primary_out <= max_usable_hc_p_threshold) {
-    return(primary_out)
+  hc_fallback <- function(p_sorted) {
+    n <- length(p_sorted)
+    i <- seq_len(n)
+    eps <- 1 / (n + 1)
+    denom <- sqrt(pmax(p_sorted * (1 - p_sorted), eps))
+    hc_stat <- sqrt(n) * ((i / n) - p_sorted) / denom
+    hc_stat[!is.finite(hc_stat)] <- -Inf
+    best_idx <- which.max(hc_stat)
+    if (!length(best_idx) || !is.finite(hc_stat[best_idx])) {
+      stop(sprintf("[%s] Deterministic HC fallback could not identify a valid threshold.", dataset_name))
+    }
+    as.numeric(p_sorted[best_idx])
   }
 
-  i <- seq_len(n_obs)
-  hc_score <- sqrt(n_obs) * (i / n_obs - sorted_empirical_p) / sqrt(pmax(sorted_empirical_p * (1 - sorted_empirical_p), 1e-300))
-  hc_score[!is.finite(hc_score)] <- -Inf
-  best_idx <- which.max(hc_score)
-
-  fallback_out <- as.numeric(sorted_empirical_p[best_idx])
-  if (!is.finite(fallback_out) || is.na(fallback_out) || fallback_out <= 0 || fallback_out > max_usable_hc_p_threshold) {
-    stop(sprintf("[%s] Unable to resolve a valid HC p-value cutoff. primary=%s fallback=%s cap=%s",
-                 dataset_name,
-                 ifelse(is.finite(primary_out), signif(primary_out, 6), "NA"),
-                 ifelse(is.finite(fallback_out), signif(fallback_out, 6), "NA"),
-                 signif(max_usable_hc_p_threshold, 6)))
+  out <- hc_primary
+  if (!is.finite(out) || is.na(out) || out <= 0 || out > max_usable_hc_p_threshold) {
+    out <- hc_fallback(sorted_empirical_p)
   }
 
-  message(sprintf("[%s] hc.thresh fallback used. primary=%s fallback=%s", dataset_name,
-                  ifelse(is.finite(primary_out), signif(primary_out, 6), "NA"),
-                  signif(fallback_out, 6)))
-  fallback_out
+  out <- min(max(out, fdr_clip_floor), max_usable_hc_p_threshold)
+
+  if (!is.finite(out) || is.na(out) || out <= 0 || out > max_usable_hc_p_threshold) {
+    stop(sprintf("[%s] HC threshold resolution failed. Resolved value was: %s", dataset_name, as.character(out)))
+  }
+
+  out
 }
 
 plot_expand_xy <- function() {
+
   list(
     scale_x_continuous(expand = expansion(mult = c(0.12, 0.24))),
     scale_y_continuous(expand = expansion(mult = c(0.10, 0.30)))
@@ -533,12 +545,12 @@ resolve_top_n_cutoff <- function(sorted_values_desc, top_n = evs_fixed_top_n) {
     cutoff_value    = cutoff_value,
     cutoff_quantile = cutoff_quantile,
     n_total         = n_total,
-    method          = "manual_cutoff",
+    method          = "fixed_top_n",
     curve_df        = NULL,
     curvature_strength = NA_real_,
     variance_measure = "NB2_variance",
     candidate_table = data.frame(
-      candidate_id = "manual_cutoff",
+      candidate_id = "fixed_top_n",
       rank_index = top_n_actual,
       curvature_strength = NA_real_,
       prominence = NA_real_,
@@ -549,10 +561,10 @@ resolve_top_n_cutoff <- function(sorted_values_desc, top_n = evs_fixed_top_n) {
       cutoff_value = cutoff_value,
       cutoff_quantile = cutoff_quantile,
       selected = TRUE,
-      selected_reason = "manual_cutoff",
+      selected_reason = "fixed_top_n",
       stringsAsFactors = FALSE
     ),
-    selected_reason = "manual_cutoff"
+    selected_reason = "fixed_top_n"
   )
 }
 
@@ -821,7 +833,7 @@ select_quantile_screen_candidates <- function(peak_grid_df,
 #   Scores an exact rank inside a matched interval using local slope and
 #   amplitude contrasts from the smoothed IOD and CV2 curves.
 #
-# resolve_matched_curvature_wave_cutoff():
+# resolve_fourier_wave_cutoff():
 #   Executes the full manuscript cutoff workflow for one dataset and returns the
 #   selected rank together with the intermediate diagnostic tables needed for
 #   export and plotting.
@@ -1022,7 +1034,7 @@ score_wave_candidate_rank <- function(curve_df, rank_index) {
   )
 }
 
-resolve_matched_curvature_wave_cutoff <- function(loading_tbl,
+resolve_fourier_wave_cutoff <- function(loading_tbl,
                                                   mean_col = "baseMean",
                                                   dispersion_col = "dispGeneEst",
                                                   fixed_top_n = evs_fixed_top_n) {
@@ -1041,7 +1053,7 @@ resolve_matched_curvature_wave_cutoff <- function(loading_tbl,
       curvature_strength = NA_real_,
       curve_df = NULL,
       max_rank_allowed = as.integer(n_total),
-      variance_measure = "IOD_CV2_matched_curvature",
+      variance_measure = "IOD_CV2_fourier_wave",
       candidate_table = data.frame(candidate_id = "manual_cutoff", rank_index = manual_rank, selected = TRUE, selected_reason = "manual_cutoff", candidate_source = "manual_cutoff", stringsAsFactors = FALSE),
       quantile_screen_table = data.frame(),
       matched_interval_table = data.frame(),
@@ -1054,7 +1066,7 @@ resolve_matched_curvature_wave_cutoff <- function(loading_tbl,
     fallback$curve_df <- curve_df
     fallback$curvature_strength <- NA_real_
     fallback$method <- "manual_cutoff"
-    fallback$candidate_table <- data.frame(candidate_id = "manual_cutoff", rank_index = fallback$top_n_actual, selected = TRUE, selected_reason = "manual_cutoff_fallback", candidate_source = "manual_cutoff", stringsAsFactors = FALSE)
+    fallback$candidate_table <- data.frame(candidate_id = "manual_cutoff", rank_index = fallback$top_n_actual, selected = TRUE, selected_reason = "manual_cutoff", candidate_source = "manual_cutoff", stringsAsFactors = FALSE)
     fallback$quantile_screen_table <- data.frame()
     fallback$matched_interval_table <- data.frame()
     return(fallback)
@@ -1068,7 +1080,7 @@ resolve_matched_curvature_wave_cutoff <- function(loading_tbl,
     fallback$curve_df <- curve_df
     fallback$curvature_strength <- NA_real_
     fallback$method <- "manual_cutoff"
-    fallback$candidate_table <- data.frame(candidate_id = "manual_cutoff", rank_index = fallback$top_n_actual, selected = TRUE, selected_reason = "manual_cutoff_fallback", candidate_source = "manual_cutoff", stringsAsFactors = FALSE)
+    fallback$candidate_table <- data.frame(candidate_id = "manual_cutoff", rank_index = fallback$top_n_actual, selected = TRUE, selected_reason = "manual_cutoff", candidate_source = "manual_cutoff", stringsAsFactors = FALSE)
     fallback$quantile_screen_table <- dplyr::bind_rows(iod_peaks, cv2_peaks)
     fallback$matched_interval_table <- matched_intervals
     return(fallback)
@@ -1096,7 +1108,7 @@ resolve_matched_curvature_wave_cutoff <- function(loading_tbl,
     fallback$curve_df <- curve_df
     fallback$curvature_strength <- NA_real_
     fallback$method <- "manual_cutoff"
-    fallback$candidate_table <- data.frame(candidate_id = "manual_cutoff", rank_index = fallback$top_n_actual, selected = TRUE, selected_reason = "manual_cutoff_fallback", candidate_source = "manual_cutoff", stringsAsFactors = FALSE)
+    fallback$candidate_table <- data.frame(candidate_id = "manual_cutoff", rank_index = fallback$top_n_actual, selected = TRUE, selected_reason = "manual_cutoff", candidate_source = "manual_cutoff", stringsAsFactors = FALSE)
     fallback$quantile_screen_table <- dplyr::bind_rows(iod_peaks, cv2_peaks)
     fallback$matched_interval_table <- matched_intervals
     return(fallback)
@@ -1111,7 +1123,7 @@ resolve_matched_curvature_wave_cutoff <- function(loading_tbl,
   cand_tbl$selected_reason <- "candidate_only"
   best_idx <- 1L
   cand_tbl$selected[best_idx] <- TRUE
-  cand_tbl$selected_reason[best_idx] <- "fourier_wave"
+  cand_tbl$selected_reason[best_idx] <- "fourier_wave_max_score"
   cand_tbl$curvature_strength <- cand_tbl$joint_strength
   cand_tbl$prominence <- cand_tbl$joint_strength
   cand_tbl$max_rank_allowed <- as.integer(n_total)
@@ -1125,11 +1137,11 @@ resolve_matched_curvature_wave_cutoff <- function(loading_tbl,
     curvature_strength = as.numeric(cand_tbl$curvature_strength[best_idx]),
     curve_df = curve_df,
     max_rank_allowed = as.integer(n_total),
-    variance_measure = "IOD_CV2_matched_curvature",
+    variance_measure = "IOD_CV2_fourier_wave",
     candidate_table = cand_tbl,
     quantile_screen_table = dplyr::bind_rows(iod_peaks, cv2_peaks),
     matched_interval_table = matched_intervals,
-    selected_reason = "fourier_wave"
+    selected_reason = "fourier_wave_max_score"
   )
 }
 
@@ -1473,6 +1485,7 @@ label_stable_crossings <- function(diff_df,
   out
 }
 
+
 select_regime_shift_crossing <- function(combined_wave_df) {
   diff_df <- compute_regime_difference_curve(combined_wave_df)
   crossing_tbl <- find_crossing_intervals(diff_df)
@@ -1490,7 +1503,7 @@ select_regime_shift_crossing <- function(combined_wave_df) {
   stable_tbl <- crossing_tbl[crossing_tbl$stable_crossing, , drop = FALSE]
   if (nrow(stable_tbl)) {
     selected <- stable_tbl[order(stable_tbl$crossing_percentile, decreasing = TRUE), , drop = FALSE][1, , drop = FALSE]
-    reason <- "last_stable_crossing"
+    reason <- "last_stable_leading_edge_crossing"
   } else {
     selected <- crossing_tbl[order(crossing_tbl$crossing_percentile, decreasing = TRUE), , drop = FALSE][1, , drop = FALSE]
     reason <- "last_crossing_fallback"
@@ -1504,7 +1517,8 @@ select_regime_shift_crossing <- function(combined_wave_df) {
   )
 }
 
-resolve_combined_fourier_cutoff <- function(fit_trt_loading_tbl,
+resolve_combined_fourier_cutoff <- function
+(fit_trt_loading_tbl,
                                             fit_ctrl_loading_tbl,
                                             fixed_top_n = evs_fixed_top_n) {
   n_total <- nrow(fit_trt_loading_tbl)
@@ -1602,7 +1616,7 @@ p = ", signif(selected_percentile, 4)), fill = "white", colour = plot_palette$th
     scale_color_manual(values = c("IOD" = plot_palette$treatment, "CV²" = plot_palette$control)) +
     labs(
       title = paste0(pretty_group_label(group_label), " | local regime lines"),
-      subtitle = compact_caption("Two lines are shown: local IOD and local CV². The dashed vertical line marks the terminal leading-edge crossing used for the final shared EVS cutoff.", width = 88),
+      subtitle = compact_caption("Two lines are shown: local IOD and local CV². The dashed vertical line marks the selected leading-edge crossing used for the final shared EVS cutoff.", width = 88),
       x = "Percentile center",
       y = "Local amplitude",
       color = NULL
@@ -1636,7 +1650,7 @@ p = ", signif(crossing_pct, 4)),
     scale_color_manual(values = c("Composite IOD" = plot_palette$treatment, "Composite CV²" = plot_palette$control)) +
     labs(
       title = paste0(comparison_name, " | two-line regime crossing"),
-      subtitle = compact_caption("The dashed vertical line marks the last valid leading-edge crossing between the composite local IOD and composite local CV² lines. This terminal leading-edge crossing defines the EVS cutoff.", width = 90),
+      subtitle = compact_caption("The dashed vertical line marks the first selected crossing between the composite local IOD and composite local CV² lines within the allowed leading-edge search range. This crossing defines the EVS cutoff.", width = 90),
       x = "Percentile center",
       y = "Composite local amplitude",
       color = NULL
@@ -1729,6 +1743,7 @@ build_crossing_summary_table <- function(combined_cutoff_info, comparison_name) 
   )
 }
 
+
 resolve_evs_cutoff <- function(loading_tbl,
                                mean_col = "baseMean",
                                dispersion_col = "dispGeneEst",
@@ -1748,6 +1763,7 @@ resolve_evs_cutoff <- function(loading_tbl,
       selected_reason = "manual_cutoff"
     ))
   }
+
   fallback <- resolve_top_n_cutoff(loading_tbl$pc1_loading_abs, top_n = fixed_top_n)
   list(
     cutoff_value = fallback$cutoff_value,
@@ -1764,6 +1780,7 @@ resolve_evs_cutoff <- function(loading_tbl,
 }
 
 # Adaptive EVS cutoff resolution.
+
 # Input: a PC1 loading table already joined to DESeq2 mean/dispersion metrics.
 # Logic: smooth the ranked NB2 variance curve, compute curvature, identify
 # local curvature peaks, screen those peaks across a quantile grid, and choose
@@ -1804,11 +1821,11 @@ resolve_adaptive_evs_cutoff <- function(loading_tbl,
       cutoff_value = fallback$cutoff_value,
       cutoff_quantile = fallback$cutoff_quantile,
       selected = TRUE,
-      selected_reason = "manual_cutoff_fallback",
+      selected_reason = "manual_cutoff",
       candidate_source = "manual_cutoff",
       stringsAsFactors = FALSE
     )
-    fallback$selected_reason <- "fallback_top_n"
+    fallback$selected_reason <- "manual_cutoff"
     return(fallback)
   }
 
@@ -1852,11 +1869,11 @@ resolve_adaptive_evs_cutoff <- function(loading_tbl,
       cutoff_value = fallback$cutoff_value,
       cutoff_quantile = fallback$cutoff_quantile,
       selected = TRUE,
-      selected_reason = "manual_cutoff_fallback",
+      selected_reason = "manual_cutoff",
       candidate_source = "manual_cutoff",
       stringsAsFactors = FALSE
     )
-    fallback$selected_reason <- "fallback_top_n"
+    fallback$selected_reason <- "manual_cutoff"
     return(fallback)
   }
 
@@ -1923,7 +1940,7 @@ resolve_adaptive_evs_cutoff <- function(loading_tbl,
     cutoff_value       = candidate_tbl$cutoff_value[best_idx],
     cutoff_quantile    = candidate_tbl$cutoff_quantile[best_idx],
     n_total            = n_total,
-    method             = "manual_cutoff",
+    method             = "legacy_variance_second_derivative_quantile_screen",
     curvature_strength = candidate_tbl$curvature_strength[best_idx],
     curve_df           = curve_df,
     max_rank_allowed   = as.integer(max_rank_allowed),
@@ -2454,25 +2471,19 @@ save_csv <- function(df, path) {
   write.csv(df, file = path, row.names = FALSE)
 }
 
+
 save_grob <- function(g, path, width = 16.4, height = 9.9, dpi = figure_dpi, bg = "white") {
-  tryCatch(
-    {
-      ggsave(
-        filename  = path,
-        plot      = g,
-        width     = width,
-        height    = height,
-        dpi       = dpi,
-        units     = "in",
-        bg        = bg,
-        limitsize = FALSE
-      )
-      invisible(TRUE)
-    },
-    error = function(e) {
-      stop(paste0("Panel export failed for ", basename(path), ": ", conditionMessage(e)))
-    }
+  ggsave(
+    filename  = path,
+    plot      = g,
+    width     = width,
+    height    = height,
+    dpi       = dpi,
+    units     = "in",
+    bg        = bg,
+    limitsize = FALSE
   )
+  invisible(TRUE)
 }
 
 safe_plot_build <- function(expr, label = "plot") {
@@ -2847,13 +2858,13 @@ build_eigenvector_split <- function(count_matrix, coldata, comparison_name) {
     rank_index = final_shared_rank,
     selected_reason = paste0(final_shared_reason, "_projected_to_raw_treatment")
   )
-  fit_trt_raw$cutoff_method <- "crossing_rank_projected_to_raw_selected"
+  fit_trt_raw$cutoff_method <- "fourier_wave_projected_to_raw"
   fit_untrt_raw <- apply_loading_cutoff(
     fit_untrt_raw,
     rank_index = final_shared_rank,
     selected_reason = paste0(final_shared_reason, "_projected_to_raw_control")
   )
-  fit_untrt_raw$cutoff_method <- "crossing_rank_projected_to_raw_selected"
+  fit_untrt_raw$cutoff_method <- "fourier_wave_projected_to_raw"
   primary_trt_fit <- fit_trt
   primary_untrt_fit <- fit_untrt
   independent_candidate_evals <- list()
@@ -2873,7 +2884,7 @@ build_eigenvector_split <- function(count_matrix, coldata, comparison_name) {
     data.frame(
       preprocessing = "normalized",
       group = "regime_shift_crossing",
-      cutoff_mode = combined_cutoff_info$method,
+      cutoff_mode = "fourier_wave",
       fixed_top_n_requested = evs_fixed_top_n,
       empiric_rank_selected = final_shared_rank,
       cutoff_quantile = fit_trt$cutoff_quantile,
@@ -2887,7 +2898,7 @@ build_eigenvector_split <- function(count_matrix, coldata, comparison_name) {
     data.frame(
       preprocessing = "raw",
       group = "regime_shift_crossing",
-      cutoff_mode = "crossing_rank_projected_to_raw_selected",
+      cutoff_mode = "fourier_wave_projected_to_raw",
       fixed_top_n_requested = evs_fixed_top_n,
       empiric_rank_selected = final_shared_rank,
       cutoff_quantile = fit_trt_raw$cutoff_quantile,
@@ -3046,6 +3057,7 @@ plot_pca_scatter <- function(pca_fit, dataset_label, group_label) {
     guides(shape = guide_legend(order = 1))
 }
 
+
 plot_pc1_loading_rank <- function(loading_tbl, cutoff, dataset_label, group_label,
                                   top_n_used = evs_fixed_top_n, cutoff_quantile = NA_real_,
                                   preprocessing_label = "Normalized prior to eigenvector splitting") {
@@ -3054,24 +3066,35 @@ plot_pc1_loading_rank <- function(loading_tbl, cutoff, dataset_label, group_labe
   } else {
     "Upper-tail quantile = NA"
   }
-  
-  ggplot(loading_tbl, aes(rank, pc1_loading_abs)) +
+
+  plot_df <- loading_tbl
+  plot_df$rank_plot <- pmax(as.numeric(plot_df$rank), 1)
+  plot_df$loading_plot <- pmax(as.numeric(plot_df$pc1_loading_abs), 1e-12)
+
+  ggplot(plot_df, aes(rank_plot, loading_plot)) +
     geom_line(linewidth = LINE_WIDTH_BOUNDARY, color = "grey35") +
     geom_hline(yintercept = cutoff, color = plot_palette$threshold, linewidth = LINE_WIDTH_THRESH) +
+    geom_vline(xintercept = max(1, top_n_used), color = plot_palette$threshold, linewidth = LINE_WIDTH_THRESH, linetype = "dashed") +
     annotate(
       "label",
-      x     = max(loading_tbl$rank) * 0.70,
+      x     = max(1, top_n_used),
       y     = cutoff,
       label = paste0(
-        "Top ", top_n_used, " cutoff = ", signif(cutoff, 4), "\n",
+        "Rank = ", top_n_used, "
+",
+        "Cutoff = ", signif(cutoff, 4), "
+",
         quantile_label
       ),
       fill  = "white",
       color = plot_palette$threshold,
       vjust = -0.7,
-      size  = 3.2,
+      hjust = 0,
+      size  = 3.0,
       label.size = 0.15
     ) +
+    scale_x_log10() +
+    scale_y_log10() +
     labs(
       title = compact_title(
         paste(dataset_label, "|", pretty_group_label(group_label), "PC1 loading rank"),
@@ -3080,13 +3103,13 @@ plot_pc1_loading_rank <- function(loading_tbl, cutoff, dataset_label, group_labe
       subtitle = compact_caption(
         paste0(
           evs_preproc_short(preprocessing_label),
-          ". Ranked absolute PC1 loadings. ",
-          "The horizontal line marks the EVS cutoff used to define the leading-edge set."
+          ". Ranked absolute PC1 loadings shown on log scales. ",
+          "The horizontal line marks the loading cutoff and the dashed vertical line marks the selected rank."
         ),
         width = 72
       ),
-      x = "Ranked PAS feature",
-      y = "Absolute PC1 loading"
+      x = "Ranked PAS feature (log10 scale)",
+      y = "Absolute PC1 loading (log10 scale)"
     ) +
     coord_cartesian(clip = "off") +
     manuscript_theme() +
@@ -3097,7 +3120,8 @@ plot_pc1_loading_rank <- function(loading_tbl, cutoff, dataset_label, group_labe
     )
 }
 
-plot_eigenvector_histograms <- function(loading_tbl, cutoff, dataset_label, group_label,
+plot_eigenvector_histograms <- function
+(loading_tbl, cutoff, dataset_label, group_label,
                                         preprocessing_label = "Normalized prior to eigenvector splitting") {
   full_vals <- loading_tbl$pc1_loading_abs
   lead_vals <- loading_tbl$pc1_loading_abs[loading_tbl$pc1_loading_abs >= cutoff]
@@ -3231,7 +3255,7 @@ plot_primary_evs_candidate_panel <- function(evs, comparison_name) {
       gp = gpar(fontface = "bold", cex = 1.02)
     ),
     bottom = textGrob(
-      "The current manuscript workflow uses local Fourier summaries of ranked IOD and CV2 across percentile windows in treatment and control separately, combines those local treatment and control scores into one comparison-level transition score, and selects one shared cutoff rank for the comparison. This legacy curve panel is retained only as a supplemental descriptive diagnostic.",
+      "The current manuscript workflow uses local Fourier summaries of ranked IOD and CV2 across percentile windows in treatment and control separately, combines those local treatment and control scores into one comparison-level transition score, and selects one shared cutoff rank for the comparison from the last valid leading-edge crossing. This legacy curve panel is retained only as a supplemental descriptive diagnostic.",
       gp = gpar(cex = 0.86)
     )
   )
@@ -3292,7 +3316,19 @@ plot_combined_pca_variance_panel <- function(evs, comparison_name) {
 # ready result table used by the volcano, dispersion, and histogram panels.
 # -----------------------------------------------------------------------------
 
+
+safe_lfc_shrink <- function(dds, coef_name, res, dataset_name) {
+  tryCatch(
+    lfcShrink(dds, coef = coef_name, type = "apeglm", res = res),
+    error = function(e) {
+      message(sprintf("[%s] apeglm shrinkage failed; retrying with normal shrinkage: %s", dataset_name, conditionMessage(e)))
+      lfcShrink(dds, coef = coef_name, type = "normal", res = res)
+    }
+  )
+}
+
 run_core_analysis <- function(count_mat, coldata, dataset_name, annot_df) {
+
   design_formula <- make_design_formula()
   
   dds <- DESeqDataSetFromMatrix(
@@ -3358,7 +3394,8 @@ run_core_analysis <- function(count_mat, coldata, dataset_name, annot_df) {
   res_df$lfdr[valid_stat]        <- as.numeric(fdr_fit$lfdr)
   
   
-  shr       <- safe_lfc_shrink(dds, res = res, dataset_name = dataset_name)
+  coef_name <- get_condition_coef(dds)
+  shr       <- safe_lfc_shrink(dds, coef_name = coef_name, res = res, dataset_name = dataset_name)
   shr_df    <- as.data.frame(shr)
   shr_df$feature_id <- as.character(rownames(shr_df))
   
@@ -4017,7 +4054,7 @@ plot_empirical_histogram_for_panel <- function(df, dataset_name, hc_p_threshold)
     ) +
     manuscript_theme()
   
-  if (is.finite(hc_p_threshold) && hc_p_threshold > 0 && hc_p_threshold < max_usable_hc_p_threshold) {
+  if (is.finite(hc_p_threshold) && hc_p_threshold > 0 && hc_p_threshold <= max_usable_hc_p_threshold) {
     p <- p + geom_vline(
       xintercept = hc_p_threshold,
       color      = plot_palette$threshold,
@@ -4386,7 +4423,7 @@ save_cross_dataset_comparison_panels <- function(comparison_name, analysis_resul
       hc_p_threshold         = sm$hc_p_threshold[1],
       hbfss_threshold        = sm$hbfss_threshold[1],
       evs_fixed_top_n        = evs_fixed_top_n,
-      evs_cutoff_mode_main   = ifelse(isTRUE(evs_use_manual_rank_first), "manual_cutoff", "fourier_wave"),
+      evs_cutoff_mode_main   = evs_cutoff_mode_main,
       evs_primary_preprocessing = "normalized",
       stringsAsFactors       = FALSE
     )
@@ -4402,7 +4439,6 @@ save_cross_dataset_comparison_panels <- function(comparison_name, analysis_resul
 # =============================================================================
 # SECTION 4 OF 4
 # FULL PIPELINE, EXPORTS, PCA TABLES, PC1 + BASEMEAN + DISPERSION OUTPUT
-
 # =============================================================================
 
 # Collate feature-level PC1 loadings, EVS split membership, and DESeq2
@@ -4518,7 +4554,7 @@ run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata,
     save_csv(evs$combined_cutoff_info$crossing_table, file.path(tab_dir, paste0(comparison_name, "_all_regime_crossings.csv")))
   }
   if (!is.null(evs$combined_cutoff_info$candidate_table) && nrow(evs$combined_cutoff_info$candidate_table)) {
-    save_csv(evs$combined_cutoff_info$candidate_table, file.path(tab_dir, paste0(comparison_name, "_selected_regime_crossing.csv")))
+    save_csv(evs$combined_cutoff_info$candidate_table, file.path(tab_dir, paste0(comparison_name, "_selected_last_regime_crossing.csv")))
   }
   crossing_summary_df <- build_crossing_summary_table(evs$combined_cutoff_info, comparison_name)
   save_csv(crossing_summary_df, file.path(tab_dir, paste0(comparison_name, "_regime_shift_crossing_summary.csv")))
@@ -4833,7 +4869,7 @@ run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata,
       n_strong_effect        = sum(df$effect_class == "strong_effect", na.rm = TRUE),
       n_weak_effect          = sum(df$effect_class == "weak_effect", na.rm = TRUE),
       evs_fixed_top_n        = evs_fixed_top_n,
-      evs_cutoff_mode_main   = ifelse(isTRUE(evs_use_manual_rank_first), "manual_cutoff", "fourier_wave"),
+      evs_cutoff_mode_main   = evs_cutoff_mode_main,
       evs_primary_preprocessing = "normalized",
       stringsAsFactors       = FALSE
     )
@@ -4908,7 +4944,7 @@ run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata,
       )
     },
     error = function(e) {
-      warning(paste0(comparison_name, ": cross-dataset panel generation failed: ", conditionMessage(e)))
+      stop(paste0(comparison_name, ": cross-dataset panel generation failed: ", conditionMessage(e)))
     }
   )
   
