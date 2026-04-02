@@ -75,29 +75,16 @@ run_twas_overlap <- FALSE
 twas_file        <- file.path(input_dir, "3aTWAS_genes_of_11_brain_disorders.csv")
 
 # Significance threshold for all DESeq2 calls and effect-class classification.
-alpha_level <- 0.20
-max_usable_hc_p_threshold <- 0.99
-runtime_debug_mode <- TRUE
+alpha_level <- 0.10
+max_usable_hc_p_threshold <- 0.95
 
-log_debug <- function(..., .timestamp = TRUE) {
-  if (!isTRUE(runtime_debug_mode)) return(invisible(NULL))
-  msg <- paste(..., collapse = "")
-  if (.timestamp) {
-    message(format(Sys.time(), "%Y-%m-%d %H:%M:%S"), " | ", msg)
-  } else {
-    message(msg)
-  }
-  invisible(NULL)
-}
-
-
-# HC configuration used by HBFSS:
-# The manuscript pipeline derives empirical-null p-values from DESeq2 Wald
-# statistics using fdrtool, then applies a Higher Criticism cutoff to those
-# empirical-null p-values. That HC p-threshold is then transformed into the
-# HBFSS decision boundary as abs(log10(hc_p_threshold_dataset)) * lfc_boundary.
-# In this analysis a valid resolved HC p-threshold is always written, and high
-# but finite thresholds remain valid up to max_usable_hc_p_threshold.
+# HC safeguard used by HBFSS:
+# When hc.thresh returns a p-threshold too close to 1, that usually indicates
+# little/no meaningful departure from the empirical null. Because HBFSS scales
+# its cutoff as abs(log10(hc_p_threshold_dataset)) * lfc_boundary, a near-1 HC
+# threshold would make the HBFSS cutoff nearly 0 and falsely inflate calls.
+# Therefore, treat HC thresholds >= max_usable_hc_p_threshold as invalid and
+# fall back safely instead of using them directly.
 
 # LFC boundary (log2 scale) used for:
 # (1) strong/weak effect hypothesis tests via lfcThreshold,
@@ -266,10 +253,11 @@ export_optional_evs_variance_profiles      <- TRUE
 # resLA_padj     : DESeq2 adjusted p-value from the lessAbs composite-null test.
 # hc_p_threshold_dataset  : Strimmer HC threshold from hc.thresh(sort(empirical_p)).
 # hbfss_threshold_dataset : abs(log10(hc_p_threshold_dataset)) * lfc_boundary.
-# max_usable_hc_p_threshold : Maximum reportable HC p-threshold used when the
-#   empirical-null p-value distribution is broad. The manuscript workflow still
-#   writes a numeric HC threshold up to this cap rather than treating high
-#   thresholds as unavailable or non-applicable.
+# max_usable_hc_p_threshold : HC safeguard for HBFSS. Near-1 HC thresholds are treated
+#   as invalid because abs(log10(hc_p_threshold_dataset)) approaches 0 as the HC threshold
+#   approaches 1. In the HBFSS framework, that would artificially collapse the HBFSS cutoff
+#   and inflate discoveries in weak/no-signal datasets. This is not a separate fdrtool rule;
+#   it is a downstream safeguard for the HBFSS transform that uses hc.thresh output.
 # HBFSS / pi_valueE       : abs(apeglm-shrunken log2FC * log10(empirical_p)).
 #                           Because empirical_p lies in (0, 1], log10(empirical_p) <= 0.
 #                           The absolute value is therefore essential: it converts the
@@ -486,56 +474,43 @@ run_empirical_null_fdrtool <- function(stat_vec, dataset_name) {
 }
 
 safe_hc_thresh <- function(empirical_p, dataset_name) {
-  # Resolve one numeric Higher Criticism p-threshold from empirical-null
-  # p-values derived from the DESeq2 Wald statistics. The primary estimator is
-  # fdrtool::hc.thresh(). If that does not return a usable numeric value, a
-  # deterministic ordered-p fallback based on the classical HC objective is
-  # used. This function never returns NA for a non-empty finite p-value vector.
   sorted_empirical_p <- sort(
     clip_probabilities(empirical_p),
     na.last    = NA,
     decreasing = FALSE
   )
-
-  if (!length(sorted_empirical_p)) {
-    stop(sprintf("[%s] No finite empirical-null p-values were available for HC threshold resolution.", dataset_name))
-  }
-
-  resolve_hc_fallback <- function(p_sorted) {
-    n <- length(p_sorted)
-    i <- seq_len(n)
-    denom <- sqrt(pmax(p_sorted * (1 - p_sorted), .Machine$double.eps))
-    hc_stat <- sqrt(n) * ((i / n) - p_sorted) / denom
-    hc_stat[!is.finite(hc_stat)] <- -Inf
-    best_idx <- which.max(hc_stat)
-    if (!length(best_idx) || !is.finite(hc_stat[best_idx])) {
-      return(as.numeric(p_sorted[min(n, max(1L, floor(0.5 * n)))]))
-    }
-    as.numeric(p_sorted[best_idx])
-  }
-
-  primary_out <- suppressWarnings(
+  if (length(sorted_empirical_p) < 5) return(NA_real_)
+  
+  out <- suppressWarnings(
     tryCatch(
       fdrtool::hc.thresh(as.vector(sorted_empirical_p)),
       error = function(e) {
-        message(sprintf("[%s] hc.thresh failed; switching to deterministic HC fallback: %s", dataset_name, conditionMessage(e)))
+        message(sprintf("[%s] hc.thresh failed: %s", dataset_name, conditionMessage(e)))
         NA_real_
       }
     )
   )
-
-  out <- as.numeric(primary_out[1])
-  if (!is.finite(out) || out <= 0 || out > 1) {
-    out <- resolve_hc_fallback(sorted_empirical_p)
+  
+  out <- as.numeric(out[1])
+  
+  # HBFSS-specific HC safeguard:
+  # hc.thresh may legitimately return values close to 1 when the empirical-p
+  # distribution is nearly uniform and shows little/no useful departure from the
+  # empirical null. That is compatible with fdrtool/hc.thresh behavior. However,
+  # in this pipeline HBFSS uses abs(log10(hc_p_threshold_dataset)) * lfc_boundary
+  # as the score anchor. If hc_p_threshold_dataset is too close to 1, that anchor
+  # collapses toward 0 and can massively inflate HBFSS calls. Therefore, near-1
+  # HC thresholds are treated as invalid for HBFSS calibration and are not used.
+  if (!is.finite(out) || out <= 0 || out >= max_usable_hc_p_threshold) {
+    message(sprintf(
+      "[%s] HC threshold rejected for HBFSS calibration (value=%s; cutoff=%s)",
+      dataset_name,
+      ifelse(is.finite(out), signif(out, 6), "NA"),
+      max_usable_hc_p_threshold
+    ))
+    return(NA_real_)
   }
-
-  out <- as.numeric(clip_probabilities(out))
-  out <- min(out, max_usable_hc_p_threshold)
-
-  if (!is.finite(out) || out <= 0 || out > 1) {
-    stop(sprintf("[%s] HC threshold resolution failed after primary and fallback paths.", dataset_name))
-  }
-
+  
   out
 }
 
@@ -1499,10 +1474,6 @@ label_stable_crossings <- function(diff_df,
   out
 }
 
-# Select the final stable crossing in the leading-edge search region. The
-# manuscript method uses the last stable IOD-versus-CV2 crossing rather than
-# the first crossing so the cutoff remains at the terminal boundary of the
-# leading-edge regime.
 select_regime_shift_crossing <- function(combined_wave_df) {
   diff_df <- compute_regime_difference_curve(combined_wave_df)
   crossing_tbl <- find_crossing_intervals(diff_df)
@@ -1519,11 +1490,11 @@ select_regime_shift_crossing <- function(combined_wave_df) {
 
   stable_tbl <- crossing_tbl[crossing_tbl$stable_crossing, , drop = FALSE]
   if (nrow(stable_tbl)) {
-    selected <- stable_tbl[order(stable_tbl$crossing_percentile, decreasing = TRUE), , drop = FALSE][1, , drop = FALSE]
-    reason <- "last_stable_crossing"
+    selected <- stable_tbl[order(stable_tbl$crossing_percentile), , drop = FALSE][1, , drop = FALSE]
+    reason <- "first_stable_crossing"
   } else {
-    selected <- crossing_tbl[order(crossing_tbl$crossing_percentile, decreasing = TRUE), , drop = FALSE][1, , drop = FALSE]
-    reason <- "last_crossing_fallback"
+    selected <- crossing_tbl[order(crossing_tbl$crossing_percentile), , drop = FALSE][1, , drop = FALSE]
+    reason <- "first_crossing_fallback"
   }
 
   list(
@@ -1603,7 +1574,7 @@ resolve_combined_fourier_cutoff <- function(fit_trt_loading_tbl,
     cutoff_value = cutoff_value,
     cutoff_quantile = cutoff_quantile,
     n_total = n_total,
-    method = "last_stable_crossing",
+    method = "first_stable_crossing",
     trt_wave_obj = trt_wave_obj,
     ctrl_wave_obj = ctrl_wave_obj,
     combined_wave_map = crossing_info$diff_df,
@@ -1615,24 +1586,37 @@ resolve_combined_fourier_cutoff <- function(fit_trt_loading_tbl,
   )
 }
 
-plot_fourier_wave_map_single <- function(wave_obj, comparison_name, group_label, selected_percentile = NA_real_) {
+plot_fourier_wave_map_single <- function(wave_obj, comparison_name, group_label, cutoff_percentile = NA_real_) {
   if (is.null(wave_obj) || is.null(wave_obj$wave_map) || !nrow(wave_obj$wave_map)) return(NULL)
   df <- wave_obj$wave_map
 
   p <- ggplot(df, aes(percentile)) +
     geom_line(aes(y = iod_amplitude, color = "IOD"), linewidth = 0.9) +
     geom_line(aes(y = cv2_amplitude, color = "CV²"), linewidth = 0.9)
-  if (is.finite(selected_percentile)) {
+
+  if (length(cutoff_percentile) == 1 && is.finite(cutoff_percentile) && !is.na(cutoff_percentile)) {
+    ymax <- max(c(df$iod_amplitude, df$cv2_amplitude), na.rm = TRUE)
     p <- p +
-      geom_vline(xintercept = selected_percentile, linetype = "dashed", linewidth = crossing_plot_vline_width, colour = plot_palette$threshold) +
-      annotate("label", x = selected_percentile, y = max(c(df$iod_amplitude, df$cv2_amplitude), na.rm = TRUE), label = paste0("Selected cutoff
-p = ", signif(selected_percentile, 4)), fill = "white", colour = plot_palette$threshold, size = 2.8, label.size = 0.15, vjust = -0.5)
+      geom_vline(xintercept = cutoff_percentile, linetype = "dashed", linewidth = crossing_plot_vline_width, colour = plot_palette$threshold) +
+      annotate(
+        "label",
+        x = cutoff_percentile,
+        y = ymax,
+        label = paste0("Chosen cutoff
+p = ", signif(cutoff_percentile, 4)),
+        fill = "white",
+        colour = plot_palette$threshold,
+        size = 2.8,
+        label.size = 0.15,
+        vjust = -0.5
+      )
   }
+
   p +
     scale_color_manual(values = c("IOD" = plot_palette$treatment, "CV²" = plot_palette$control)) +
     labs(
       title = paste0(pretty_group_label(group_label), " | local regime lines"),
-      subtitle = compact_caption("Two lines are shown: local IOD and local CV². The dashed vertical line marks the selected leading-edge crossing used for the final shared EVS cutoff.", width = 88),
+      subtitle = compact_caption("Two lines are shown: local IOD and local CV². The dashed vertical line marks the shared comparison-level cutoff chosen from the first stable composite crossing.", width = 88),
       x = "Percentile center",
       y = "Local amplitude",
       color = NULL
@@ -1666,7 +1650,7 @@ p = ", signif(crossing_pct, 4)),
     scale_color_manual(values = c("Composite IOD" = plot_palette$treatment, "Composite CV²" = plot_palette$control)) +
     labs(
       title = paste0(comparison_name, " | two-line regime crossing"),
-      subtitle = compact_caption("The dashed vertical line marks the first selected crossing between the composite local IOD and composite local CV² lines within the allowed leading-edge search range. This crossing defines the EVS cutoff.", width = 90),
+      subtitle = compact_caption("The dashed vertical line marks the first stable crossing between the composite local IOD and composite local CV² lines. This crossing defines the EVS cutoff.", width = 90),
       x = "Percentile center",
       y = "Composite local amplitude",
       color = NULL
@@ -1690,7 +1674,7 @@ plot_combined_fourier_score <- function(combined_cutoff_info, comparison_name) {
   p +
     labs(
       title = paste0(comparison_name, " | descriptive score profile"),
-      subtitle = compact_caption("The score profile is descriptive only. The EVS cutoff is determined by the selected leading-edge crossing of the two regime lines, not by the global score maximum.", width = 90),
+      subtitle = compact_caption("The score profile is descriptive only. The EVS cutoff is determined by the first stable crossing of the two regime lines, not by the global score maximum.", width = 90),
       x = "Percentile center",
       y = "Score"
     ) +
@@ -1711,7 +1695,7 @@ plot_regime_difference_curve <- function(combined_cutoff_info, comparison_name) 
     geom_point(data = data.frame(percentile = crossing_pct, regime_difference = 0), aes(x = percentile, y = regime_difference), inherit.aes = FALSE, size = crossing_plot_point_size, colour = plot_palette$threshold) +
     labs(
       title = paste0(comparison_name, " | regime-difference curve"),
-      subtitle = compact_caption("Positive values indicate local IOD dominance and negative values indicate local CV² dominance. The selected leading-edge zero-crossing is the EVS cutoff.", width = 90),
+      subtitle = compact_caption("Positive values indicate local IOD dominance and negative values indicate local CV² dominance. The first stable zero-crossing is the EVS cutoff.", width = 90),
       x = "Percentile center",
       y = "IOD − CV²"
     ) +
@@ -1783,13 +1767,13 @@ resolve_evs_cutoff <- function(loading_tbl,
     cutoff_value = fallback$cutoff_value,
     top_n_actual = fallback$top_n_actual,
     cutoff_quantile = fallback$cutoff_quantile,
-    method = "fixed_top_n_initial_seed",
+    method = "fixed_top_n_initial_placeholder",
     curve_df = NULL,
     curvature_strength = NA_real_,
     candidate_table = data.frame(),
     quantile_screen_table = data.frame(),
     matched_interval_table = data.frame(),
-    selected_reason = "fixed_top_n_initial_seed"
+    selected_reason = "fixed_top_n_initial_placeholder"
   )
 }
 
@@ -2487,7 +2471,6 @@ save_csv <- function(df, path) {
 save_grob <- function(g, path, width = 16.4, height = 9.9, dpi = figure_dpi, bg = "white") {
   tryCatch(
     {
-      log_debug("Exporting plot: ", basename(path))
       ggsave(
         filename  = path,
         plot      = g,
@@ -2498,23 +2481,21 @@ save_grob <- function(g, path, width = 16.4, height = 9.9, dpi = figure_dpi, bg 
         bg        = bg,
         limitsize = FALSE
       )
-      log_debug("Finished plot export: ", basename(path))
       invisible(TRUE)
     },
     error = function(e) {
-      stop(paste0("Panel export failed for ", basename(path), ": ", conditionMessage(e)))
+      warning(paste0("Panel export failed for ", basename(path), ": ", conditionMessage(e)))
+      invisible(FALSE)
     }
   )
 }
 
 safe_plot_build <- function(expr, label = "plot") {
-  # Build the plot object immediately and fail loudly if the plot code errors.
-  # Returning NULL is reserved for deliberate no-data conditions inside the plot
-  # functions themselves, not for swallowed build failures.
   tryCatch(
     eval.parent(substitute(expr)),
     error = function(e) {
-      stop(paste0(label, " failed: ", conditionMessage(e)))
+      warning(paste0(label, " failed: ", conditionMessage(e)))
+      NULL
     }
   )
 }
@@ -2904,35 +2885,18 @@ build_eigenvector_split <- function(count_matrix, coldata, comparison_name) {
     stop("Leading-edge dataset is empty. Check sample mapping or EVS cutoff settings.")
   }
 
-  evs_cutoff_summary <- dplyr::bind_rows(
-    data.frame(
-      preprocessing = "normalized",
-      group = "regime_shift_crossing",
-      cutoff_mode = combined_cutoff_info$method,
-      fixed_top_n_requested = evs_fixed_top_n,
-      empiric_rank_selected = final_shared_rank,
-      cutoff_quantile = fit_trt$cutoff_quantile,
-      treatment_cutoff_value = fit_trt$cutoff,
-      control_cutoff_value = fit_untrt$cutoff,
-      composite_cutoff_value = mean(c(fit_trt$cutoff, fit_untrt$cutoff), na.rm = TRUE),
-      curvature_strength = NA_real_,
-      selected_reason = combined_cutoff_info$selected_reason,
-      stringsAsFactors = FALSE
-    ),
-    data.frame(
-      preprocessing = "raw",
-      group = "regime_shift_crossing",
-      cutoff_mode = "crossing_rank_projected_to_raw_selected",
-      fixed_top_n_requested = evs_fixed_top_n,
-      empiric_rank_selected = final_shared_rank,
-      cutoff_quantile = fit_trt_raw$cutoff_quantile,
-      treatment_cutoff_value = fit_trt_raw$cutoff,
-      control_cutoff_value = fit_untrt_raw$cutoff,
-      composite_cutoff_value = mean(c(fit_trt_raw$cutoff, fit_untrt_raw$cutoff), na.rm = TRUE),
-      curvature_strength = NA_real_,
-      selected_reason = paste0(combined_cutoff_info$selected_reason, "_projected_to_raw"),
-      stringsAsFactors = FALSE
-    )
+  evs_cutoff_summary <- data.frame(
+    cutoff_method = combined_cutoff_info$method,
+    selected_reason = combined_cutoff_info$selected_reason,
+    cutoff_rank = final_shared_rank,
+    cutoff_quantile = fit_trt$cutoff_quantile,
+    treatment_cutoff_value_normalized = fit_trt$cutoff_value,
+    control_cutoff_value_normalized = fit_untrt$cutoff_value,
+    composite_cutoff_value_normalized = mean(c(fit_trt$cutoff_value, fit_untrt$cutoff_value), na.rm = TRUE),
+    treatment_cutoff_value_raw = fit_trt_raw$cutoff_value,
+    control_cutoff_value_raw = fit_untrt_raw$cutoff_value,
+    composite_cutoff_value_raw = mean(c(fit_trt_raw$cutoff_value, fit_untrt_raw$cutoff_value), na.rm = TRUE),
+    stringsAsFactors = FALSE
   )
 
   list(
@@ -2975,8 +2939,6 @@ make_pca_summary_table <- function(pca_fit, dataset_name, preprocessing_label, g
   )
 }
 
-# Plot the variance explained profile for one PCA fit so the manuscript can
-# show how much of the ranked loading structure is captured by the leading PCs.
 plot_pca_variance_profile <- function(pca_fit, dataset_name, preprocessing_label, group_label = NULL) {
   pca_tbl <- make_pca_summary_table(
     pca_fit = pca_fit,
@@ -3013,14 +2975,7 @@ plot_pca_variance_profile <- function(pca_fit, dataset_name, preprocessing_label
     ) +
     labs(
       title = compact_title(paste(dataset_name, "|", pretty_group_label(group_label), "PCA"), width = 42),
-      subtitle = compact_caption(
-        paste0(
-          "Group = ", pretty_group_label(group_label),
-          ". Preprocessing = ", evs_preproc_short(preprocessing_label),
-          ". Bars show per-component variance and the overlaid line shows cumulative variance."
-        ),
-        width = 72
-      ),
+      subtitle = NULL,
       x = "Principal component",
       y = "Variance explained"
     ) +
@@ -3403,19 +3358,7 @@ run_core_analysis <- function(count_mat, coldata, dataset_name, annot_df) {
   
   
   coef_name <- get_condition_coef(dds)
-  if (!is.character(coef_name) || length(coef_name) != 1L || !nzchar(coef_name)) {
-    stop(sprintf("[%s] Invalid coefficient name passed to lfcShrink().", dataset_name))
-  }
-  log_debug(sprintf("[%s] Starting apeglm shrinkage on %d rows.", dataset_name, nrow(res_df)))
-  shrink_start_time <- Sys.time()
-  shr <- tryCatch(
-    lfcShrink(dds, coef = coef_name, type = "apeglm", res = res),
-    error = function(e) {
-      stop(sprintf("[%s] apeglm shrinkage failed: %s", dataset_name, conditionMessage(e)))
-    }
-  )
-  shrink_elapsed_seconds <- as.numeric(difftime(Sys.time(), shrink_start_time, units = "secs"))
-  log_debug(sprintf("[%s] Finished apeglm shrinkage in %.2f seconds.", dataset_name, shrink_elapsed_seconds))
+  shr       <- lfcShrink(dds, coef = coef_name, type = "apeglm", res = res)
   shr_df    <- as.data.frame(shr)
   shr_df$feature_id <- as.character(rownames(shr_df))
   
@@ -3437,14 +3380,21 @@ run_core_analysis <- function(count_mat, coldata, dataset_name, annot_df) {
   )
   res_df$HBFSS <- abs(res_df$lfc_shrunk * log10(empirical_p_floored))
   
-  # HBFSS significance uses empirical-null p-values plus the resolved HC
-  # threshold only. No BH correction is applied on top of HBFSS.
-  hbfss_threshold_dataset  <- abs(log10(hc_p_threshold_dataset)) * lfc_boundary
-  res_df$HBFSS_significant <- ifelse(
-    is.na(res_df$HBFSS),
-    FALSE,
-    res_df$HBFSS >= hbfss_threshold_dataset
-  )
+  # HBFSS significance uses empirical-null p-values plus the HC threshold only.
+  # No BH correction is applied on top of HBFSS. Near-1 HC thresholds are treated
+  # as invalid for HBFSS calibration because abs(log10(hc_p_threshold_dataset))
+  # would become nearly 0 and would make the HBFSS cutoff spuriously permissive.
+  if (is.na(hc_p_threshold_dataset)) {
+    hbfss_threshold_dataset  <- NA_real_
+    res_df$HBFSS_significant <- FALSE
+  } else {
+    hbfss_threshold_dataset  <- abs(log10(hc_p_threshold_dataset)) * lfc_boundary
+    res_df$HBFSS_significant <- ifelse(
+      is.na(res_df$HBFSS),
+      FALSE,
+      res_df$HBFSS >= hbfss_threshold_dataset
+    )
+  }
   
   res_df$regulation_direction <- ifelse(
     is.na(res_df$lfc_shrunk),
@@ -3585,37 +3535,37 @@ run_core_analysis <- function(count_mat, coldata, dataset_name, annot_df) {
 # -----------------------------------------------------------------------------
 
 method_call_colors <- c(
-  "Neither"                 = "grey70",
-  "HBFSS only"              = plot_palette$hbfss,
-  "DESeq2 weak only"        = plot_palette$weak,
-  "DESeq2 weak + HBFSS"     = plot_palette$overlap,
-  "DESeq2 strong only"      = plot_palette$deseq2,
-  "DESeq2 strong + HBFSS"   = plot_palette$overlap,
-  "DESeq2 standard only"    = plot_palette$deseq2,
-  "DESeq2 standard + HBFSS" = plot_palette$overlap
+  "Background"                      = "grey70",
+  "DESeq2 weak effect"             = plot_palette$weak,
+  "Weak effect + HBFSS"            = plot_palette$overlap,
+  "DESeq2 strong effect"           = plot_palette$deseq2,
+  "Strong effect + HBFSS"          = plot_palette$overlap,
+  "DESeq2 standard significance"   = plot_palette$threshold,
+  "Standard significance + HBFSS"  = plot_palette$overlap,
+  "HBFSS only"                     = plot_palette$hbfss
 )
 
 method_call_shapes <- c(
-  "Neither"                 = 21,
-  "HBFSS only"              = 23,
-  "DESeq2 weak only"        = 22,
-  "DESeq2 weak + HBFSS"     = 25,
-  "DESeq2 strong only"      = 24,
-  "DESeq2 strong + HBFSS"   = 24,
-  "DESeq2 standard only"    = 8,
-  "DESeq2 standard + HBFSS" = 23
+  "Background"                      = 21,
+  "DESeq2 weak effect"             = 22,
+  "Weak effect + HBFSS"            = 22,
+  "DESeq2 strong effect"           = 24,
+  "Strong effect + HBFSS"          = 24,
+  "DESeq2 standard significance"   = 25,
+  "Standard significance + HBFSS"  = 25,
+  "HBFSS only"                     = 23
 )
 
 method_fill_colors <- method_call_colors
 method_border_colors <- c(
-  "Neither"                 = "grey40",
-  "HBFSS only"              = "grey15",
-  "DESeq2 weak only"        = "grey15",
-  "DESeq2 weak + HBFSS"     = "grey15",
-  "DESeq2 strong only"      = "grey15",
-  "DESeq2 strong + HBFSS"   = "grey15",
-  "DESeq2 standard only"    = "grey15",
-  "DESeq2 standard + HBFSS" = "grey15"
+  "Background"                      = "grey40",
+  "DESeq2 weak effect"             = "grey15",
+  "Weak effect + HBFSS"            = plot_palette$hbfss,
+  "DESeq2 strong effect"           = "grey15",
+  "Strong effect + HBFSS"          = plot_palette$hbfss,
+  "DESeq2 standard significance"   = "grey15",
+  "Standard significance + HBFSS"  = plot_palette$hbfss,
+  "HBFSS only"                     = "grey15"
 )
 
 # -----------------------------------------------------------------------------
@@ -3646,8 +3596,8 @@ build_reviewer_volcano_classes <- function(df) {
   df <- as.data.frame(df)
 
   required_cols <- c(
-    "overlap_call", "deseq2_strong_call", "deseq2_weak_call", "HBFSS_only_call",
-    "standard_significant", "resLA_padj", "resGA_padj", "gene_symbol"
+    "standard_significant", "deseq2_strong_call", "deseq2_weak_call", "HBFSS_significant",
+    "resLA_padj", "resGA_padj", "gene_symbol"
   )
   missing_cols <- setdiff(required_cols, names(df))
   if (length(missing_cols)) {
@@ -3660,28 +3610,39 @@ build_reviewer_volcano_classes <- function(df) {
     )
   }
 
+  df$weak_hbfss_overlap_call <- !is.na(df$deseq2_weak_call) & df$deseq2_weak_call &
+    !is.na(df$HBFSS_significant) & df$HBFSS_significant
+  df$strong_hbfss_overlap_call <- !is.na(df$deseq2_strong_call) & df$deseq2_strong_call &
+    !is.na(df$HBFSS_significant) & df$HBFSS_significant
+  df$standard_hbfss_overlap_call <- !is.na(df$standard_significant) & df$standard_significant &
+    !is.na(df$HBFSS_significant) & df$HBFSS_significant
+  df$HBFSS_only_call <- !is.na(df$HBFSS_significant) & df$HBFSS_significant &
+    !( !is.na(df$deseq2_weak_call) & df$deseq2_weak_call ) &
+    !( !is.na(df$deseq2_strong_call) & df$deseq2_strong_call ) &
+    !( !is.na(df$standard_significant) & df$standard_significant )
+
   df$method_call_class <- dplyr::case_when(
-    !is.na(df$overlap_call) & df$overlap_call & !is.na(df$deseq2_weak_call) & df$deseq2_weak_call ~ "DESeq2 weak + HBFSS",
-    !is.na(df$overlap_call) & df$overlap_call & !is.na(df$deseq2_strong_call) & df$deseq2_strong_call ~ "DESeq2 strong + HBFSS",
-    !is.na(df$overlap_call) & df$overlap_call ~ "DESeq2 standard + HBFSS",
-    !is.na(df$HBFSS_only_call) & df$HBFSS_only_call ~ "HBFSS only",
-    !is.na(df$deseq2_weak_call) & df$deseq2_weak_call ~ "DESeq2 weak only",
-    !is.na(df$deseq2_strong_call) & df$deseq2_strong_call ~ "DESeq2 strong only",
-    !is.na(df$standard_significant) & df$standard_significant ~ "DESeq2 standard only",
-    TRUE ~ "Neither"
+    df$weak_hbfss_overlap_call ~ "Weak effect + HBFSS",
+    df$strong_hbfss_overlap_call ~ "Strong effect + HBFSS",
+    df$standard_hbfss_overlap_call ~ "Standard significance + HBFSS",
+    !is.na(df$deseq2_weak_call) & df$deseq2_weak_call ~ "DESeq2 weak effect",
+    !is.na(df$deseq2_strong_call) & df$deseq2_strong_call ~ "DESeq2 strong effect",
+    !is.na(df$standard_significant) & df$standard_significant ~ "DESeq2 standard significance",
+    df$HBFSS_only_call ~ "HBFSS only",
+    TRUE ~ "Background"
   )
 
   df$method_call_class <- factor(
     df$method_call_class,
     levels = c(
-      "Neither",
-      "HBFSS only",
-      "DESeq2 weak only",
-      "DESeq2 weak + HBFSS",
-      "DESeq2 strong only",
-      "DESeq2 strong + HBFSS",
-      "DESeq2 standard only",
-      "DESeq2 standard + HBFSS"
+      "Background",
+      "DESeq2 weak effect",
+      "Weak effect + HBFSS",
+      "DESeq2 strong effect",
+      "Strong effect + HBFSS",
+      "DESeq2 standard significance",
+      "Standard significance + HBFSS",
+      "HBFSS only"
     )
   )
 
@@ -3698,16 +3659,20 @@ select_volcano_labels <- function(df, y_col = "neglog10_empirical_p", n_labels =
   df <- df[df$has_valid_gene_symbol, , drop = FALSE]
   if (!nrow(df)) return(df[0, , drop = FALSE])
 
-  keep_levels <- c("DESeq2 weak + HBFSS", "DESeq2 strong + HBFSS", "DESeq2 standard + HBFSS", "DESeq2 strong only", "HBFSS only")
-  df <- df[df$method_call_class %in% keep_levels, , drop = FALSE]
+  df <- df[df$method_call_class %in% c(
+    "Strong effect + HBFSS",
+    "Standard significance + HBFSS",
+    "Weak effect + HBFSS",
+    "DESeq2 strong effect",
+    "DESeq2 standard significance",
+    "HBFSS only"
+  ), , drop = FALSE]
   if (!nrow(df)) return(df[0, , drop = FALSE])
 
   df$label_priority <- dplyr::case_when(
-    df$method_call_class == "DESeq2 strong + HBFSS" ~ 1,
-    df$method_call_class == "DESeq2 weak + HBFSS" ~ 2,
-    df$method_call_class == "DESeq2 standard + HBFSS" ~ 3,
-    df$method_call_class == "DESeq2 strong only" ~ 4,
-    df$method_call_class == "HBFSS only" ~ 5,
+    df$method_call_class %in% c("Strong effect + HBFSS", "Standard significance + HBFSS", "Weak effect + HBFSS") ~ 1,
+    df$method_call_class %in% c("DESeq2 strong effect", "DESeq2 standard significance") ~ 2,
+    df$method_call_class == "HBFSS only" ~ 3,
     TRUE ~ 9
   )
 
@@ -3722,36 +3687,30 @@ select_volcano_labels <- function(df, y_col = "neglog10_empirical_p", n_labels =
   df[seq_len(min(n_labels, nrow(df))), , drop = FALSE]
 }
 
-volcano_top_caption <- function(df) {
-  hc_txt <- NA_character_
-  hbfss_txt <- NA_character_
-  if (nrow(df)) {
-    hc_val <- suppressWarnings(as.numeric(df$hc_p_threshold_dataset[1]))
-    hbfss_val <- suppressWarnings(as.numeric(df$hbfss_threshold_dataset[1]))
-    if (is.finite(hc_val)) hc_txt <- paste0("HC p threshold=", signif(hc_val, 4))
-    if (is.finite(hbfss_val)) hbfss_txt <- paste0("HBFSS cutoff=", signif(hbfss_val, 4))
+volcano_top_caption <- function(df = NULL) {
+  if (is.null(df) || !nrow(df)) {
+    return(paste0("DESeq2: padj < ", percent(alpha_level, accuracy = 1), ". HBFSS: empirical p + HC threshold."))
   }
-  parts <- c(
-    hc_txt,
-    hbfss_txt,
-    paste0("DESeq2 standard: padj<", percent(alpha_level, accuracy = 1), " and shrunk |LFC|>=", lfc_boundary),
-    paste0("DESeq2 strong: greaterAbs padj<", percent(alpha_level, accuracy = 1), " with shrunk |LFC|>=", lfc_boundary),
-    paste0("DESeq2 weak: lessAbs padj<", percent(alpha_level, accuracy = 1), " with shrunk |LFC|<", lfc_boundary)
+  hc_p_threshold <- suppressWarnings(as.numeric(df$hc_p_threshold_dataset[1]))
+  hbfss_threshold <- suppressWarnings(as.numeric(df$hbfss_threshold_dataset[1]))
+  paste0(
+    "DESeq2: padj < ", percent(alpha_level, accuracy = 1),
+    ". HBFSS threshold = ", ifelse(is.finite(hbfss_threshold), signif(hbfss_threshold, 4), "NA"),
+    "; HC p threshold = ", ifelse(is.finite(hc_p_threshold), signif(hc_p_threshold, 4), "NA"), "."
   )
-  paste(parts[!is.na(parts) & nzchar(parts)], collapse = " | ")
 }
 
 volcano_count_caption <- function(df) {
   method_counts <- table(factor(df$method_call_class, levels = levels(df$method_call_class)))
   paste0(
-    "Neither=", method_counts["Neither"],
-    " | HBFSS=", method_counts["HBFSS only"],
-    " | Weak=", method_counts["DESeq2 weak only"],
-    " | Weak+HBFSS=", method_counts["DESeq2 weak + HBFSS"],
-    " | Strong=", method_counts["DESeq2 strong only"],
-    " | Strong+HBFSS=", method_counts["DESeq2 strong + HBFSS"],
-    " | Standard=", method_counts["DESeq2 standard only"],
-    " | Standard+HBFSS=", method_counts["DESeq2 standard + HBFSS"]
+    "Background=", method_counts["Background"],
+    " | Weak=", method_counts["DESeq2 weak effect"],
+    " | Weak+HBFSS=", method_counts["Weak effect + HBFSS"],
+    " | Strong=", method_counts["DESeq2 strong effect"],
+    " | Strong+HBFSS=", method_counts["Strong effect + HBFSS"],
+    " | Standard=", method_counts["DESeq2 standard significance"],
+    " | Standard+HBFSS=", method_counts["Standard significance + HBFSS"],
+    " | HBFSS=", method_counts["HBFSS only"]
   )
 }
 
@@ -3787,8 +3746,8 @@ volcano_guides <- function() {
         size   = 3.5,
         stroke = 0.72,
         alpha  = 1,
-        fill   = unname(method_fill_colors[names(method_call_shapes)]),
-        colour = unname(method_border_colors[names(method_call_shapes)])
+        fill   = unname(method_fill_colors),
+        colour = unname(method_border_colors)
       )
     )
   )
@@ -3815,7 +3774,8 @@ volcano_label_layer <- function(lab_df) {
 }
 
 .volcano_overlap_layer <- function(df, size_add = 0.9, stroke_add = 0.3) {
-  ov <- df[!is.na(df$method_call_class) & grepl("\\+ HBFSS$", as.character(df$method_call_class)), , drop = FALSE]
+  overlap_levels <- c("Weak effect + HBFSS", "Strong effect + HBFSS", "Standard significance + HBFSS")
+  ov <- df[!is.na(df$method_call_class) & df$method_call_class %in% overlap_levels, , drop = FALSE]
   if (!nrow(ov)) return(NULL)
   geom_point(
     data        = ov,
@@ -3827,7 +3787,7 @@ volcano_label_layer <- function(lab_df) {
   )
 }
 
-plot_standard_volcano <- function(df, dataset_name, show_legend = TRUE) {
+plot_standard_volcano <- function(df, dataset_name) {
   df     <- build_reviewer_volcano_classes(df)
   lab_df <- select_volcano_labels(df, y_col = "neglog10_padj", n_labels = 20)
 
@@ -3851,7 +3811,7 @@ plot_standard_volcano <- function(df, dataset_name, show_legend = TRUE) {
       x       = "Shrunken log2 fold change (β̂shrunk)",
       y       = expression(-log[10](padj)),
       caption = compact_caption(paste0(
-        volcano_top_caption(), "\n",
+        volcano_top_caption(df), "\n",
         volcano_count_caption(df),
         "  |  LFC lines = ±", lfc_boundary
       ))
@@ -3859,6 +3819,7 @@ plot_standard_volcano <- function(df, dataset_name, show_legend = TRUE) {
     coord_cartesian(clip = "off") +
     plot_expand_xy() +
     manuscript_theme() +
+    theme(plot.margin = margin(t = 18, r = 40, b = 24, l = 26)) +
     volcano_guides() +
     volcano_label_layer(lab_df)
 }
@@ -3884,6 +3845,11 @@ add_hbfss_boundary_layer <- function(p, df) {
   max_abs_lfc <- max(abs(finite_lfc), na.rm = TRUE)
   if (!is.finite(max_abs_lfc) || is.na(max_abs_lfc) || max_abs_lfc <= 0) max_abs_lfc <- lfc_boundary * 3
 
+  finite_y <- suppressWarnings(as.numeric(df$neglog10_empirical_p))
+  finite_y <- finite_y[is.finite(finite_y) & !is.na(finite_y)]
+  max_y <- if (length(finite_y)) max(finite_y, na.rm = TRUE) else NA_real_
+  if (!is.finite(max_y) || is.na(max_y) || max_y <= 0) max_y <- max(5, threshold / max(0.1, lfc_boundary))
+
   x_abs <- seq(from = max(0.05, min(lfc_boundary, max_abs_lfc)), to = max_abs_lfc, length.out = 400)
   y_hyper <- threshold / x_abs
 
@@ -3903,6 +3869,18 @@ add_hbfss_boundary_layer <- function(p, df) {
   boundary_df <- boundary_df[is.finite(boundary_df$neglog10_empirical_p) & !is.na(boundary_df$neglog10_empirical_p), , drop = FALSE]
   if (!nrow(boundary_df)) return(p)
 
+  label_x <- max_abs_lfc * 0.98
+  label_y <- max_y * 0.98
+  label_text <- paste0(
+    "HBFSS cutoff = ", signif(threshold, 4),
+    if (is.finite(hc_p_threshold) && !is.na(hc_p_threshold) && hc_p_threshold > 0 && hc_p_threshold < 1) {
+      paste0("
+HC p cutoff = ", signif(hc_p_threshold, 4))
+    } else {
+      ""
+    }
+  )
+
   p <- p + geom_path(
     data = boundary_df,
     aes(x = lfc_shrunk, y = neglog10_empirical_p),
@@ -3921,10 +3899,21 @@ add_hbfss_boundary_layer <- function(p, df) {
     )
   }
 
-  p
+  p + annotate(
+    "label",
+    x = label_x,
+    y = label_y,
+    label = label_text,
+    hjust = 1,
+    vjust = 1,
+    size = 2.8,
+    fill = "white",
+    colour = plot_palette$threshold,
+    label.size = 0.15
+  )
 }
 
-plot_hbfss_volcano <- function(df, dataset_name, show_legend = TRUE) {
+plot_hbfss_volcano <- function(df, dataset_name) {
   df     <- build_reviewer_volcano_classes(df)
   lab_df <- select_volcano_labels(df, y_col = "neglog10_empirical_p", n_labels = 20)
 
@@ -3944,13 +3933,14 @@ plot_hbfss_volcano <- function(df, dataset_name, show_legend = TRUE) {
       x       = "Shrunken log2 fold change (β̂shrunk)",
       y       = expression(-log[10](p[empirical])),
       caption = compact_caption(paste0(
-        volcano_top_caption(),
+        volcano_top_caption(df),
         "\n",
         volcano_count_caption(df)
       ))
     ) +
     coord_cartesian(clip = "off") +
     manuscript_theme() +
+    theme(plot.margin = margin(t = 18, r = 40, b = 24, l = 26)) +
     plot_expand_xy() +
     volcano_guides()
 
@@ -3958,7 +3948,7 @@ plot_hbfss_volcano <- function(df, dataset_name, show_legend = TRUE) {
   p
 }
 
-plot_publication_volcano_panel <- function(df, dataset_name, show_legend = TRUE) {
+plot_publication_volcano_panel <- function(df, dataset_name) {
   build  <- build_reviewer_volcano_classes(df)
   top_df <- select_volcano_labels(build, y_col = "neglog10_empirical_p", n_labels = 20)
 
@@ -3978,13 +3968,14 @@ plot_publication_volcano_panel <- function(df, dataset_name, show_legend = TRUE)
       x       = "Shrunken log2 fold change (β̂shrunk)",
       y       = expression(-log[10](p[empirical])),
       caption = compact_caption(paste0(
-        volcano_top_caption(),
+        volcano_top_caption(df),
         "\n",
         volcano_count_caption(build)
       ))
     ) +
     coord_cartesian(clip = "off") +
     manuscript_theme() +
+    theme(plot.margin = margin(t = 18, r = 40, b = 24, l = 26)) +
     plot_expand_xy() +
     volcano_guides()
 
@@ -4056,24 +4047,28 @@ plot_hbfss_distribution <- function(df, dataset_name) {
 # MANUSCRIPT COMPARISON PANELS
 # -----------------------------------------------------------------------------
 
-# Plot the empirical-null p-value distribution and annotate the resolved HC
-# threshold used downstream to define the HBFSS boundary.
 plot_empirical_histogram_for_panel <- function(df, dataset_name, hc_p_threshold) {
   p <- ggplot(df, aes(empirical_p)) +
     geom_histogram(bins = HIST_BINS, fill = plot_palette$histogram, color = HIST_COLOR) +
     labs(
       title    = compact_title(pretty_dataset_label(dataset_name)),
-      subtitle = paste0("HC = ", signif(hc_p_threshold, 4)),
+      subtitle = if (is.finite(hc_p_threshold) && hc_p_threshold > 0 && hc_p_threshold < max_usable_hc_p_threshold) {
+        paste0("HC = ", signif(hc_p_threshold, 4))
+      } else {
+        "HC unavailable"
+      },
       x = "Empirical-null p-value",
       y = "Count"
     ) +
     manuscript_theme()
   
-  p <- p + geom_vline(
-    xintercept = hc_p_threshold,
-    color      = plot_palette$threshold,
-    linewidth  = LINE_WIDTH_THRESH
-  )
+  if (is.finite(hc_p_threshold) && hc_p_threshold > 0 && hc_p_threshold < max_usable_hc_p_threshold) {
+    p <- p + geom_vline(
+      xintercept = hc_p_threshold,
+      color      = plot_palette$threshold,
+      linewidth  = LINE_WIDTH_THRESH
+    )
+  }
   
   p
 }
@@ -4211,26 +4206,6 @@ save_cross_dataset_comparison_panels <- function(comparison_name, analysis_resul
     safe_plot_build(expr, paste0(comparison_name, ": ", label))
   }
 
-  extract_shared_legend <- function(p) {
-    pg <- ggplotGrob(p + theme(legend.position = "bottom"))
-    gtable::gtable_filter(pg, "guide-box")
-  }
-
-  make_panel_with_shared_legend <- function(plot_list, title_text, legend_plot, ncols = length(plot_list)) {
-    plot_list <- Filter(Negate(is.null), plot_list)
-    if (!length(plot_list)) return(NULL)
-    legend_grob <- extract_shared_legend(legend_plot)
-    no_legend_list <- lapply(plot_list, function(p) p + theme(legend.position = "none"))
-    top_grob <- do.call(arrangeGrob, c(no_legend_list, list(ncol = ncols)))
-    arrangeGrob(
-      top_grob,
-      legend_grob,
-      ncol = 1,
-      heights = unit.c(unit(1, "null"), unit(1.1, "in")),
-      top = textGrob(title_text, gp = gpar(fontface = "bold", cex = 1.10))
-    )
-  }
-
   make_panel <- function(grob_list, title_text, ncols = length(grob_list)) {
     grob_list <- Filter(Negate(is.null), grob_list)
     if (!length(grob_list)) return(NULL)
@@ -4312,14 +4287,12 @@ save_cross_dataset_comparison_panels <- function(comparison_name, analysis_resul
     safe_panel_plot(
       plot_standard_volcano(
         analysis_results[[k]]$results,
-        analysis_results[[k]]$summary$dataset_name[1],
-        show_legend = FALSE
+        analysis_results[[k]]$summary$dataset_name[1]
       ),
       paste0("standard volcano: ", k)
     )
   })
-  std_legend_plot <- plot_standard_volcano(analysis_results[[keys_present[1]]]$results, analysis_results[[keys_present[1]]]$summary$dataset_name[1], show_legend = TRUE)
-  std_panel <- make_panel_with_shared_legend(std_grobs, paste(comparison_name, "| DESeq2 volcanoes"), std_legend_plot)
+  std_panel <- make_panel(std_grobs, paste(comparison_name, "| DESeq2 volcanoes"))
   if (!is.null(std_panel)) {
     save_grob(
       std_panel,
@@ -4333,14 +4306,12 @@ save_cross_dataset_comparison_panels <- function(comparison_name, analysis_resul
     safe_panel_plot(
       plot_hbfss_volcano(
         analysis_results[[k]]$results,
-        analysis_results[[k]]$summary$dataset_name[1],
-        show_legend = FALSE
+        analysis_results[[k]]$summary$dataset_name[1]
       ),
       paste0("HBFSS volcano: ", k)
     )
   })
-  hbfss_legend_plot <- plot_hbfss_volcano(analysis_results[[keys_present[1]]]$results, analysis_results[[keys_present[1]]]$summary$dataset_name[1], show_legend = TRUE)
-  hbfss_panel <- make_panel_with_shared_legend(hbfss_grobs, paste(comparison_name, "| HBFSS volcanoes"), hbfss_legend_plot)
+  hbfss_panel <- make_panel(hbfss_grobs, paste(comparison_name, "| HBFSS volcanoes"))
   if (!is.null(hbfss_panel)) {
     save_grob(
       hbfss_panel,
@@ -4354,14 +4325,12 @@ save_cross_dataset_comparison_panels <- function(comparison_name, analysis_resul
     safe_panel_plot(
       plot_publication_volcano_panel(
         analysis_results[[k]]$results,
-        analysis_results[[k]]$summary$dataset_name[1],
-        show_legend = FALSE
+        analysis_results[[k]]$summary$dataset_name[1]
       ),
       paste0("publication volcano: ", k)
     )
   })
-  pub_legend_plot <- plot_publication_volcano_panel(analysis_results[[keys_present[1]]]$results, analysis_results[[keys_present[1]]]$summary$dataset_name[1], show_legend = TRUE)
-  pub_panel <- make_panel_with_shared_legend(pub_grobs, paste(comparison_name, "| Publication volcanoes"), pub_legend_plot)
+  pub_panel <- make_panel(pub_grobs, paste(comparison_name, "| Publication volcanoes"))
   if (!is.null(pub_panel)) {
     save_grob(
       pub_panel,
@@ -4452,6 +4421,7 @@ save_cross_dataset_comparison_panels <- function(comparison_name, analysis_resul
 # =============================================================================
 # SECTION 4 OF 4
 # FULL PIPELINE, EXPORTS, PCA TABLES, PC1 + BASEMEAN + DISPERSION OUTPUT
+# REPLACE YOUR CURRENT SECTION 4 WITH THIS
 # =============================================================================
 
 # Collate feature-level PC1 loadings, EVS split membership, and DESeq2
@@ -4561,7 +4531,7 @@ run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata,
     save_csv(evs$combined_cutoff_info$ctrl_wave_obj$wave_map, file.path(tab_dir, paste0(comparison_name, "_control_local_fourier_map.csv")))
   }
   if (!is.null(evs$combined_cutoff_info$combined_wave_map) && nrow(evs$combined_cutoff_info$combined_wave_map)) {
-    save_csv(evs$combined_cutoff_info$combined_wave_map, file.path(tab_dir, paste0(comparison_name, "_selected_regime_crossing_map.csv")))
+    save_csv(evs$combined_cutoff_info$combined_wave_map, file.path(tab_dir, paste0(comparison_name, "_first_stable_crossing_map.csv")))
   }
   if (!is.null(evs$combined_cutoff_info$crossing_table) && nrow(evs$combined_cutoff_info$crossing_table)) {
     save_csv(evs$combined_cutoff_info$crossing_table, file.path(tab_dir, paste0(comparison_name, "_all_regime_crossings.csv")))
@@ -4573,14 +4543,14 @@ run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata,
   save_csv(crossing_summary_df, file.path(tab_dir, paste0(comparison_name, "_regime_shift_crossing_summary.csv")))
 
   trt_fourier_plot <- safe_plot_build(
-    plot_fourier_wave_map_single(evs$combined_cutoff_info$trt_wave_obj, comparison_name, "treatment", selected_percentile = if (!is.null(evs$combined_cutoff_info$selected_crossing) && nrow(evs$combined_cutoff_info$selected_crossing)) evs$combined_cutoff_info$selected_crossing$crossing_percentile[1] else NA_real_),
+    plot_fourier_wave_map_single(evs$combined_cutoff_info$trt_wave_obj, comparison_name, "treatment", cutoff_percentile = evs$combined_cutoff_info$selected_crossing$crossing_percentile[1]),
     paste0(comparison_name, ": treatment local fourier wave map")
   )
   if (!is.null(trt_fourier_plot)) {
     save_grob(trt_fourier_plot, file.path(cmp_dir, paste0(comparison_name, "_treatment_local_fourier_wave_map.png")), width = 12, height = 10)
   }
   ctrl_fourier_plot <- safe_plot_build(
-    plot_fourier_wave_map_single(evs$combined_cutoff_info$ctrl_wave_obj, comparison_name, "control", selected_percentile = if (!is.null(evs$combined_cutoff_info$selected_crossing) && nrow(evs$combined_cutoff_info$selected_crossing)) evs$combined_cutoff_info$selected_crossing$crossing_percentile[1] else NA_real_),
+    plot_fourier_wave_map_single(evs$combined_cutoff_info$ctrl_wave_obj, comparison_name, "control", cutoff_percentile = evs$combined_cutoff_info$selected_crossing$crossing_percentile[1]),
     paste0(comparison_name, ": control local fourier wave map")
   )
   if (!is.null(ctrl_fourier_plot)) {
@@ -4884,6 +4854,10 @@ run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata,
       evs_fixed_top_n        = evs_fixed_top_n,
       evs_cutoff_mode_main   = evs_cutoff_mode_main,
       evs_primary_preprocessing = "normalized",
+      shared_cutoff_rank     = evs$combined_cutoff_info$top_n_actual,
+      shared_cutoff_method   = evs$combined_cutoff_info$method,
+      shared_cutoff_quantile = evs$fit_trt$cutoff_quantile,
+      shared_selected_reason = evs$combined_cutoff_info$selected_reason,
       stringsAsFactors       = FALSE
     )
     
