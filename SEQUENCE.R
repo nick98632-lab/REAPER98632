@@ -70,10 +70,10 @@ count_file <- file.path(input_dir, "WTTS-Seq_2022.2_DE_raw_read_numbers.csv")
 run_twas_overlap <- FALSE
 twas_file <- file.path(input_dir, "3aTWAS_genes_of_11_brain_disorders.csv")
 
-alpha_level <- 0.10
+alpha_level <- 0.20
 max_usable_hc_p_threshold <- 0.99
 lfc_boundary <- 1.0
-lfc_shrink_type <- "normal"   # "normal" for speed/stability; "apeglm" optional
+lfc_shrink_type <- "apeglm"   # "normal" for speed/stability; "apeglm" optional
 lfc_shrink_apeglm_method <- "nbinomC"
 
 evs_cutoff_mode_main <- "matched_curvature_wave"
