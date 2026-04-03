@@ -1,2 +1,0 @@
-"candidate_id","rank_index","percentile","cutoff_value","cutoff_quantile","selected","selected_reason"
-"crossing_1",2990,0.0975187530774694,0.0117015712491029,0.905553098742814,TRUE,"last_crossing_fallback"
