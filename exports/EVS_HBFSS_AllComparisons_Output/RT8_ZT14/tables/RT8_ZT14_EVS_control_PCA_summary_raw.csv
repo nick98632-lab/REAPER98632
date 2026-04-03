@@ -1,0 +1,6 @@
+"dataset_name","preprocessing_label","group_label","principal_component","standard_deviation","variance","proportion_variance","cumulative_proportion"
+"RT8_ZT14","Raw counts before EVS","control","PC1",131.790430174415,17368.7174855573,0.393142332545975,0.393142332545975
+"RT8_ZT14","Raw counts before EVS","control","PC2",106.450841379836,11331.781630475,0.256495798599468,0.649638131145443
+"RT8_ZT14","Raw counts before EVS","control","PC3",93.3531218719535,8714.80536323981,0.197260328002758,0.846898459148201
+"RT8_ZT14","Raw counts before EVS","control","PC4",82.2429635470799,6763.90505300631,0.153101540851799,1
+"RT8_ZT14","Raw counts before EVS","control","PC5",1.43051432351343e-12,2.04637122977708e-24,4.63197791776231e-29,1
