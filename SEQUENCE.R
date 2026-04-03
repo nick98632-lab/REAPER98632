@@ -23,10 +23,9 @@
 # 4. At percentile positions spanning the ranked dataset, local windows are
 #    evaluated with low-order Fourier series for IOD and CV2.
 # 5. Treatment and control local Fourier summaries are combined into one
-#    comparison-level regime-difference profile.
-# 6. One shared comparison-level cutoff rank is selected as the first stable
-#    crossing of the combined local IOD and combined local CV2 curves, then
-#    projected back onto the normalized and raw EVS panels.
+#    comparison-level score that identifies the dominant transition interval.
+# 6. One shared comparison-level cutoff rank is selected from that combined
+#    Fourier score and projected back onto the normalized and raw EVS panels.
 # 7. The selected cutoff defines the leading-edge and remainder subsets, which
 #    are then analyzed alongside the original dataset.
 # 8. Manuscript figures, wave diagnostics, and feature-level result tables are
@@ -36,9 +35,9 @@
 # Treatment and control are allowed to exhibit different local wave behavior,
 # but downstream EVS splitting uses one shared cutoff per comparison because the
 # original, leading-edge, and remainder analyses require a single comparison-
-# level split. That shared cutoff is derived from the first stable crossing of
-# the combined treatment-plus-control local IOD and local CV2 regime lines,
-# rather than from a treatment-only or control-only decision rule.
+# level split. That shared cutoff is derived from the combined treatment-plus-
+# control local Fourier score rather than from a treatment-only or control-only
+# decision rule.
 # =============================================================================
 
 suppressPackageStartupMessages({
@@ -74,6 +73,8 @@ twas_file <- file.path(input_dir, "3aTWAS_genes_of_11_brain_disorders.csv")
 alpha_level <- 0.10
 max_usable_hc_p_threshold <- 0.95
 lfc_boundary <- 1.0
+lfc_shrink_type <- "normal"   # "normal" for speed/stability; "apeglm" optional
+lfc_shrink_apeglm_method <- "nbinomC"
 
 evs_cutoff_mode_main <- "matched_curvature_wave"
 evs_fixed_top_n <- 5000L
@@ -1521,7 +1522,6 @@ resolve_combined_fourier_cutoff <- function(fit_trt_loading_tbl,
 }
 
 
-
 select_wave_backup_cutoff <- function(wave_obj, group_label = "group") {
   if (is.null(wave_obj) || is.null(wave_obj$wave_map) || !nrow(wave_obj$wave_map)) {
     return(list(
@@ -1607,16 +1607,16 @@ select_wave_backup_cutoff <- function(wave_obj, group_label = "group") {
 }
 
 build_group_backup_crossings <- function(combined_cutoff_info) {
-  trt_backup <- select_wave_backup_cutoff(combined_cutoff_info$trt_wave_obj, group_label = "treatment")
+  trt_backup  <- select_wave_backup_cutoff(combined_cutoff_info$trt_wave_obj,  group_label = "treatment")
   ctrl_backup <- select_wave_backup_cutoff(combined_cutoff_info$ctrl_wave_obj, group_label = "control")
 
-  combined_cutoff_info$trt_backup_crossing <- trt_backup$selected_crossing
-  combined_cutoff_info$trt_backup_reason <- trt_backup$selected_reason
-  combined_cutoff_info$trt_backup_table <- trt_backup$crossing_table
+  combined_cutoff_info$trt_backup_crossing  <- trt_backup$selected_crossing
+  combined_cutoff_info$trt_backup_reason    <- trt_backup$selected_reason
+  combined_cutoff_info$trt_backup_table     <- trt_backup$crossing_table
 
   combined_cutoff_info$ctrl_backup_crossing <- ctrl_backup$selected_crossing
-  combined_cutoff_info$ctrl_backup_reason <- ctrl_backup$selected_reason
-  combined_cutoff_info$ctrl_backup_table <- ctrl_backup$crossing_table
+  combined_cutoff_info$ctrl_backup_reason   <- ctrl_backup$selected_reason
+  combined_cutoff_info$ctrl_backup_table    <- ctrl_backup$crossing_table
 
   combined_cutoff_info
 }
@@ -1658,8 +1658,9 @@ plot_fourier_wave_map_single <- function(wave_obj, comparison_name, group_label)
   backup_info <- select_wave_backup_cutoff(wave_obj, group_label = tolower(pretty_group_label(group_label)))
   sc <- backup_info$selected_crossing
 
-  cutoff_pct <- if (!is.null(sc) && nrow(sc)) sc$crossing_percentile[1] else NA_real_
+  cutoff_pct  <- if (!is.null(sc) && nrow(sc)) sc$crossing_percentile[1] else NA_real_
   cutoff_rank <- if (!is.null(sc) && nrow(sc)) sc$crossing_rank[1] else NA_integer_
+
   line_col <- if (tolower(group_label) %in% c("treatment", "trt")) plot_palette$treatment else plot_palette$control
 
   p <- ggplot(df, aes(percentile)) +
@@ -1669,7 +1670,7 @@ plot_fourier_wave_map_single <- function(wave_obj, comparison_name, group_label)
     labs(
       title = paste0(pretty_group_label(group_label), " | local regime lines"),
       subtitle = compact_caption(
-        "This panel includes the backup within-group cutoff. It is the first stable local crossing of IOD and CV² for that group alone.",
+        "This panel includes the backup within-group cutoff. It is the first stable crossing of local IOD and local CV² for that group alone.",
         width = 88
       ),
       x = "Percentile center",
@@ -1753,7 +1754,11 @@ plot_combined_fourier_wave_map <- function(combined_cutoff_info, comparison_name
         "label",
         x = crossing_pct,
         y = ymax,
-        label = paste0("Shared cutoff\np = ", signif(crossing_pct, 4), "\nrank = ", crossing_rank),
+        label = paste0(
+          "Shared cutoff\n",
+          "p = ", signif(crossing_pct, 4), "\n",
+          "rank = ", crossing_rank
+        ),
         fill = "white",
         colour = plot_palette$threshold,
         size = 3.0,
@@ -1774,7 +1779,11 @@ plot_combined_fourier_wave_map <- function(combined_cutoff_info, comparison_name
         "label",
         x = trt_pct,
         y = ymax * 0.78,
-        label = paste0("Treatment backup\np = ", signif(trt_pct, 4), "\nrank = ", trt_rank),
+        label = paste0(
+          "Treatment backup\n",
+          "p = ", signif(trt_pct, 4), "\n",
+          "rank = ", trt_rank
+        ),
         fill = "white",
         colour = plot_palette$treatment,
         size = 2.7,
@@ -1794,7 +1803,11 @@ plot_combined_fourier_wave_map <- function(combined_cutoff_info, comparison_name
         "label",
         x = ctrl_pct,
         y = ymax * 0.58,
-        label = paste0("Control backup\np = ", signif(ctrl_pct, 4), "\nrank = ", ctrl_rank),
+        label = paste0(
+          "Control backup\n",
+          "p = ", signif(ctrl_pct, 4), "\n",
+          "rank = ", ctrl_rank
+        ),
         fill = "white",
         colour = plot_palette$control,
         size = 2.7,
@@ -3286,7 +3299,43 @@ run_core_analysis <- function(count_mat, coldata, dataset_name, annot_df) {
   res_df$lfdr[valid_stat]        <- as.numeric(fdr_fit$lfdr)
 
   coef_name <- get_condition_coef(dds)
-  shr       <- lfcShrink(dds, coef = coef_name, type = "apeglm", res = res)
+
+  message(sprintf("[%s] Starting lfcShrink(type = \"%s\")", dataset_name, lfc_shrink_type))
+  shr <- tryCatch(
+    {
+      if (identical(lfc_shrink_type, "apeglm")) {
+        suppressMessages(suppressWarnings(
+          lfcShrink(
+            dds,
+            coef = coef_name,
+            type = "apeglm",
+            res = res,
+            apeMethod = lfc_shrink_apeglm_method
+          )
+        ))
+      } else {
+        suppressMessages(suppressWarnings(
+          lfcShrink(
+            dds,
+            coef = coef_name,
+            type = "normal"
+          )
+        ))
+      }
+    },
+    error = function(e) {
+      message(sprintf("[%s] lfcShrink(type = \"%s\") failed: %s", dataset_name, lfc_shrink_type, conditionMessage(e)))
+      message(sprintf("[%s] Falling back to lfcShrink(type = \"normal\")", dataset_name))
+      suppressMessages(suppressWarnings(
+        lfcShrink(
+          dds,
+          coef = coef_name,
+          type = "normal"
+        )
+      ))
+    }
+  )
+  message(sprintf("[%s] Finished lfcShrink()", dataset_name))
   shr_df    <- as.data.frame(shr, stringsAsFactors = FALSE)
   shr_df$feature_id <- as.character(rownames(shr_df))
 
@@ -3473,15 +3522,8 @@ method_call_shapes <- c(
   "Overlap"            = 25
 )
 
-method_fill_colors <- method_call_colors
-method_border_colors <- method_call_colors
-
 # -----------------------------------------------------------------------------
 # PLOT HELPER FUNCTIONS
-# -----------------------------------------------------------------------------
-
-# -----------------------------------------------------------------------------
-# PATCHED VOLCANO CLASSIFICATION
 # -----------------------------------------------------------------------------
 
 build_plot_specific_volcano_classes <- function(df, plot_type = c("standard", "hbfss")) {
@@ -3508,47 +3550,29 @@ build_plot_specific_volcano_classes <- function(df, plot_type = c("standard", "h
     plot_threshold_pass <- is.finite(yvals) & !is.na(yvals) & (yvals >= -log10(alpha_level))
 
     strong_visible <- !is.na(df$deseq2_strong_call) & df$deseq2_strong_call & plot_threshold_pass
-    weak_visible <- !is.na(df$deseq2_weak_call) & df$deseq2_weak_call & plot_threshold_pass
-    hbfss_visible <- !is.na(df$HBFSS_only_call) & df$HBFSS_only_call & plot_threshold_pass
-    overlap_visible <- !is.na(df$overlap_call) & df$overlap_call & plot_threshold_pass
+    weak_visible   <- !is.na(df$deseq2_weak_call)   & df$deseq2_weak_call   & plot_threshold_pass
+    hbfss_visible  <- !is.na(df$HBFSS_only_call)    & df$HBFSS_only_call    & plot_threshold_pass
+    overlap_visible <- !is.na(df$overlap_call)      & df$overlap_call       & plot_threshold_pass
   } else {
     yvals <- suppressWarnings(as.numeric(df$neglog10_empirical_p))
-
-    hc_thr <- suppressWarnings(as.numeric(df$hc_p_threshold_dataset))
-    hc_line_y <- ifelse(
-      is.finite(hc_thr) & !is.na(hc_thr) & hc_thr > 0 & hc_thr < 1,
-      -log10(hc_thr),
-      NA_real_
-    )
+    hc_thr <- suppressWarnings(as.numeric(df$hc_p_threshold_dataset[1]))
+    hc_line_y <- if (is.finite(hc_thr) && !is.na(hc_thr) && hc_thr > 0 && hc_thr < 1) -log10(hc_thr) else NA_real_
 
     plot_threshold_pass <- is.finite(yvals) & !is.na(yvals)
-    if (any(is.finite(hc_line_y))) {
+    if (is.finite(hc_line_y) && !is.na(hc_line_y)) {
       plot_threshold_pass <- plot_threshold_pass & (yvals >= hc_line_y)
     }
 
     strong_visible <- !is.na(df$deseq2_strong_call) & df$deseq2_strong_call & plot_threshold_pass
-    weak_visible <- !is.na(df$deseq2_weak_call) & df$deseq2_weak_call & plot_threshold_pass
-    hbfss_visible <- !is.na(df$HBFSS_only_call) & df$HBFSS_only_call & plot_threshold_pass
-    overlap_visible <- !is.na(df$overlap_call) & df$overlap_call & plot_threshold_pass
+    weak_visible   <- !is.na(df$deseq2_weak_call)   & df$deseq2_weak_call   & plot_threshold_pass
+    hbfss_visible  <- !is.na(df$HBFSS_only_call)    & df$HBFSS_only_call    & plot_threshold_pass
+    overlap_visible <- !is.na(df$overlap_call)      & df$overlap_call       & plot_threshold_pass
   }
-
-  df$method_call_class <- dplyr::case_when(
-    overlap_visible ~ "Overlap",
-    strong_visible ~ "DESeq2 strong only",
-    weak_visible ~ "DESeq2 weak only",
-    hbfss_visible ~ "HBFSS only",
-    TRUE ~ "Neither"
-  )
-
-  df$method_call_class <- factor(
-    df$method_call_class,
-    levels = c("Neither", "DESeq2 weak only", "DESeq2 strong only", "HBFSS only", "Overlap")
-  )
 
   df$effect_color_class <- dplyr::case_when(
     strong_visible ~ "Strong effect",
-    weak_visible ~ "Weak effect",
-    TRUE ~ "Intermediate effect"
+    weak_visible   ~ "Weak effect",
+    TRUE           ~ "Intermediate effect"
   )
 
   df$effect_color_class <- factor(
@@ -3556,14 +3580,23 @@ build_plot_specific_volcano_classes <- function(df, plot_type = c("standard", "h
     levels = c("Strong effect", "Intermediate effect", "Weak effect")
   )
 
+  df$method_call_class <- dplyr::case_when(
+    overlap_visible ~ "Overlap",
+    strong_visible  ~ "DESeq2 strong only",
+    weak_visible    ~ "DESeq2 weak only",
+    hbfss_visible   ~ "HBFSS only",
+    TRUE            ~ "Neither"
+  )
+
+  df$method_call_class <- factor(
+    df$method_call_class,
+    levels = c("Neither", "DESeq2 weak only", "DESeq2 strong only", "HBFSS only", "Overlap")
+  )
+
   df
 }
 
-build_reviewer_volcano_classes <- function(df) {
-  build_plot_specific_volcano_classes(df, plot_type = "hbfss")
-}
-
-select_volcano_labels <- function(df, y_col = "neglog10_empirical_p", n_labels = 20) {
+select_volcano_labels <- function(df, y_col = "neglog10_empirical_p", n_labels = 10) {
   df <- as.data.frame(df, stringsAsFactors = FALSE)
   if (!nrow(df)) return(df[0, , drop = FALSE])
 
@@ -3574,27 +3607,45 @@ select_volcano_labels <- function(df, y_col = "neglog10_empirical_p", n_labels =
   if (!nrow(df)) return(df[0, , drop = FALSE])
 
   df$label_priority <- dplyr::case_when(
-    df$method_call_class == "Overlap" ~ 1,
+    df$method_call_class == "Overlap"            ~ 1,
     df$method_call_class == "DESeq2 strong only" ~ 2,
-    df$method_call_class == "DESeq2 weak only" ~ 3,
-    df$method_call_class == "HBFSS only" ~ 4,
+    df$method_call_class == "HBFSS only"         ~ 3,
+    df$method_call_class == "DESeq2 weak only"   ~ 4,
     TRUE ~ 9
   )
 
   metric_y <- suppressWarnings(as.numeric(df[[y_col]]))
   metric_y[!is.finite(metric_y)] <- -Inf
-  metric_h <- suppressWarnings(as.numeric(df$HBFSS))
-  metric_h[!is.finite(metric_h)] <- -Inf
 
-  ord <- order(df$label_priority, -metric_y, -metric_h, -abs(df$lfc_shrunk), na.last = TRUE)
+  ord <- order(df$label_priority, -metric_y, -abs(df$lfc_shrunk), na.last = TRUE)
   df <- df[ord, , drop = FALSE]
   df <- df[!duplicated(df$gene_symbol_plot), , drop = FALSE]
 
   df[seq_len(min(n_labels, nrow(df))), , drop = FALSE]
 }
 
-volcano_top_caption <- function() {
-  paste0("DESeq2 alpha = ", percent(alpha_level, accuracy = 1), ". HBFSS uses empirical p-values.")
+compute_volcano_axis_limits <- function(df, x_col = "lfc_shrunk", y_col = "neglog10_empirical_p") {
+  x <- suppressWarnings(as.numeric(df[[x_col]]))
+  y <- suppressWarnings(as.numeric(df[[y_col]]))
+
+  x <- x[is.finite(x) & !is.na(x)]
+  y <- y[is.finite(y) & !is.na(y)]
+
+  if (!length(x)) x <- c(-2, 2)
+  if (!length(y)) y <- c(0, 5)
+
+  x_q <- stats::quantile(abs(x), probs = 0.995, na.rm = TRUE, type = 7)
+  x_lim <- max(lfc_boundary + 0.5, as.numeric(x_q))
+  x_lim <- min(x_lim, max(abs(x), na.rm = TRUE))
+  x_lim <- max(2.5, x_lim)
+
+  y_q <- stats::quantile(y, probs = 0.995, na.rm = TRUE, type = 7)
+  y_lim <- max(3, as.numeric(y_q) * 1.08)
+
+  list(
+    x = c(-x_lim, x_lim),
+    y = c(0, y_lim)
+  )
 }
 
 volcano_count_caption <- function(df) {
@@ -3608,7 +3659,7 @@ volcano_count_caption <- function(df) {
   )
 }
 
-.volcano_base_layers <- function() {
+.volcano_base_layers <- function(show_legend = TRUE) {
   list(
     geom_vline(
       xintercept = c(-lfc_boundary, lfc_boundary),
@@ -3624,44 +3675,24 @@ volcano_count_caption <- function(df) {
     ),
     scale_fill_manual(values = method_call_colors, drop = FALSE, name = "Interpretive tier"),
     scale_color_manual(values = method_call_colors, drop = FALSE, name = "Interpretive tier"),
-    scale_shape_manual(values = method_call_shapes, drop = FALSE, name = "Interpretive tier")
-  )
-}
-
-volcano_guides <- function() {
-  guides(
-    fill = guide_legend(
-      order = 1,
-      nrow = 2,
-      byrow = TRUE,
-      override.aes = list(
-        size = 3.8,
-        stroke = 0.8,
-        alpha = 1,
-        shape = unname(method_call_shapes),
-        fill = unname(method_call_colors),
-        colour = unname(method_call_colors)
-      )
-    ),
-    color = "none",
-    shape = "none"
-  )
-}
-
-volcano_point_layer <- function(df) {
-  geom_point(
-    data = df,
-    aes(
-      x = lfc_shrunk,
-      y = .data$plot_y,
-      fill = method_call_class,
-      color = method_call_class,
-      shape = method_call_class
-    ),
-    alpha = POINT_ALPHA_PRIMARY,
-    size = POINT_SIZE_PRIMARY + 0.45,
-    stroke = POINT_STROKE + 0.14,
-    na.rm = TRUE
+    scale_shape_manual(values = method_call_shapes, drop = FALSE, name = "Interpretive tier"),
+    guides(
+      fill = if (show_legend) guide_legend(
+        order = 1,
+        nrow = 2,
+        byrow = TRUE,
+        override.aes = list(
+          size = 3.8,
+          stroke = 0.8,
+          alpha = 1,
+          shape = unname(method_call_shapes),
+          fill = unname(method_call_colors),
+          colour = unname(method_call_colors)
+        )
+      ) else "none",
+      color = "none",
+      shape = "none"
+    )
   )
 }
 
@@ -3685,24 +3716,31 @@ volcano_label_layer <- function(lab_df) {
   )
 }
 
-.volcano_overlap_layer <- function(df, size_add = 0.9, stroke_add = 0.3) {
-  ov <- df[!is.na(df$method_call_class) & df$method_call_class == "Overlap", , drop = FALSE]
-  if (!nrow(ov)) return(NULL)
+volcano_point_layer <- function(df) {
   geom_point(
-    data        = ov,
-    aes(fill = method_call_class, color = method_call_class, shape = method_call_class),
-    alpha       = 1,
-    size        = POINT_SIZE_PRIMARY + size_add,
-    stroke      = POINT_STROKE + stroke_add,
-    show.legend = FALSE
+    data = df,
+    aes(
+      x = lfc_shrunk,
+      y = plot_y,
+      fill = method_call_class,
+      color = method_call_class,
+      shape = method_call_class
+    ),
+    alpha = POINT_ALPHA_PRIMARY,
+    size = POINT_SIZE_PRIMARY + 0.45,
+    stroke = POINT_STROKE + 0.14,
+    na.rm = TRUE
   )
 }
 
-# -----------------------------------------------------------------------------
-# PATCHED HBFSS BOUNDARY LAYER
-# -----------------------------------------------------------------------------
+extract_plot_legend <- function(p) {
+  g <- ggplotGrob(p)
+  guide_idx <- which(vapply(g$grobs, function(x) x$name, character(1)) == "guide-box")
+  if (!length(guide_idx)) return(NULL)
+  g$grobs[[guide_idx[1]]]
+}
 
-add_hbfss_boundary_layer <- function(p, df) {
+add_hbfss_boundary_layer <- function(p, df, annotate_thresholds = TRUE) {
   threshold <- suppressWarnings(as.numeric(df$hbfss_threshold_dataset[1]))
   hc_p_threshold <- suppressWarnings(as.numeric(df$hc_p_threshold_dataset[1]))
 
@@ -3710,19 +3748,15 @@ add_hbfss_boundary_layer <- function(p, df) {
     return(p)
   }
 
-  finite_lfc <- suppressWarnings(as.numeric(df$lfc_shrunk))
-  finite_lfc <- finite_lfc[is.finite(finite_lfc) & !is.na(finite_lfc)]
-  max_abs_lfc <- max(abs(finite_lfc), na.rm = TRUE)
-
-  if (!is.finite(max_abs_lfc) || is.na(max_abs_lfc) || max_abs_lfc <= 0) {
-    max_abs_lfc <- lfc_boundary * 3
-  }
+  axis_limits <- compute_volcano_axis_limits(df, x_col = "lfc_shrunk", y_col = "neglog10_empirical_p")
+  max_abs_lfc <- max(abs(axis_limits$x))
 
   x_abs <- seq(
-    from = max(0.05, min(lfc_boundary, max_abs_lfc)),
+    from = max(0.08, min(lfc_boundary, max_abs_lfc)),
     to = max_abs_lfc,
     length.out = 400
   )
+
   y_hyper <- threshold / x_abs
 
   boundary_df <- data.frame(
@@ -3730,6 +3764,7 @@ add_hbfss_boundary_layer <- function(p, df) {
     neglog10_empirical_p = c(rev(y_hyper), y_hyper),
     stringsAsFactors = FALSE
   )
+
   boundary_df <- boundary_df[
     is.finite(boundary_df$neglog10_empirical_p) &
       !is.na(boundary_df$neglog10_empirical_p),
@@ -3737,57 +3772,48 @@ add_hbfss_boundary_layer <- function(p, df) {
     drop = FALSE
   ]
 
-  if (nrow(boundary_df)) {
-    obs_y_max <- suppressWarnings(max(df$neglog10_empirical_p[is.finite(df$neglog10_empirical_p)], na.rm = TRUE))
-    if (!is.finite(obs_y_max) || is.na(obs_y_max)) {
-      obs_y_max <- max(y_hyper[is.finite(y_hyper)], na.rm = TRUE)
-    }
-    label_y <- min(max(y_hyper, na.rm = TRUE), obs_y_max * 0.92)
-    if (!is.finite(label_y) || is.na(label_y)) {
-      label_y <- max(y_hyper, na.rm = TRUE)
-    }
-
-    p <- p +
-      geom_path(
-        data = boundary_df,
-        aes(x = lfc_shrunk, y = neglog10_empirical_p),
-        inherit.aes = FALSE,
-        linetype = "dashed",
-        linewidth = LINE_WIDTH_BOUNDARY,
-        colour = plot_palette$hbfss
-      ) +
-      annotate(
-        "label",
-        x = max_abs_lfc * 0.82,
-        y = label_y,
-        label = paste0("HBFSS = ", signif(threshold, 4), " / |LFC|"),
-        fill = "white",
-        colour = plot_palette$hbfss,
-        size = 2.8,
-        label.size = 0.15
-      )
-  }
+  p <- p +
+    geom_path(
+      data = boundary_df,
+      aes(x = lfc_shrunk, y = neglog10_empirical_p),
+      inherit.aes = FALSE,
+      linetype = "22",
+      linewidth = 0.55,
+      colour = plot_palette$hbfss,
+      alpha = 0.80
+    )
 
   if (is.finite(hc_p_threshold) && !is.na(hc_p_threshold) && hc_p_threshold > 0 && hc_p_threshold < 1) {
     y_floor <- -log10(hc_p_threshold)
-
     p <- p +
       geom_hline(
         yintercept = y_floor,
-        linetype = "dotted",
-        linewidth = LINE_WIDTH_BOUNDARY,
-        colour = plot_palette$threshold
-      ) +
+        linetype = "22",
+        linewidth = 0.55,
+        colour = plot_palette$threshold,
+        alpha = 0.80
+      )
+  }
+
+  if (isTRUE(annotate_thresholds)) {
+    label_txt <- paste0(
+      "HC p = ", ifelse(is.finite(hc_p_threshold), signif(hc_p_threshold, 4), "NA"),
+      "
+HBFSS = ", signif(threshold, 4), " / |LFC|"
+    )
+
+    p <- p +
       annotate(
         "label",
-        x = 0,
-        y = y_floor,
-        label = paste0("HC empirical p = ", signif(hc_p_threshold, 4)),
+        x = axis_limits$x[1] * 0.96,
+        y = axis_limits$y[2] * 0.96,
+        label = label_txt,
+        hjust = 0,
+        vjust = 1,
         fill = "white",
-        colour = plot_palette$threshold,
-        size = 2.8,
-        label.size = 0.15,
-        vjust = -0.7
+        colour = "grey25",
+        size = 2.3,
+        label.size = 0.12
       )
   }
 
@@ -3798,96 +3824,119 @@ add_hbfss_boundary_layer <- function(p, df) {
 # PATCHED VOLCANO PLOTS
 # -----------------------------------------------------------------------------
 
-plot_standard_volcano <- function(df, dataset_name) {
+# -----------------------------------------------------------------------------
+# PATCHED VOLCANO PLOTS
+# -----------------------------------------------------------------------------
+
+plot_standard_volcano <- function(df, dataset_name, show_legend = TRUE) {
   df <- build_plot_specific_volcano_classes(df, plot_type = "standard")
   df$plot_y <- df$neglog10_wald_pvalue
   lab_df <- select_volcano_labels(df, y_col = "neglog10_wald_pvalue", n_labels = 20)
 
   p <- ggplot(df, aes(lfc_shrunk, plot_y)) +
     volcano_point_layer(df) +
-    .volcano_base_layers() +
+    .volcano_base_layers(show_legend = show_legend) +
     geom_hline(
       yintercept = -log10(alpha_level),
-      linetype = "dashed",
-      linewidth = LINE_WIDTH_BOUNDARY,
-      colour = plot_palette$threshold
+      linetype   = "dashed",
+      linewidth  = LINE_WIDTH_BOUNDARY,
+      colour     = plot_palette$threshold
     ) +
     labs(
-      title = pretty_dataset_label(dataset_name),
-      x = "Shrunken log2 fold change (βshrunk)",
-      y = expression(-log[10]("Wald p value")),
+      title   = pretty_dataset_label(dataset_name),
+      x       = "Shrunken log2 fold change (β̂shrunk)",
+      y       = expression(-log[10]("Wald p value")),
       caption = compact_caption(paste0(
-        "DC2 uses Wald test p values directly. ",
-        "All displayed strong and weak effect calls are colored only if they are above the plotted Wald p threshold. ",
+        "DC2 uses Wald-test p values directly. ",
+        "Strong and weak DESeq2 calls are colored only when they clear the displayed Wald p threshold on this panel. ",
         volcano_count_caption(df),
-        " | LFC lines = ±", lfc_boundary
+        "  |  LFC lines = ±", lfc_boundary
       ))
     ) +
     coord_cartesian(clip = "off") +
     plot_expand_xy() +
-    manuscript_theme() +
-    volcano_guides()
+    manuscript_theme()
 
   if (nrow(lab_df) > 0) p <- p + volcano_label_layer(lab_df)
   p
 }
 
-plot_hbfss_volcano <- function(df, dataset_name) {
+plot_hbfss_volcano <- function(df, dataset_name, show_legend = TRUE) {
   df <- build_plot_specific_volcano_classes(df, plot_type = "hbfss")
   df$plot_y <- df$neglog10_empirical_p
   lab_df <- select_volcano_labels(df, y_col = "neglog10_empirical_p", n_labels = 20)
 
   p <- ggplot(df, aes(lfc_shrunk, plot_y)) +
     volcano_point_layer(df) +
-    .volcano_base_layers()
+    .volcano_base_layers(show_legend = show_legend)
 
   p <- add_hbfss_boundary_layer(p, df) +
     labs(
-      title = pretty_dataset_label(dataset_name),
-      x = "Shrunken log2 fold change (βshrunk)",
-      y = expression(-log[10](p[empirical])),
+      title   = pretty_dataset_label(dataset_name),
+      x       = "Shrunken log2 fold change (β̂shrunk)",
+      y       = expression(-log[10](p[empirical])),
       caption = compact_caption(paste0(
         "HBFSS uses empirical p values from fdrtool. ",
-        "All displayed strong and weak effect calls are colored only if they are above the plotted empirical p and HBFSS boundaries on this panel. ",
+        "Strong, weak, HBFSS-only, and overlap markers are colored only when they clear the displayed empirical thresholds on this panel. ",
         volcano_count_caption(df)
       ))
     ) +
     coord_cartesian(clip = "off") +
     manuscript_theme() +
-    plot_expand_xy() +
-    volcano_guides()
+    plot_expand_xy()
 
   if (nrow(lab_df) > 0) p <- p + volcano_label_layer(lab_df)
   p
 }
 
-plot_publication_volcano_panel <- function(df, dataset_name) {
-  df <- build_plot_specific_volcano_classes(df, plot_type = "hbfss")
-  df$plot_y <- df$neglog10_empirical_p
-  top_df <- select_volcano_labels(df, y_col = "neglog10_empirical_p", n_labels = 20)
+plot_publication_volcano_panel <- function(df, dataset_name, show_legend = FALSE) {
+  build <- build_plot_specific_volcano_classes(df, plot_type = "hbfss")
+  build$plot_y <- build$neglog10_empirical_p
+  top_df <- select_volcano_labels(build, y_col = "neglog10_empirical_p", n_labels = 10)
 
-  p <- ggplot(df, aes(lfc_shrunk, plot_y)) +
-    volcano_point_layer(df) +
-    .volcano_base_layers()
+  lims <- compute_volcano_axis_limits(build, x_col = "lfc_shrunk", y_col = "plot_y")
 
-  p <- add_hbfss_boundary_layer(p, df) +
+  p <- ggplot(build, aes(lfc_shrunk, plot_y)) +
+    volcano_point_layer(build) +
+    .volcano_base_layers(show_legend = show_legend) +
     labs(
       title = pretty_dataset_label(dataset_name),
-      x = "Shrunken log2 fold change (βshrunk)",
+      x = "Shrunken log2 fold change (β̂shrunk)",
       y = expression(-log[10](p[empirical])),
-      caption = compact_caption(paste0(
-        "Publication HBFSS volcano. ",
-        "All markers are explicitly mapped to a displayed interpretive tier. ",
-        "Strong and weak effect calls are colored only when they are above the relevant displayed empirical thresholding on this plot. ",
-        volcano_count_caption(df)
-      ))
+      caption = compact_caption(
+        paste0(
+          "Representative HBFSS volcano. ",
+          volcano_count_caption(build)
+        )
+      )
     ) +
-    coord_cartesian(clip = "off") +
+    coord_cartesian(xlim = lims$x, ylim = lims$y, clip = "off") +
     manuscript_theme() +
-    plot_expand_xy() +
-    volcano_guides()
+    theme(
+      legend.position = if (isTRUE(show_legend)) "bottom" else "none",
+      plot.caption = element_text(size = base_theme_size - 3, lineheight = 0.95),
+      plot.margin = margin(t = 10, r = 12, b = 12, l = 12)
+    )
 
-  if (nrow(top_df) > 0) p <- p + volcano_label_layer(top_df)
+  p <- add_hbfss_boundary_layer(p, build, annotate_thresholds = TRUE)
+
+  if (nrow(top_df) > 0) {
+    p <- p + ggrepel::geom_text_repel(
+      data = top_df,
+      aes(label = gene_symbol_plot),
+      size = 1.85,
+      seed = 1,
+      max.overlaps = 18,
+      force = 1.0,
+      force_pull = 0.4,
+      box.padding = 0.25,
+      point.padding = 0.14,
+      min.segment.length = 0,
+      segment.alpha = 0.5,
+      segment.size = 0.18
+    )
+  }
+
   p
 }
 
@@ -4177,60 +4226,110 @@ save_cross_dataset_comparison_panels <- function(comparison_name, analysis_resul
     )
   }
 
-  std_grobs <- lapply(keys_present, function(k) {
+  std_plots <- lapply(seq_along(keys_present), function(ii) {
+    k <- keys_present[[ii]]
     safe_panel_plot(
       plot_standard_volcano(
         analysis_results[[k]]$results,
-        analysis_results[[k]]$summary$dataset_name[1]
+        analysis_results[[k]]$summary$dataset_name[1],
+        show_legend = FALSE
       ),
       paste0("standard volcano: ", k)
     )
   })
-  std_panel <- make_panel(std_grobs, paste(comparison_name, "| DESeq2 volcanoes"))
-  if (!is.null(std_panel)) {
+  std_legend_source <- safe_panel_plot(
+    plot_standard_volcano(
+      analysis_results[[keys_present[1]]]$results,
+      analysis_results[[keys_present[1]]]$summary$dataset_name[1],
+      show_legend = TRUE
+    ),
+    "standard volcano legend source"
+  )
+  std_legend <- if (!is.null(std_legend_source)) extract_plot_legend(std_legend_source) else NULL
+  std_grobs <- Filter(Negate(is.null), std_plots)
+  if (length(std_grobs)) {
+    std_panel <- arrangeGrob(
+      grobs = c(std_grobs, list(std_legend)),
+      layout_matrix = rbind(c(1, 2, 3), c(4, 4, 4)),
+      heights = c(12, 1.8),
+      top = textGrob(paste0(comparison_name, " | DESeq2 volcanoes"), gp = gpar(fontface = "bold", cex = 1.05))
+    )
     save_grob(
       std_panel,
       file.path(cmp_dir, paste0(comparison_name, "_cross_dataset_standard_volcano_panel.png")),
-      width  = 6.8 * length(Filter(Negate(is.null), std_grobs)),
-      height = 6.1
+      width = 18,
+      height = 7.8
     )
   }
 
-  hbfss_grobs <- lapply(keys_present, function(k) {
+  hbfss_plots <- lapply(seq_along(keys_present), function(ii) {
+    k <- keys_present[[ii]]
     safe_panel_plot(
       plot_hbfss_volcano(
         analysis_results[[k]]$results,
-        analysis_results[[k]]$summary$dataset_name[1]
+        analysis_results[[k]]$summary$dataset_name[1],
+        show_legend = FALSE
       ),
       paste0("HBFSS volcano: ", k)
     )
   })
-  hbfss_panel <- make_panel(hbfss_grobs, paste(comparison_name, "| HBFSS volcanoes"))
-  if (!is.null(hbfss_panel)) {
+  hbfss_legend_source <- safe_panel_plot(
+    plot_hbfss_volcano(
+      analysis_results[[keys_present[1]]]$results,
+      analysis_results[[keys_present[1]]]$summary$dataset_name[1],
+      show_legend = TRUE
+    ),
+    "HBFSS volcano legend source"
+  )
+  hbfss_legend <- if (!is.null(hbfss_legend_source)) extract_plot_legend(hbfss_legend_source) else NULL
+  hbfss_grobs <- Filter(Negate(is.null), hbfss_plots)
+  if (length(hbfss_grobs)) {
+    hbfss_panel <- arrangeGrob(
+      grobs = c(hbfss_grobs, list(hbfss_legend)),
+      layout_matrix = rbind(c(1, 2, 3), c(4, 4, 4)),
+      heights = c(12, 1.8),
+      top = textGrob(paste0(comparison_name, " | HBFSS volcanoes"), gp = gpar(fontface = "bold", cex = 1.05))
+    )
     save_grob(
       hbfss_panel,
       file.path(cmp_dir, paste0(comparison_name, "_cross_dataset_HBFSS_volcano_panel.png")),
-      width  = 6.8 * length(Filter(Negate(is.null), hbfss_grobs)),
-      height = 6.1
+      width = 18,
+      height = 7.8
     )
   }
 
-  pub_grobs <- lapply(keys_present, function(k) {
+  pub_plots <- lapply(keys_present, function(k) {
     safe_panel_plot(
       plot_publication_volcano_panel(
         analysis_results[[k]]$results,
-        analysis_results[[k]]$summary$dataset_name[1]
+        analysis_results[[k]]$summary$dataset_name[1],
+        show_legend = FALSE
       ),
       paste0("publication volcano: ", k)
     )
   })
-  pub_panel <- make_panel(pub_grobs, paste(comparison_name, "| Publication volcanoes"))
-  if (!is.null(pub_panel)) {
+  pub_plots <- Filter(Negate(is.null), pub_plots)
+  pub_legend_source <- safe_panel_plot(
+    plot_publication_volcano_panel(
+      analysis_results[[keys_present[1]]]$results,
+      analysis_results[[keys_present[1]]]$summary$dataset_name[1],
+      show_legend = TRUE
+    ),
+    "publication volcano legend source"
+  )
+  pub_legend <- if (!is.null(pub_legend_source)) extract_plot_legend(pub_legend_source) else NULL
+  if (length(pub_plots)) {
+    pub_panel <- arrangeGrob(
+      grobs = c(pub_plots, list(pub_legend)),
+      layout_matrix = rbind(c(1, 2, 3), c(4, 4, 4)),
+      heights = c(12, 1.8),
+      top = textGrob(paste0(comparison_name, " | HBFSS volcanoes"), gp = gpar(fontface = "bold", cex = 1.05))
+    )
     save_grob(
       pub_panel,
       file.path(cmp_dir, paste0(comparison_name, "_cross_dataset_publication_volcano_panel.png")),
-      width  = 6.8 * length(Filter(Negate(is.null), pub_grobs)),
-      height = 6.1
+      width = 18,
+      height = 7.8
     )
   }
 
@@ -4313,80 +4412,6 @@ save_cross_dataset_comparison_panels <- function(comparison_name, analysis_resul
   invisible(NULL)
 }
 
-# =============================================================================
-# SECTION 4 OF 4
-# FULL PIPELINE, EXPORTS, PCA TABLES, PC1 + BASEMEAN + DISPERSION OUTPUT
-# =============================================================================
-
-build_pc1_feature_export <- function(analysis_results, annot_df, comparison_name,
-                                     evs, tab_dir) {
-  annot_df$feature_id  <- as.character(annot_df$feature_id)
-  annot_df$gene_symbol <- as.character(annot_df$gene_symbol)
-
-  base_export <- annot_df %>%
-    dplyr::distinct(feature_id, .keep_all = TRUE)
-
-  add_dataset_columns <- function(df, key, prefix) {
-    if (is.null(analysis_results[[key]]) || is.null(analysis_results[[key]]$results)) return(df)
-    src <- analysis_results[[key]]$results
-    keep_cols <- intersect(
-      c("feature_id", "baseMean", "dispGeneEst", "dispFit", "dispersion"),
-      names(src)
-    )
-    src <- src[, keep_cols, drop = FALSE]
-    names(src)[names(src) == "baseMean"]    <- paste0("baseMean_", prefix)
-    names(src)[names(src) == "dispGeneEst"] <- paste0("dispGeneEst_", prefix)
-    names(src)[names(src) == "dispFit"]     <- paste0("dispFit_", prefix)
-    names(src)[names(src) == "dispersion"]  <- paste0("dispersion_", prefix)
-    dplyr::left_join(df, src, by = "feature_id")
-  }
-
-  out <- base_export
-  out <- add_dataset_columns(out, "raw_dataset",          "original")
-  out <- add_dataset_columns(out, "leading_edge_dataset", "leading_edge")
-  out <- add_dataset_columns(out, "remainder_dataset",    "remainder")
-
-  load_tbl <- function(tbl, col_name) {
-    x <- tbl[, c("feature_id", "pc1_loading"), drop = FALSE]
-    names(x)[names(x) == "pc1_loading"] <- col_name
-    x
-  }
-
-  out <- dplyr::left_join(out, load_tbl(evs$fit_trt$loading_table,      "pc1_loading_trt_normalized"), by = "feature_id")
-  out <- dplyr::left_join(out, load_tbl(evs$fit_untrt$loading_table,    "pc1_loading_ctrl_normalized"), by = "feature_id")
-  out <- dplyr::left_join(out, load_tbl(evs$fit_trt_raw$loading_table,  "pc1_loading_trt_raw"),        by = "feature_id")
-  out <- dplyr::left_join(out, load_tbl(evs$fit_untrt_raw$loading_table,"pc1_loading_ctrl_raw"),       by = "feature_id")
-
-  out$comparison_name <- comparison_name
-
-  ordered_cols <- c(
-    "comparison_name",
-    "feature_id",
-    "gene_symbol",
-    "pc1_loading_trt_normalized",
-    "pc1_loading_ctrl_normalized",
-    "pc1_loading_trt_raw",
-    "pc1_loading_ctrl_raw",
-    "baseMean_original",
-    "baseMean_leading_edge",
-    "baseMean_remainder",
-    "dispGeneEst_original",
-    "dispFit_original",
-    "dispersion_original",
-    "dispGeneEst_leading_edge",
-    "dispFit_leading_edge",
-    "dispersion_leading_edge",
-    "dispGeneEst_remainder",
-    "dispFit_remainder",
-    "dispersion_remainder"
-  )
-
-  out <- out[, c(intersect(ordered_cols, names(out)), setdiff(names(out), ordered_cols)), drop = FALSE]
-
-  save_csv(out, file.path(tab_dir, paste0(comparison_name, "_PC1_loadings_baseMean_dispersion_export.csv")))
-  out
-}
-
 run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata, annot_df) {
   cmp_dir     <- file.path(output_dir, comparison_name)
   tab_dir     <- file.path(cmp_dir, "tables")
@@ -4421,7 +4446,6 @@ run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata,
   }
   crossing_summary_df <- build_crossing_summary_table(evs$combined_cutoff_info, comparison_name)
   save_csv(crossing_summary_df, file.path(tab_dir, paste0(comparison_name, "_regime_shift_crossing_summary.csv")))
-
   backup_crossing_summary_df <- build_backup_crossing_summary_table(evs$combined_cutoff_info, comparison_name)
   save_csv(backup_crossing_summary_df, file.path(tab_dir, paste0(comparison_name, "_backup_crossing_summary.csv")))
 
