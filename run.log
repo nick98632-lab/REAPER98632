@@ -130,7 +130,7 @@ fitting model and testing
 [RT8_ZT14_leading_edge_dataset] Mean Wald stat sent to fdrtool: 0.0097  (computed only on finite DESeq2 Wald statistics)
 [RT8_ZT14_leading_edge_dataset] Starting lfcShrink(type = "normal")
 [RT8_ZT14_leading_edge_dataset] Finished lfcShrink()
-[RT8_ZT14_leading_edge_dataset] HC threshold rejected for HBFSS calibration (value=0.987851; cutoff=0.95)
+[RT8_ZT14_leading_edge_dataset] HC threshold fallback used for HBFSS calibration (primary=0.987851; fallback=0.0956824)
 estimating size factors
 estimating dispersions
 gene-wise dispersion estimates
@@ -148,7 +148,7 @@ There were 50 or more warnings (use warnings() to see the first 50)
 =====================================================
 Pipeline complete.
 Output directory:
-/root/REAPER98632/exports/sequence_run_20260403_180200 
+/root/REAPER98632/exports/sequence_run_20260403_190905 
 =====================================================
 
    comparison_name                  dataset_name n_features hc_p_threshold
@@ -162,21 +162,21 @@ Output directory:
 8         RT4_ZT10 RT4_ZT10_leading_edge_dataset       4698   0.0219676318
 9         RT4_ZT10    RT4_ZT10_remainder_dataset      26960   0.0439040576
 10        RT8_ZT14          RT8_ZT14_raw_dataset      31580   0.0186581006
-11        RT8_ZT14 RT8_ZT14_leading_edge_dataset       4557             NA
+11        RT8_ZT14 RT8_ZT14_leading_edge_dataset       4557   0.0956823919
 12        RT8_ZT14    RT8_ZT14_remainder_dataset      27023   0.0247335725
    hbfss_threshold n_standard_significant n_HBFSS_significant
-1         3.273643                      3                  73
-2         1.474597                      1                   8
-3         1.417029                     10                 740
+1         3.273643                     11                  73
+2         1.474597                      2                   8
+3         1.417029                     66                 740
 4         1.863991                     27                  42
 5         1.467417                     66                   3
-6         1.625873                     42                 100
-7         1.650470                     58                1423
-8         1.658217                     24                 239
-9         1.357495                    146                1768
+6         1.625873                     43                 100
+7         1.650470                    835                1423
+8         1.658217                    150                 239
+9         1.357495                    972                1768
 10        1.729133                     88                 190
-11              NA                      0                   0
-12        1.606713                    124                 284
+11        1.019168                    137                  42
+12        1.606713                    140                 284
    n_overlap_significant n_strong_effect n_weak_effect evs_fixed_top_n
 1                      3               3             0            5000
 2                      1               1             0            5000
@@ -188,7 +188,7 @@ Output directory:
 8                     11              11            13            5000
 9                     38              38           108            5000
 10                     0               0            88            5000
-11                     0               0             0            5000
+11                     0               0           137            5000
 12                     0               0           124            5000
      evs_cutoff_mode_main evs_primary_preprocessing shared_cutoff_rank
 1  matched_curvature_wave                normalized               6213
