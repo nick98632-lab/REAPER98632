@@ -125,6 +125,20 @@ crossing_plot_point_size <- 1.8
 figure_dpi <- 320
 base_theme_size <- 10
 
+# -----------------------------------------------------------------------------
+# RAW-WALD BRACKETED CUTOFF SEARCH
+# -----------------------------------------------------------------------------
+
+raw_wald_cutoff_mode <- TRUE
+raw_wald_search_coarse_step <- 25L
+raw_wald_search_fine_radius <- 50L
+raw_wald_search_balance_lambda <- 0.50
+raw_wald_search_min_subset_n <- 200L
+
+raw_wald_score_weight_mean <- 1.00
+raw_wald_score_weight_sd   <- 1.00
+raw_wald_score_weight_skew <- 0.50
+
 # =============================================================================
 # UNIFIED AESTHETIC CONSTANTS
 # =============================================================================
@@ -1697,6 +1711,160 @@ build_backup_crossing_summary_table <- function(combined_cutoff_info, comparison
   )
 }
 
+
+safe_skewness <- function(x) {
+  x <- as.numeric(x)
+  x <- x[is.finite(x) & !is.na(x)]
+  if (length(x) < 5) return(NA_real_)
+  sx <- stats::sd(x)
+  if (!is.finite(sx) || is.na(sx) || sx == 0) return(NA_real_)
+  mean(((x - mean(x)) / sx)^3)
+}
+
+compute_raw_wald_normality_metrics <- function(z) {
+  z <- as.numeric(z)
+  z <- z[is.finite(z) & !is.na(z)]
+
+  if (length(z) < 5) {
+    return(data.frame(
+      n = length(z),
+      mean_abs = Inf,
+      sd_dev = Inf,
+      skew_abs = Inf,
+      distortion = Inf,
+      stringsAsFactors = FALSE
+    ))
+  }
+
+  mu <- mean(z)
+  sdv <- stats::sd(z)
+  skw <- safe_skewness(z)
+
+  mean_abs <- abs(mu)
+  sd_dev <- abs(sdv - 1)
+  skew_abs <- abs(skw)
+
+  distortion <- raw_wald_score_weight_mean * mean_abs +
+    raw_wald_score_weight_sd * sd_dev +
+    raw_wald_score_weight_skew * skew_abs
+
+  data.frame(
+    n = length(z),
+    mean_abs = mean_abs,
+    sd_dev = sd_dev,
+    skew_abs = skew_abs,
+    distortion = distortion,
+    stringsAsFactors = FALSE
+  )
+}
+
+score_raw_wald_split <- function(rank_index, ordered_wald_df) {
+  n_total <- nrow(ordered_wald_df)
+  if (!is.finite(rank_index) || is.na(rank_index)) return(NULL)
+
+  rank_index <- as.integer(rank_index)
+  if (rank_index < raw_wald_search_min_subset_n) return(NULL)
+  if ((n_total - rank_index) < raw_wald_search_min_subset_n) return(NULL)
+
+  z_lead <- ordered_wald_df$wald_stat[seq_len(rank_index)]
+  z_rem  <- ordered_wald_df$wald_stat[(rank_index + 1L):n_total]
+
+  lead_metrics <- compute_raw_wald_normality_metrics(z_lead)
+  rem_metrics  <- compute_raw_wald_normality_metrics(z_rem)
+
+  if (!is.finite(lead_metrics$distortion[1]) || !is.finite(rem_metrics$distortion[1])) {
+    return(NULL)
+  }
+
+  total_distortion <- lead_metrics$distortion[1] + rem_metrics$distortion[1]
+  balance_penalty <- abs(lead_metrics$distortion[1] - rem_metrics$distortion[1])
+
+  split_score <- -(total_distortion + raw_wald_search_balance_lambda * balance_penalty)
+
+  data.frame(
+    rank_index = rank_index,
+    n_leading_edge = rank_index,
+    n_remainder = n_total - rank_index,
+    leading_mean_abs = lead_metrics$mean_abs[1],
+    leading_sd_dev = lead_metrics$sd_dev[1],
+    leading_skew_abs = lead_metrics$skew_abs[1],
+    leading_distortion = lead_metrics$distortion[1],
+    remainder_mean_abs = rem_metrics$mean_abs[1],
+    remainder_sd_dev = rem_metrics$sd_dev[1],
+    remainder_skew_abs = rem_metrics$skew_abs[1],
+    remainder_distortion = rem_metrics$distortion[1],
+    total_distortion = total_distortion,
+    balance_penalty = balance_penalty,
+    split_score = split_score,
+    stringsAsFactors = FALSE
+  )
+}
+
+build_raw_wald_rank_table <- function(full_results_df, shared_combined_tbl) {
+  res_df <- as.data.frame(full_results_df, stringsAsFactors = FALSE)
+  assert_required_columns(res_df, c("feature_id", "stat"), object_name = "full_results_df")
+  assert_required_columns(shared_combined_tbl, c("feature_id", "combined_rank"), object_name = "shared_combined_tbl")
+
+  res_df$feature_id <- as.character(res_df$feature_id)
+  shared_combined_tbl$feature_id <- as.character(shared_combined_tbl$feature_id)
+
+  out <- dplyr::left_join(
+    shared_combined_tbl[, c("feature_id", "combined_rank"), drop = FALSE],
+    res_df[, c("feature_id", "stat"), drop = FALSE],
+    by = "feature_id"
+  )
+
+  colnames(out)[colnames(out) == "stat"] <- "wald_stat"
+  out <- out[order(out$combined_rank), , drop = FALSE]
+  out <- out[is.finite(out$wald_stat) & !is.na(out$wald_stat), , drop = FALSE]
+  rownames(out) <- NULL
+  out
+}
+
+run_raw_wald_bracket_search <- function(full_results_df,
+                                        shared_combined_tbl,
+                                        lower_rank,
+                                        upper_rank,
+                                        coarse_step = raw_wald_search_coarse_step,
+                                        fine_radius = raw_wald_search_fine_radius) {
+  ordered_wald_df <- build_raw_wald_rank_table(full_results_df, shared_combined_tbl)
+  n_total <- nrow(ordered_wald_df)
+
+  lower_rank <- max(raw_wald_search_min_subset_n, as.integer(lower_rank))
+  upper_rank <- min(n_total - raw_wald_search_min_subset_n, as.integer(upper_rank))
+
+  if (!is.finite(lower_rank) || !is.finite(upper_rank) || lower_rank >= upper_rank) {
+    stop("Invalid raw-Wald bracket search interval.", call. = FALSE)
+  }
+
+  coarse_ranks <- seq.int(lower_rank, upper_rank, by = max(1L, as.integer(coarse_step)))
+  if (tail(coarse_ranks, 1) != upper_rank) coarse_ranks <- c(coarse_ranks, upper_rank)
+
+  coarse_rows <- lapply(coarse_ranks, function(rk) score_raw_wald_split(rk, ordered_wald_df))
+  coarse_tbl <- dplyr::bind_rows(Filter(Negate(is.null), coarse_rows))
+  if (!nrow(coarse_tbl)) stop("No valid coarse raw-Wald split candidates were produced.", call. = FALSE)
+
+  best_coarse_rank <- coarse_tbl$rank_index[which.max(coarse_tbl$split_score)]
+
+  fine_lo <- max(lower_rank, best_coarse_rank - as.integer(fine_radius))
+  fine_hi <- min(upper_rank, best_coarse_rank + as.integer(fine_radius))
+  fine_ranks <- seq.int(fine_lo, fine_hi, by = 1L)
+
+  fine_rows <- lapply(fine_ranks, function(rk) score_raw_wald_split(rk, ordered_wald_df))
+  fine_tbl <- dplyr::bind_rows(Filter(Negate(is.null), fine_rows))
+  if (!nrow(fine_tbl)) stop("No valid fine raw-Wald split candidates were produced.", call. = FALSE)
+
+  best_fine <- fine_tbl[which.max(fine_tbl$split_score), , drop = FALSE]
+
+  list(
+    ordered_wald_df = ordered_wald_df,
+    coarse_table = coarse_tbl,
+    fine_table = fine_tbl,
+    selected_rank = as.integer(best_fine$rank_index[1]),
+    selected_row = best_fine
+  )
+}
+
 plot_fourier_wave_map_single <- function(wave_obj, comparison_name, group_label) {
   if (is.null(wave_obj) || is.null(wave_obj$wave_map) || !nrow(wave_obj$wave_map)) return(NULL)
   df <- wave_obj$wave_map
@@ -2851,6 +3019,45 @@ build_eigenvector_split <- function(count_matrix, coldata, comparison_name) {
 
   final_shared_rank <- as.integer(combined_cutoff_info$top_n_actual)
   final_shared_reason <- combined_cutoff_info$selected_reason
+  raw_wald_search_info <- NULL
+
+  if (isTRUE(raw_wald_cutoff_mode)) {
+    full_raw_fit <- run_core_analysis(
+      count_mat = count_matrix,
+      coldata = coldata,
+      dataset_name = paste0(comparison_name, "_raw_wald_search_reference"),
+      annot_df = OrigID_Symbol
+    )
+
+    trt_backup_rank <- if (!is.null(combined_cutoff_info$trt_backup_crossing) && nrow(combined_cutoff_info$trt_backup_crossing)) {
+      as.integer(combined_cutoff_info$trt_backup_crossing$crossing_rank[1])
+    } else {
+      as.integer(combined_cutoff_info$top_n_actual)
+    }
+
+    ctrl_backup_rank <- if (!is.null(combined_cutoff_info$ctrl_backup_crossing) && nrow(combined_cutoff_info$ctrl_backup_crossing)) {
+      as.integer(combined_cutoff_info$ctrl_backup_crossing$crossing_rank[1])
+    } else {
+      as.integer(combined_cutoff_info$top_n_actual)
+    }
+
+    bracket_lo <- min(trt_backup_rank, ctrl_backup_rank, na.rm = TRUE)
+    bracket_hi <- max(trt_backup_rank, ctrl_backup_rank, na.rm = TRUE)
+
+    bracket_pad <- max(10L, round(0.05 * max(1L, abs(bracket_hi - bracket_lo))))
+    bracket_lo <- max(1L, bracket_lo - bracket_pad)
+    bracket_hi <- min(nrow(combined_cutoff_info$shared_combined_tbl), bracket_hi + bracket_pad)
+
+    raw_wald_search_info <- run_raw_wald_bracket_search(
+      full_results_df = full_raw_fit$results,
+      shared_combined_tbl = combined_cutoff_info$shared_combined_tbl,
+      lower_rank = bracket_lo,
+      upper_rank = bracket_hi
+    )
+
+    final_shared_rank <- as.integer(raw_wald_search_info$selected_rank)
+    final_shared_reason <- "raw_wald_bracket_balanced_normality_selected"
+  }
 
   fit_trt <- apply_loading_cutoff(
     fit_trt,
@@ -2922,6 +3129,23 @@ build_eigenvector_split <- function(count_matrix, coldata, comparison_name) {
     )
   )
 
+  if (!is.null(raw_wald_search_info) && !is.null(raw_wald_search_info$selected_row)) {
+    evs_cutoff_summary <- dplyr::bind_rows(
+      evs_cutoff_summary,
+      data.frame(
+        preprocessing = "raw_wald_rank_search",
+        group = "balanced_normality_search",
+        cutoff_mode = "raw_wald_bracket_balanced_normality",
+        fixed_top_n_requested = evs_fixed_top_n,
+        empiric_rank_selected = final_shared_rank,
+        cutoff_quantile = 1 - (final_shared_rank / nrow(shared_combined_tbl)),
+        curvature_strength = NA_real_,
+        selected_reason = final_shared_reason,
+        stringsAsFactors = FALSE
+      )
+    )
+  }
+
   list(
     fit_trt               = fit_trt,
     fit_untrt             = fit_untrt,
@@ -2933,6 +3157,7 @@ build_eigenvector_split <- function(count_matrix, coldata, comparison_name) {
     combined_cutoff_info  = combined_cutoff_info,
     shared_combined_tbl   = shared_combined_tbl,
     evs_cutoff_summary    = evs_cutoff_summary,
+    raw_wald_search_info  = raw_wald_search_info,
     normalized_counts     = norm_counts_init,
     raw_dataset           = count_matrix,
     leading_edge_dataset  = count_matrix[leading_edge_ids, , drop = FALSE],
@@ -4509,6 +4734,21 @@ run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata,
   save_csv(crossing_summary_df, file.path(tab_dir, paste0(comparison_name, "_regime_shift_crossing_summary.csv")))
   backup_crossing_summary_df <- build_backup_crossing_summary_table(evs$combined_cutoff_info, comparison_name)
   save_csv(backup_crossing_summary_df, file.path(tab_dir, paste0(comparison_name, "_backup_crossing_summary.csv")))
+
+  if (!is.null(evs$raw_wald_search_info)) {
+    save_csv(
+      evs$raw_wald_search_info$coarse_table,
+      file.path(tab_dir, paste0(comparison_name, "_raw_wald_bracket_search_coarse.csv"))
+    )
+    save_csv(
+      evs$raw_wald_search_info$fine_table,
+      file.path(tab_dir, paste0(comparison_name, "_raw_wald_bracket_search_fine.csv"))
+    )
+    save_csv(
+      evs$raw_wald_search_info$selected_row,
+      file.path(tab_dir, paste0(comparison_name, "_raw_wald_bracket_search_selected.csv"))
+    )
+  }
 
   trt_fourier_plot <- safe_plot_build(
     plot_fourier_wave_map_single(evs$combined_cutoff_info$trt_wave_obj, comparison_name, "treatment"),
