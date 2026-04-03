@@ -1,4 +1,0 @@
-"comparison_name","cutoff_type","selected_reason","crossing_percentile","crossing_rank"
-"RT4_ZT10","shared_combined","first_crossing_fallback",0.153231797009688,4698
-"RT4_ZT10","treatment_backup","treatment_first_crossing_fallback",0.202495057962449,6359
-"RT4_ZT10","control_backup","control_first_crossing_fallback",0.10682302585576,3195
