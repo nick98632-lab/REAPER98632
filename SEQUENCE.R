@@ -132,7 +132,6 @@ base_theme_size <- 10
 raw_wald_cutoff_mode <- TRUE
 raw_wald_search_coarse_step <- 25L
 raw_wald_search_fine_radius <- 50L
-raw_wald_search_balance_lambda <- 0.50
 raw_wald_search_min_subset_n <- 200L
 
 raw_wald_score_weight_mean <- 1.00
@@ -1767,7 +1766,7 @@ safe_skewness <- function(x) {
   mean(((x - mean(x)) / sx)^3)
 }
 
-compute_raw_wald_normality_metrics <- function(z) {
+compute_raw_wald_normality_metrics <- function(z, dataset_name = "raw_wald_subset") {
   z <- as.numeric(z)
   z <- z[is.finite(z) & !is.na(z)]
 
@@ -1777,14 +1776,24 @@ compute_raw_wald_normality_metrics <- function(z) {
       mean_abs = Inf,
       sd_dev = Inf,
       skew_abs = Inf,
+      p_uniform_deviation = Inf,
       distortion = Inf,
       stringsAsFactors = FALSE
     ))
   }
 
+  fdr_fit <- run_empirical_null_fdrtool(z, dataset_name = dataset_name)
+
   mu <- mean(z)
   sdv <- stats::sd(z)
   skw <- safe_skewness(z)
+
+  empirical_p <- clip_probabilities(fdr_fit$pval)
+  p_uniform_deviation <- if (length(empirical_p)) {
+    abs(mean(empirical_p, na.rm = TRUE) - 0.5)
+  } else {
+    Inf
+  }
 
   mean_abs <- abs(mu)
   sd_dev <- abs(sdv - 1)
@@ -1792,13 +1801,15 @@ compute_raw_wald_normality_metrics <- function(z) {
 
   distortion <- raw_wald_score_weight_mean * mean_abs +
     raw_wald_score_weight_sd * sd_dev +
-    raw_wald_score_weight_skew * skew_abs
+    raw_wald_score_weight_skew * skew_abs +
+    p_uniform_deviation
 
   data.frame(
     n = length(z),
     mean_abs = mean_abs,
     sd_dev = sd_dev,
     skew_abs = skew_abs,
+    p_uniform_deviation = p_uniform_deviation,
     distortion = distortion,
     stringsAsFactors = FALSE
   )
@@ -1815,17 +1826,21 @@ score_raw_wald_split <- function(rank_index, ordered_wald_df) {
   z_lead <- ordered_wald_df$wald_stat[seq_len(rank_index)]
   z_rem  <- ordered_wald_df$wald_stat[(rank_index + 1L):n_total]
 
-  lead_metrics <- compute_raw_wald_normality_metrics(z_lead)
-  rem_metrics  <- compute_raw_wald_normality_metrics(z_rem)
+  lead_metrics <- compute_raw_wald_normality_metrics(
+    z_lead,
+    dataset_name = paste0("raw_wald_leading_rank_", rank_index)
+  )
+  rem_metrics  <- compute_raw_wald_normality_metrics(
+    z_rem,
+    dataset_name = paste0("raw_wald_remainder_rank_", rank_index)
+  )
 
   if (!is.finite(lead_metrics$distortion[1]) || !is.finite(rem_metrics$distortion[1])) {
     return(NULL)
   }
 
   total_distortion <- lead_metrics$distortion[1] + rem_metrics$distortion[1]
-  balance_penalty <- abs(lead_metrics$distortion[1] - rem_metrics$distortion[1])
-
-  split_score <- -(total_distortion + raw_wald_search_balance_lambda * balance_penalty)
+  split_score <- -total_distortion
 
   data.frame(
     rank_index = rank_index,
@@ -1834,13 +1849,14 @@ score_raw_wald_split <- function(rank_index, ordered_wald_df) {
     leading_mean_abs = lead_metrics$mean_abs[1],
     leading_sd_dev = lead_metrics$sd_dev[1],
     leading_skew_abs = lead_metrics$skew_abs[1],
+    leading_p_uniform_deviation = lead_metrics$p_uniform_deviation[1],
     leading_distortion = lead_metrics$distortion[1],
     remainder_mean_abs = rem_metrics$mean_abs[1],
     remainder_sd_dev = rem_metrics$sd_dev[1],
     remainder_skew_abs = rem_metrics$skew_abs[1],
+    remainder_p_uniform_deviation = rem_metrics$p_uniform_deviation[1],
     remainder_distortion = rem_metrics$distortion[1],
     total_distortion = total_distortion,
-    balance_penalty = balance_penalty,
     split_score = split_score,
     stringsAsFactors = FALSE
   )
@@ -2015,7 +2031,7 @@ plot_combined_fourier_wave_map <- function(combined_cutoff_info, comparison_name
         x = crossing_pct,
         y = ymax,
         label = paste0(
-          "Shared cutoff\n",
+          ifelse(identical(combined_cutoff_info$selected_reason, "raw_wald_bracket_total_distortion_selected"), "Raw-Wald selected cutoff", "Shared cutoff"), "\n",
           "p = ", signif(crossing_pct, 4), "\n",
           "rank = ", crossing_rank
         ),
@@ -3102,7 +3118,43 @@ build_eigenvector_split <- function(count_matrix, coldata, comparison_name) {
     )
 
     final_shared_rank <- as.integer(raw_wald_search_info$selected_rank)
-    final_shared_reason <- "raw_wald_bracket_balanced_normality_selected"
+    final_shared_reason <- "raw_wald_bracket_total_distortion_selected"
+
+    selected_pct <- NA_real_
+    if (!is.null(combined_cutoff_info$combined_wave_map) &&
+        nrow(combined_cutoff_info$combined_wave_map) &&
+        "combined_center_rank" %in% names(combined_cutoff_info$combined_wave_map)) {
+      nearest_idx <- which.min(abs(
+        as.numeric(combined_cutoff_info$combined_wave_map$combined_center_rank) - final_shared_rank
+      ))
+      if (length(nearest_idx) == 1L && is.finite(nearest_idx)) {
+        selected_pct <- as.numeric(combined_cutoff_info$combined_wave_map$percentile[nearest_idx])
+      }
+    }
+    if (!is.finite(selected_pct) || is.na(selected_pct)) {
+      selected_pct <- final_shared_rank / nrow(combined_cutoff_info$shared_combined_tbl)
+    }
+
+    combined_cutoff_info$selected_crossing <- data.frame(
+      crossing_id = "raw_wald_bracket_selected",
+      idx_left = NA_integer_,
+      idx_right = NA_integer_,
+      percentile_left = selected_pct,
+      percentile_right = selected_pct,
+      rank_left = final_shared_rank,
+      rank_right = final_shared_rank,
+      regime_difference_left = NA_real_,
+      regime_difference_right = NA_real_,
+      crossing_percentile = selected_pct,
+      crossing_rank = final_shared_rank,
+      left_window_positive_frac = NA_real_,
+      right_window_negative_frac = NA_real_,
+      stable_crossing = NA,
+      stringsAsFactors = FALSE
+    )
+    combined_cutoff_info$selected_reason <- final_shared_reason
+    combined_cutoff_info$raw_wald_selected_rank <- final_shared_rank
+    combined_cutoff_info$raw_wald_selected_percentile <- selected_pct
   }
 
   fit_trt <- apply_loading_cutoff(
@@ -3181,7 +3233,7 @@ build_eigenvector_split <- function(count_matrix, coldata, comparison_name) {
       data.frame(
         preprocessing = "raw_wald_rank_search",
         group = "balanced_normality_search",
-        cutoff_mode = "raw_wald_bracket_balanced_normality",
+        cutoff_mode = "raw_wald_bracket_total_distortion",
         fixed_top_n_requested = evs_fixed_top_n,
         empiric_rank_selected = final_shared_rank,
         cutoff_quantile = 1 - (final_shared_rank / nrow(shared_combined_tbl)),
@@ -3724,8 +3776,7 @@ run_core_analysis <- function(count_mat, coldata, dataset_name, annot_df) {
   res_df$raw_lfc_pass    <- !is.na(res_df$log2FoldChange) & (abs(res_df$log2FoldChange) >= lfc_boundary)
   res_df$shrunk_lfc_pass <- !is.na(res_df$lfc_shrunk)     & (abs(res_df$lfc_shrunk)     >= lfc_boundary)
 
-  res_df$wald_pvalue <- res_df$pvalue
-  res_df$neglog10_wald_pvalue <- safe_neglog10(res_df$wald_pvalue)
+  res_df$neglog10_wald_pvalue <- safe_neglog10(res_df$pvalue)
 
   res_strong_df            <- as.data.frame(res_strong)
   res_strong_df$feature_id <- as.character(rownames(res_strong_df))
@@ -3827,7 +3878,7 @@ run_core_analysis <- function(count_mat, coldata, dataset_name, annot_df) {
     "dataset_name", "feature_id", "gene_symbol", "baseMean",
     "lfc_shrunk", "regulation_direction",
     "lfdr",
-    "pvalue", "wald_pvalue", "padj", "empirical_p", "empirical_q",
+    "pvalue", "padj", "empirical_p", "empirical_q",
     "HBFSS", "hc_p_threshold_dataset", "hbfss_threshold_dataset",
     "resLA_padj", "resGA_padj", "hc_empirical_pass",
     "deseq2_standard_call", "deseq2_strong_call", "deseq2_weak_call_raw", "deseq2_weak_call",
@@ -3863,7 +3914,7 @@ method_call_shapes <- c(
   "Neither"                   = 21,
   "DC2 weak effect"           = 22,
   "DC2 strong effect"         = 24,
-  "DC2 standard significance" = 23,
+  "DC2 standard significance" = 21,
   "HBFSS only"                = 23,
   "Overlap"                   = 25
 )
@@ -3874,7 +3925,7 @@ build_plot_specific_volcano_classes <- function(df, plot_type = c("standard", "h
 
   required_cols <- c(
     "gene_symbol", "lfc_shrunk",
-    "wald_pvalue", "neglog10_wald_pvalue",
+    "pvalue", "neglog10_wald_pvalue",
     "empirical_p", "neglog10_empirical_p",
     "deseq2_standard_call", "deseq2_strong_call", "deseq2_weak_call",
     "HBFSS_significant", "HBFSS_only_call", "overlap_call",
@@ -3904,9 +3955,9 @@ build_plot_specific_volcano_classes <- function(df, plot_type = c("standard", "h
     }
   }
 
+  standard_call <- !is.na(df$deseq2_standard_call) & df$deseq2_standard_call
   strong_call <- !is.na(df$deseq2_strong_call) & df$deseq2_strong_call
   weak_call <- !is.na(df$deseq2_weak_call) & df$deseq2_weak_call
-  standard_call <- !is.na(df$deseq2_standard_call) & df$deseq2_standard_call
   hbfss_only_call <- !is.na(df$HBFSS_only_call) & df$HBFSS_only_call
   overlap_call <- !is.na(df$overlap_call) & df$overlap_call
 
@@ -3914,8 +3965,8 @@ build_plot_specific_volcano_classes <- function(df, plot_type = c("standard", "h
     overlap_call & visible ~ "Overlap",
     hbfss_only_call & visible ~ "HBFSS only",
     strong_call & visible ~ "DC2 strong effect",
-    weak_call & visible ~ "DC2 weak effect",
     standard_call & visible ~ "DC2 standard significance",
+    weak_call & visible ~ "DC2 weak effect",
     TRUE ~ "Neither"
   )
 
