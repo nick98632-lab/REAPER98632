@@ -1,0 +1,4 @@
+"comparison_name","cutoff_type","selected_reason","crossing_percentile","crossing_rank"
+"RT2_ZT8","shared_combined","raw_wald_bracket_total_distortion_selected",0.11,3507
+"RT2_ZT8","treatment_backup","treatment_first_crossing_fallback",0.125347665918699,3828
+"RT2_ZT8","control_backup","control_first_crossing_fallback",0.114377079348982,3521

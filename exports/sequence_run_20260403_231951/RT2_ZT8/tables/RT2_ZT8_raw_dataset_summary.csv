@@ -1,0 +1,2 @@
+"comparison_name","dataset_name","n_features","hc_p_threshold","hbfss_threshold","n_standard_significant","n_HBFSS_significant","n_overlap_significant","n_strong_effect","n_weak_effect","evs_fixed_top_n","evs_cutoff_mode_main","evs_primary_preprocessing","shared_cutoff_rank","shared_cutoff_method","shared_cutoff_quantile","shared_selected_reason"
+"RT2_ZT8","RT2_ZT8_raw_dataset",31534,0.0136775581992137,1.86399142858533,44,42,0,0,44,5000,"matched_curvature_wave","normalized",24890,"first_stable_crossing",0.888786706412127,"raw_wald_bracket_total_distortion_selected"

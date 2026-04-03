@@ -1,4 +1,0 @@
-"preprocessing","group","cutoff_mode","fixed_top_n_requested","empiric_rank_selected","cutoff_quantile","curvature_strength","selected_reason","comparison_name"
-"normalized","regime_shift_crossing","first_stable_crossing",5000,6227,0.802649510347669,NA,"first_stable_crossing","RT0_ZT6"
-"raw","regime_shift_crossing","crossing_rank_projected_to_raw_selected",5000,6227,0.802649510347669,NA,"first_stable_crossing_projected_to_raw","RT0_ZT6"
-"raw_wald_rank_search","balanced_normality_search","raw_wald_bracket_balanced_normality",5000,6227,0.802649510347669,NA,"raw_wald_bracket_balanced_normality_selected","RT0_ZT6"

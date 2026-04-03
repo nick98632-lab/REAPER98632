@@ -11,7 +11,7 @@ mean-dispersion relationship
 final dispersion estimates
 fitting model and testing
 [RT0_ZT6_raw_wald_search_reference] Mean Wald stat sent to fdrtool: 0.0832  (computed only on finite DESeq2 Wald statistics)
-[RT0_ZT6_raw_wald_search_reference] Starting lfcShrink(type = "apeglm")
+[RT0_ZT6_raw_wald_search_reference] Starting lfcShrink(type = "normal")
 [RT0_ZT6_raw_wald_search_reference] Finished lfcShrink()
 estimating size factors
 estimating dispersions
@@ -20,7 +20,7 @@ mean-dispersion relationship
 final dispersion estimates
 fitting model and testing
 [RT0_ZT6_raw_dataset] Mean Wald stat sent to fdrtool: 0.0832  (computed only on finite DESeq2 Wald statistics)
-[RT0_ZT6_raw_dataset] Starting lfcShrink(type = "apeglm")
+[RT0_ZT6_raw_dataset] Starting lfcShrink(type = "normal")
 [RT0_ZT6_raw_dataset] Finished lfcShrink()
 estimating size factors
 estimating dispersions
@@ -28,8 +28,8 @@ gene-wise dispersion estimates
 mean-dispersion relationship
 final dispersion estimates
 fitting model and testing
-[RT0_ZT6_leading_edge_dataset] Mean Wald stat sent to fdrtool: 0.0769  (computed only on finite DESeq2 Wald statistics)
-[RT0_ZT6_leading_edge_dataset] Starting lfcShrink(type = "apeglm")
+[RT0_ZT6_leading_edge_dataset] Mean Wald stat sent to fdrtool: 0.0760  (computed only on finite DESeq2 Wald statistics)
+[RT0_ZT6_leading_edge_dataset] Starting lfcShrink(type = "normal")
 [RT0_ZT6_leading_edge_dataset] Finished lfcShrink()
 estimating size factors
 estimating dispersions
@@ -40,8 +40,8 @@ mean-dispersion relationship
    specify fitType='local' or 'mean' to avoid this message next time.
 final dispersion estimates
 fitting model and testing
-[RT0_ZT6_remainder_dataset] Mean Wald stat sent to fdrtool: 0.0861  (computed only on finite DESeq2 Wald statistics)
-[RT0_ZT6_remainder_dataset] Starting lfcShrink(type = "apeglm")
+[RT0_ZT6_remainder_dataset] Mean Wald stat sent to fdrtool: 0.0851  (computed only on finite DESeq2 Wald statistics)
+[RT0_ZT6_remainder_dataset] Starting lfcShrink(type = "normal")
 [RT0_ZT6_remainder_dataset] Finished lfcShrink()
 
 =====================================================
@@ -56,7 +56,7 @@ mean-dispersion relationship
 final dispersion estimates
 fitting model and testing
 [RT2_ZT8_raw_wald_search_reference] Mean Wald stat sent to fdrtool: -0.0180  (computed only on finite DESeq2 Wald statistics)
-[RT2_ZT8_raw_wald_search_reference] Starting lfcShrink(type = "apeglm")
+[RT2_ZT8_raw_wald_search_reference] Starting lfcShrink(type = "normal")
 [RT2_ZT8_raw_wald_search_reference] Finished lfcShrink()
 estimating size factors
 estimating dispersions
@@ -65,7 +65,7 @@ mean-dispersion relationship
 final dispersion estimates
 fitting model and testing
 [RT2_ZT8_raw_dataset] Mean Wald stat sent to fdrtool: -0.0180  (computed only on finite DESeq2 Wald statistics)
-[RT2_ZT8_raw_dataset] Starting lfcShrink(type = "apeglm")
+[RT2_ZT8_raw_dataset] Starting lfcShrink(type = "normal")
 [RT2_ZT8_raw_dataset] Finished lfcShrink()
 estimating size factors
 estimating dispersions
@@ -73,8 +73,8 @@ gene-wise dispersion estimates
 mean-dispersion relationship
 final dispersion estimates
 fitting model and testing
-[RT2_ZT8_leading_edge_dataset] Mean Wald stat sent to fdrtool: 0.0203  (computed only on finite DESeq2 Wald statistics)
-[RT2_ZT8_leading_edge_dataset] Starting lfcShrink(type = "apeglm")
+[RT2_ZT8_leading_edge_dataset] Mean Wald stat sent to fdrtool: 0.0198  (computed only on finite DESeq2 Wald statistics)
+[RT2_ZT8_leading_edge_dataset] Starting lfcShrink(type = "normal")
 [RT2_ZT8_leading_edge_dataset] Finished lfcShrink()
 estimating size factors
 estimating dispersions
@@ -86,7 +86,7 @@ mean-dispersion relationship
 final dispersion estimates
 fitting model and testing
 [RT2_ZT8_remainder_dataset] Mean Wald stat sent to fdrtool: -0.0256  (computed only on finite DESeq2 Wald statistics)
-[RT2_ZT8_remainder_dataset] Starting lfcShrink(type = "apeglm")
+[RT2_ZT8_remainder_dataset] Starting lfcShrink(type = "normal")
 [RT2_ZT8_remainder_dataset] Finished lfcShrink()
 
 =====================================================
@@ -101,7 +101,7 @@ mean-dispersion relationship
 final dispersion estimates
 fitting model and testing
 [RT4_ZT10_raw_wald_search_reference] Mean Wald stat sent to fdrtool: 0.0808  (computed only on finite DESeq2 Wald statistics)
-[RT4_ZT10_raw_wald_search_reference] Starting lfcShrink(type = "apeglm")
+[RT4_ZT10_raw_wald_search_reference] Starting lfcShrink(type = "normal")
 [RT4_ZT10_raw_wald_search_reference] Finished lfcShrink()
 estimating size factors
 estimating dispersions
@@ -110,7 +110,7 @@ mean-dispersion relationship
 final dispersion estimates
 fitting model and testing
 [RT4_ZT10_raw_dataset] Mean Wald stat sent to fdrtool: 0.0808  (computed only on finite DESeq2 Wald statistics)
-[RT4_ZT10_raw_dataset] Starting lfcShrink(type = "apeglm")
+[RT4_ZT10_raw_dataset] Starting lfcShrink(type = "normal")
 [RT4_ZT10_raw_dataset] Finished lfcShrink()
 estimating size factors
 estimating dispersions
@@ -118,8 +118,8 @@ gene-wise dispersion estimates
 mean-dispersion relationship
 final dispersion estimates
 fitting model and testing
-[RT4_ZT10_leading_edge_dataset] Mean Wald stat sent to fdrtool: -0.0508  (computed only on finite DESeq2 Wald statistics)
-[RT4_ZT10_leading_edge_dataset] Starting lfcShrink(type = "apeglm")
+[RT4_ZT10_leading_edge_dataset] Mean Wald stat sent to fdrtool: -0.0499  (computed only on finite DESeq2 Wald statistics)
+[RT4_ZT10_leading_edge_dataset] Starting lfcShrink(type = "normal")
 [RT4_ZT10_leading_edge_dataset] Finished lfcShrink()
 estimating size factors
 estimating dispersions
@@ -130,8 +130,8 @@ mean-dispersion relationship
    specify fitType='local' or 'mean' to avoid this message next time.
 final dispersion estimates
 fitting model and testing
-[RT4_ZT10_remainder_dataset] Mean Wald stat sent to fdrtool: 0.0864  (computed only on finite DESeq2 Wald statistics)
-[RT4_ZT10_remainder_dataset] Starting lfcShrink(type = "apeglm")
+[RT4_ZT10_remainder_dataset] Mean Wald stat sent to fdrtool: 0.0851  (computed only on finite DESeq2 Wald statistics)
+[RT4_ZT10_remainder_dataset] Starting lfcShrink(type = "normal")
 [RT4_ZT10_remainder_dataset] Finished lfcShrink()
 
 =====================================================
@@ -146,7 +146,7 @@ mean-dispersion relationship
 final dispersion estimates
 fitting model and testing
 [RT8_ZT14_raw_wald_search_reference] Mean Wald stat sent to fdrtool: -0.0282  (computed only on finite DESeq2 Wald statistics)
-[RT8_ZT14_raw_wald_search_reference] Starting lfcShrink(type = "apeglm")
+[RT8_ZT14_raw_wald_search_reference] Starting lfcShrink(type = "normal")
 [RT8_ZT14_raw_wald_search_reference] Finished lfcShrink()
 estimating size factors
 estimating dispersions
@@ -155,7 +155,7 @@ mean-dispersion relationship
 final dispersion estimates
 fitting model and testing
 [RT8_ZT14_raw_dataset] Mean Wald stat sent to fdrtool: -0.0282  (computed only on finite DESeq2 Wald statistics)
-[RT8_ZT14_raw_dataset] Starting lfcShrink(type = "apeglm")
+[RT8_ZT14_raw_dataset] Starting lfcShrink(type = "normal")
 [RT8_ZT14_raw_dataset] Finished lfcShrink()
 estimating size factors
 estimating dispersions
@@ -164,7 +164,7 @@ mean-dispersion relationship
 final dispersion estimates
 fitting model and testing
 [RT8_ZT14_leading_edge_dataset] Mean Wald stat sent to fdrtool: 0.0039  (computed only on finite DESeq2 Wald statistics)
-[RT8_ZT14_leading_edge_dataset] Starting lfcShrink(type = "apeglm")
+[RT8_ZT14_leading_edge_dataset] Starting lfcShrink(type = "normal")
 [RT8_ZT14_leading_edge_dataset] Finished lfcShrink()
 [RT8_ZT14_leading_edge_dataset] HC threshold fallback used for HBFSS calibration (primary=0.998528; fallback=0.0962902)
 estimating size factors
@@ -177,52 +177,52 @@ mean-dispersion relationship
 final dispersion estimates
 fitting model and testing
 [RT8_ZT14_remainder_dataset] Mean Wald stat sent to fdrtool: -0.0316  (computed only on finite DESeq2 Wald statistics)
-[RT8_ZT14_remainder_dataset] Starting lfcShrink(type = "apeglm")
+[RT8_ZT14_remainder_dataset] Starting lfcShrink(type = "normal")
 [RT8_ZT14_remainder_dataset] Finished lfcShrink()
 There were 50 or more warnings (use warnings() to see the first 50)
 
 =====================================================
 Pipeline complete.
 Output directory:
-/root/REAPER98632/exports/sequence_run_20260403_212127 
+/root/REAPER98632/exports/sequence_run_20260403_231951 
 =====================================================
 
    comparison_name                  dataset_name n_features hc_p_threshold
 1          RT0_ZT6           RT0_ZT6_raw_dataset      31553   0.0005325461
-2          RT0_ZT6  RT0_ZT6_leading_edge_dataset       6227   0.0336010810
-3          RT0_ZT6     RT0_ZT6_remainder_dataset      25326   0.0406911864
+2          RT0_ZT6  RT0_ZT6_leading_edge_dataset       6257   0.0343951623
+3          RT0_ZT6     RT0_ZT6_remainder_dataset      25296   0.0380713200
 4          RT2_ZT8           RT2_ZT8_raw_dataset      31534   0.0136775582
-5          RT2_ZT8  RT2_ZT8_leading_edge_dataset       3508   0.0342067255
-6          RT2_ZT8     RT2_ZT8_remainder_dataset      28026   0.0244066826
+5          RT2_ZT8  RT2_ZT8_leading_edge_dataset       3507   0.0337572383
+6          RT2_ZT8     RT2_ZT8_remainder_dataset      28027   0.0244314650
 7         RT4_ZT10          RT4_ZT10_raw_dataset      31658   0.0223630002
-8         RT4_ZT10 RT4_ZT10_leading_edge_dataset       6058   0.0190556862
-9         RT4_ZT10    RT4_ZT10_remainder_dataset      25600   0.0433836182
+8         RT4_ZT10 RT4_ZT10_leading_edge_dataset       5926   0.0188653500
+9         RT4_ZT10    RT4_ZT10_remainder_dataset      25732   0.0433778765
 10        RT8_ZT14          RT8_ZT14_raw_dataset      31580   0.0186581006
 11        RT8_ZT14 RT8_ZT14_leading_edge_dataset       5659   0.0962902310
 12        RT8_ZT14    RT8_ZT14_remainder_dataset      25921   0.0209430797
    hbfss_threshold n_standard_significant n_HBFSS_significant
-1         3.273643                     16                  62
-2         1.473647                      2                  12
-3         1.390500                     74                 197
-4         1.863991                     44                   8
-5         1.465888                     99                   1
-6         1.612491                     82                  25
-7         1.650470                    897                1101
-8         1.719975                    269                 298
-9         1.362674                   1003                1228
-10        1.729133                    134                  77
-11        1.016418                    256                  30
-12        1.678959                    165                 147
+1         3.273643                     22                  73
+2         1.463503                      2                   8
+3         1.419402                     99                 737
+4         1.863991                     44                  42
+5         1.471633                     99                   3
+6         1.612050                     82                 102
+7         1.650470                   1095                1423
+8         1.724335                    191                 267
+9         1.362732                   1224                1721
+10        1.729133                    131                 190
+11        1.016418                    253                  57
+12        1.678959                    150                 266
    n_overlap_significant n_strong_effect n_weak_effect evs_fixed_top_n
 1                      3               3             0            5000
 2                      1               1             0            5000
-3                      4               4            12            5000
+3                      5               5            11            5000
 4                      0               0            44            5000
 5                      0               0            99            5000
 6                      0               0            81            5000
-7                     50              50            71            5000
+7                     52              52            71            5000
 8                     21              21            28            5000
-9                     84              84           112            5000
+9                     83              83           117            5000
 10                     0               0           129            5000
 11                     0               0           253            5000
 12                     0               0           131            5000
@@ -230,25 +230,38 @@ Output directory:
 1  matched_curvature_wave                normalized               6213
 2  matched_curvature_wave                normalized               6213
 3  matched_curvature_wave                normalized               6213
-4  matched_curvature_wave                normalized               3646
-5  matched_curvature_wave                normalized               3646
-6  matched_curvature_wave                normalized               3646
+4  matched_curvature_wave                normalized              24890
+5  matched_curvature_wave                normalized              24890
+6  matched_curvature_wave                normalized              24890
 7  matched_curvature_wave                normalized               4698
 8  matched_curvature_wave                normalized               4698
 9  matched_curvature_wave                normalized               4698
-10 matched_curvature_wave                normalized               4557
-11 matched_curvature_wave                normalized               4557
-12 matched_curvature_wave                normalized               4557
-    shared_cutoff_method shared_cutoff_quantile  shared_selected_reason
-1  first_stable_crossing              0.8026495   first_stable_crossing
-2  first_stable_crossing              0.8026495   first_stable_crossing
-3  first_stable_crossing              0.8026495   first_stable_crossing
-4  first_stable_crossing              0.8887550 first_crossing_fallback
-5  first_stable_crossing              0.8887550 first_crossing_fallback
-6  first_stable_crossing              0.8887550 first_crossing_fallback
-7  first_stable_crossing              0.8086424 first_crossing_fallback
-8  first_stable_crossing              0.8086424 first_crossing_fallback
-9  first_stable_crossing              0.8086424 first_crossing_fallback
-10 first_stable_crossing              0.8208043 first_crossing_fallback
-11 first_stable_crossing              0.8208043 first_crossing_fallback
-12 first_stable_crossing              0.8208043 first_crossing_fallback
+10 matched_curvature_wave                normalized              26951
+11 matched_curvature_wave                normalized              26951
+12 matched_curvature_wave                normalized              26951
+    shared_cutoff_method shared_cutoff_quantile
+1  first_stable_crossing              0.8016987
+2  first_stable_crossing              0.8016987
+3  first_stable_crossing              0.8016987
+4  first_stable_crossing              0.8887867
+5  first_stable_crossing              0.8887867
+6  first_stable_crossing              0.8887867
+7  first_stable_crossing              0.8128119
+8  first_stable_crossing              0.8128119
+9  first_stable_crossing              0.8128119
+10 first_stable_crossing              0.8208043
+11 first_stable_crossing              0.8208043
+12 first_stable_crossing              0.8208043
+                       shared_selected_reason
+1  raw_wald_bracket_total_distortion_selected
+2  raw_wald_bracket_total_distortion_selected
+3  raw_wald_bracket_total_distortion_selected
+4  raw_wald_bracket_total_distortion_selected
+5  raw_wald_bracket_total_distortion_selected
+6  raw_wald_bracket_total_distortion_selected
+7  raw_wald_bracket_total_distortion_selected
+8  raw_wald_bracket_total_distortion_selected
+9  raw_wald_bracket_total_distortion_selected
+10 raw_wald_bracket_total_distortion_selected
+11 raw_wald_bracket_total_distortion_selected
+12 raw_wald_bracket_total_distortion_selected
