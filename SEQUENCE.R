@@ -73,7 +73,7 @@ twas_file <- file.path(input_dir, "3aTWAS_genes_of_11_brain_disorders.csv")
 alpha_level <- 0.20
 max_usable_hc_p_threshold <- 0.99
 lfc_boundary <- 1.0
-lfc_shrink_type <- "apeglm"   # "normal" for speed/stability; "apeglm" optional
+lfc_shrink_type <- "normal"   # "normal" for speed/stability; "apeglm" optional
 lfc_shrink_apeglm_method <- "nbinomC"
 
 evs_cutoff_mode_main <- "matched_curvature_wave"
@@ -1409,6 +1409,39 @@ label_stable_crossings <- function(diff_df,
   out
 }
 
+select_last_stable_crossing_before_divergence <- function(diff_df,
+                                                          crossing_tbl,
+                                                          post_window_n = 4L,
+                                                          min_separation_fraction = 0.75) {
+  if (is.null(crossing_tbl) || !nrow(crossing_tbl)) return(NULL)
+
+  df <- as.data.frame(diff_df, stringsAsFactors = FALSE)
+  stable_tbl <- crossing_tbl[crossing_tbl$stable_crossing, , drop = FALSE]
+  if (!nrow(stable_tbl)) return(NULL)
+
+  stable_tbl <- stable_tbl[order(stable_tbl$crossing_percentile), , drop = FALSE]
+  keep_idx <- rep(FALSE, nrow(stable_tbl))
+
+  for (i in seq_len(nrow(stable_tbl))) {
+    ir <- stable_tbl$idx_right[i]
+    post_idx <- seq.int(ir, min(nrow(df), ir + post_window_n - 1L), by = 1L)
+    post_vals <- df$regime_difference[post_idx]
+    neg_frac <- mean(post_vals < 0, na.rm = TRUE)
+
+    keep_idx[i] <- isTRUE(
+      is.finite(neg_frac) &&
+        neg_frac >= min_separation_fraction
+    )
+  }
+
+  stable_tbl2 <- stable_tbl[keep_idx, , drop = FALSE]
+  if (!nrow(stable_tbl2)) {
+    return(stable_tbl[nrow(stable_tbl), , drop = FALSE])
+  }
+
+  stable_tbl2[nrow(stable_tbl2), , drop = FALSE]
+}
+
 select_regime_shift_crossing <- function(combined_wave_df) {
   diff_df <- compute_regime_difference_curve(combined_wave_df)
   crossing_tbl <- find_crossing_intervals(diff_df)
@@ -1423,13 +1456,26 @@ select_regime_shift_crossing <- function(combined_wave_df) {
     ))
   }
 
-  stable_tbl <- crossing_tbl[crossing_tbl$stable_crossing, , drop = FALSE]
-  if (nrow(stable_tbl)) {
-    selected <- stable_tbl[order(stable_tbl$crossing_percentile), , drop = FALSE][1, , drop = FALSE]
-    reason <- "first_stable_crossing"
+  selected <- select_last_stable_crossing_before_divergence(
+    diff_df = diff_df,
+    crossing_tbl = crossing_tbl,
+    post_window_n = 4L,
+    min_separation_fraction = 0.75
+  )
+
+  if (!is.null(selected) && nrow(selected)) {
+    reason <- "last_stable_crossing_before_divergence"
   } else {
-    selected <- crossing_tbl[order(crossing_tbl$crossing_percentile), , drop = FALSE][1, , drop = FALSE]
-    reason <- "first_crossing_fallback"
+    stable_tbl <- crossing_tbl[crossing_tbl$stable_crossing, , drop = FALSE]
+    if (nrow(stable_tbl)) {
+      stable_tbl <- stable_tbl[order(stable_tbl$crossing_percentile), , drop = FALSE]
+      selected <- stable_tbl[nrow(stable_tbl), , drop = FALSE]
+      reason <- "last_stable_crossing_fallback"
+    } else {
+      crossing_tbl <- crossing_tbl[order(crossing_tbl$crossing_percentile), , drop = FALSE]
+      selected <- crossing_tbl[nrow(crossing_tbl), , drop = FALSE]
+      reason <- "last_crossing_fallback"
+    }
   }
 
   list(
@@ -3830,7 +3876,7 @@ build_plot_specific_volcano_classes <- function(df, plot_type = c("standard", "h
     "gene_symbol", "lfc_shrunk",
     "wald_pvalue", "neglog10_wald_pvalue",
     "empirical_p", "neglog10_empirical_p",
-    "deseq2_standard_call", "deseq2_strong_call", "deseq2_weak_call_raw",
+    "deseq2_standard_call", "deseq2_strong_call", "deseq2_weak_call",
     "HBFSS_significant", "HBFSS_only_call", "overlap_call",
     "hc_p_threshold_dataset", "hbfss_threshold_dataset",
     "HBFSS"
@@ -3841,33 +3887,36 @@ build_plot_specific_volcano_classes <- function(df, plot_type = c("standard", "h
     grepl("^[A-Za-z0-9._-]+$", trimws(df$gene_symbol))
   df$gene_symbol_plot <- ifelse(df$has_valid_gene_symbol, trimws(df$gene_symbol), NA_character_)
 
-  strong_visible   <- !is.na(df$deseq2_strong_call)   & df$deseq2_strong_call
-  weak_visible     <- !is.na(df$deseq2_weak_call_raw) & df$deseq2_weak_call_raw
-  standard_visible <- !is.na(df$deseq2_standard_call) & df$deseq2_standard_call
-  hbfss_visible    <- !is.na(df$HBFSS_only_call)      & df$HBFSS_only_call
-  overlap_visible  <- !is.na(df$overlap_call)         & df$overlap_call
+  if (plot_type == "standard") {
+    yvals <- suppressWarnings(as.numeric(df$neglog10_wald_pvalue))
+    visible <- is.finite(yvals) & !is.na(yvals) & (yvals >= -log10(alpha_level))
+  } else {
+    yvals <- suppressWarnings(as.numeric(df$neglog10_empirical_p))
+    hc_thr <- suppressWarnings(as.numeric(df$hc_p_threshold_dataset))
+    hc_line_y <- ifelse(
+      is.finite(hc_thr) & !is.na(hc_thr) & hc_thr > 0 & hc_thr < 1,
+      -log10(hc_thr),
+      NA_real_
+    )
+    visible <- is.finite(yvals) & !is.na(yvals)
+    if (any(is.finite(hc_line_y))) {
+      visible <- visible & (yvals >= hc_line_y)
+    }
+  }
 
-  df$effect_color_class <- dplyr::case_when(
-    overlap_visible ~ "Overlap",
-    strong_visible ~ "Strong effect",
-    weak_visible ~ "Weak effect",
-    standard_visible ~ "Standard significance",
-    hbfss_visible ~ "HBFSS only",
-    TRUE ~ "Intermediate effect"
-  )
-
-  df$effect_color_class <- factor(
-    df$effect_color_class,
-    levels = c("Strong effect", "Standard significance", "Intermediate effect", "Weak effect", "HBFSS only", "Overlap")
-  )
+  strong_call <- !is.na(df$deseq2_strong_call) & df$deseq2_strong_call
+  weak_call <- !is.na(df$deseq2_weak_call) & df$deseq2_weak_call
+  standard_call <- !is.na(df$deseq2_standard_call) & df$deseq2_standard_call
+  hbfss_only_call <- !is.na(df$HBFSS_only_call) & df$HBFSS_only_call
+  overlap_call <- !is.na(df$overlap_call) & df$overlap_call
 
   df$method_call_class <- dplyr::case_when(
-    overlap_visible  ~ "Overlap",
-    strong_visible   ~ "DC2 strong effect",
-    weak_visible     ~ "DC2 weak effect",
-    standard_visible ~ "DC2 standard significance",
-    hbfss_visible    ~ "HBFSS only",
-    TRUE             ~ "Neither"
+    overlap_call & visible ~ "Overlap",
+    hbfss_only_call & visible ~ "HBFSS only",
+    strong_call & visible ~ "DC2 strong effect",
+    weak_call & visible ~ "DC2 weak effect",
+    standard_call & visible ~ "DC2 standard significance",
+    TRUE ~ "Neither"
   )
 
   df$method_call_class <- factor(
@@ -3965,6 +4014,7 @@ volcano_count_caption <- function(df) {
       fill = if (show_legend) guide_legend(
         order = 1,
         nrow = 1,
+        direction = "horizontal",
         byrow = TRUE,
         override.aes = list(
           size = 3.8,
@@ -4190,7 +4240,7 @@ plot_publication_volcano_panel <- function(df, dataset_name, show_legend = FALSE
       y = expression(-log[10](p[empirical])),
       caption = compact_caption(
         paste0(
-          "Representative HBFSS volcano with DC2 weak, DC2 strong, DC2 standard significance, HBFSS-only, and overlap classes. ",
+          "Representative HBFSS volcano with DC2 weak, DC2 strong, DC2 standard significance, HBFSS-only, and overlap classes. All displayed weak, strong, HBFSS-only, and overlap markers are colored across their full points once they clear the panel thresholding rule. ",
           volcano_count_caption(build)
         )
       )
