@@ -1,4 +1,0 @@
-"comparison_name","cutoff_type","selected_reason","crossing_percentile","crossing_rank"
-"RT8_ZT14","shared_combined","last_crossing_fallback",0.7,21672
-"RT8_ZT14","treatment_backup","treatment_first_crossing_fallback",0.1,3090
-"RT8_ZT14","control_backup","control_first_crossing_fallback",0.1,3102

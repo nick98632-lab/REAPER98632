@@ -4,9 +4,38 @@ Running comparison: RT0_ZT6
 =====================================================
 converting counts to integer mode
 converting counts to integer mode
-converting counts to integer mode
-converting counts to integer mode
-[RT0_ZT6_raw_dataset] Mean Wald stat sent to fdrtool: 0.0832
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+[RT0_ZT6_raw_dataset] Mean Wald stat sent to fdrtool: 0.0832  (computed only on finite DESeq2 Wald statistics)
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+[RT0_ZT6_leading_edge_dataset] Mean Wald stat sent to fdrtool: 0.0774  (computed only on finite DESeq2 Wald statistics)
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+-- note: fitType='parametric', but the dispersion trend was not well captured by the
+   function: y = a/x + b, and a local regression fit was automatically substituted.
+   specify fitType='local' or 'mean' to avoid this message next time.
+final dispersion estimates
+fitting model and testing
+[RT0_ZT6_remainder_dataset] Mean Wald stat sent to fdrtool: 0.0852  (computed only on finite DESeq2 Wald statistics)
 using 'apeglm' for LFC shrinkage. If used in published research, please cite:
     Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
     sequence count data: removing the noise and preserving large differences.
@@ -17,9 +46,38 @@ Running comparison: RT2_ZT8
 =====================================================
 converting counts to integer mode
 converting counts to integer mode
-converting counts to integer mode
-converting counts to integer mode
-[RT2_ZT8_raw_dataset] Mean Wald stat sent to fdrtool: -0.0180
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+[RT2_ZT8_raw_dataset] Mean Wald stat sent to fdrtool: -0.0180  (computed only on finite DESeq2 Wald statistics)
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+[RT2_ZT8_leading_edge_dataset] Mean Wald stat sent to fdrtool: 0.0168  (computed only on finite DESeq2 Wald statistics)
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+-- note: fitType='parametric', but the dispersion trend was not well captured by the
+   function: y = a/x + b, and a local regression fit was automatically substituted.
+   specify fitType='local' or 'mean' to avoid this message next time.
+final dispersion estimates
+fitting model and testing
+[RT2_ZT8_remainder_dataset] Mean Wald stat sent to fdrtool: -0.0255  (computed only on finite DESeq2 Wald statistics)
 using 'apeglm' for LFC shrinkage. If used in published research, please cite:
     Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
     sequence count data: removing the noise and preserving large differences.
@@ -30,32 +88,14 @@ Running comparison: RT4_ZT10
 =====================================================
 converting counts to integer mode
 converting counts to integer mode
-converting counts to integer mode
-converting counts to integer mode
-[RT4_ZT10_raw_dataset] Mean Wald stat sent to fdrtool: 0.0808
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+[RT4_ZT10_raw_dataset] Mean Wald stat sent to fdrtool: 0.0808  (computed only on finite DESeq2 Wald statistics)
 using 'apeglm' for LFC shrinkage. If used in published research, please cite:
     Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
     sequence count data: removing the noise and preserving large differences.
     Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
-
-=====================================================
-Running comparison: RT8_ZT14
-=====================================================
-converting counts to integer mode
-converting counts to integer mode
-converting counts to integer mode
-converting counts to integer mode
-[RT8_ZT14_raw_dataset] Mean Wald stat sent to fdrtool: -0.0282
-using 'apeglm' for LFC shrinkage. If used in published research, please cite:
-    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
-    sequence count data: removing the noise and preserving large differences.
-    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
-There were 50 or more warnings (use warnings() to see the first 50)
-
-=====================================================
-Pipeline complete.
-Output directory:
-/root/REAPER98632/exports/EVS_HBFSS_AllComparisons_Output 
-=====================================================
-
-No comparison summaries were written. Check failed_comparisons.csv for the exact error message.
