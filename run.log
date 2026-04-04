@@ -2,34 +2,175 @@
 =====================================================
 Running comparison: RT0_ZT6
 =====================================================
-[2026-04-04 03:57:09] RT0_ZT6comparison loaded
+[2026-04-04 04:03:55] RT0_ZT6comparison loaded
 converting counts to integer mode
 converting counts to integer mode
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+[2026-04-04 04:05:19] RT0_ZT6split built
+[2026-04-04 04:05:19] RT0_ZT6cutoff summary | treatment backup = NA | control backup = NA | crossing ref = NA | final rank = 5004 | method = raw_wald_bracket_total_distortion
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+[2026-04-04 04:06:26] RT0_ZT6original dataset analysis complete
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+[2026-04-04 04:06:51] RT0_ZT6leading-edge dataset analysis complete
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+-- note: fitType='parametric', but the dispersion trend was not well captured by the
+   function: y = a/x + b, and a local regression fit was automatically substituted.
+   specify fitType='local' or 'mean' to avoid this message next time.
+final dispersion estimates
+fitting model and testing
+[2026-04-04 04:07:38] RT0_ZT6remainder dataset analysis complete
+[2026-04-04 04:07:43] RT0_ZT6spline summary panel exported
+[2026-04-04 04:07:45] RT0_ZT6raw-Wald cutoff panel exported
+[2026-04-04 04:07:52] RT0_ZT6volcano panel exported
 
 =====================================================
 Running comparison: RT2_ZT8
 =====================================================
-[2026-04-04 03:57:20] RT2_ZT8comparison loaded
+[2026-04-04 04:07:52] RT2_ZT8comparison loaded
 converting counts to integer mode
 converting counts to integer mode
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+[2026-04-04 04:09:27] RT2_ZT8split built
+[2026-04-04 04:09:27] RT2_ZT8cutoff summary | treatment backup = NA | control backup = NA | crossing ref = NA | final rank = 4996 | method = raw_wald_bracket_total_distortion
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+[2026-04-04 04:10:54] RT2_ZT8original dataset analysis complete
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+[2026-04-04 04:11:16] RT2_ZT8leading-edge dataset analysis complete
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+-- note: fitType='parametric', but the dispersion trend was not well captured by the
+   function: y = a/x + b, and a local regression fit was automatically substituted.
+   specify fitType='local' or 'mean' to avoid this message next time.
+final dispersion estimates
+fitting model and testing
+[2026-04-04 04:12:18] RT2_ZT8remainder dataset analysis complete
+[2026-04-04 04:12:22] RT2_ZT8spline summary panel exported
+[2026-04-04 04:12:25] RT2_ZT8raw-Wald cutoff panel exported
+[2026-04-04 04:12:31] RT2_ZT8volcano panel exported
 
 =====================================================
 Running comparison: RT4_ZT10
 =====================================================
-[2026-04-04 03:57:31] RT4_ZT10comparison loaded
+[2026-04-04 04:12:31] RT4_ZT10comparison loaded
 converting counts to integer mode
 converting counts to integer mode
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+[2026-04-04 04:13:32] RT4_ZT10split built
+[2026-04-04 04:13:32] RT4_ZT10cutoff summary | treatment backup = NA | control backup = NA | crossing ref = NA | final rank = 5003 | method = raw_wald_bracket_total_distortion
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+[2026-04-04 04:14:19] RT4_ZT10original dataset analysis complete
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+[2026-04-04 04:14:35] RT4_ZT10leading-edge dataset analysis complete
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+-- note: fitType='parametric', but the dispersion trend was not well captured by the
+   function: y = a/x + b, and a local regression fit was automatically substituted.
+   specify fitType='local' or 'mean' to avoid this message next time.
+final dispersion estimates
+fitting model and testing
+[2026-04-04 04:15:20] RT4_ZT10remainder dataset analysis complete
+[2026-04-04 04:15:24] RT4_ZT10spline summary panel exported
+[2026-04-04 04:15:27] RT4_ZT10raw-Wald cutoff panel exported
+[2026-04-04 04:15:35] RT4_ZT10volcano panel exported
 
 =====================================================
 Running comparison: RT8_ZT14
 =====================================================
-[2026-04-04 03:57:42] RT8_ZT14comparison loaded
+[2026-04-04 04:15:35] RT8_ZT14comparison loaded
 converting counts to integer mode
 converting counts to integer mode
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+[2026-04-04 04:16:35] RT8_ZT14split built
+[2026-04-04 04:16:35] RT8_ZT14cutoff summary | treatment backup = NA | control backup = NA | crossing ref = NA | final rank = 5010 | method = raw_wald_bracket_total_distortion
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+[2026-04-04 04:17:24] RT8_ZT14original dataset analysis complete
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+[2026-04-04 04:17:45] RT8_ZT14leading-edge dataset analysis complete
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+-- note: fitType='parametric', but the dispersion trend was not well captured by the
+   function: y = a/x + b, and a local regression fit was automatically substituted.
+   specify fitType='local' or 'mean' to avoid this message next time.
+final dispersion estimates
+fitting model and testing
+[2026-04-04 04:18:22] RT8_ZT14remainder dataset analysis complete
+[2026-04-04 04:18:27] RT8_ZT14spline summary panel exported
+[2026-04-04 04:18:29] RT8_ZT14raw-Wald cutoff panel exported
+[2026-04-04 04:18:37] RT8_ZT14volcano panel exported
+There were 24 warnings (use warnings() to see them)
 
 =====================================================
 Pipeline complete.
 Output directory:
-/root/REAPER98632/exports/sequence_run_20260404_035706 
+/root/REAPER98632/exports/sequence_run_20260404_040351 
 =====================================================
 
