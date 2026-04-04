@@ -7,7 +7,7 @@
 # 2. Normalize counts with DESeq2.
 # 3. Build treatment and control EVS loading tables from PC1 absolute loadings.
 # 4. Build local Fourier half-range amplitude maps at every gene rank for NB-derived IOD and CV2.
-# 5. Build a treatment-control composite amplitude overlap curve on the shared EVS axis.
+# 5. Rescale each within-group amplitude trajectory to 0 to 1, then build the treatment-control composite amplitude overlap curve on the shared EVS axis.
 # 6. Select the last local half-range amplitude crossing before divergence.
 # 7. Perform union-based eigenvector splitting at that cutoff rank.
 # 8. Export leading-edge and remainder datasets, tables, and panels.
@@ -405,6 +405,8 @@ build_group_wave_map <- function(loading_tbl) {
   wave_map <- df[, c("feature_id", "gene_symbol", "rank", "baseMean", "dispGeneEst"), drop = FALSE]
   wave_map$iod_local_amplitude <- iod_wave$local_amplitude
   wave_map$cv2_local_amplitude <- cv2_wave$local_amplitude
+  wave_map$iod_local_amplitude_scaled <- rescale_to_unit_interval(wave_map$iod_local_amplitude)
+  wave_map$cv2_local_amplitude_scaled <- rescale_to_unit_interval(wave_map$cv2_local_amplitude)
   wave_map$local_window_left_rank <- iod_wave$local_window_left_rank
   wave_map$local_window_right_rank <- iod_wave$local_window_right_rank
   wave_map$local_window_n <- iod_wave$local_window_n
@@ -414,25 +416,28 @@ build_group_wave_map <- function(loading_tbl) {
 # =============================================================================
 # CROSSING AND EVS SPLITTING
 # =============================================================================
-# The treatment and control local-amplitude maps are combined onto a shared EVS
-# axis. The selected cutoff is the last local-amplitude crossing before
-# persistent divergence. That rank is then projected back onto the treatment and
-# control EVS tables, and the leading edge is defined as the union of all
-# features retained by either side at or above that EVS threshold.
+# The treatment and control local-amplitude maps are first rescaled to the unit
+# interval within each group. The treatment-control comparison is then performed
+# on these 0 to 1 amplitude trajectories so that the crossing identifies a
+# change in relative local oscillatory dominance rather than raw-magnitude scale.
+# The selected cutoff is the last local-amplitude crossing before persistent
+# divergence. That rank is then projected back onto the treatment and control
+# EVS tables, and the leading edge is defined as the union of all features
+# retained by either side at or above that EVS threshold.
 
 build_composite_wave_map <- function(trt_wave_map, ctrl_wave_map) {
-  trt_use <- trt_wave_map[, c("feature_id", "rank", "iod_local_amplitude", "cv2_local_amplitude", "local_window_left_rank", "local_window_right_rank", "local_window_n"), drop = FALSE]
-  ctrl_use <- ctrl_wave_map[, c("feature_id", "rank", "iod_local_amplitude", "cv2_local_amplitude", "local_window_left_rank", "local_window_right_rank", "local_window_n"), drop = FALSE]
+  trt_use <- trt_wave_map[, c("feature_id", "rank", "iod_local_amplitude", "cv2_local_amplitude", "iod_local_amplitude_scaled", "cv2_local_amplitude_scaled", "local_window_left_rank", "local_window_right_rank", "local_window_n"), drop = FALSE]
+  ctrl_use <- ctrl_wave_map[, c("feature_id", "rank", "iod_local_amplitude", "cv2_local_amplitude", "iod_local_amplitude_scaled", "cv2_local_amplitude_scaled", "local_window_left_rank", "local_window_right_rank", "local_window_n"), drop = FALSE]
 
-  names(trt_use) <- c("feature_id", "rank_trt", "iod_local_amplitude_trt", "cv2_local_amplitude_trt", "window_left_trt", "window_right_trt", "window_n_trt")
-  names(ctrl_use) <- c("feature_id", "rank_ctrl", "iod_local_amplitude_ctrl", "cv2_local_amplitude_ctrl", "window_left_ctrl", "window_right_ctrl", "window_n_ctrl")
+  names(trt_use) <- c("feature_id", "rank_trt", "iod_local_amplitude_trt", "cv2_local_amplitude_trt", "iod_local_amplitude_scaled_trt", "cv2_local_amplitude_scaled_trt", "window_left_trt", "window_right_trt", "window_n_trt")
+  names(ctrl_use) <- c("feature_id", "rank_ctrl", "iod_local_amplitude_ctrl", "cv2_local_amplitude_ctrl", "iod_local_amplitude_scaled_ctrl", "cv2_local_amplitude_scaled_ctrl", "window_left_ctrl", "window_right_ctrl", "window_n_ctrl")
 
   merged <- inner_join(trt_use, ctrl_use, by = "feature_id")
   merged <- merged %>%
     mutate(
       combined_rank = round(rowMeans(cbind(rank_trt, rank_ctrl), na.rm = TRUE)),
-      composite_iod_amplitude = iod_local_amplitude_trt + iod_local_amplitude_ctrl,
-      composite_cv2_amplitude = cv2_local_amplitude_trt + cv2_local_amplitude_ctrl,
+      composite_iod_amplitude = iod_local_amplitude_scaled_trt + iod_local_amplitude_scaled_ctrl,
+      composite_cv2_amplitude = cv2_local_amplitude_scaled_trt + cv2_local_amplitude_scaled_ctrl,
       regime_difference = composite_iod_amplitude - composite_cv2_amplitude,
       local_window_left_rank = pmin(window_left_trt, window_left_ctrl, na.rm = TRUE),
       local_window_right_rank = pmax(window_right_trt, window_right_ctrl, na.rm = TRUE),
@@ -644,14 +649,14 @@ build_stage1_summary_table <- function(stage1_obj, comparison_name) {
 
 plot_group_wave_map <- function(group_wave_map, group_label, comparison_name) {
   ggplot(group_wave_map, aes(rank)) +
-    geom_line(aes(y = iod_local_amplitude, color = "IOD"), linewidth = 0.9) +
-    geom_line(aes(y = cv2_local_amplitude, color = "CV²"), linewidth = 0.9) +
+    geom_line(aes(y = iod_local_amplitude_scaled, color = "IOD"), linewidth = 0.9) +
+    geom_line(aes(y = cv2_local_amplitude_scaled, color = "CV²"), linewidth = 0.9) +
     scale_color_manual(values = c("IOD" = plot_colors$iod, "CV²" = plot_colors$cv2)) +
     labs(
       title = paste0(comparison_name, " | ", group_label, " local Fourier amplitude map"),
-      subtitle = "Local amplitude defined as one-half the fitted peak-to-trough range within each local Fourier window",
+      subtitle = "Local half-range amplitudes were rescaled to 0 to 1 within group before treatment-control comparison",
       x = "EVS rank",
-      y = "Local amplitude"
+      y = "Scaled local amplitude (0-1)"
     ) +
     plain_theme()
 }
