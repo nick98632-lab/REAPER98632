@@ -1,0 +1,3 @@
+"preprocessing","group","cutoff_mode","fixed_top_n_requested","empiric_rank_selected","cutoff_quantile","curvature_strength","selected_reason","comparison_name"
+"normalized","regime_shift_crossing","first_stable_crossing",5000,3646,0.884378765776622,NA,"first_crossing_fallback","RT2_ZT8"
+"raw","regime_shift_crossing","crossing_rank_projected_to_raw_selected",5000,3646,0.884378765776622,NA,"first_crossing_fallback_projected_to_raw","RT2_ZT8"
