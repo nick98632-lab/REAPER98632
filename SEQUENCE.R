@@ -1185,7 +1185,6 @@ resolve_combined_fourier_cutoff <- function(fit_trt_loading_tbl,
   )
 }
 
-
 select_wave_backup_cutoff <- function(wave_obj, group_label = "group") {
   if (is.null(wave_obj) || is.null(wave_obj$wave_map) || !nrow(wave_obj$wave_map)) {
     return(list(
@@ -1314,7 +1313,6 @@ build_backup_crossing_summary_table <- function(combined_cutoff_info, comparison
     add_row(combined_cutoff_info$ctrl_backup_crossing, "control_backup", combined_cutoff_info$ctrl_backup_reason)
   )
 }
-
 
 safe_skewness <- function(x) {
   x <- as.numeric(x)
@@ -3942,21 +3940,7 @@ run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata,
   evs_cutoff_summary_out$comparison_name <- comparison_name
   save_csv(evs_cutoff_summary_out, file.path(tab_dir, paste0(comparison_name, "_EVS_cutoff_summary.csv")))
 
-  if (!is.null(evs$combined_cutoff_info$trt_wave_obj$wave_map) && nrow(evs$combined_cutoff_info$trt_wave_obj$wave_map)) {
-    save_csv(evs$combined_cutoff_info$trt_wave_obj$wave_map, file.path(tab_dir, paste0(comparison_name, "_treatment_local_fourier_map.csv")))
-  }
-  if (!is.null(evs$combined_cutoff_info$ctrl_wave_obj$wave_map) && nrow(evs$combined_cutoff_info$ctrl_wave_obj$wave_map)) {
-    save_csv(evs$combined_cutoff_info$ctrl_wave_obj$wave_map, file.path(tab_dir, paste0(comparison_name, "_control_local_fourier_map.csv")))
-  }
-  if (!is.null(evs$combined_cutoff_info$combined_wave_map) && nrow(evs$combined_cutoff_info$combined_wave_map)) {
-    save_csv(evs$combined_cutoff_info$combined_wave_map, file.path(tab_dir, paste0(comparison_name, "_first_stable_crossing_map.csv")))
-  }
-  if (!is.null(evs$combined_cutoff_info$crossing_table) && nrow(evs$combined_cutoff_info$crossing_table)) {
-    save_csv(evs$combined_cutoff_info$crossing_table, file.path(tab_dir, paste0(comparison_name, "_all_regime_crossings.csv")))
-  }
-  if (!is.null(evs$combined_cutoff_info$candidate_table) && nrow(evs$combined_cutoff_info$candidate_table)) {
-    save_csv(evs$combined_cutoff_info$candidate_table, file.path(tab_dir, paste0(comparison_name, "_selected_regime_crossing.csv")))
-  }
+  # Removed from active script: fourier map/crossing csv exports.
   crossing_summary_df <- build_crossing_summary_table(evs$combined_cutoff_info, comparison_name)
   save_csv(crossing_summary_df, file.path(tab_dir, paste0(comparison_name, "_regime_shift_crossing_summary.csv")))
   backup_crossing_summary_df <- build_backup_crossing_summary_table(evs$combined_cutoff_info, comparison_name)
@@ -4130,22 +4114,7 @@ run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata,
     }
   }
 
-  save_csv(
-    make_pca_summary_table(evs$fit_trt$pca_fit, comparison_name, evs$fit_trt$preprocessing_label, "treatment"),
-    file.path(tab_dir, paste0(comparison_name, "_EVS_treatment_PCA_summary_normalized.csv"))
-  )
-  save_csv(
-    make_pca_summary_table(evs$fit_untrt$pca_fit, comparison_name, evs$fit_untrt$preprocessing_label, "control"),
-    file.path(tab_dir, paste0(comparison_name, "_EVS_control_PCA_summary_normalized.csv"))
-  )
-  save_csv(
-    make_pca_summary_table(evs$fit_trt_raw$pca_fit, comparison_name, evs$fit_trt_raw$preprocessing_label, "treatment"),
-    file.path(tab_dir, paste0(comparison_name, "_EVS_treatment_PCA_summary_raw.csv"))
-  )
-  save_csv(
-    make_pca_summary_table(evs$fit_untrt_raw$pca_fit, comparison_name, evs$fit_untrt_raw$preprocessing_label, "control"),
-    file.path(tab_dir, paste0(comparison_name, "_EVS_control_PCA_summary_raw.csv"))
-  )
+  # Removed from active script: pca summary csv exports.
 
   if (isTRUE(export_optional_evs_variance_profiles)) {
     variance_panel <- safe_plot_build(
@@ -4249,11 +4218,7 @@ run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata,
     df         <- fit$results
     fig_subdir <- dataset_fig_dirs[[nm]]
 
-    save_csv(df, file.path(tab_dir, paste0(full_dataset_name, "_results_full.csv")))
-    save_csv(subset(df, standard_significant), file.path(tab_dir, paste0(full_dataset_name, "_standard_significant.csv")))
-    save_csv(subset(df, HBFSS_significant),    file.path(tab_dir, paste0(full_dataset_name, "_HBFSS_significant.csv")))
-    save_csv(subset(df, effect_class == "strong_effect"), file.path(tab_dir, paste0(full_dataset_name, "_strong_effect.csv")))
-    save_csv(subset(df, effect_class == "weak_effect"),   file.path(tab_dir, paste0(full_dataset_name, "_weak_effect.csv")))
+  # Removed from active script: subset results csv exports.
 
     summary_row <- data.frame(
       comparison_name        = comparison_name,
@@ -4300,9 +4265,7 @@ run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata,
         NULL
       }
     )
-    if (!is.null(disp_resid)) {
-      save_csv(disp_resid, file.path(tab_dir, paste0(full_dataset_name, "_dispersion_residuals.csv")))
-    }
+  # Removed from active script: dispersion residual csv export.
 
     analysis_results[[nm]] <- list(
       dds         = fit$dds,
