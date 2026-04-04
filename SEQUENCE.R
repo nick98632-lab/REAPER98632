@@ -1,4 +1,9 @@
 
+log_step <- function(...) {
+  message(sprintf('[%s] %s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), paste0(..., collapse = '')))
+  flush.console()
+}
+
 # =============================================================================
 # SEQUENCE 10 ACTIVE CLEAN REWRITE
 # Current method only:
