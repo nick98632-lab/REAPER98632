@@ -6,11 +6,15 @@
 # 1. Read the raw count matrix.
 # 2. Normalize counts with DESeq2.
 # 3. Build treatment and control EVS loading tables from PC1 absolute loadings.
-# 4. Build local Fourier wave maps at every gene rank for NB-derived IOD and CV2.
-# 5. Build a treatment-control composite overlap curve on the shared EVS axis.
-# 6. Select the last crossing before divergence.
+# 4. Build local Fourier amplitude maps at every gene rank for NB-derived IOD and CV2.
+# 5. Build a treatment-control composite amplitude overlap curve on the shared EVS axis.
+# 6. Select the last local-amplitude crossing before divergence.
 # 7. Perform union-based eigenvector splitting at that cutoff rank.
 # 8. Export leading-edge and remainder datasets, tables, and panels.
+#
+# Interpretation: the local-amplitude crossing marks a transition in the dominant
+# oscillatory regime of the EVS-ranked data, such as a switch from IOD-dominant
+# to CV2-dominant local structure or the reverse.
 #
 # This script does not include:
 # - percentile gating
@@ -46,9 +50,8 @@ dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
 count_file <- file.path(input_dir, "WTTS-Seq_2022.2_DE_raw_read_numbers.csv")
 figure_dpi <- 320
 base_theme_size <- 10
-fourier_harmonics <- 2L
-local_window_fraction <- 0.12
-local_min_window_n <- 31L
+fourier_harmonics <- 1L
+local_window_fraction <- 0.005
 min_features_required <- 25L
 
 comparison_table <- data.frame(
@@ -271,7 +274,7 @@ build_shared_evs_table <- function(trt_loading_tbl, ctrl_loading_tbl) {
 }
 
 # =============================================================================
-# LOCAL FOURIER WAVE MAPS AT EVERY GENE
+# LOCAL FOURIER AMPLITUDE MAPS AT EVERY GENE
 # =============================================================================
 
 build_fourier_design <- function(rank_vec, n_harmonics = fourier_harmonics) {
@@ -285,25 +288,24 @@ build_fourier_design <- function(rank_vec, n_harmonics = fourier_harmonics) {
   out
 }
 
-fit_local_fourier_wave <- function(rank_vec, y_vec, n_harmonics = fourier_harmonics,
-                                   window_fraction = local_window_fraction,
-                                   min_window_n = local_min_window_n) {
+fit_local_fourier_amplitude <- function(rank_vec, y_vec, n_harmonics = fourier_harmonics,
+                                        window_fraction = local_window_fraction) {
   keep <- is.finite(rank_vec) & is.finite(y_vec)
   rank_vec <- as.numeric(rank_vec[keep])
   y_vec <- as.numeric(y_vec[keep])
 
   n <- length(rank_vec)
-  min_needed <- max(as.integer(2L * n_harmonics + 5L), as.integer(min_window_n))
+  min_needed <- as.integer(2L * n_harmonics + 1L)
   if (n < min_needed) {
-    stop("Not enough finite points to fit local Fourier waves at every gene.", call. = FALSE)
+    stop("Not enough finite points to fit local Fourier amplitudes at every gene.", call. = FALSE)
   }
 
-  half_window <- max(floor(n * window_fraction / 2), floor(min_needed / 2))
+  half_window <- max(1L, floor(n * window_fraction / 2))
   design_full <- build_fourier_design(rank_vec, n_harmonics = n_harmonics)
   x_cols <- c("x01", unlist(lapply(seq_len(n_harmonics), function(k) c(paste0("sin_", k), paste0("cos_", k)))))
   x_mat_full <- cbind(`(Intercept)` = 1, as.matrix(design_full[, x_cols, drop = FALSE]))
 
-  fitted_y <- rep(NA_real_, n)
+  local_amplitude <- rep(NA_real_, n)
   left_rank <- rep(NA_integer_, n)
   right_rank <- rep(NA_integer_, n)
   window_n <- rep(NA_integer_, n)
@@ -322,7 +324,16 @@ fit_local_fourier_wave <- function(rank_vec, y_vec, n_harmonics = fourier_harmon
     fit <- stats::lm.fit(x = x_mat_full[idx, , drop = FALSE], y = y_vec[idx])
     coef_vec <- fit$coefficients
     coef_vec[!is.finite(coef_vec)] <- 0
-    fitted_y[i] <- sum(x_mat_full[i, ] * coef_vec)
+
+    harmonic_amplitudes <- vapply(seq_len(n_harmonics), function(k) {
+      sin_name <- paste0("sin_", k)
+      cos_name <- paste0("cos_", k)
+      a <- if (sin_name %in% names(coef_vec)) unname(coef_vec[sin_name]) else 0
+      b <- if (cos_name %in% names(coef_vec)) unname(coef_vec[cos_name]) else 0
+      sqrt(a^2 + b^2)
+    }, numeric(1))
+
+    local_amplitude[i] <- sqrt(sum(harmonic_amplitudes^2))
     left_rank[i] <- as.integer(rank_vec[left_idx])
     right_rank[i] <- as.integer(rank_vec[right_idx])
     window_n[i] <- as.integer(length(idx))
@@ -330,7 +341,7 @@ fit_local_fourier_wave <- function(rank_vec, y_vec, n_harmonics = fourier_harmon
 
   data.frame(
     rank = as.integer(rank_vec),
-    fitted_y = fitted_y,
+    local_amplitude = local_amplitude,
     local_window_left_rank = left_rank,
     local_window_right_rank = right_rank,
     local_window_n = window_n,
@@ -356,12 +367,12 @@ build_group_wave_map <- function(loading_tbl) {
   df$log_iod_nb <- log10(df$iod_nb)
   df$log_cv2_nb <- log10(df$cv2_nb)
 
-  iod_wave <- fit_local_fourier_wave(df$rank, df$log_iod_nb)
-  cv2_wave <- fit_local_fourier_wave(df$rank, df$log_cv2_nb)
+  iod_wave <- fit_local_fourier_amplitude(df$rank, df$log_iod_nb)
+  cv2_wave <- fit_local_fourier_amplitude(df$rank, df$log_cv2_nb)
 
   wave_map <- df[, c("feature_id", "gene_symbol", "rank", "baseMean", "dispGeneEst"), drop = FALSE]
-  wave_map$iod_fitted <- iod_wave$fitted_y
-  wave_map$cv2_fitted <- cv2_wave$fitted_y
+  wave_map$iod_local_amplitude <- iod_wave$local_amplitude
+  wave_map$cv2_local_amplitude <- cv2_wave$local_amplitude
   wave_map$local_window_left_rank <- iod_wave$local_window_left_rank
   wave_map$local_window_right_rank <- iod_wave$local_window_right_rank
   wave_map$local_window_n <- iod_wave$local_window_n
@@ -373,19 +384,19 @@ build_group_wave_map <- function(loading_tbl) {
 # =============================================================================
 
 build_composite_wave_map <- function(trt_wave_map, ctrl_wave_map) {
-  trt_use <- trt_wave_map[, c("feature_id", "rank", "iod_fitted", "cv2_fitted", "local_window_left_rank", "local_window_right_rank", "local_window_n"), drop = FALSE]
-  ctrl_use <- ctrl_wave_map[, c("feature_id", "rank", "iod_fitted", "cv2_fitted", "local_window_left_rank", "local_window_right_rank", "local_window_n"), drop = FALSE]
+  trt_use <- trt_wave_map[, c("feature_id", "rank", "iod_local_amplitude", "cv2_local_amplitude", "local_window_left_rank", "local_window_right_rank", "local_window_n"), drop = FALSE]
+  ctrl_use <- ctrl_wave_map[, c("feature_id", "rank", "iod_local_amplitude", "cv2_local_amplitude", "local_window_left_rank", "local_window_right_rank", "local_window_n"), drop = FALSE]
 
-  names(trt_use) <- c("feature_id", "rank_trt", "iod_fitted_trt", "cv2_fitted_trt", "window_left_trt", "window_right_trt", "window_n_trt")
-  names(ctrl_use) <- c("feature_id", "rank_ctrl", "iod_fitted_ctrl", "cv2_fitted_ctrl", "window_left_ctrl", "window_right_ctrl", "window_n_ctrl")
+  names(trt_use) <- c("feature_id", "rank_trt", "iod_local_amplitude_trt", "cv2_local_amplitude_trt", "window_left_trt", "window_right_trt", "window_n_trt")
+  names(ctrl_use) <- c("feature_id", "rank_ctrl", "iod_local_amplitude_ctrl", "cv2_local_amplitude_ctrl", "window_left_ctrl", "window_right_ctrl", "window_n_ctrl")
 
   merged <- inner_join(trt_use, ctrl_use, by = "feature_id")
   merged <- merged %>%
     mutate(
       combined_rank = round(rowMeans(cbind(rank_trt, rank_ctrl), na.rm = TRUE)),
-      composite_iod = iod_fitted_trt + iod_fitted_ctrl,
-      composite_cv2 = cv2_fitted_trt + cv2_fitted_ctrl,
-      regime_difference = composite_iod - composite_cv2,
+      composite_iod_amplitude = iod_local_amplitude_trt + iod_local_amplitude_ctrl,
+      composite_cv2_amplitude = cv2_local_amplitude_trt + cv2_local_amplitude_ctrl,
+      regime_difference = composite_iod_amplitude - composite_cv2_amplitude,
       local_window_left_rank = pmin(window_left_trt, window_left_ctrl, na.rm = TRUE),
       local_window_right_rank = pmax(window_right_trt, window_right_ctrl, na.rm = TRUE),
       local_window_n = pmax(window_n_trt, window_n_ctrl, na.rm = TRUE)
@@ -542,7 +553,7 @@ run_stage1_method <- function(trt_loading_tbl, ctrl_loading_tbl, comparison_name
     leading_edge_union_n = split_obj$leading_edge_union_n,
     remainder_union_n = split_obj$remainder_union_n,
     n_total = split_obj$n_total,
-    selected_reason = "last_crossing_before_divergence"
+    selected_reason = "last_local_amplitude_crossing_before_divergence"
   )
 }
 
@@ -583,13 +594,13 @@ build_stage1_summary_table <- function(stage1_obj, comparison_name) {
 
 plot_group_wave_map <- function(group_wave_map, group_label, comparison_name) {
   ggplot(group_wave_map, aes(rank)) +
-    geom_line(aes(y = iod_fitted, color = "IOD"), linewidth = 0.9) +
-    geom_line(aes(y = cv2_fitted, color = "CV²"), linewidth = 0.9) +
+    geom_line(aes(y = iod_local_amplitude, color = "IOD"), linewidth = 0.9) +
+    geom_line(aes(y = cv2_local_amplitude, color = "CV²"), linewidth = 0.9) +
     scale_color_manual(values = c("IOD" = plot_colors$iod, "CV²" = plot_colors$cv2)) +
     labs(
-      title = paste0(comparison_name, " | ", group_label, " local Fourier wave map"),
+      title = paste0(comparison_name, " | ", group_label, " local Fourier amplitude map"),
       x = "EVS rank",
-      y = "Fitted log-scale value"
+      y = "Local amplitude"
     ) +
     plain_theme()
 }
@@ -597,20 +608,20 @@ plot_group_wave_map <- function(group_wave_map, group_label, comparison_name) {
 plot_composite_overlap <- function(stage1_obj, comparison_name) {
   df <- stage1_obj$composite_wave_map
   sc <- stage1_obj$selected_crossing
-  ymax <- max(c(df$composite_iod, df$composite_cv2), na.rm = TRUE)
+  ymax <- max(c(df$composite_iod_amplitude, df$composite_cv2_amplitude), na.rm = TRUE)
 
   p <- ggplot(df, aes(combined_rank)) +
-    geom_line(aes(y = composite_iod, color = "Composite IOD"), linewidth = 0.9) +
-    geom_line(aes(y = composite_cv2, color = "Composite CV²"), linewidth = 0.9) +
+    geom_line(aes(y = composite_iod_amplitude, color = "Composite IOD"), linewidth = 0.9) +
+    geom_line(aes(y = composite_cv2_amplitude, color = "Composite CV²"), linewidth = 0.9) +
     scale_color_manual(values = c("Composite IOD" = plot_colors$iod, "Composite CV²" = plot_colors$cv2)) +
     labs(
-      title = paste0(comparison_name, " | treatment-control overlap"),
+      title = paste0(comparison_name, " | treatment-control local amplitude overlap"),
       x = "Combined EVS rank",
-      y = "Composite fitted value"
+      y = "Composite local amplitude"
     ) +
     plain_theme()
 
-  if (isTRUE(stage1_obj$selected_reason == "last_crossing_before_divergence") && is.finite(sc$crossing_rank[1])) {
+  if (isTRUE(stage1_obj$selected_reason == "last_local_amplitude_crossing_before_divergence") && is.finite(sc$crossing_rank[1])) {
     p <- p +
       geom_vline(xintercept = sc$crossing_rank[1], linetype = "dashed", linewidth = 0.9, colour = plot_colors$diff) +
       annotate(
@@ -618,7 +629,7 @@ plot_composite_overlap <- function(stage1_obj, comparison_name) {
         x = sc$crossing_rank[1],
         y = ymax,
         label = paste0(
-          "Last crossing before divergence
+          "Last local-amplitude crossing before divergence
 ",
           "rank cutoff = ", stage1_obj$rank_cutoff, "
 ",
@@ -659,13 +670,13 @@ plot_difference_curve <- function(stage1_obj, comparison_name) {
     geom_hline(yintercept = 0, colour = "grey50", linewidth = 0.5) +
     geom_line(colour = plot_colors$diff, linewidth = 0.9) +
     labs(
-      title = paste0(comparison_name, " | IOD minus CV² crossing curve"),
+      title = paste0(comparison_name, " | IOD amplitude minus CV² amplitude"),
       x = "Combined EVS rank",
-      y = "IOD − CV²"
+      y = "IOD amplitude − CV² amplitude"
     ) +
     plain_theme()
 
-  if (isTRUE(stage1_obj$selected_reason == "last_crossing_before_divergence") && is.finite(sc$crossing_rank[1])) {
+  if (isTRUE(stage1_obj$selected_reason == "last_local_amplitude_crossing_before_divergence") && is.finite(sc$crossing_rank[1])) {
     p <- p +
       geom_vline(xintercept = sc$crossing_rank[1], linetype = "dashed", linewidth = 0.9, colour = plot_colors$diff) +
       geom_point(data = data.frame(combined_rank = sc$crossing_rank[1], regime_difference = 0), aes(combined_rank, regime_difference), inherit.aes = FALSE, size = 2) +
@@ -731,7 +742,7 @@ build_fourier_panel <- function(stage1_obj, comparison_name) {
     grobs = list(p1, p2, p3, p4),
     ncol = 2,
     top = grid::textGrob(
-      paste0(comparison_name, " | treatment, control, overlap, and crossing panels"),
+      paste0(comparison_name, " | treatment, control, local-amplitude overlap, and crossing panels"),
       gp = grid::gpar(fontface = "bold", cex = 1.05)
     )
   )
@@ -781,17 +792,17 @@ run_one_comparison <- function(comparison_row, count_matrix, annot_df) {
 
   save_csv(trt_loading_tbl, file.path(table_dir, paste0(comparison_name, "_treatment_loading_table.csv")))
   save_csv(ctrl_loading_tbl, file.path(table_dir, paste0(comparison_name, "_control_loading_table.csv")))
-  save_csv(stage1_obj$trt_wave_map, file.path(table_dir, paste0(comparison_name, "_treatment_local_fourier_wave_map.csv")))
-  save_csv(stage1_obj$ctrl_wave_map, file.path(table_dir, paste0(comparison_name, "_control_local_fourier_wave_map.csv")))
+  save_csv(stage1_obj$trt_wave_map, file.path(table_dir, paste0(comparison_name, "_treatment_local_fourier_amplitude_map.csv")))
+  save_csv(stage1_obj$ctrl_wave_map, file.path(table_dir, paste0(comparison_name, "_control_local_fourier_amplitude_map.csv")))
   save_csv(stage1_obj$shared_evs_tbl, file.path(table_dir, paste0(comparison_name, "_shared_evs_table.csv")))
-  save_csv(stage1_obj$composite_wave_map, file.path(table_dir, paste0(comparison_name, "_composite_local_fourier_wave_map.csv")))
+  save_csv(stage1_obj$composite_wave_map, file.path(table_dir, paste0(comparison_name, "_composite_local_fourier_amplitude_map.csv")))
   save_csv(stage1_obj$crossing_tbl, file.path(table_dir, paste0(comparison_name, "_crossing_table.csv")))
   save_csv(build_stage1_summary_table(stage1_obj, comparison_name), file.path(table_dir, paste0(comparison_name, "_stage1_summary.csv")))
 
-  save_plot(plot_group_wave_map(stage1_obj$trt_wave_map, "treatment", comparison_name), file.path(figure_dir, paste0(comparison_name, "_treatment_local_fourier_wave_map.png")))
-  save_plot(plot_group_wave_map(stage1_obj$ctrl_wave_map, "control", comparison_name), file.path(figure_dir, paste0(comparison_name, "_control_local_fourier_wave_map.png")))
-  save_plot(plot_composite_overlap(stage1_obj, comparison_name), file.path(figure_dir, paste0(comparison_name, "_treatment_control_overlap.png")))
-  save_plot(plot_difference_curve(stage1_obj, comparison_name), file.path(figure_dir, paste0(comparison_name, "_iod_minus_cv2_crossing_curve.png")))
+  save_plot(plot_group_wave_map(stage1_obj$trt_wave_map, "treatment", comparison_name), file.path(figure_dir, paste0(comparison_name, "_treatment_local_fourier_amplitude_map.png")))
+  save_plot(plot_group_wave_map(stage1_obj$ctrl_wave_map, "control", comparison_name), file.path(figure_dir, paste0(comparison_name, "_control_local_fourier_amplitude_map.png")))
+  save_plot(plot_composite_overlap(stage1_obj, comparison_name), file.path(figure_dir, paste0(comparison_name, "_treatment_control_local_amplitude_overlap.png")))
+  save_plot(plot_difference_curve(stage1_obj, comparison_name), file.path(figure_dir, paste0(comparison_name, "_iod_minus_cv2_amplitude_curve.png")))
   save_grob(build_fourier_panel(stage1_obj, comparison_name), file.path(figure_dir, paste0(comparison_name, "_fourier_panel.png")))
   save_grob(build_evs_panel(trt_loading_tbl, ctrl_loading_tbl, stage1_obj$rank_cutoff, comparison_name), file.path(figure_dir, paste0(comparison_name, "_evs_panel.png")))
 
@@ -807,7 +818,7 @@ run_one_comparison <- function(comparison_row, count_matrix, annot_df) {
     save_csv(matrix_to_export_table(leading_norm, annot_df), file.path(table_dir, paste0(comparison_name, "_leading_edge_normalized_counts.csv")))
     save_csv(matrix_to_export_table(remainder_norm, annot_df), file.path(table_dir, paste0(comparison_name, "_remainder_normalized_counts.csv")))
   } else {
-    save_csv(data.frame(note = "No crossing detected; split datasets were not created.", stringsAsFactors = FALSE), file.path(table_dir, paste0(comparison_name, "_split_status.csv")))
+    save_csv(data.frame(note = "No local-amplitude crossing detected; split datasets were not created.", stringsAsFactors = FALSE), file.path(table_dir, paste0(comparison_name, "_split_status.csv")))
   }
 
   build_stage1_summary_table(stage1_obj, comparison_name)
@@ -827,7 +838,7 @@ main <- function() {
   }))
 
   save_csv(all_summary, file.path(output_dir, "all_comparisons_stage1_summary.csv"))
-  cat("\nCompleted Stage 1 EVS + local Fourier rewrite. Output directory:\n", output_dir, "\n", sep = "")
+  cat("\nCompleted Stage 1 EVS + local Fourier amplitude rewrite. Output directory:\n", output_dir, "\n", sep = "")
 }
 
 main()
