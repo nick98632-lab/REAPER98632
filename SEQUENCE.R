@@ -299,6 +299,10 @@ fit_local_fourier_wave <- function(rank_vec, y_vec, n_harmonics = fourier_harmon
   }
 
   half_window <- max(floor(n * window_fraction / 2), floor(min_needed / 2))
+  design_full <- build_fourier_design(rank_vec, n_harmonics = n_harmonics)
+  x_cols <- c("x01", unlist(lapply(seq_len(n_harmonics), function(k) c(paste0("sin_", k), paste0("cos_", k)))))
+  x_mat_full <- cbind(`(Intercept)` = 1, as.matrix(design_full[, x_cols, drop = FALSE]))
+
   fitted_y <- rep(NA_real_, n)
   left_rank <- rep(NA_integer_, n)
   right_rank <- rep(NA_integer_, n)
@@ -314,18 +318,14 @@ fit_local_fourier_wave <- function(rank_vec, y_vec, n_harmonics = fourier_harmon
       if (right_idx < n) right_idx <- right_idx + 1L
     }
 
-    local_rank <- rank_vec[left_idx:right_idx]
-    local_y <- y_vec[left_idx:right_idx]
-    design_df <- build_fourier_design(local_rank, n_harmonics = n_harmonics)
-    design_df$y <- local_y
-    rhs <- paste(setdiff(names(design_df), c("y", "rank")), collapse = " + ")
-    fit <- stats::lm(stats::as.formula(paste("y ~", rhs)), data = design_df)
-    pred_df <- build_fourier_design(rank_vec[i], n_harmonics = n_harmonics)
-
-    fitted_y[i] <- as.numeric(stats::predict(fit, newdata = pred_df))
+    idx <- left_idx:right_idx
+    fit <- stats::lm.fit(x = x_mat_full[idx, , drop = FALSE], y = y_vec[idx])
+    coef_vec <- fit$coefficients
+    coef_vec[!is.finite(coef_vec)] <- 0
+    fitted_y[i] <- sum(x_mat_full[i, ] * coef_vec)
     left_rank[i] <- as.integer(rank_vec[left_idx])
     right_rank[i] <- as.integer(rank_vec[right_idx])
-    window_n[i] <- as.integer(right_idx - left_idx + 1L)
+    window_n[i] <- as.integer(length(idx))
   }
 
   data.frame(
@@ -474,11 +474,16 @@ build_eigenvector_split <- function(shared_evs_tbl, rank_cutoff) {
   )
 }
 
-run_stage1_method <- function(trt_loading_tbl, ctrl_loading_tbl) {
+run_stage1_method <- function(trt_loading_tbl, ctrl_loading_tbl, comparison_name = "") {
+  cat("Building treatment local Fourier wave map", if (nzchar(comparison_name)) paste0(" for ", comparison_name) else "", "...\n", sep = "")
   trt_wave_map <- build_group_wave_map(trt_loading_tbl)
+  cat("Building control local Fourier wave map", if (nzchar(comparison_name)) paste0(" for ", comparison_name) else "", "...\n", sep = "")
   ctrl_wave_map <- build_group_wave_map(ctrl_loading_tbl)
+  cat("Building shared EVS table", if (nzchar(comparison_name)) paste0(" for ", comparison_name) else "", "...\n", sep = "")
   shared_evs_tbl <- build_shared_evs_table(trt_loading_tbl, ctrl_loading_tbl)
+  cat("Building composite local Fourier overlap", if (nzchar(comparison_name)) paste0(" for ", comparison_name) else "", "...\n", sep = "")
   composite_wave_map <- build_composite_wave_map(trt_wave_map, ctrl_wave_map)
+  cat("Finding crossings", if (nzchar(comparison_name)) paste0(" for ", comparison_name) else "", "...\n", sep = "")
   crossing_tbl <- find_all_crossings(composite_wave_map)
   selected_crossing <- select_last_crossing_before_divergence(crossing_tbl)
   rank_cutoff <- max(1L, as.integer(selected_crossing$crossing_rank[1]))
@@ -676,13 +681,16 @@ run_one_comparison <- function(comparison_row, count_matrix, annot_df) {
   cat("\n--- Running ", comparison_name, " ---\n", sep = "")
 
   comp <- subset_comparison(count_matrix, comparison_row, meta_all)
+  cat("Estimating comparison-normalized counts...\n")
   norm_counts <- compute_normalized_counts(comp$count_matrix, comp$coldata)
+  cat("Estimating treatment NB metrics...\n")
   trt_metrics <- compute_group_feature_metrics(comp$count_matrix[, comp$trt_ids, drop = FALSE])
+  cat("Estimating control NB metrics...\n")
   ctrl_metrics <- compute_group_feature_metrics(comp$count_matrix[, comp$ctrl_ids, drop = FALSE])
   trt_loading_tbl <- compute_pc1_loading_table(norm_counts, comp$trt_ids, trt_metrics, annot_df)
   ctrl_loading_tbl <- compute_pc1_loading_table(norm_counts, comp$ctrl_ids, ctrl_metrics, annot_df)
 
-  stage1_obj <- run_stage1_method(trt_loading_tbl, ctrl_loading_tbl)
+  stage1_obj <- run_stage1_method(trt_loading_tbl, ctrl_loading_tbl, comparison_name = comparison_name)
 
   comparison_dir <- file.path(output_dir, comparison_name)
   table_dir <- file.path(comparison_dir, "tables")
