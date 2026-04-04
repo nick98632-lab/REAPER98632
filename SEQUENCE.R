@@ -896,56 +896,210 @@ plot_fourier_panel <- function(cmp, trt_wave, ctrl_wave, cmb, trt_bk, ctrl_bk, c
               top = textGrob(paste0(cmp, " | Fourier summary panel"), gp = gpar(fontface = "bold", cex = 1.04)))
 }
 
-plot_wald_hist <- function(z, title, fill_col = pal$grey) {
-  z <- as.numeric(z)
-  z <- z[is.finite(z) & !is.na(z)]
-  sm_n <- length(z); sm_mu <- if (sm_n) mean(z) else NA_real_; sm_sd <- if (sm_n > 1) sd(z) else NA_real_; sm_sk <- safe_skew(z)
-  ggplot(data.frame(wald_stat = z), aes(wald_stat)) +
-    geom_histogram(bins = hist_bins, fill = fill_col, color = "white", alpha = 0.90) +
-    geom_vline(xintercept = 0, linetype = "dashed", linewidth = 0.55, colour = pal$threshold) +
-    labs(title = title,
-         subtitle = paste0("n = ", sm_n, " | mean = ", fmt(sm_mu), " | sd = ", fmt(sm_sd), " | skew = ", fmt(sm_sk)),
-         x = "Wald statistic", y = "Count") +
-    theme_seq()
+fmt_num <- function(x, d = 3) {
+  if (!is.finite(x) || is.na(x)) return("NA")
+  formatC(x, digits = d, format = "fg", flag = "#")
 }
 
-plot_raw_wald_scan <- function(scan, cmp, trt_rank = NA_integer_, ctrl_rank = NA_integer_) {
-  if (is.null(scan) || is.null(scan$fine) || !nrow(scan$fine)) return(NULL)
-  fine <- scan$fine; coarse <- scan$coarse; sel <- scan$selected_row; sel_rank <- scan$selected_rank
-  p <- ggplot(fine, aes(rank_index, total_distortion)) +
-    geom_line(linewidth = 0.8, colour = "grey30") +
-    geom_point(size = 1.2, colour = "grey30")
-  if (!is.null(coarse) && nrow(coarse)) p <- p + geom_point(data = coarse, aes(rank_index, total_distortion),
-                                                            inherit.aes = FALSE, shape = 21, size = 1.8, stroke = 0.35,
-                                                            fill = "white", colour = pal$threshold)
-  if (is.finite(trt_rank) && !is.na(trt_rank)) p <- p + geom_vline(xintercept = trt_rank, linetype = "dotted", linewidth = 0.8, colour = pal$treatment)
-  if (is.finite(ctrl_rank) && !is.na(ctrl_rank)) p <- p + geom_vline(xintercept = ctrl_rank, linetype = "dotted", linewidth = 0.8, colour = pal$control)
-  if (is.finite(sel_rank) && !is.na(sel_rank) && !is.null(sel) && nrow(sel)) {
-    p <- p + geom_vline(xintercept = sel_rank, linetype = "solid", linewidth = 1.0, colour = pal$threshold) +
-      geom_point(data = sel, aes(rank_index, total_distortion), inherit.aes = FALSE,
-                 shape = 24, size = 2.6, stroke = 0.45, fill = "white", colour = pal$threshold) +
-      annotate("label", x = sel_rank, y = sel$total_distortion[1],
-               label = paste0("Selected rank = ", sel_rank, "\nDistortion = ", fmt(sel$total_distortion[1])),
-               fill = "white", colour = pal$threshold, size = 2.7, label.size = 0.15, vjust = -0.8)
+rank_to_pct <- function(rank_index, n_total) {
+  if (!is.finite(rank_index) || !is.finite(n_total) || n_total <= 0) return(NA_real_)
+  rank_index / n_total
+}
+
+wald_sum <- function(z) {
+  z <- as.numeric(z)
+  z <- z[is.finite(z) & !is.na(z)]
+  if (length(z) < 3) {
+    return(data.frame(n = length(z), mean = NA_real_, sd = NA_real_, skew = NA_real_, stringsAsFactors = FALSE))
   }
-  p + labs(title = paste0(cmp, " | raw-Wald bracket search"),
-           subtitle = "Grey line = fine scan. Open circles = coarse scan.",
-           x = "Candidate cutoff rank", y = "Total distortion") +
+  data.frame(
+    n = length(z),
+    mean = mean(z, na.rm = TRUE),
+    sd = stats::sd(z, na.rm = TRUE),
+    skew = safe_skew(z),
+    stringsAsFactors = FALSE
+  )
+}
+
+plot_wald_hist <- function(z, title_txt, subtitle_txt = NULL, fill_col = pal$grey) {
+  z <- as.numeric(z)
+  z <- z[is.finite(z) & !is.na(z)]
+  df <- data.frame(wald = z, stringsAsFactors = FALSE)
+  sm <- wald_sum(z)
+  stat_txt <- paste0(
+    "n = ", sm$n[1],
+    " | mean = ", fmt_num(sm$mean[1]),
+    " | sd = ", fmt_num(sm$sd[1]),
+    " | skew = ", fmt_num(sm$skew[1])
+  )
+  ggplot(df, aes(wald)) +
+    geom_histogram(bins = hist_bins, fill = fill_col, color = "white", alpha = 0.9) +
+    geom_vline(xintercept = 0, linetype = "dashed", linewidth = 0.7, colour = pal$threshold) +
+    labs(
+      title = title_txt,
+      subtitle = paste(c(subtitle_txt, stat_txt), collapse = "
+"),
+      x = "Wald statistic",
+      y = "Count"
+    ) +
+    theme_seq() +
+    theme(
+      plot.title = element_text(size = base_theme_size, hjust = 0.5),
+      plot.subtitle = element_text(size = base_theme_size - 1, hjust = 0.5, lineheight = 1.0)
+    )
+}
+
+plot_raw_wald_search <- function(scan, cmp, trt_rank = NA_integer_, ctrl_rank = NA_integer_) {
+  if (is.null(scan) || is.null(scan$fine) || !nrow(scan$fine)) return(NULL)
+  fine <- as.data.frame(scan$fine, stringsAsFactors = FALSE)
+  coarse <- if (!is.null(scan$coarse)) as.data.frame(scan$coarse, stringsAsFactors = FALSE) else data.frame()
+  sel <- as.data.frame(scan$selected_row, stringsAsFactors = FALSE)
+  sel_rank <- as.integer(scan$selected_rank)
+  n_total <- max(fine$n_leading_edge + fine$n_remainder, na.rm = TRUE)
+  sel_pct <- rank_to_pct(sel_rank, n_total)
+  trt_pct <- rank_to_pct(trt_rank, n_total)
+  ctrl_pct <- rank_to_pct(ctrl_rank, n_total)
+  ann_txt <- paste0(
+    "Final selected cutoff
+",
+    "rank = ", sel_rank,
+    " | pct = ", fmt_num(sel_pct, 4),
+    "
+distortion = ", fmt_num(sel$total_distortion[1]),
+    "
+lead n = ", sel$n_leading_edge[1],
+    " | rem n = ", sel$n_remainder[1]
+  )
+  p <- ggplot(fine, aes(rank_index, total_distortion)) +
+    geom_line(linewidth = 0.85, colour = "grey35") +
+    geom_point(size = 1.0, colour = "grey35")
+  if (nrow(coarse)) {
+    p <- p + geom_point(
+      data = coarse,
+      aes(rank_index, total_distortion),
+      inherit.aes = FALSE,
+      shape = 21,
+      size = 1.6,
+      stroke = 0.25,
+      fill = "white",
+      colour = pal$threshold
+    )
+  }
+  ymax <- max(fine$total_distortion, na.rm = TRUE)
+  if (is.finite(trt_rank) && !is.na(trt_rank)) {
+    p <- p +
+      geom_vline(xintercept = trt_rank, linetype = "dotted", linewidth = 0.9, colour = pal$treatment) +
+      annotate(
+        "label",
+        x = trt_rank,
+        y = ymax * 0.98,
+        label = paste0("Treatment backup
+rank = ", trt_rank, "
+pct = ", fmt_num(trt_pct, 4)),
+        fill = "white",
+        colour = pal$treatment,
+        size = 2.6,
+        label.size = 0.15,
+        vjust = 1
+      )
+  }
+  if (is.finite(ctrl_rank) && !is.na(ctrl_rank)) {
+    p <- p +
+      geom_vline(xintercept = ctrl_rank, linetype = "dotted", linewidth = 0.9, colour = pal$control) +
+      annotate(
+        "label",
+        x = ctrl_rank,
+        y = ymax * 0.88,
+        label = paste0("Control backup
+rank = ", ctrl_rank, "
+pct = ", fmt_num(ctrl_pct, 4)),
+        fill = "white",
+        colour = pal$control,
+        size = 2.6,
+        label.size = 0.15,
+        vjust = 1
+      )
+  }
+  p +
+    geom_vline(xintercept = sel_rank, linetype = "solid", linewidth = 1.1, colour = pal$threshold) +
+    geom_point(
+      data = sel,
+      aes(rank_index, total_distortion),
+      inherit.aes = FALSE,
+      shape = 24,
+      size = 2.6,
+      stroke = 0.35,
+      fill = "white",
+      colour = pal$threshold
+    ) +
+    annotate(
+      "label",
+      x = sel_rank,
+      y = sel$total_distortion[1],
+      label = ann_txt,
+      fill = "white",
+      colour = pal$threshold,
+      size = 2.7,
+      label.size = 0.15,
+      hjust = 1,
+      vjust = 1
+    ) +
+    labs(
+      title = paste0(cmp, " | Bracketed raw-Wald cutoff search"),
+      subtitle = paste0(
+        "Search performed only between the treatment and control backup cutoffs.
+",
+        "Total distortion = |mean| + |sd - 1| + 0.5*|skew|. The final selected cutoff minimizes total distortion."
+      ),
+      x = "Candidate cutoff rank",
+      y = "Total distortion"
+    ) +
     theme_seq()
 }
 
 plot_raw_wald_panel <- function(cmp, scan, trt_rank = NA_integer_, ctrl_rank = NA_integer_) {
   if (is.null(scan) || is.null(scan$ordered_wald) || !nrow(scan$ordered_wald)) return(NULL)
-  ow <- scan$ordered_wald; sel_rank <- scan$selected_rank
+  ow <- as.data.frame(scan$ordered_wald, stringsAsFactors = FALSE)
+  sel_rank <- as.integer(scan$selected_rank)
+  sel_pct <- rank_to_pct(sel_rank, nrow(ow))
   z_raw <- ow$wald_stat
   z_lead <- ow$wald_stat[seq_len(sel_rank)]
   z_rem <- ow$wald_stat[(sel_rank + 1L):nrow(ow)]
-  p1 <- plot_wald_hist(z_raw, paste0(cmp, " | Raw dataset"), pal$grey)
-  p2 <- plot_raw_wald_scan(scan, cmp, trt_rank, ctrl_rank)
-  p3 <- plot_wald_hist(z_lead, paste0(cmp, " | Leading edge at rank ", sel_rank), pal$treatment)
-  p4 <- plot_wald_hist(z_rem, paste0(cmp, " | Remainder at rank ", sel_rank), pal$control)
-  arrangeGrob(p1, p2, p3, p4, ncol = 2,
-              top = textGrob(paste0(cmp, " | Raw-Wald cutoff selection panel"), gp = gpar(fontface = "bold", cex = 1.04)))
+  p1 <- plot_wald_hist(
+    z_raw,
+    paste0(cmp, " | Raw dataset"),
+    "Full unsplit Wald-statistic distribution used as the baseline reference before EVS splitting."
+  )
+  p2 <- plot_raw_wald_search(scan, cmp, trt_rank, ctrl_rank)
+  p3 <- plot_wald_hist(
+    z_lead,
+    paste0(cmp, " | Leading-edge subset"),
+    paste0("Features ranked above the final selected cutoff.
+Selected rank = ", sel_rank,
+           " | selected percentile = ", fmt_num(sel_pct, 4)),
+    pal$treatment
+  )
+  p4 <- plot_wald_hist(
+    z_rem,
+    paste0(cmp, " | Remainder subset"),
+    paste0("Features ranked below the final selected cutoff.
+Selected rank = ", sel_rank,
+           " | selected percentile = ", fmt_num(sel_pct, 4)),
+    pal$control
+  )
+  arrangeGrob(
+    p1, p2, p3, p4,
+    ncol = 2,
+    top = textGrob(paste0(cmp, " | Raw-Wald cutoff selection panel"), gp = gpar(fontface = "bold", cex = 1.06)),
+    bottom = textGrob(
+      paste0(
+        "Top left: raw unsplit Wald-statistic distribution. ",
+        "Top right: bracketed cutoff scan between treatment and control backup cutoffs. ",
+        "Bottom left/right: Wald-statistic distributions for the leading-edge and remainder subsets created by the final selected cutoff."
+      ),
+      gp = gpar(cex = 0.86)
+    )
+  )
 }
 
 # -----------------------------------------------------------------------------
