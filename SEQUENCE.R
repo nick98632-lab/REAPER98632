@@ -1,13 +1,13 @@
 # =============================================================================
 # SEQUENCE STAGE 1 REWRITE
-# EVS + FULL-AXIS FOURIER + UNION-BASED EIGENVECTOR SPLITTING
+# EVS + LOCAL FOURIER AT EVERY GENE + UNION-BASED EIGENVECTOR SPLITTING
 # =============================================================================
 # What this script does
 # 1. Reads the raw count matrix.
 # 2. Builds normalized counts with DESeq2 for each comparison.
 # 3. Builds treatment and control EVS loading tables from PC1 absolute loadings.
-# 4. Computes full-axis Fourier fits for IOD and CV2 within treatment and control.
-# 5. Combines the treatment and control fitted curves across the full ranked axis.
+# 4. Computes local Fourier fits centered at every gene rank for IOD and CV2 within treatment and control.
+# 5. Combines the treatment and control local fitted curves across the full ranked axis.
 # 6. Selects the last crossing before divergence across the full dataset.
 # 7. Projects that rank cutoff back to treatment and control EVS ranks.
 # 8. Defines the leading edge as the union of treatment and control members with
@@ -45,7 +45,7 @@ repo_dir <- getwd()
 input_dir <- file.path(repo_dir, "data")
 output_root <- file.path(repo_dir, "exports")
 analysis_stamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
-output_dir <- file.path(output_root, paste0("sequence_stage1_evs_fourier_full_axis_", analysis_stamp))
+output_dir <- file.path(output_root, paste0("sequence_stage1_evs_fourier_local_every_gene_", analysis_stamp))
 dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
 
 auto_count_file <- file.path(input_dir, "WTTS-Seq_2022.2_DE_raw_read_numbers.csv")
@@ -54,6 +54,8 @@ count_file <- auto_count_file
 figure_dpi <- 320
 base_theme_size <- 10
 fourier_harmonics <- 2L
+local_fourier_window_fraction <- 0.12
+local_fourier_min_window_n <- 31L
 
 comparison_table <- data.frame(
   comparison_name = c("RT0_ZT6", "RT2_ZT8", "RT4_ZT10", "RT8_ZT14"),
@@ -245,6 +247,7 @@ compute_pc1_loading_table <- function(norm_counts, sample_ids, feature_metrics, 
   list(pca_fit = pca_fit, loading_table = loading_tbl)
 }
 
+
 build_fourier_design <- function(rank_vec, n_harmonics = fourier_harmonics) {
   x <- as.numeric(rank_vec)
   x01 <- (x - min(x)) / max(1e-12, max(x) - min(x))
@@ -256,25 +259,58 @@ build_fourier_design <- function(rank_vec, n_harmonics = fourier_harmonics) {
   design_df
 }
 
-fit_fourier_curve <- function(rank_vec, y_vec, n_harmonics = fourier_harmonics) {
+fit_local_fourier_at_every_gene <- function(rank_vec, y_vec, n_harmonics = fourier_harmonics,
+                                            window_fraction = local_fourier_window_fraction,
+                                            min_window_n = local_fourier_min_window_n) {
   keep <- is.finite(rank_vec) & is.finite(y_vec)
   rank_vec <- as.numeric(rank_vec[keep])
   y_vec <- as.numeric(y_vec[keep])
 
-  if (length(rank_vec) < (2L * n_harmonics + 5L)) {
-    stop("Not enough finite points to fit the Fourier model.", call. = FALSE)
+  n <- length(rank_vec)
+  min_needed <- max(as.integer(2L * n_harmonics + 5L), as.integer(min_window_n))
+  if (n < min_needed) {
+    stop("Not enough finite points to fit the local Fourier model at every gene.", call. = FALSE)
   }
 
-  design_df <- build_fourier_design(rank_vec, n_harmonics = n_harmonics)
-  design_df$y <- y_vec
-  rhs <- paste(setdiff(names(design_df), c("y", "rank_index")), collapse = " + ")
-  fit <- stats::lm(stats::as.formula(paste("y ~", rhs)), data = design_df)
-  fitted_vals <- as.numeric(stats::predict(fit, newdata = design_df))
+  half_window <- max(floor(n * window_fraction / 2), floor(min_needed / 2))
+  fitted_vals <- rep(NA_real_, n)
+  left_rank <- rep(NA_integer_, n)
+  right_rank <- rep(NA_integer_, n)
+  window_n <- rep(NA_integer_, n)
+
+  for (i in seq_len(n)) {
+    left_idx <- max(1L, i - half_window)
+    right_idx <- min(n, i + half_window)
+
+    while ((right_idx - left_idx + 1L) < min_needed && (left_idx > 1L || right_idx < n)) {
+      if (left_idx > 1L) left_idx <- left_idx - 1L
+      if ((right_idx - left_idx + 1L) >= min_needed) break
+      if (right_idx < n) right_idx <- right_idx + 1L
+    }
+
+    local_rank <- rank_vec[left_idx:right_idx]
+    local_y <- y_vec[left_idx:right_idx]
+    design_df <- build_fourier_design(local_rank, n_harmonics = n_harmonics)
+    design_df$y <- local_y
+    rhs <- paste(setdiff(names(design_df), c("y", "rank_index")), collapse = " + ")
+    fit <- stats::lm(stats::as.formula(paste("y ~", rhs)), data = design_df)
+
+    pred_df <- build_fourier_design(rank_vec[i], n_harmonics = n_harmonics)
+    fitted_vals[i] <- as.numeric(stats::predict(fit, newdata = pred_df))
+    left_rank[i] <- as.integer(rank_vec[left_idx])
+    right_rank[i] <- as.integer(rank_vec[right_idx])
+    window_n[i] <- as.integer(right_idx - left_idx + 1L)
+  }
 
   list(
-    fit = fit,
     fitted_y = fitted_vals,
-    residual_y = y_vec - fitted_vals
+    window_table = data.frame(
+      rank = as.integer(rank_vec),
+      local_window_left_rank = left_rank,
+      local_window_right_rank = right_rank,
+      local_window_n = window_n,
+      stringsAsFactors = FALSE
+    )
   )
 }
 
@@ -297,14 +333,17 @@ build_group_fourier_map <- function(loading_tbl) {
   df$log_iod_nb <- log10(df$iod_nb)
   df$log_cv2_nb <- log10(df$cv2_nb)
 
-  iod_fit <- fit_fourier_curve(df$rank, df$log_iod_nb)
-  cv2_fit <- fit_fourier_curve(df$rank, df$log_cv2_nb)
+  iod_fit <- fit_local_fourier_at_every_gene(df$rank, df$log_iod_nb)
+  cv2_fit <- fit_local_fourier_at_every_gene(df$rank, df$log_cv2_nb)
 
   wave_map <- data.frame(
     feature_id = df$feature_id,
     rank = df$rank,
     iod_fitted = iod_fit$fitted_y,
     cv2_fitted = cv2_fit$fitted_y,
+    local_window_left_rank = iod_fit$window_table$local_window_left_rank,
+    local_window_right_rank = iod_fit$window_table$local_window_right_rank,
+    local_window_n = iod_fit$window_table$local_window_n,
     stringsAsFactors = FALSE
   )
 
@@ -336,21 +375,25 @@ build_shared_combined_loading_table <- function(trt_loading_tbl, ctrl_loading_tb
 }
 
 combine_treatment_control_fourier_maps <- function(trt_wave_obj, ctrl_wave_obj) {
-  trt_map <- trt_wave_obj$wave_map[, c("feature_id", "rank", "iod_fitted", "cv2_fitted")]
-  ctrl_map <- ctrl_wave_obj$wave_map[, c("feature_id", "rank", "iod_fitted", "cv2_fitted")]
+  trt_map <- trt_wave_obj$wave_map[, c("feature_id", "rank", "iod_fitted", "cv2_fitted", "local_window_left_rank", "local_window_right_rank", "local_window_n")]
+  ctrl_map <- ctrl_wave_obj$wave_map[, c("feature_id", "rank", "iod_fitted", "cv2_fitted", "local_window_left_rank", "local_window_right_rank", "local_window_n")]
 
-  names(trt_map) <- c("feature_id", "rank_trt", "iod_fitted_trt", "cv2_fitted_trt")
-  names(ctrl_map) <- c("feature_id", "rank_ctrl", "iod_fitted_ctrl", "cv2_fitted_ctrl")
+  names(trt_map) <- c("feature_id", "rank_trt", "iod_fitted_trt", "cv2_fitted_trt", "local_window_left_rank_trt", "local_window_right_rank_trt", "local_window_n_trt")
+  names(ctrl_map) <- c("feature_id", "rank_ctrl", "iod_fitted_ctrl", "cv2_fitted_ctrl", "local_window_left_rank_ctrl", "local_window_right_rank_ctrl", "local_window_n_ctrl")
 
   inner_join(trt_map, ctrl_map, by = "feature_id") %>%
     mutate(
       combined_center_rank = round(rowMeans(cbind(rank_trt, rank_ctrl), na.rm = TRUE)),
       composite_iod = iod_fitted_trt + iod_fitted_ctrl,
       composite_cv2 = cv2_fitted_trt + cv2_fitted_ctrl,
-      regime_difference = composite_iod - composite_cv2
+      regime_difference = composite_iod - composite_cv2,
+      local_window_left_rank = pmin(local_window_left_rank_trt, local_window_left_rank_ctrl, na.rm = TRUE),
+      local_window_right_rank = pmax(local_window_right_rank_trt, local_window_right_rank_ctrl, na.rm = TRUE),
+      local_window_n = pmax(local_window_n_trt, local_window_n_ctrl, na.rm = TRUE)
     ) %>%
     arrange(combined_center_rank, feature_id)
 }
+
 
 find_crossings <- function(combined_wave_df) {
   df <- combined_wave_df %>%
@@ -391,7 +434,7 @@ find_crossings <- function(combined_wave_df) {
   }
 
   if (!length(out)) {
-    stop("No crossings were found across the full ranked axis.", call. = FALSE)
+    stop("No crossings were found across the local Fourier wave map.", call. = FALSE)
   }
 
   bind_rows(out) %>% arrange(crossing_rank)
@@ -486,7 +529,7 @@ plot_group_fourier_map <- function(wave_obj, group_label, comparison_name) {
     geom_line(aes(y = cv2_fitted, color = "CV²"), linewidth = 0.9) +
     scale_color_manual(values = c("IOD" = plot_palette$treatment, "CV²" = plot_palette$control)) +
     labs(
-      title = paste0(comparison_name, " | ", group_label, " full-axis Fourier fit"),
+      title = paste0(comparison_name, " | ", group_label, " local Fourier fit at every gene"),
       x = "EVS rank",
       y = "Fitted log-scale value"
     ) +
@@ -553,7 +596,7 @@ plot_difference_curve <- function(stage1_obj, comparison_name) {
       vjust = -0.8
     ) +
     labs(
-      title = paste0(comparison_name, " | IOD minus CV² crossing curve"),
+      title = paste0(comparison_name, " | IOD minus CV² local crossing curve"),
       x = "Combined EVS rank",
       y = "IOD − CV²"
     ) +
@@ -593,7 +636,7 @@ build_summary_panel <- function(stage1_obj, comparison_name) {
     grobs = list(p1, p2, p3, p4),
     ncol = 2,
     top = grid::textGrob(
-      paste0(comparison_name, " | treatment, control, overlap, and crossing panels"),
+      paste0(comparison_name, " | treatment, control, overlap, and local crossing panels"),
       gp = grid::gpar(fontface = "bold", cex = 1.05)
     )
   )
@@ -666,9 +709,9 @@ run_one_comparison <- function(comparison_row, count_matrix, annot_df) {
 
   save_csv(trt_loading$loading_table, file.path(tab_dir, paste0(comparison_name, "_treatment_loading_table.csv")))
   save_csv(ctrl_loading$loading_table, file.path(tab_dir, paste0(comparison_name, "_control_loading_table.csv")))
-  save_csv(stage1_obj$trt_wave_obj$wave_map, file.path(tab_dir, paste0(comparison_name, "_treatment_full_axis_fourier_map.csv")))
-  save_csv(stage1_obj$ctrl_wave_obj$wave_map, file.path(tab_dir, paste0(comparison_name, "_control_full_axis_fourier_map.csv")))
-  save_csv(stage1_obj$combined_wave_df, file.path(tab_dir, paste0(comparison_name, "_combined_full_axis_fourier_map.csv")))
+  save_csv(stage1_obj$trt_wave_obj$wave_map, file.path(tab_dir, paste0(comparison_name, "_treatment_local_every_gene_fourier_map.csv")))
+  save_csv(stage1_obj$ctrl_wave_obj$wave_map, file.path(tab_dir, paste0(comparison_name, "_control_local_every_gene_fourier_map.csv")))
+  save_csv(stage1_obj$combined_wave_df, file.path(tab_dir, paste0(comparison_name, "_combined_local_every_gene_fourier_map.csv")))
   save_csv(stage1_obj$crossing_tbl, file.path(tab_dir, paste0(comparison_name, "_crossing_table.csv")))
   save_csv(build_stage1_summary_table(stage1_obj, comparison_name), file.path(tab_dir, paste0(comparison_name, "_stage1_summary.csv")))
   save_csv(stage1_obj$split_obj$membership_tbl, file.path(tab_dir, paste0(comparison_name, "_split_membership_table.csv")))
@@ -679,8 +722,8 @@ run_one_comparison <- function(comparison_row, count_matrix, annot_df) {
   save_csv(matrix_to_export_table(leading_norm, annot_df), file.path(tab_dir, paste0(comparison_name, "_leading_edge_normalized_counts.csv")))
   save_csv(matrix_to_export_table(remainder_norm, annot_df), file.path(tab_dir, paste0(comparison_name, "_remainder_normalized_counts.csv")))
 
-  save_plot(plot_group_fourier_map(stage1_obj$trt_wave_obj, "treatment", comparison_name), file.path(fig_dir, paste0(comparison_name, "_treatment_full_axis_fourier_fit.png")))
-  save_plot(plot_group_fourier_map(stage1_obj$ctrl_wave_obj, "control", comparison_name), file.path(fig_dir, paste0(comparison_name, "_control_full_axis_fourier_fit.png")))
+  save_plot(plot_group_fourier_map(stage1_obj$trt_wave_obj, "treatment", comparison_name), file.path(fig_dir, paste0(comparison_name, "_treatment_local_every_gene_fourier_fit.png")))
+  save_plot(plot_group_fourier_map(stage1_obj$ctrl_wave_obj, "control", comparison_name), file.path(fig_dir, paste0(comparison_name, "_control_local_every_gene_fourier_fit.png")))
   save_plot(plot_composite_overlap(stage1_obj, comparison_name), file.path(fig_dir, paste0(comparison_name, "_treatment_control_composite_overlap.png")))
   save_plot(plot_difference_curve(stage1_obj, comparison_name), file.path(fig_dir, paste0(comparison_name, "_iod_minus_cv2_crossing_curve.png")))
   save_grob(build_summary_panel(stage1_obj, comparison_name), file.path(fig_dir, paste0(comparison_name, "_fourier_summary_panel.png")))
