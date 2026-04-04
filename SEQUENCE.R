@@ -578,7 +578,7 @@ backup_crossing <- function(wave_obj, label = "group") {
   df <- wave_obj$wave
   diff_df <- data.frame(percentile = df$percentile,
                         combined_center_rank = round(df$center_rank),
-                        diff = df$iod_amp - df$cv2_amp, stringsAsFactors = FALSE)
+                        diff = df$iod_sm - df$cv2_sm, stringsAsFactors = FALSE)
   tab <- find_crossings(diff_df)
   tab <- label_stable(diff_df, tab)
   if (!nrow(tab)) return(list(selected = NULL, reason = paste0(label, "_no_crossing"), table = tab, diff_df = diff_df))
