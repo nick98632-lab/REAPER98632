@@ -510,6 +510,60 @@ build_nb_variance_curve <- function(loading_tbl,
 # LOCAL FOURIER SHARED-CUTOFF METHOD
 # -----------------------------------------------------------------------------
 
+
+build_local_fourier_design <- function(x, n_harmonics = fourier_harmonics) {
+  x <- as.numeric(x)
+  x01 <- (x - min(x)) / max(1e-12, (max(x) - min(x)))
+  out <- data.frame(x = x01)
+  for (k in seq_len(n_harmonics)) {
+    out[[paste0("sin_", k)]] <- sin(2 * pi * k * x01)
+    out[[paste0("cos_", k)]] <- cos(2 * pi * k * x01)
+  }
+  out
+}
+
+fit_local_fourier <- function(rank_vec, y_vec, n_harmonics = fourier_harmonics) {
+  rank_vec <- as.numeric(rank_vec)
+  y_vec <- as.numeric(y_vec)
+
+  keep <- is.finite(rank_vec) & !is.na(rank_vec) & is.finite(y_vec) & !is.na(y_vec)
+  rank_vec <- rank_vec[keep]
+  y_vec <- y_vec[keep]
+
+  if (length(rank_vec) < (2 * n_harmonics + 5L)) return(NULL)
+
+  y_sd <- suppressWarnings(stats::sd(y_vec, na.rm = TRUE))
+  if (!is.finite(y_sd) || is.na(y_sd) || y_sd == 0) return(NULL)
+
+  dd <- build_local_fourier_design(rank_vec, n_harmonics = n_harmonics)
+  dd$y <- y_vec
+
+  rhs <- paste(colnames(dd)[colnames(dd) != "y"], collapse = " + ")
+  fm <- stats::as.formula(paste("y ~", rhs))
+
+  fit <- tryCatch(stats::lm(fm, data = dd), error = function(e) NULL)
+  if (is.null(fit)) return(NULL)
+
+  fitted_y <- as.numeric(stats::predict(fit, newdata = dd))
+  residual_y <- dd$y - fitted_y
+
+  local_amplitude <- 0.5 * (max(fitted_y, na.rm = TRUE) - min(fitted_y, na.rm = TRUE))
+  peak_idx <- which.max(fitted_y)
+  trough_idx <- which.min(fitted_y)
+  center_rank <- mean(c(rank_vec[peak_idx], rank_vec[trough_idx]))
+
+  list(
+    fit = fit,
+    fitted_y = fitted_y,
+    residual_y = residual_y,
+    local_amplitude = local_amplitude,
+    peak_rank = rank_vec[peak_idx],
+    trough_rank = rank_vec[trough_idx],
+    center_rank = center_rank,
+    residual_sd = stats::sd(residual_y, na.rm = TRUE)
+  )
+}
+
 build_ranked_fourier_metric_table <- function(loading_tbl,
                                               mean_col = "baseMean",
                                               dispersion_col = "dispGeneEst") {
