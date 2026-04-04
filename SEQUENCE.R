@@ -640,7 +640,6 @@ plot_composite_overlap <- function(stage1_obj, comparison_name) {
         fill = "white",
         colour = plot_colors$diff,
         size = 3,
-        label.size = 0.15,
         vjust = -0.5
       )
   } else {
@@ -654,7 +653,6 @@ Diagnostic plot only",
         fill = "white",
         colour = plot_colors$diff,
         size = 3,
-        label.size = 0.15,
         vjust = -0.5
       )
   }
@@ -688,7 +686,6 @@ plot_difference_curve <- function(stage1_obj, comparison_name) {
         fill = "white",
         colour = plot_colors$diff,
         size = 3,
-        label.size = 0.15,
         vjust = -0.8
       )
   } else {
@@ -701,7 +698,6 @@ plot_difference_curve <- function(stage1_obj, comparison_name) {
         fill = "white",
         colour = plot_colors$diff,
         size = 3,
-        label.size = 0.15,
         vjust = -0.8
       )
   }
