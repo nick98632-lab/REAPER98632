@@ -1,2 +1,0 @@
-"rank_index","n_leading_edge","n_remainder","leading_mean_abs","leading_sd_dev","leading_skew_abs","leading_p_uniform_deviation","leading_distortion","remainder_mean_abs","remainder_sd_dev","remainder_skew_abs","remainder_p_uniform_deviation","remainder_distortion","total_distortion","split_score"
-5659,5659,25921,0.0566307528624962,0.102425848595699,0.0826717848075699,0.00176432480799232,0.202156818669972,0.0219571328095318,0.0927326854449116,0.0419482915018072,0.00501263529802698,0.140676599303374,0.342833417973346,-0.342833417973346
