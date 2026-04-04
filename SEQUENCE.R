@@ -76,7 +76,7 @@ lfc_boundary <- 1.0
 lfc_shrink_type <- "normal"   # "normal" for speed/stability; "apeglm" optional
 lfc_shrink_apeglm_method <- "nbinomC"
 
-evs_cutoff_mode_main <- "combined_fourier_first_stable_crossing"
+evs_cutoff_mode_main <- "combined_global_fourier_last_crossing_before_divergence"
 evs_fixed_top_n <- 5000L
 evs_fixed_rank_override <- NA_integer_
 
@@ -538,126 +538,10 @@ build_ranked_fourier_metric_table <- function(loading_tbl,
   df
 }
 
-build_percentile_windows_fourier <- function(n_total,
-                                             step = fourier_percentile_step,
-                                             window_fraction = fourier_window_fraction,
-                                             min_rank = fourier_min_rank,
-                                             max_rank_frac = fourier_max_rank_frac) {
-  pct_grid <- seq(step, 1, by = step)
-  center_ranks <- pmax(1L, pmin(n_total, round(pct_grid * n_total)))
 
-  max_rank <- floor(n_total * max_rank_frac)
-  keep <- center_ranks >= min_rank & center_ranks <= max_rank
-
-  pct_grid <- pct_grid[keep]
-  center_ranks <- center_ranks[keep]
-
-  half_window <- max(5L, round((window_fraction * n_total) / 2))
-
-  data.frame(
-    percentile = pct_grid,
-    center_rank = center_ranks,
-    lo_rank = pmax(1L, center_ranks - half_window),
-    hi_rank = pmin(n_total, center_ranks + half_window),
-    stringsAsFactors = FALSE
-  )
-}
-
-build_local_fourier_design <- function(x, n_harmonics = fourier_harmonics) {
-  x <- as.numeric(x)
-  x01 <- (x - min(x)) / max(1e-12, (max(x) - min(x)))
-  out <- data.frame(x = x01)
-  for (k in seq_len(n_harmonics)) {
-    out[[paste0("sin_", k)]] <- sin(2 * pi * k * x01)
-    out[[paste0("cos_", k)]] <- cos(2 * pi * k * x01)
-  }
-  out
-}
-
-fit_local_fourier <- function(rank_vec, y_vec, n_harmonics = fourier_harmonics) {
-  rank_vec <- as.numeric(rank_vec)
-  y_vec <- as.numeric(y_vec)
-
-  keep <- is.finite(rank_vec) & !is.na(rank_vec) & is.finite(y_vec) & !is.na(y_vec)
-  rank_vec <- rank_vec[keep]
-  y_vec <- y_vec[keep]
-
-  if (length(rank_vec) < (2 * n_harmonics + 5L)) return(NULL)
-
-  y_sd <- suppressWarnings(stats::sd(y_vec, na.rm = TRUE))
-  if (!is.finite(y_sd) || is.na(y_sd) || y_sd == 0) return(NULL)
-
-  dd <- build_local_fourier_design(rank_vec, n_harmonics = n_harmonics)
-  dd$y <- y_vec
-
-  rhs <- paste(colnames(dd)[colnames(dd) != "y"], collapse = " + ")
-  fm <- stats::as.formula(paste("y ~", rhs))
-
-  fit <- tryCatch(stats::lm(fm, data = dd), error = function(e) NULL)
-  if (is.null(fit)) return(NULL)
-
-  fitted_y <- as.numeric(stats::predict(fit, newdata = dd))
-  residual_y <- dd$y - fitted_y
-
-  local_amplitude <- 0.5 * (max(fitted_y, na.rm = TRUE) - min(fitted_y, na.rm = TRUE))
-  peak_idx <- which.max(fitted_y)
-  trough_idx <- which.min(fitted_y)
-  center_rank <- mean(c(rank_vec[peak_idx], rank_vec[trough_idx]))
-
-  list(
-    fit = fit,
-    fitted_y = fitted_y,
-    residual_y = residual_y,
-    local_amplitude = local_amplitude,
-    peak_rank = rank_vec[peak_idx],
-    trough_rank = rank_vec[trough_idx],
-    center_rank = center_rank,
-    residual_sd = stats::sd(residual_y, na.rm = TRUE)
-  )
-}
-
-summarize_local_fourier_window <- function(metric_df, lo_rank, hi_rank) {
-  sub <- metric_df[metric_df$rank >= lo_rank & metric_df$rank <= hi_rank, , drop = FALSE]
-  if (nrow(sub) < 9L) {
-    return(data.frame(
-      iod_amplitude = NA_real_,
-      cv2_amplitude = NA_real_,
-      iod_center = NA_real_,
-      cv2_center = NA_real_,
-      iod_residual_sd = NA_real_,
-      cv2_residual_sd = NA_real_,
-      stringsAsFactors = FALSE
-    ))
-  }
-
-  iod_fit <- fit_local_fourier(sub$rank, sub$log_iod_nb)
-  cv2_fit <- fit_local_fourier(sub$rank, sub$log_cv2_nb)
-  if (is.null(iod_fit) || is.null(cv2_fit)) {
-    return(data.frame(
-      iod_amplitude = NA_real_,
-      cv2_amplitude = NA_real_,
-      iod_center = NA_real_,
-      cv2_center = NA_real_,
-      iod_residual_sd = NA_real_,
-      cv2_residual_sd = NA_real_,
-      stringsAsFactors = FALSE
-    ))
-  }
-
-  data.frame(
-    iod_amplitude = iod_fit$local_amplitude,
-    cv2_amplitude = cv2_fit$local_amplitude,
-    iod_center = iod_fit$center_rank,
-    cv2_center = cv2_fit$center_rank,
-    iod_residual_sd = iod_fit$residual_sd,
-    cv2_residual_sd = cv2_fit$residual_sd,
-    stringsAsFactors = FALSE
-  )
-}
-
-build_local_fourier_wave_map <- function(loading_tbl,
-                                         mean_col = "baseMean",
-                                         dispersion_col = "dispGeneEst") {
+build_global_fourier_wave_map <- function(loading_tbl,
+                                          mean_col = "baseMean",
+                                          dispersion_col = "dispGeneEst") {
   metric_df <- build_ranked_fourier_metric_table(
     loading_tbl = loading_tbl,
     mean_col = mean_col,
@@ -665,40 +549,31 @@ build_local_fourier_wave_map <- function(loading_tbl,
   )
   if (is.null(metric_df) || !nrow(metric_df)) return(NULL)
 
-  windows <- build_percentile_windows_fourier(n_total = nrow(metric_df))
-  if (!nrow(windows)) return(NULL)
+  iod_fit <- fit_local_fourier(metric_df$rank, metric_df$log_iod_nb)
+  cv2_fit <- fit_local_fourier(metric_df$rank, metric_df$log_cv2_nb)
+  if (is.null(iod_fit) || is.null(cv2_fit)) return(NULL)
 
-  rows <- lapply(seq_len(nrow(windows)), function(i) {
-    ww <- windows[i, , drop = FALSE]
-    ss <- summarize_local_fourier_window(metric_df, ww$lo_rank, ww$hi_rank)
-    cbind(ww, ss, stringsAsFactors = FALSE)
-  })
+  n_total <- nrow(metric_df)
 
-  wave_map <- dplyr::bind_rows(rows)
-
-  iod_amp_scaled <- if (all(is.na(wave_map$iod_amplitude))) {
-    rep(NA_real_, nrow(wave_map))
-  } else {
-    scales::rescale(wave_map$iod_amplitude, to = c(0, 1), from = range(wave_map$iod_amplitude, na.rm = TRUE))
-  }
-
-  cv2_amp_scaled <- if (all(is.na(wave_map$cv2_amplitude))) {
-    rep(NA_real_, nrow(wave_map))
-  } else {
-    scales::rescale(wave_map$cv2_amplitude, to = c(0, 1), from = range(wave_map$cv2_amplitude, na.rm = TRUE))
-  }
-
-  wave_map$center_distance <- abs(wave_map$iod_center - wave_map$cv2_center)
-  wave_map$center_agreement <- 1 / (1 + wave_map$center_distance)
-  wave_map$local_fourier_score <- (
-    fourier_score_weight_iod_amp * iod_amp_scaled +
-      fourier_score_weight_cv2_amp * cv2_amp_scaled +
-      fourier_score_weight_center_agreement * wave_map$center_agreement
+  wave_map <- data.frame(
+    feature_id = metric_df$feature_id,
+    rank = metric_df$rank,
+    percentile = metric_df$rank / n_total,
+    iod_fitted = as.numeric(iod_fit$fitted_y),
+    cv2_fitted = as.numeric(cv2_fit$fitted_y),
+    iod_residual = as.numeric(iod_fit$residual_y),
+    cv2_residual = as.numeric(cv2_fit$residual_y),
+    stringsAsFactors = FALSE
   )
+
+  wave_map <- wave_map[order(wave_map$rank), , drop = FALSE]
+  rownames(wave_map) <- NULL
 
   list(
     metric_df = metric_df,
-    wave_map = wave_map
+    wave_map = wave_map,
+    iod_fit = iod_fit,
+    cv2_fit = cv2_fit
   )
 }
 
@@ -708,44 +583,22 @@ combine_treatment_control_fourier_maps <- function(trt_wave_obj, ctrl_wave_obj) 
   ctrl_map <- ctrl_wave_obj$wave_map
   if (is.null(trt_map) || is.null(ctrl_map) || !nrow(trt_map) || !nrow(ctrl_map)) return(NULL)
 
-  keep_cols <- c("percentile", "center_rank", "iod_amplitude", "cv2_amplitude", "iod_center", "cv2_center", "local_fourier_score")
-  trt_map2 <- trt_map[, keep_cols, drop = FALSE]
-  ctrl_map2 <- ctrl_map[, keep_cols, drop = FALSE]
+  trt_map2 <- trt_map[, c("feature_id", "rank", "percentile", "iod_fitted", "cv2_fitted"), drop = FALSE]
+  ctrl_map2 <- ctrl_map[, c("feature_id", "rank", "percentile", "iod_fitted", "cv2_fitted"), drop = FALSE]
 
-  names(trt_map2)[names(trt_map2) != "percentile"] <- paste0(names(trt_map2)[names(trt_map2) != "percentile"], "_trt")
-  names(ctrl_map2)[names(ctrl_map2) != "percentile"] <- paste0(names(ctrl_map2)[names(ctrl_map2) != "percentile"], "_ctrl")
+  names(trt_map2) <- c("feature_id", "rank_trt", "percentile_trt", "iod_fitted_trt", "cv2_fitted_trt")
+  names(ctrl_map2) <- c("feature_id", "rank_ctrl", "percentile_ctrl", "iod_fitted_ctrl", "cv2_fitted_ctrl")
 
-  out <- dplyr::inner_join(trt_map2, ctrl_map2, by = "percentile")
+  out <- dplyr::inner_join(trt_map2, ctrl_map2, by = "feature_id")
   if (!nrow(out)) return(NULL)
 
-  out$combined_center_rank <- round((out$center_rank_trt + out$center_rank_ctrl) / 2)
-  out$combined_iod_amplitude <- out$iod_amplitude_trt + out$iod_amplitude_ctrl
-  out$combined_cv2_amplitude <- out$cv2_amplitude_trt + out$cv2_amplitude_ctrl
+  out$combined_center_rank <- round((out$rank_trt + out$rank_ctrl) / 2)
+  out$percentile <- rowMeans(cbind(out$percentile_trt, out$percentile_ctrl), na.rm = TRUE)
+  out$combined_iod_amplitude <- out$iod_fitted_trt + out$iod_fitted_ctrl
+  out$combined_cv2_amplitude <- out$cv2_fitted_trt + out$cv2_fitted_ctrl
 
-  out$combined_center_distance <- abs(
-    ((out$iod_center_trt + out$iod_center_ctrl) / 2) -
-      ((out$cv2_center_trt + out$cv2_center_ctrl) / 2)
-  )
-  out$combined_center_agreement <- 1 / (1 + out$combined_center_distance)
-
-  iod_amp_scaled <- if (all(is.na(out$combined_iod_amplitude))) {
-    rep(NA_real_, nrow(out))
-  } else {
-    scales::rescale(out$combined_iod_amplitude, to = c(0, 1), from = range(out$combined_iod_amplitude, na.rm = TRUE))
-  }
-
-  cv2_amp_scaled <- if (all(is.na(out$combined_cv2_amplitude))) {
-    rep(NA_real_, nrow(out))
-  } else {
-    scales::rescale(out$combined_cv2_amplitude, to = c(0, 1), from = range(out$combined_cv2_amplitude, na.rm = TRUE))
-  }
-
-  out$combined_fourier_score <- (
-    fourier_score_weight_iod_amp * iod_amp_scaled +
-      fourier_score_weight_cv2_amp * cv2_amp_scaled +
-      fourier_score_weight_center_agreement * out$combined_center_agreement
-  )
-
+  out <- out[order(out$percentile, out$combined_center_rank, out$feature_id), , drop = FALSE]
+  rownames(out) <- NULL
   out
 }
 
@@ -868,22 +721,16 @@ select_regime_shift_crossing <- function(combined_wave_df) {
     ))
   }
 
-  stable_tbl <- crossing_tbl[crossing_tbl$stable_crossing, , drop = FALSE]
-  if (nrow(stable_tbl)) {
-    selected <- stable_tbl[order(stable_tbl$crossing_percentile), , drop = FALSE][1, , drop = FALSE]
-    reason <- "first_stable_crossing"
-  } else {
-    selected <- crossing_tbl[order(crossing_tbl$crossing_percentile), , drop = FALSE][1, , drop = FALSE]
-    reason <- "first_crossing_fallback"
-  }
+  selected <- crossing_tbl[order(crossing_tbl$crossing_percentile, decreasing = TRUE), , drop = FALSE][1, , drop = FALSE]
 
   list(
     diff_df = diff_df,
     crossing_table = crossing_tbl,
     selected_crossing = selected,
-    selected_reason = reason
+    selected_reason = "last_crossing_before_divergence"
   )
 }
+
 
 # -----------------------------------------------------------------------------
 # PATCHED SHARED COMBINED RANK TABLE + SHARED CUTOFF
@@ -944,8 +791,8 @@ resolve_combined_fourier_cutoff <- function(fit_trt_loading_tbl,
     top_n = fixed_top_n
   )
 
-  trt_wave_obj <- build_local_fourier_wave_map(fit_trt_loading_tbl)
-  ctrl_wave_obj <- build_local_fourier_wave_map(fit_ctrl_loading_tbl)
+  trt_wave_obj <- build_global_fourier_wave_map(fit_trt_loading_tbl)
+  ctrl_wave_obj <- build_global_fourier_wave_map(fit_ctrl_loading_tbl)
 
   if (is.null(trt_wave_obj) || is.null(ctrl_wave_obj)) {
     fallback$method <- "fixed_top_n_fallback"
@@ -1008,12 +855,22 @@ resolve_combined_fourier_cutoff <- function(fit_trt_loading_tbl,
     stringsAsFactors = FALSE
   )
 
+  leading_edge_union_flag <- (
+    (!is.na(shared_combined_tbl$rank_trt)  & shared_combined_tbl$rank_trt  <= selected_rank) |
+    (!is.na(shared_combined_tbl$rank_ctrl) & shared_combined_tbl$rank_ctrl <= selected_rank)
+  )
+  leading_edge_union_n <- sum(leading_edge_union_flag, na.rm = TRUE)
+  remainder_union_n <- n_total - leading_edge_union_n
+
   list(
     top_n_actual = selected_rank,
     cutoff_value = cutoff_value,
     cutoff_quantile = cutoff_quantile,
     n_total = n_total,
-    method = "first_stable_crossing",
+    rank_cutoff = selected_rank,
+    leading_edge_union_n = leading_edge_union_n,
+    remainder_union_n = remainder_union_n,
+    method = "global_fourier_last_crossing_before_divergence",
     trt_wave_obj = trt_wave_obj,
     ctrl_wave_obj = ctrl_wave_obj,
     shared_combined_tbl = shared_combined_tbl,
@@ -1033,17 +890,17 @@ plot_fourier_wave_map_single <- function(wave_obj, comparison_name, group_label)
   df <- wave_obj$wave_map
 
   ggplot(df, aes(percentile)) +
-    geom_line(aes(y = iod_amplitude, color = "IOD"), linewidth = 0.9) +
-    geom_line(aes(y = cv2_amplitude, color = "CV²"), linewidth = 0.9) +
+    geom_line(aes(y = iod_fitted, color = "IOD"), linewidth = 0.9) +
+    geom_line(aes(y = cv2_fitted, color = "CV²"), linewidth = 0.9) +
     scale_color_manual(values = c("IOD" = plot_palette$treatment, "CV²" = plot_palette$control)) +
     labs(
-      title = paste0(pretty_group_label(group_label), " | local regime lines"),
+      title = paste0(pretty_group_label(group_label), " | full-axis fitted regime lines"),
       subtitle = compact_caption(
-        "This panel shows the within-group local IOD and local CV² regime lines for visual reference.",
+        "This panel shows the within-group full-axis Fourier fitted IOD and CV² regime lines across the entire ranked gene axis.",
         width = 88
       ),
-      x = "Percentile center",
-      y = "Local amplitude",
+      x = "Rank percentile",
+      y = "Fourier fitted value",
       color = NULL
     ) +
     manuscript_theme()
@@ -1056,6 +913,8 @@ plot_combined_fourier_wave_map <- function(combined_cutoff_info, comparison_name
   sc <- combined_cutoff_info$selected_crossing
   crossing_pct <- if (!is.null(sc) && nrow(sc)) sc$crossing_percentile[1] else NA_real_
   crossing_rank <- if (!is.null(sc) && nrow(sc)) sc$crossing_rank[1] else NA_integer_
+  leading_edge_union_n <- if (!is.null(combined_cutoff_info$leading_edge_union_n)) combined_cutoff_info$leading_edge_union_n else NA_integer_
+  remainder_union_n <- if (!is.null(combined_cutoff_info$remainder_union_n)) combined_cutoff_info$remainder_union_n else NA_integer_
 
   ymax <- max(c(df$combined_iod_amplitude, df$combined_cv2_amplitude), na.rm = TRUE)
 
@@ -1064,13 +923,13 @@ plot_combined_fourier_wave_map <- function(combined_cutoff_info, comparison_name
     geom_line(aes(y = combined_cv2_amplitude, color = "Composite CV²"), linewidth = crossing_plot_line_width) +
     scale_color_manual(values = c("Composite IOD" = plot_palette$treatment, "Composite CV²" = plot_palette$control)) +
     labs(
-      title = paste0(comparison_name, " | two-line regime crossing"),
+      title = paste0(comparison_name, " | treatment-control composite overlap"),
       subtitle = compact_caption(
-        "The dashed line is the selected shared comparison cutoff based on the first stable crossing of the composite IOD and composite CV² regime lines.",
-        width = 90
+        "The dashed line is the selected shared comparison cutoff based on the last crossing before divergence of the full-axis composite IOD and composite CV² fitted lines. The rank cutoff is projected back into the treatment and control ranked loading tables, and the leading edge is defined as the union of sites that fall within that cutoff in either group. Labels report the crossing rank and the post-union leading-edge and remainder counts.",
+        width = 100
       ),
-      x = "Percentile center",
-      y = "Composite local amplitude",
+      x = "Rank percentile",
+      y = "Composite Fourier fitted value",
       color = NULL
     ) +
     manuscript_theme()
@@ -1088,11 +947,11 @@ plot_combined_fourier_wave_map <- function(combined_cutoff_info, comparison_name
         x = crossing_pct,
         y = ymax,
         label = paste0(
-          "Shared cutoff
-",
-          "p = ", signif(crossing_pct, 4), "
-",
-          "rank = ", crossing_rank
+          "Last crossing before divergence\n",
+          "percentile = ", signif(crossing_pct, 4), "\n",
+          "rank cutoff = ", crossing_rank, "\n",
+          "leading-edge union n = ", leading_edge_union_n, "\n",
+          "remainder n = ", remainder_union_n
         ),
         fill = "white",
         colour = plot_palette$threshold,
@@ -1123,7 +982,7 @@ plot_regime_difference_curve <- function(combined_cutoff_info, comparison_name) 
       "label",
       x = crossing_pct,
       y = 0,
-      label = paste0("rank = ", crossing_rank),
+      label = paste0("rank cutoff = ", crossing_rank),
       fill = "white",
       colour = plot_palette$threshold,
       size = 2.8,
@@ -1131,8 +990,8 @@ plot_regime_difference_curve <- function(combined_cutoff_info, comparison_name) 
       vjust = -0.8
     ) +
     labs(
-      title = paste0(comparison_name, " | regime-difference curve"),
-      subtitle = compact_caption("Positive values indicate local IOD dominance and negative values indicate local CV² dominance. The first stable zero-crossing is the EVS cutoff.", width = 90),
+      title = paste0(comparison_name, " | IOD minus CV² crossing curve"),
+      subtitle = compact_caption("Positive values indicate full-axis IOD dominance and negative values indicate full-axis CV² dominance. The last zero-crossing before divergence is the EVS cutoff.", width = 90),
       x = "Percentile center",
       y = "IOD − CV²"
     ) +
@@ -1140,18 +999,26 @@ plot_regime_difference_curve <- function(combined_cutoff_info, comparison_name) 
 }
 
 plot_crossing_summary_panel <- function(combined_cutoff_info, comparison_name) {
-  p1 <- plot_combined_fourier_wave_map(combined_cutoff_info, comparison_name)
-  p2 <- plot_regime_difference_curve(combined_cutoff_info, comparison_name)
-  if (is.null(p1) || is.null(p2)) return(NULL)
+  p1 <- plot_fourier_wave_map_single(combined_cutoff_info$trt_wave_obj, comparison_name, "treatment")
+  p2 <- plot_fourier_wave_map_single(combined_cutoff_info$ctrl_wave_obj, comparison_name, "control")
+  p3 <- plot_combined_fourier_wave_map(combined_cutoff_info, comparison_name)
+  p4 <- plot_regime_difference_curve(combined_cutoff_info, comparison_name)
+
+  grobs <- Filter(Negate(is.null), list(p1, p2, p3, p4))
+  if (!length(grobs)) return(NULL)
 
   arrangeGrob(
-    p1, p2,
-    ncol = 1,
+    grobs = grobs,
+    ncol = 2,
     top = textGrob(
-      paste0(comparison_name, " | regime-shift crossing summary"),
+      paste0(comparison_name, " | treatment, control, overlap, and crossing panels"),
       gp = gpar(fontface = "bold", cex = 1.04)
     )
   )
+}
+
+plot_fourier_summary_panel <- function(combined_cutoff_info, comparison_name) {
+  plot_crossing_summary_panel(combined_cutoff_info, comparison_name)
 }
 
 build_crossing_summary_table <- function(combined_cutoff_info, comparison_name) {
@@ -1172,6 +1039,10 @@ build_crossing_summary_table <- function(combined_cutoff_info, comparison_name) 
     crossing_id = sc$crossing_id[1],
     crossing_percentile = sc$crossing_percentile[1],
     crossing_rank = sc$crossing_rank[1],
+    rank_cutoff = combined_cutoff_info$rank_cutoff,
+    n_total_union = combined_cutoff_info$n_total,
+    leading_edge_union_n = combined_cutoff_info$leading_edge_union_n,
+    remainder_union_n = combined_cutoff_info$remainder_union_n,
     percentile_left = sc$percentile_left[1],
     percentile_right = sc$percentile_right[1],
     regime_difference_left = sc$regime_difference_left[1],
@@ -1831,11 +1702,17 @@ build_eigenvector_split <- function(count_matrix, coldata, comparison_name) {
     stop("Shared combined loading table is missing after shared cutoff resolution.", call. = FALSE)
   }
 
+  leading_edge_union_flag <- (
+    (!is.na(shared_combined_tbl$rank_trt)  & shared_combined_tbl$rank_trt  <= final_shared_rank) |
+    (!is.na(shared_combined_tbl$rank_ctrl) & shared_combined_tbl$rank_ctrl <= final_shared_rank)
+  )
   leading_edge_ids <- as.character(
-    shared_combined_tbl$feature_id[shared_combined_tbl$combined_rank <= final_shared_rank]
+    shared_combined_tbl$feature_id[leading_edge_union_flag]
   )
   analyzed_feature_ids <- as.character(shared_combined_tbl$feature_id)
-  remainder_ids <- setdiff(analyzed_feature_ids, leading_edge_ids)
+  remainder_ids <- as.character(
+    shared_combined_tbl$feature_id[!leading_edge_union_flag]
+  )
 
   if (length(leading_edge_ids) == 0) {
     stop("Leading-edge dataset is empty. Check sample mapping or EVS cutoff settings.", call. = FALSE)
@@ -3344,13 +3221,13 @@ run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata,
   save_csv(evs_cutoff_summary_out, file.path(tab_dir, paste0(comparison_name, "_EVS_cutoff_summary.csv")))
 
   if (!is.null(evs$combined_cutoff_info$trt_wave_obj$wave_map) && nrow(evs$combined_cutoff_info$trt_wave_obj$wave_map)) {
-    save_csv(evs$combined_cutoff_info$trt_wave_obj$wave_map, file.path(tab_dir, paste0(comparison_name, "_treatment_local_fourier_map.csv")))
+    save_csv(evs$combined_cutoff_info$trt_wave_obj$wave_map, file.path(tab_dir, paste0(comparison_name, "_treatment_full_axis_fourier_map.csv")))
   }
   if (!is.null(evs$combined_cutoff_info$ctrl_wave_obj$wave_map) && nrow(evs$combined_cutoff_info$ctrl_wave_obj$wave_map)) {
-    save_csv(evs$combined_cutoff_info$ctrl_wave_obj$wave_map, file.path(tab_dir, paste0(comparison_name, "_control_local_fourier_map.csv")))
+    save_csv(evs$combined_cutoff_info$ctrl_wave_obj$wave_map, file.path(tab_dir, paste0(comparison_name, "_control_full_axis_fourier_map.csv")))
   }
   if (!is.null(evs$combined_cutoff_info$combined_wave_map) && nrow(evs$combined_cutoff_info$combined_wave_map)) {
-    save_csv(evs$combined_cutoff_info$combined_wave_map, file.path(tab_dir, paste0(comparison_name, "_first_stable_crossing_map.csv")))
+    save_csv(evs$combined_cutoff_info$combined_wave_map, file.path(tab_dir, paste0(comparison_name, "_last_crossing_map.csv")))
   }
   if (!is.null(evs$combined_cutoff_info$crossing_table) && nrow(evs$combined_cutoff_info$crossing_table)) {
     save_csv(evs$combined_cutoff_info$crossing_table, file.path(tab_dir, paste0(comparison_name, "_all_regime_crossings.csv")))
@@ -3363,24 +3240,24 @@ run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata,
 
   trt_fourier_plot <- safe_plot_build(
     plot_fourier_wave_map_single(evs$combined_cutoff_info$trt_wave_obj, comparison_name, "treatment"),
-    paste0(comparison_name, ": treatment local fourier wave map")
+    paste0(comparison_name, ": treatment full-axis fourier wave map")
   )
   if (!is.null(trt_fourier_plot)) {
-    save_grob(trt_fourier_plot, file.path(cmp_dir, paste0(comparison_name, "_treatment_local_fourier_wave_map.png")), width = 12, height = 10)
+    save_grob(trt_fourier_plot, file.path(cmp_dir, paste0(comparison_name, "_treatment_full_axis_fourier_wave_map.png")), width = 12, height = 10)
   }
   ctrl_fourier_plot <- safe_plot_build(
     plot_fourier_wave_map_single(evs$combined_cutoff_info$ctrl_wave_obj, comparison_name, "control"),
-    paste0(comparison_name, ": control local fourier wave map")
+    paste0(comparison_name, ": control full-axis fourier wave map")
   )
   if (!is.null(ctrl_fourier_plot)) {
-    save_grob(ctrl_fourier_plot, file.path(cmp_dir, paste0(comparison_name, "_control_local_fourier_wave_map.png")), width = 12, height = 10)
+    save_grob(ctrl_fourier_plot, file.path(cmp_dir, paste0(comparison_name, "_control_full_axis_fourier_wave_map.png")), width = 12, height = 10)
   }
   combined_fourier_plot <- safe_plot_build(
     plot_combined_fourier_wave_map(evs$combined_cutoff_info, comparison_name),
-    paste0(comparison_name, ": combined local fourier wave map")
+    paste0(comparison_name, ": combined full-axis fourier wave map")
   )
   if (!is.null(combined_fourier_plot)) {
-    save_grob(combined_fourier_plot, file.path(cmp_dir, paste0(comparison_name, "_combined_local_fourier_wave_map.png")), width = 12, height = 6)
+    save_grob(combined_fourier_plot, file.path(cmp_dir, paste0(comparison_name, "_combined_full_axis_fourier_wave_map.png")), width = 12, height = 6)
   }
 
 
@@ -3394,6 +3271,38 @@ run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata,
       file.path(cmp_dir, paste0(comparison_name, "_fourier_summary_panel.png")),
       width = 18,
       height = 12
+    )
+  }
+
+  evs_hist_panel <- safe_plot_build(
+    arrangeGrob(
+      plot_eigenvector_histograms(
+        evs$fit_trt$loading_table,
+        evs$fit_trt$cutoff,
+        comparison_name,
+        "treatment",
+        evs$fit_trt$preprocessing_label
+      ),
+      plot_eigenvector_histograms(
+        evs$fit_untrt$loading_table,
+        evs$fit_untrt$cutoff,
+        comparison_name,
+        "control",
+        evs$fit_untrt$preprocessing_label
+      ),
+      ncol = 1,
+      top = textGrob(
+        paste0(comparison_name, " | treatment and control EVS histograms"),
+        gp = gpar(fontface = "bold", cex = 1.02)
+      )
+    ),
+    paste0(comparison_name, ": EVS histogram panel")
+  )
+  if (!is.null(evs_hist_panel)) {
+    save_grob(
+      evs_hist_panel,
+      file.path(cmp_dir, paste0(comparison_name, "_EVS_histogram_panel.png")),
+      width = 18, height = 12
     )
   }
 
