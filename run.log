@@ -2,22 +2,34 @@
 =====================================================
 Running comparison: RT0_ZT6
 =====================================================
+[2026-04-04 03:48:23] RT0_ZT6comparison loaded
+converting counts to integer mode
+converting counts to integer mode
 
 =====================================================
 Running comparison: RT2_ZT8
 =====================================================
+[2026-04-04 03:48:39] RT2_ZT8comparison loaded
+converting counts to integer mode
+converting counts to integer mode
 
 =====================================================
 Running comparison: RT4_ZT10
 =====================================================
+[2026-04-04 03:48:54] RT4_ZT10comparison loaded
+converting counts to integer mode
+converting counts to integer mode
 
 =====================================================
 Running comparison: RT8_ZT14
 =====================================================
+[2026-04-04 03:49:10] RT8_ZT14comparison loaded
+converting counts to integer mode
+converting counts to integer mode
 
 =====================================================
 Pipeline complete.
 Output directory:
-/root/REAPER98632/exports/sequence_run_20260404_033232 
+/root/REAPER98632/exports/sequence_run_20260404_034819 
 =====================================================
 
