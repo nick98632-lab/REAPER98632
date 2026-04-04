@@ -1,0 +1,2 @@
+"rank_index","n_lead","n_rem","lead_mean_abs","lead_sd_dev","lead_skew_abs","lead_distortion","rem_mean_abs","rem_sd_dev","rem_skew_abs","rem_distortion","total_distortion","split_score"
+26333,26333,5201,0.0175331557148559,0.250967713602227,0.077584778614162,0.307293258624164,0.0206147525672936,0.21273842132136,0.0323431011750601,0.249524724476183,0.556817983100347,-0.556817983100347
