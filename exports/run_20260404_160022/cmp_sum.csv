@@ -1,0 +1,5 @@
+"cmp","method","rank","n_raw","n_lead","n_rem","raw_std","raw_weak","raw_strong","raw_hbfss","raw_overlap","lead_std","lead_weak","lead_strong","lead_hbfss","lead_overlap","rem_std","rem_weak","rem_strong","rem_hbfss","rem_overlap"
+"RT0_ZT6","wave_raw_wald",9352,31757,15537,16220,24,8,16,34,16,2,0,2,19,2,52,21,31,29,29
+"RT2_ZT8","wave_raw_wald",25275,31757,30126,1631,0,0,0,8,0,0,0,0,9,0,0,0,0,1,0
+"RT4_ZT10","wave_raw_wald",9118,31757,15081,16676,1883,1058,825,1100,1098,299,82,217,331,236,2290,1627,663,870,869
+"RT8_ZT14","wave_raw_wald",12925,31757,20919,10838,12,7,5,76,8,4,1,3,32,3,120,94,26,89,78
