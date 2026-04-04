@@ -43,7 +43,7 @@ count_file <- file.path(in_dir, "WTTS-Seq_2022.2_DE_raw_read_numbers.csv")
 alpha_level <- 0.20
 lfc_boundary <- 1.0
 hc_upper <- 0.99
-lfc_shrink_type <- "normal"
+lfc_shrink_type <- "apeglm"
 
 fourier_step <- 0.01
 fourier_window_frac <- 0.12
@@ -769,7 +769,7 @@ add_hbfss_guides <- function(p, df, lims) {
                hjust = 0, vjust = 1, fill = "white", colour = "grey25", size = 2.3, label.size = 0.12)
 }
 
-plot_volcano <- function(df, cmp) {
+plot_volcano <- function(df, panel_title, show_legend = FALSE) {
   df <- build_volcano_classes(df)
   labs_df <- pick_labels(df, n_labels = 10)
   lims <- compute_vol_lims(df)
@@ -777,28 +777,30 @@ plot_volcano <- function(df, cmp) {
   p <- ggplot(df, aes(lfc_shrunk, neglog10_emp)) +
     geom_point(aes(fill = plot_class, color = plot_class, shape = plot_class),
                alpha = 0.82, size = 2.0, stroke = 0.3, na.rm = TRUE) +
-    geom_vline(xintercept = c(-lfc_boundary, lfc_boundary), linetype = "dashed", linewidth = 0.55, colour = pal$threshold) +
-    geom_vline(xintercept = 0, linewidth = 0.4, colour = "grey45") +
+    geom_vline(xintercept = c(-lfc_boundary, lfc_boundary), linetype = 'dashed', linewidth = 0.55, colour = pal$threshold) +
+    geom_vline(xintercept = 0, linewidth = 0.4, colour = 'grey45') +
     scale_fill_manual(values = vol_cols, drop = FALSE, name = NULL) +
     scale_color_manual(values = vol_cols, drop = FALSE, name = NULL) +
     scale_shape_manual(values = vol_shapes, drop = FALSE, name = NULL) +
-    coord_cartesian(xlim = lims$x, ylim = lims$y, clip = "off") +
-    labs(title = paste0(cmp, " | HBFSS volcano"),
-         subtitle = "One manuscript volcano per comparison",
-         x = "Shrunken log2 fold change",
+    coord_cartesian(xlim = lims$x, ylim = lims$y, clip = 'off') +
+    labs(title = panel_title,
+         subtitle = NULL,
+         x = 'Shrunken log2 fold change',
          y = expression(-log[10](p[empirical])),
          caption = paste0(
-           "Weak=", sum(df$plot_class == "DC2 weak effect", na.rm = TRUE),
-           " | Strong=", sum(df$plot_class == "DC2 strong effect", na.rm = TRUE),
-           " | HBFSS=", sum(df$plot_class == "HBFSS only", na.rm = TRUE),
-           " | Overlap=", sum(df$plot_class == "Overlap", na.rm = TRUE)
+           'Standard=', sum(df$standard_significant, na.rm = TRUE),
+           ' | Weak=', sum(df$deseq2_weak_call, na.rm = TRUE),
+           ' | Strong=', sum(df$deseq2_strong_call, na.rm = TRUE),
+           ' | HBFSS=', sum(df$HBFSS_significant, na.rm = TRUE),
+           ' | Overlap=', sum(df$overlap_call, na.rm = TRUE)
          )) +
     theme_seq() +
+    theme(legend.position = if (show_legend) 'bottom' else 'none') +
     guides(fill = guide_legend(nrow = 1, byrow = TRUE,
                                override.aes = list(size = 3.5, alpha = 1,
                                                    shape = unname(vol_shapes),
                                                    fill = unname(vol_cols), colour = unname(vol_cols))),
-           color = "none", shape = "none")
+           color = 'none', shape = 'none')
   p <- add_hbfss_guides(p, df, lims)
   if (nrow(labs_df)) {
     p <- p + geom_text_repel(data = labs_df, aes(label = gene_symbol_plot), size = 1.85,
@@ -809,8 +811,27 @@ plot_volcano <- function(df, cmp) {
   p
 }
 
+get_legend_grob <- function(p) {
+  g <- ggplotGrob(p)
+  idx <- which(vapply(g$grobs, function(x) x$name, character(1)) == 'guide-box')
+  if (!length(idx)) return(NULL)
+  g$grobs[[idx[1]]]
+}
+
+plot_volcano_panel <- function(cmp, raw_df, lead_df, rem_df) {
+  p_raw <- plot_volcano(raw_df, paste0(cmp, ' | Original dataset'), show_legend = FALSE)
+  p_lead <- plot_volcano(lead_df, paste0(cmp, ' | Leading-edge dataset'), show_legend = FALSE)
+  p_rem <- plot_volcano(rem_df, paste0(cmp, ' | Remainder dataset'), show_legend = FALSE)
+  leg <- get_legend_grob(plot_volcano(raw_df, paste0(cmp, ' | Original dataset'), show_legend = TRUE))
+  arrangeGrob(p_raw, p_lead, p_rem, leg,
+              layout_matrix = rbind(c(1,2,3), c(4,4,4)),
+              heights = c(12, 1.8),
+              top = textGrob(paste0(cmp, ' | HBFSS volcano panel'), gp = gpar(fontface = 'bold', cex = 1.04)))
+}
+
 # -----------------------------------------------------------------------------
 # figures
+
 # -----------------------------------------------------------------------------
 
 plot_wave_single <- function(wave_obj, cmp, group_label, backup = NULL) {
@@ -1193,6 +1214,7 @@ run_cmp <- function(cmp_name, count_mat, coldata) {
   dir.create(fig_dir, showWarnings = FALSE, recursive = TRUE)
   dir.create(tab_dir, showWarnings = FALSE, recursive = TRUE)
 
+  log_step(cmp_name, 'comparison loaded')
   sp <- build_split(count_mat, coldata, cmp_name)
 
   trt_rank <- if (!is.null(sp$trt_bk$selected) && nrow(sp$trt_bk$selected)) as.integer(sp$trt_bk$selected$crossing_rank[1]) else NA_integer_
@@ -1202,7 +1224,7 @@ run_cmp <- function(cmp_name, count_mat, coldata) {
   cutoff_summary <- data.frame(
     comparison_name = cmp_name,
     final_selected_rank = sp$final_rank,
-    final_selected_method = sp$final_method,
+    method = sp$final_method,
     crossing_rank_reference = cross_rank,
     treatment_backup_rank = trt_rank,
     control_backup_rank = ctrl_rank,
@@ -1218,9 +1240,15 @@ run_cmp <- function(cmp_name, count_mat, coldata) {
     save_csv(sp$raw_scan$selected_row, file.path(tab_dir, paste0(cmp_name, "_raw_wald_scan_selected.csv")))
   }
 
-  raw_fit <- run_core(sp$raw_dataset, coldata, paste0(cmp_name, "_raw"), annot)
-  lead_fit <- run_core(sp$lead_dataset, coldata, paste0(cmp_name, "_lead"), annot)
-  rem_fit <- run_core(sp$rem_dataset, coldata, paste0(cmp_name, "_rem"), annot)
+  log_step(cmp_name, 'split built')
+  log_step(cmp_name, 'cutoff summary | treatment backup = ', trt_rank, ' | control backup = ', ctrl_rank, ' | crossing ref = ', cross_rank, ' | final rank = ', sp$final_rank, ' | method = ', sp$final_method)
+
+  raw_fit <- run_core(sp$raw_dataset, coldata, paste0(cmp_name, '_raw'), annot)
+  log_step(cmp_name, 'original dataset analysis complete')
+  lead_fit <- run_core(sp$lead_dataset, coldata, paste0(cmp_name, '_lead'), annot)
+  log_step(cmp_name, 'leading-edge dataset analysis complete')
+  rem_fit <- run_core(sp$rem_dataset, coldata, paste0(cmp_name, '_rem'), annot)
+  log_step(cmp_name, 'remainder dataset analysis complete')
 
   keep_main <- c("dataset_name","feature_id","gene_symbol","baseMean","stat","lfc_shrunk","pvalue","padj","empirical_p",
                  "empirical_q","lfdr","resGA_padj","resLA_padj","deseq2_strong_call","deseq2_weak_call",
@@ -1237,23 +1265,25 @@ run_cmp <- function(cmp_name, count_mat, coldata) {
     cmp_name, sp$trt_wave, sp$ctrl_wave, sp$cmb,
     sp$trt_bk$selected, sp$ctrl_bk$selected, sp$sel_cross, sp$final_rank
   )
-  ggsave(file.path(fig_dir, paste0(cmp_name, "_fourier_summary_panel.png")),
-         fig_fourier, width = 16, height = 10, dpi = figure_dpi, units = "in", limitsize = FALSE, bg = "white")
+  ggsave(file.path(fig_dir, paste0(cmp_name, '_fourier_summary_panel.png')),
+         fig_fourier, width = 16, height = 10, dpi = figure_dpi, units = 'in', limitsize = FALSE, bg = 'white')
+  log_step(cmp_name, 'Fourier summary panel exported')
 
   fig_rawscan <- plot_raw_wald_panel(cmp_name, sp$raw_scan, trt_rank, ctrl_rank)
   if (!is.null(fig_rawscan)) {
-    ggsave(file.path(fig_dir, paste0(cmp_name, "_raw_wald_cutoff_selection_panel.png")),
-           fig_rawscan, width = 16, height = 10, dpi = figure_dpi, units = "in", limitsize = FALSE, bg = "white")
+    ggsave(file.path(fig_dir, paste0(cmp_name, '_raw_wald_cutoff_selection_panel.png')),
+           fig_rawscan, width = 16, height = 10, dpi = figure_dpi, units = 'in', limitsize = FALSE, bg = 'white')
+    log_step(cmp_name, 'raw-Wald cutoff panel exported')
   }
 
-  # one volcano per comparison: manuscript plot from the original dataset
-  fig_vol <- plot_volcano(raw_fit$results, cmp_name)
-  save_plot(fig_vol, file.path(fig_dir, paste0(cmp_name, "_volcano.png")), width = 9.5, height = 7.5)
+  fig_vol <- plot_volcano_panel(cmp_name, raw_fit$results, lead_fit$results, rem_fit$results)
+  ggsave(file.path(fig_dir, paste0(cmp_name, '_volcano_panel.png')), fig_vol, width = 18, height = 7.8, dpi = figure_dpi, units = 'in', limitsize = FALSE, bg = 'white')
+  log_step(cmp_name, 'volcano panel exported')
 
   data.frame(
     comparison_name = cmp_name,
     final_selected_rank = sp$final_rank,
-    final_selected_method = sp$final_method,
+    method = sp$final_method,
     n_raw = nrow(raw_fit$results),
     n_lead = nrow(lead_fit$results),
     n_rem = nrow(rem_fit$results),
