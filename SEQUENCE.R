@@ -1,23 +1,25 @@
 # =============================================================================
 # SEQUENCE STAGE 1 REWRITE
-# EVS + FULL-AXIS FOURIER + UNION-BASED LEADING EDGE
+# EVS + FULL-AXIS FOURIER + UNION-BASED EIGENVECTOR SPLITTING
 # =============================================================================
 # What this script does
 # 1. Reads the raw count matrix.
 # 2. Builds normalized counts with DESeq2 for each comparison.
 # 3. Builds treatment and control EVS loading tables from PC1 absolute loadings.
 # 4. Computes full-axis Fourier fits for IOD and CV2 within treatment and control.
-# 5. Combines the treatment and control fitted curves.
-# 6. Selects the last crossing before divergence.
+# 5. Combines the treatment and control fitted curves across the full ranked axis.
+# 6. Selects the last crossing before divergence across the full dataset.
 # 7. Projects that rank cutoff back to treatment and control EVS ranks.
 # 8. Defines the leading edge as the union of treatment and control members with
 #    ranks less than or equal to the shared cutoff rank.
 # 9. Defines the remainder as everything outside that union.
-# 10. Exports only Stage 1 EVS/Fourier tables and figures.
+# 10. Exports Stage 1 EVS/Fourier tables, panels, and split datasets.
 #
 # What this script does not do
+# - no percentile window logic
 # - no quantile cutoff logic
 # - no stability screen for crossings
+# - no fallback cutoff logic
 # - no higher criticism
 # - no HBFSS
 # - no shrinkage workflow
@@ -43,17 +45,15 @@ repo_dir <- getwd()
 input_dir <- file.path(repo_dir, "data")
 output_root <- file.path(repo_dir, "exports")
 analysis_stamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
-output_dir <- file.path(output_root, paste0("sequence_stage1_evs_fourier_", analysis_stamp))
+output_dir <- file.path(output_root, paste0("sequence_stage1_evs_fourier_full_axis_", analysis_stamp))
 dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
 
 auto_count_file <- file.path(input_dir, "WTTS-Seq_2022.2_DE_raw_read_numbers.csv")
-count_file <- if (file.exists(auto_count_file)) auto_count_file else auto_count_file
+count_file <- auto_count_file
 
 figure_dpi <- 320
 base_theme_size <- 10
 fourier_harmonics <- 2L
-crossing_min_percentile <- 0.05
-crossing_max_percentile <- 0.95
 
 comparison_table <- data.frame(
   comparison_name = c("RT0_ZT6", "RT2_ZT8", "RT4_ZT10", "RT8_ZT14"),
@@ -84,8 +84,7 @@ plot_palette <- list(
   treatment = "#1F78B4",
   control = "#4D4D4D",
   threshold = "#8C2D04",
-  histogram = "#969696",
-  background = "white"
+  histogram = "#969696"
 )
 
 # =============================================================================
@@ -246,10 +245,10 @@ compute_pc1_loading_table <- function(norm_counts, sample_ids, feature_metrics, 
   list(pca_fit = pca_fit, loading_table = loading_tbl)
 }
 
-build_local_fourier_design <- function(rank_vec, n_harmonics = fourier_harmonics) {
+build_fourier_design <- function(rank_vec, n_harmonics = fourier_harmonics) {
   x <- as.numeric(rank_vec)
   x01 <- (x - min(x)) / max(1e-12, max(x) - min(x))
-  design_df <- data.frame(x = x01)
+  design_df <- data.frame(rank_index = x, x01 = x01)
   for (k in seq_len(n_harmonics)) {
     design_df[[paste0("sin_", k)]] <- sin(2 * pi * k * x01)
     design_df[[paste0("cos_", k)]] <- cos(2 * pi * k * x01)
@@ -266,9 +265,9 @@ fit_fourier_curve <- function(rank_vec, y_vec, n_harmonics = fourier_harmonics) 
     stop("Not enough finite points to fit the Fourier model.", call. = FALSE)
   }
 
-  design_df <- build_local_fourier_design(rank_vec, n_harmonics = n_harmonics)
+  design_df <- build_fourier_design(rank_vec, n_harmonics = n_harmonics)
   design_df$y <- y_vec
-  rhs <- paste(setdiff(names(design_df), "y"), collapse = " + ")
+  rhs <- paste(setdiff(names(design_df), c("y", "rank_index")), collapse = " + ")
   fit <- stats::lm(stats::as.formula(paste("y ~", rhs)), data = design_df)
   fitted_vals <- as.numeric(stats::predict(fit, newdata = design_df))
 
@@ -304,7 +303,6 @@ build_group_fourier_map <- function(loading_tbl) {
   wave_map <- data.frame(
     feature_id = df$feature_id,
     rank = df$rank,
-    percentile = df$rank / nrow(df),
     iod_fitted = iod_fit$fitted_y,
     cv2_fitted = cv2_fit$fitted_y,
     stringsAsFactors = FALSE
@@ -338,61 +336,52 @@ build_shared_combined_loading_table <- function(trt_loading_tbl, ctrl_loading_tb
 }
 
 combine_treatment_control_fourier_maps <- function(trt_wave_obj, ctrl_wave_obj) {
-  trt_map <- trt_wave_obj$wave_map[, c("feature_id", "rank", "percentile", "iod_fitted", "cv2_fitted")]
-  ctrl_map <- ctrl_wave_obj$wave_map[, c("feature_id", "rank", "percentile", "iod_fitted", "cv2_fitted")]
+  trt_map <- trt_wave_obj$wave_map[, c("feature_id", "rank", "iod_fitted", "cv2_fitted")]
+  ctrl_map <- ctrl_wave_obj$wave_map[, c("feature_id", "rank", "iod_fitted", "cv2_fitted")]
 
-  names(trt_map) <- c("feature_id", "rank_trt", "percentile_trt", "iod_fitted_trt", "cv2_fitted_trt")
-  names(ctrl_map) <- c("feature_id", "rank_ctrl", "percentile_ctrl", "iod_fitted_ctrl", "cv2_fitted_ctrl")
+  names(trt_map) <- c("feature_id", "rank_trt", "iod_fitted_trt", "cv2_fitted_trt")
+  names(ctrl_map) <- c("feature_id", "rank_ctrl", "iod_fitted_ctrl", "cv2_fitted_ctrl")
 
-  out <- inner_join(trt_map, ctrl_map, by = "feature_id") %>%
+  inner_join(trt_map, ctrl_map, by = "feature_id") %>%
     mutate(
-      percentile = rowMeans(cbind(percentile_trt, percentile_ctrl), na.rm = TRUE),
       combined_center_rank = round(rowMeans(cbind(rank_trt, rank_ctrl), na.rm = TRUE)),
       composite_iod = iod_fitted_trt + iod_fitted_ctrl,
       composite_cv2 = cv2_fitted_trt + cv2_fitted_ctrl,
       regime_difference = composite_iod - composite_cv2
     ) %>%
-    arrange(percentile, combined_center_rank, feature_id)
-
-  out
+    arrange(combined_center_rank, feature_id)
 }
 
 find_crossings <- function(combined_wave_df) {
   df <- combined_wave_df %>%
-    filter(is.finite(percentile), is.finite(regime_difference)) %>%
-    filter(percentile >= crossing_min_percentile, percentile <= crossing_max_percentile) %>%
-    arrange(percentile)
+    filter(is.finite(combined_center_rank), is.finite(regime_difference)) %>%
+    arrange(combined_center_rank, feature_id)
 
-  if (nrow(df) < 2L) return(data.frame())
+  if (nrow(df) < 2L) {
+    stop("Not enough points to evaluate crossings across the full ranked axis.", call. = FALSE)
+  }
 
   out <- list()
   idx <- 1L
   for (i in seq_len(nrow(df) - 1L)) {
     y1 <- df$regime_difference[i]
     y2 <- df$regime_difference[i + 1L]
-    x1 <- df$percentile[i]
-    x2 <- df$percentile[i + 1L]
-    r1 <- df$combined_center_rank[i]
-    r2 <- df$combined_center_rank[i + 1L]
+    x1 <- df$combined_center_rank[i]
+    x2 <- df$combined_center_rank[i + 1L]
 
     crossed <- (y1 == 0) || (y2 == 0) || ((y1 > 0) && (y2 < 0)) || ((y1 < 0) && (y2 > 0))
     if (!crossed) next
 
     if (identical(y1, y2) || isTRUE(all.equal(y1, y2))) {
-      crossing_percentile <- mean(c(x1, x2))
-      crossing_rank <- round(mean(c(r1, r2)))
+      crossing_rank <- round(mean(c(x1, x2)))
     } else {
-      crossing_percentile <- x1 + (0 - y1) * (x2 - x1) / (y2 - y1)
-      crossing_rank <- round(r1 + (0 - y1) * (r2 - r1) / (y2 - y1))
+      crossing_rank <- round(x1 + (0 - y1) * (x2 - x1) / (y2 - y1))
     }
 
     out[[idx]] <- data.frame(
       crossing_id = paste0("crossing_", idx),
-      percentile_left = x1,
-      percentile_right = x2,
-      crossing_percentile = crossing_percentile,
-      rank_left = r1,
-      rank_right = r2,
+      rank_left = x1,
+      rank_right = x2,
       crossing_rank = crossing_rank,
       regime_difference_left = y1,
       regime_difference_right = y2,
@@ -401,70 +390,51 @@ find_crossings <- function(combined_wave_df) {
     idx <- idx + 1L
   }
 
-  if (!length(out)) return(data.frame())
-  bind_rows(out) %>% arrange(crossing_percentile)
+  if (!length(out)) {
+    stop("No crossings were found across the full ranked axis.", call. = FALSE)
+  }
+
+  bind_rows(out) %>% arrange(crossing_rank)
 }
 
 select_last_crossing_before_divergence <- function(crossing_tbl) {
-  if (is.null(crossing_tbl) || !nrow(crossing_tbl)) {
-    stop("No crossings were found within the requested percentile window.", call. = FALSE)
-  }
   crossing_tbl %>%
-    arrange(desc(crossing_percentile), desc(crossing_rank)) %>%
+    arrange(desc(crossing_rank)) %>%
     slice(1)
 }
 
-build_eigenvector_split <- function(shared_combined_tbl, rank_cutoff, count_matrix, norm_counts_df, annot_df) {
-  leading_edge_flag <- (
-    (!is.na(shared_combined_tbl$rank_trt) & shared_combined_tbl$rank_trt <= rank_cutoff) |
-    (!is.na(shared_combined_tbl$rank_ctrl) & shared_combined_tbl$rank_ctrl <= rank_cutoff)
-  )
+build_eigenvector_split <- function(shared_combined_tbl, rank_cutoff) {
+  assert_required_columns(shared_combined_tbl, c("feature_id", "rank_trt", "rank_ctrl"), "shared_combined_tbl")
 
   membership_tbl <- shared_combined_tbl %>%
     mutate(
-      in_leading_edge_union = leading_edge_flag,
-      in_remainder = !leading_edge_flag
+      in_treatment_leading_edge = !is.na(rank_trt) & rank_trt <= rank_cutoff,
+      in_control_leading_edge = !is.na(rank_ctrl) & rank_ctrl <= rank_cutoff,
+      in_leading_edge_union = in_treatment_leading_edge | in_control_leading_edge,
+      in_remainder = !in_leading_edge_union
     )
 
   leading_edge_ids <- as.character(membership_tbl$feature_id[membership_tbl$in_leading_edge_union])
   remainder_ids <- as.character(membership_tbl$feature_id[membership_tbl$in_remainder])
 
-  if (!length(leading_edge_ids)) stop("Leading edge is empty after union-based split.", call. = FALSE)
-  if (!length(remainder_ids)) stop("Remainder is empty after union-based split.", call. = FALSE)
-
-  count_feature_ids <- rownames(count_matrix)
-  leading_edge_count_matrix <- count_matrix[count_feature_ids %in% leading_edge_ids, , drop = FALSE]
-  remainder_count_matrix <- count_matrix[count_feature_ids %in% remainder_ids, , drop = FALSE]
-
-  norm_core <- as.data.frame(norm_counts_df, stringsAsFactors = FALSE)
-  norm_core$feature_id <- rownames(norm_core)
-  leading_edge_norm_df <- norm_core[norm_core$feature_id %in% leading_edge_ids, , drop = FALSE]
-  remainder_norm_df <- norm_core[norm_core$feature_id %in% remainder_ids, , drop = FALSE]
-
-  if (!is.null(annot_df) && nrow(annot_df)) {
-    leading_edge_annot_df <- annot_df[annot_df$feature_id %in% leading_edge_ids, , drop = FALSE]
-    remainder_annot_df <- annot_df[annot_df$feature_id %in% remainder_ids, , drop = FALSE]
-  } else {
-    leading_edge_annot_df <- data.frame(feature_id = leading_edge_ids, stringsAsFactors = FALSE)
-    remainder_annot_df <- data.frame(feature_id = remainder_ids, stringsAsFactors = FALSE)
+  if (!length(leading_edge_ids)) {
+    stop("Leading edge is empty after union-based eigenvector splitting.", call. = FALSE)
+  }
+  if (!length(remainder_ids)) {
+    stop("Remainder is empty after union-based eigenvector splitting.", call. = FALSE)
   }
 
   list(
     membership_tbl = membership_tbl,
     leading_edge_ids = leading_edge_ids,
     remainder_ids = remainder_ids,
-    leading_edge_count_matrix = leading_edge_count_matrix,
-    remainder_count_matrix = remainder_count_matrix,
-    leading_edge_norm_df = leading_edge_norm_df,
-    remainder_norm_df = remainder_norm_df,
-    leading_edge_annot_df = leading_edge_annot_df,
-    remainder_annot_df = remainder_annot_df,
     leading_edge_union_n = length(leading_edge_ids),
-    remainder_union_n = length(remainder_ids)
+    remainder_union_n = length(remainder_ids),
+    n_total = nrow(membership_tbl)
   )
 }
 
-resolve_stage1_cutoff <- function(trt_loading_tbl, ctrl_loading_tbl, count_matrix, norm_counts_df, annot_df) {
+resolve_stage1_cutoff <- function(trt_loading_tbl, ctrl_loading_tbl) {
   trt_wave_obj <- build_group_fourier_map(trt_loading_tbl)
   ctrl_wave_obj <- build_group_fourier_map(ctrl_loading_tbl)
   shared_combined_tbl <- build_shared_combined_loading_table(trt_loading_tbl, ctrl_loading_tbl)
@@ -472,16 +442,8 @@ resolve_stage1_cutoff <- function(trt_loading_tbl, ctrl_loading_tbl, count_matri
   crossing_tbl <- find_crossings(combined_wave_df)
   selected_crossing <- select_last_crossing_before_divergence(crossing_tbl)
 
-  rank_cutoff <- as.integer(selected_crossing$crossing_rank[1])
-  rank_cutoff <- max(1L, rank_cutoff)
-
-  evs_split <- build_eigenvector_split(
-    shared_combined_tbl = shared_combined_tbl,
-    rank_cutoff = rank_cutoff,
-    count_matrix = count_matrix,
-    norm_counts_df = norm_counts_df,
-    annot_df = annot_df
-  )
+  rank_cutoff <- max(1L, as.integer(selected_crossing$crossing_rank[1]))
+  split_obj <- build_eigenvector_split(shared_combined_tbl, rank_cutoff)
 
   list(
     trt_wave_obj = trt_wave_obj,
@@ -491,14 +453,26 @@ resolve_stage1_cutoff <- function(trt_loading_tbl, ctrl_loading_tbl, count_matri
     crossing_tbl = crossing_tbl,
     selected_crossing = selected_crossing,
     rank_cutoff = rank_cutoff,
-    evs_split = evs_split,
-    leading_edge_ids = evs_split$leading_edge_ids,
-    remainder_ids = evs_split$remainder_ids,
-    n_total = nrow(shared_combined_tbl),
-    leading_edge_union_n = evs_split$leading_edge_union_n,
-    remainder_union_n = evs_split$remainder_union_n,
+    split_obj = split_obj,
+    leading_edge_ids = split_obj$leading_edge_ids,
+    remainder_ids = split_obj$remainder_ids,
+    n_total = split_obj$n_total,
+    leading_edge_union_n = split_obj$leading_edge_union_n,
+    remainder_union_n = split_obj$remainder_union_n,
     selected_reason = "last_crossing_before_divergence"
   )
+}
+
+subset_matrix_by_ids <- function(mat, ids) {
+  keep_ids <- intersect(ids, rownames(mat))
+  mat[keep_ids, , drop = FALSE]
+}
+
+matrix_to_export_table <- function(mat, annot_df) {
+  out <- as.data.frame(mat, stringsAsFactors = FALSE)
+  out$feature_id <- rownames(out)
+  out <- out %>% left_join(annot_df, by = "feature_id")
+  out[, c("feature_id", "gene_symbol", setdiff(names(out), c("feature_id", "gene_symbol"))), drop = FALSE]
 }
 
 # =============================================================================
@@ -507,13 +481,13 @@ resolve_stage1_cutoff <- function(trt_loading_tbl, ctrl_loading_tbl, count_matri
 
 plot_group_fourier_map <- function(wave_obj, group_label, comparison_name) {
   df <- wave_obj$wave_map
-  ggplot(df, aes(percentile)) +
+  ggplot(df, aes(rank)) +
     geom_line(aes(y = iod_fitted, color = "IOD"), linewidth = 0.9) +
     geom_line(aes(y = cv2_fitted, color = "CV²"), linewidth = 0.9) +
     scale_color_manual(values = c("IOD" = plot_palette$treatment, "CV²" = plot_palette$control)) +
     labs(
       title = paste0(comparison_name, " | ", group_label, " full-axis Fourier fit"),
-      x = "Rank percentile",
+      x = "EVS rank",
       y = "Fitted log-scale value"
     ) +
     manuscript_theme()
@@ -524,13 +498,13 @@ plot_composite_overlap <- function(stage1_obj, comparison_name) {
   sc <- stage1_obj$selected_crossing
   ymax <- max(c(df$composite_iod, df$composite_cv2), na.rm = TRUE)
 
-  ggplot(df, aes(percentile)) +
+  ggplot(df, aes(combined_center_rank)) +
     geom_line(aes(y = composite_iod, color = "Composite IOD"), linewidth = 0.9) +
     geom_line(aes(y = composite_cv2, color = "Composite CV²"), linewidth = 0.9) +
-    geom_vline(xintercept = sc$crossing_percentile[1], linetype = "dashed", linewidth = 0.9, colour = plot_palette$threshold) +
+    geom_vline(xintercept = sc$crossing_rank[1], linetype = "dashed", linewidth = 0.9, colour = plot_palette$threshold) +
     annotate(
       "label",
-      x = sc$crossing_percentile[1],
+      x = sc$crossing_rank[1],
       y = ymax,
       label = paste0(
         "Last crossing before divergence\n",
@@ -547,7 +521,7 @@ plot_composite_overlap <- function(stage1_obj, comparison_name) {
     scale_color_manual(values = c("Composite IOD" = plot_palette$treatment, "Composite CV²" = plot_palette$control)) +
     labs(
       title = paste0(comparison_name, " | treatment-control composite overlap"),
-      x = "Rank percentile",
+      x = "Combined EVS rank",
       y = "Composite fitted value"
     ) +
     manuscript_theme()
@@ -557,14 +531,19 @@ plot_difference_curve <- function(stage1_obj, comparison_name) {
   df <- stage1_obj$combined_wave_df
   sc <- stage1_obj$selected_crossing
 
-  ggplot(df, aes(percentile, regime_difference)) +
+  ggplot(df, aes(combined_center_rank, regime_difference)) +
     geom_hline(yintercept = 0, colour = "grey50", linewidth = 0.5) +
     geom_line(colour = plot_palette$threshold, linewidth = 0.9) +
-    geom_vline(xintercept = sc$crossing_percentile[1], linetype = "dashed", linewidth = 0.9, colour = plot_palette$threshold) +
-    geom_point(data = data.frame(percentile = sc$crossing_percentile[1], regime_difference = 0), aes(x = percentile, y = regime_difference), inherit.aes = FALSE, size = 2) +
+    geom_vline(xintercept = sc$crossing_rank[1], linetype = "dashed", linewidth = 0.9, colour = plot_palette$threshold) +
+    geom_point(
+      data = data.frame(combined_center_rank = sc$crossing_rank[1], regime_difference = 0),
+      aes(x = combined_center_rank, y = regime_difference),
+      inherit.aes = FALSE,
+      size = 2
+    ) +
     annotate(
       "label",
-      x = sc$crossing_percentile[1],
+      x = sc$crossing_rank[1],
       y = 0,
       label = paste0("rank cutoff = ", stage1_obj$rank_cutoff),
       fill = "white",
@@ -575,7 +554,7 @@ plot_difference_curve <- function(stage1_obj, comparison_name) {
     ) +
     labs(
       title = paste0(comparison_name, " | IOD minus CV² crossing curve"),
-      x = "Rank percentile",
+      x = "Combined EVS rank",
       y = "IOD − CV²"
     ) +
     manuscript_theme()
@@ -646,7 +625,6 @@ build_stage1_summary_table <- function(stage1_obj, comparison_name) {
     comparison_name = comparison_name,
     selected_reason = stage1_obj$selected_reason,
     crossing_id = sc$crossing_id[1],
-    crossing_percentile = sc$crossing_percentile[1],
     crossing_rank = sc$crossing_rank[1],
     rank_cutoff = stage1_obj$rank_cutoff,
     n_total = stage1_obj$n_total,
@@ -654,10 +632,6 @@ build_stage1_summary_table <- function(stage1_obj, comparison_name) {
     remainder_union_n = stage1_obj$remainder_union_n,
     stringsAsFactors = FALSE
   )
-}
-
-build_split_membership_table <- function(stage1_obj) {
-  stage1_obj$evs_split$membership_tbl
 }
 
 # =============================================================================
@@ -674,21 +648,21 @@ run_one_comparison <- function(comparison_row, count_matrix, annot_df) {
   trt_metrics <- compute_group_feature_metrics(comp$count_matrix[, comp$trt_ids, drop = FALSE])
   ctrl_metrics <- compute_group_feature_metrics(comp$count_matrix[, comp$ctrl_ids, drop = FALSE])
 
-  norm_counts_df <- as.data.frame(norm_counts, stringsAsFactors = FALSE)
-  norm_counts_df$feature_id <- rownames(norm_counts_df)
-  norm_counts_df <- norm_counts_df %>% left_join(annot_df, by = "feature_id")
-  rownames(norm_counts_df) <- norm_counts_df$feature_id
+  trt_loading <- compute_pc1_loading_table(norm_counts, comp$trt_ids, trt_metrics, annot_df)
+  ctrl_loading <- compute_pc1_loading_table(norm_counts, comp$ctrl_ids, ctrl_metrics, annot_df)
 
-  trt_loading <- compute_pc1_loading_table(norm_counts_df, comp$trt_ids, trt_metrics, annot_df)
-  ctrl_loading <- compute_pc1_loading_table(norm_counts_df, comp$ctrl_ids, ctrl_metrics, annot_df)
-
-  stage1_obj <- resolve_stage1_cutoff(trt_loading$loading_table, ctrl_loading$loading_table, comp$count_matrix, norm_counts_df, annot_df)
+  stage1_obj <- resolve_stage1_cutoff(trt_loading$loading_table, ctrl_loading$loading_table)
 
   comparison_dir <- file.path(output_dir, comparison_name)
   tab_dir <- file.path(comparison_dir, "tables")
   fig_dir <- file.path(comparison_dir, "figures")
   dir.create(tab_dir, recursive = TRUE, showWarnings = FALSE)
   dir.create(fig_dir, recursive = TRUE, showWarnings = FALSE)
+
+  leading_raw <- subset_matrix_by_ids(comp$count_matrix, stage1_obj$leading_edge_ids)
+  remainder_raw <- subset_matrix_by_ids(comp$count_matrix, stage1_obj$remainder_ids)
+  leading_norm <- subset_matrix_by_ids(norm_counts, stage1_obj$leading_edge_ids)
+  remainder_norm <- subset_matrix_by_ids(norm_counts, stage1_obj$remainder_ids)
 
   save_csv(trt_loading$loading_table, file.path(tab_dir, paste0(comparison_name, "_treatment_loading_table.csv")))
   save_csv(ctrl_loading$loading_table, file.path(tab_dir, paste0(comparison_name, "_control_loading_table.csv")))
@@ -697,15 +671,13 @@ run_one_comparison <- function(comparison_row, count_matrix, annot_df) {
   save_csv(stage1_obj$combined_wave_df, file.path(tab_dir, paste0(comparison_name, "_combined_full_axis_fourier_map.csv")))
   save_csv(stage1_obj$crossing_tbl, file.path(tab_dir, paste0(comparison_name, "_crossing_table.csv")))
   save_csv(build_stage1_summary_table(stage1_obj, comparison_name), file.path(tab_dir, paste0(comparison_name, "_stage1_summary.csv")))
-  save_csv(build_split_membership_table(stage1_obj), file.path(tab_dir, paste0(comparison_name, "_split_membership_table.csv")))
+  save_csv(stage1_obj$split_obj$membership_tbl, file.path(tab_dir, paste0(comparison_name, "_split_membership_table.csv")))
   save_csv(data.frame(feature_id = stage1_obj$leading_edge_ids, stringsAsFactors = FALSE), file.path(tab_dir, paste0(comparison_name, "_leading_edge_ids.csv")))
   save_csv(data.frame(feature_id = stage1_obj$remainder_ids, stringsAsFactors = FALSE), file.path(tab_dir, paste0(comparison_name, "_remainder_ids.csv")))
-  save_csv(cbind(data.frame(feature_id = rownames(stage1_obj$evs_split$leading_edge_count_matrix), stringsAsFactors = FALSE), as.data.frame(stage1_obj$evs_split$leading_edge_count_matrix, check.names = FALSE)), file.path(tab_dir, paste0(comparison_name, "_leading_edge_raw_counts.csv")))
-  save_csv(cbind(data.frame(feature_id = rownames(stage1_obj$evs_split$remainder_count_matrix), stringsAsFactors = FALSE), as.data.frame(stage1_obj$evs_split$remainder_count_matrix, check.names = FALSE)), file.path(tab_dir, paste0(comparison_name, "_remainder_raw_counts.csv")))
-  save_csv(stage1_obj$evs_split$leading_edge_norm_df, file.path(tab_dir, paste0(comparison_name, "_leading_edge_normalized_counts.csv")))
-  save_csv(stage1_obj$evs_split$remainder_norm_df, file.path(tab_dir, paste0(comparison_name, "_remainder_normalized_counts.csv")))
-  save_csv(stage1_obj$evs_split$leading_edge_annot_df, file.path(tab_dir, paste0(comparison_name, "_leading_edge_annotation.csv")))
-  save_csv(stage1_obj$evs_split$remainder_annot_df, file.path(tab_dir, paste0(comparison_name, "_remainder_annotation.csv")))
+  save_csv(matrix_to_export_table(leading_raw, annot_df), file.path(tab_dir, paste0(comparison_name, "_leading_edge_raw_counts.csv")))
+  save_csv(matrix_to_export_table(remainder_raw, annot_df), file.path(tab_dir, paste0(comparison_name, "_remainder_raw_counts.csv")))
+  save_csv(matrix_to_export_table(leading_norm, annot_df), file.path(tab_dir, paste0(comparison_name, "_leading_edge_normalized_counts.csv")))
+  save_csv(matrix_to_export_table(remainder_norm, annot_df), file.path(tab_dir, paste0(comparison_name, "_remainder_normalized_counts.csv")))
 
   save_plot(plot_group_fourier_map(stage1_obj$trt_wave_obj, "treatment", comparison_name), file.path(fig_dir, paste0(comparison_name, "_treatment_full_axis_fourier_fit.png")))
   save_plot(plot_group_fourier_map(stage1_obj$ctrl_wave_obj, "control", comparison_name), file.path(fig_dir, paste0(comparison_name, "_control_full_axis_fourier_fit.png")))
