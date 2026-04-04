@@ -1,5 +1,0 @@
-"comparison_name","final_selected_rank","final_selected_method","n_raw","n_lead","n_rem","n_raw_weak","n_raw_strong","n_raw_hbfss"
-"RT0_ZT6",6217,"raw_wald_bracket_total_distortion",31553,6217,25336,0,3,73
-"RT2_ZT8",26333,"raw_wald_bracket_total_distortion",31534,26333,5201,44,0,42
-"RT4_ZT10",21434,"raw_wald_bracket_total_distortion",31658,21434,10224,71,52,1423
-"RT8_ZT14",28240,"raw_wald_bracket_total_distortion",31580,28240,3340,129,0,190
