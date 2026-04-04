@@ -3,13 +3,13 @@
 # SEQUENCE 10 ACTIVE CLEAN REWRITE
 # Current method only:
 #   - EVS ranking
-#   - local spline-smoothed treatment/control/combined reference profiles
+#   - local Fourier treatment/control/combined reference curves
 #   - last stable crossing before divergence as reference cutoff
 #   - raw-Wald bracket search between treatment/control backup ranks
 #   - final selected cutoff from minimum total distortion
 #   - final split applied to leading-edge and remainder
 #   - pure Strimmer fdrtool + hc.thresh
-#   - three-panel manuscript volcano per comparison
+#   - one manuscript volcano per comparison
 #   - cleaned tables and figures
 # =============================================================================
 
@@ -45,9 +45,9 @@ lfc_boundary <- 1.0
 hc_upper <- 0.99
 lfc_shrink_type <- "apeglm"
 
-profile_step <- 0.01
-profile_window_frac <- 0.12
-spline_spar <- 0.60
+fourier_step <- 0.01
+fourier_window_frac <- 0.12
+fourier_harmonics <- 2L
 crossing_min_pct <- 0.05
 crossing_max_pct <- 0.95
 crossing_stability_n <- 3L
@@ -144,12 +144,6 @@ fmt <- function(x, digits = 3) {
   formatC(x, digits = digits, format = "fg", flag = "#")
 }
 
-log_step <- function(...) {
-  msg <- paste0(...)
-  message(sprintf('[%s] %s', format(Sys.time(), '%Y-%m-%d %H:%M:%S'), msg))
-  flush.console()
-}
-
 theme_seq <- function() {
   theme_bw(base_size = base_theme_size) +
     theme(
@@ -177,6 +171,103 @@ safe_skew <- function(x) {
   sx <- stats::sd(x)
   if (!is.finite(sx) || is.na(sx) || sx == 0) return(NA_real_)
   mean(((x - mean(x)) / sx)^3)
+}
+
+
+roll_mean_dense <- function(x, k = 151L) {
+  x <- as.numeric(x)
+  n <- length(x)
+  if (n == 0L) return(numeric(0))
+  k <- max(3L, as.integer(k))
+  if (k %% 2L == 0L) k <- k + 1L
+  h <- (k - 1L) / 2L
+  out <- rep(NA_real_, n)
+  for (i in seq_len(n)) {
+    lo <- max(1L, i - h)
+    hi <- min(n, i + h)
+    vals <- x[lo:hi]
+    vals <- vals[is.finite(vals) & !is.na(vals)]
+    if (length(vals)) out[i] <- mean(vals)
+  }
+  out
+}
+
+build_nb_rank_profiles <- function(full_results, shared_tbl, prof_k = 151L) {
+  res <- as.data.frame(full_results, stringsAsFactors = FALSE)
+  assert_cols(res, c("feature_id","baseMean","dispGeneEst"), "full_results")
+  assert_cols(shared_tbl, c("feature_id","combined_rank"), "shared_tbl")
+  out <- left_join(
+    shared_tbl[, c("feature_id","combined_rank"), drop = FALSE],
+    res[, c("feature_id","baseMean","dispGeneEst"), drop = FALSE],
+    by = "feature_id"
+  )
+  out <- out[order(out$combined_rank), , drop = FALSE]
+  out$mu <- as.numeric(out$baseMean)
+  out$alpha <- as.numeric(out$dispGeneEst)
+  out <- out[
+    is.finite(out$mu) & !is.na(out$mu) & out$mu > 0 &
+      is.finite(out$alpha) & !is.na(out$alpha) & out$alpha >= 0,
+    ,
+    drop = FALSE
+  ]
+  out$rank <- out$combined_rank
+  out$iod <- 1 + out$alpha * out$mu
+  out$cv2 <- (1 / out$mu) + out$alpha
+  out$iod_prof <- roll_mean_dense(out$iod, prof_k)
+  out$cv2_prof <- roll_mean_dense(out$cv2, prof_k)
+  out$delta_prof <- out$iod_prof - out$cv2_prof
+  out
+}
+
+plot_cutoff_explanation_panel <- function(cmp_name, prof_df, cutoff_rank) {
+  df <- as.data.frame(prof_df, stringsAsFactors = FALSE)
+  req <- c("rank","iod_prof","cv2_prof","delta_prof")
+  assert_cols(df, req, "prof_df")
+  df <- df[
+    is.finite(df$rank) & !is.na(df$rank) &
+      is.finite(df$iod_prof) & !is.na(df$iod_prof) &
+      is.finite(df$cv2_prof) & !is.na(df$cv2_prof) &
+      is.finite(df$delta_prof) & !is.na(df$delta_prof),
+    ,
+    drop = FALSE
+  ]
+  y_rng <- range(c(df$iod_prof, df$cv2_prof), na.rm = TRUE)
+  p1 <- ggplot(df, aes(rank)) +
+    geom_line(aes(y = iod_prof, colour = "IOD(r)"), linewidth = 0.9) +
+    geom_line(aes(y = cv2_prof, colour = "CV²(r)"), linewidth = 0.9) +
+    geom_vline(xintercept = cutoff_rank, linetype = "dashed", linewidth = 0.8, colour = pal$treatment) +
+    scale_colour_manual(values = c("IOD(r)" = pal$treatment, "CV²(r)" = pal$control)) +
+    coord_cartesian(ylim = y_rng) +
+    labs(title = "A. Rank-linked regime profiles", x = "Rank", y = "amplitude", colour = NULL) +
+    theme_seq()
+
+  p2 <- ggplot(df, aes(rank, iod_prof)) +
+    geom_line(linewidth = 0.9, colour = pal$treatment) +
+    geom_vline(xintercept = cutoff_rank, linetype = "dashed", linewidth = 0.8, colour = pal$treatment) +
+    labs(title = "B. IOD as a function of rank", x = "Rank", y = "IOD(r)",
+         subtitle = "IOD(r) = Var(Y[r]) / mu[r] = 1 + alpha[r] * mu[r]") +
+    theme_seq()
+
+  p3 <- ggplot(df, aes(rank, cv2_prof)) +
+    geom_line(linewidth = 0.9, colour = pal$treatment) +
+    geom_vline(xintercept = cutoff_rank, linetype = "dashed", linewidth = 0.8, colour = pal$treatment) +
+    labs(title = "C. CV² as a function of rank", x = "Rank", y = "CV²(r)",
+         subtitle = "CV²(r) = Var(Y[r]) / mu[r]^2 = 1 / mu[r] + alpha[r]") +
+    theme_seq()
+
+  p4 <- ggplot(df, aes(rank, delta_prof)) +
+    geom_line(linewidth = 0.9, colour = pal$treatment) +
+    geom_hline(yintercept = 0, linetype = "dotted", linewidth = 0.8, colour = pal$control) +
+    geom_vline(xintercept = cutoff_rank, linetype = "dashed", linewidth = 0.8, colour = pal$treatment) +
+    labs(title = "D. Crossing condition", x = "Rank", y = "IOD(r) - CV²(r)",
+         subtitle = "Δ(r) = IOD(r) - CV²(r); crossing occurs where Δ(r) = 0") +
+    theme_seq()
+
+  arrangeGrob(
+    p1, p2, p3, p4, ncol = 2,
+    top = textGrob(paste0(cmp_name, " | cutoff-explanation panel"), gp = gpar(fontface = "bold", cex = 1.04)),
+    bottom = textGrob("Dashed vertical line = projected cutoff across all panels.", gp = gpar(cex = 0.9))
+  )
 }
 
 # -----------------------------------------------------------------------------
@@ -365,7 +456,7 @@ run_core <- function(count_mat, coldata, dataset_name, annot_df) {
 }
 
 # -----------------------------------------------------------------------------
-# EVS rank + Spline
+# EVS rank + Fourier
 # -----------------------------------------------------------------------------
 
 prep_cmp <- function(cmp, trt_prefix, ctrl_prefix) {
@@ -401,42 +492,38 @@ pc1_tbl <- function(value_df, sample_names, metrics = NULL) {
   list(pca = pca, tbl = out)
 }
 
-build_windows <- function(n_total) {
-  pct <- seq(profile_step, 1, by = profile_step)
-  ctr <- pmax(1L, pmin(n_total, round(pct * n_total)))
-  keep <- ctr >= 1L & ctr <= n_total
-  pct <- pct[keep]; ctr <- ctr[keep]
-  half <- max(5L, round((profile_window_frac * n_total) / 2))
-  data.frame(percentile = pct, center_rank = ctr,
-             lo_rank = pmax(1L, ctr - half),
-             hi_rank = pmin(n_total, ctr + half),
-             stringsAsFactors = FALSE)
+fourier_design <- function(x, harmonics = fourier_harmonics) {
+  x <- as.numeric(x)
+  x01 <- (x - min(x)) / max(1e-12, (max(x) - min(x)))
+  out <- data.frame(x = x01)
+  for (k in seq_len(harmonics)) {
+    out[[paste0("sin_", k)]] <- sin(2*pi*k*x01)
+    out[[paste0("cos_", k)]] <- cos(2*pi*k*x01)
+  }
+  out
 }
 
-smooth_local_profile <- function(x, y, spar = spline_spar) {
-  x0 <- as.numeric(x)
-  y0 <- as.numeric(y)
-  out <- rep(NA_real_, length(x0))
-
-  keep <- is.finite(x0) & !is.na(x0) & is.finite(y0) & !is.na(y0)
-  x <- x0[keep]
-  y <- y0[keep]
-
-  if (length(x) < 8L) return(out)
-
-  fit <- tryCatch(
-    stats::smooth.spline(x = x, y = y, spar = spar),
-    error = function(e) NULL
-  )
-  if (is.null(fit)) return(out)
-
-  pred <- tryCatch(
-    stats::predict(fit, x = x)$y,
-    error = function(e) rep(NA_real_, length(x))
-  )
-
-  out[keep] <- as.numeric(pred)
-  out
+fit_local_fourier <- function(rank_vec, y_vec, harmonics = fourier_harmonics) {
+  rank_vec <- as.numeric(rank_vec)
+  y_vec <- as.numeric(y_vec)
+  keep <- is.finite(rank_vec) & !is.na(rank_vec) & is.finite(y_vec) & !is.na(y_vec)
+  rank_vec <- rank_vec[keep]
+  y_vec <- y_vec[keep]
+  if (length(rank_vec) < (2 * harmonics + 5L)) return(NULL)
+  y_sd <- suppressWarnings(stats::sd(y_vec, na.rm = TRUE))
+  if (!is.finite(y_sd) || is.na(y_sd) || y_sd == 0) return(NULL)
+  dd <- fourier_design(rank_vec, harmonics)
+  dd$y <- y_vec
+  rhs <- paste(setdiff(names(dd), "y"), collapse = " + ")
+  fm <- as.formula(paste("y ~", rhs))
+  fit <- tryCatch(stats::lm(fm, data = dd), error = function(e) NULL)
+  if (is.null(fit)) return(NULL)
+  fy <- as.numeric(predict(fit, newdata = dd))
+  amp <- 0.5 * (max(fy, na.rm = TRUE) - min(fy, na.rm = TRUE))
+  pk <- which.max(fy); tr <- which.min(fy)
+  list(local_amplitude = amp,
+       center_rank = mean(c(rank_vec[pk], rank_vec[tr])),
+       residual_sd = sd(dd$y - fy, na.rm = TRUE))
 }
 
 rank_metric_tbl <- function(tbl) {
@@ -457,18 +544,32 @@ rank_metric_tbl <- function(tbl) {
   df
 }
 
+build_windows <- function(n_total) {
+  pct <- seq(fourier_step, 1, by = fourier_step)
+  ctr <- pmax(1L, pmin(n_total, round(pct * n_total)))
+  max_rank <- floor(n_total * 1.00)
+  keep <- ctr >= 1L & ctr <= max_rank
+  pct <- pct[keep]; ctr <- ctr[keep]
+  half <- max(5L, round((fourier_window_frac * n_total) / 2))
+  data.frame(percentile = pct, center_rank = ctr,
+             lo_rank = pmax(1L, ctr - half),
+             hi_rank = pmin(n_total, ctr + half),
+             stringsAsFactors = FALSE)
+}
+
 summarize_window <- function(metric_df, lo_rank, hi_rank) {
   sub <- metric_df[metric_df$rank >= lo_rank & metric_df$rank <= hi_rank, , drop = FALSE]
-  if (nrow(sub) < 9L) {
-    return(data.frame(iod_raw = NA_real_, cv2_raw = NA_real_, iod_center = NA_real_, cv2_center = NA_real_, stringsAsFactors = FALSE))
-  }
-  data.frame(
-    iod_raw = mean(sub$log_iod, na.rm = TRUE),
-    cv2_raw = mean(sub$log_cv2, na.rm = TRUE),
-    iod_center = mean(sub$rank, na.rm = TRUE),
-    cv2_center = mean(sub$rank, na.rm = TRUE),
-    stringsAsFactors = FALSE
-  )
+  if (nrow(sub) < 9L) return(data.frame(iod_amp = NA_real_, cv2_amp = NA_real_,
+                                        iod_center = NA_real_, cv2_center = NA_real_, stringsAsFactors = FALSE))
+  iod_fit <- fit_local_fourier(sub$rank, sub$log_iod)
+  cv2_fit <- fit_local_fourier(sub$rank, sub$log_cv2)
+  if (is.null(iod_fit) || is.null(cv2_fit)) return(data.frame(iod_amp = NA_real_, cv2_amp = NA_real_,
+                                                              iod_center = NA_real_, cv2_center = NA_real_, stringsAsFactors = FALSE))
+  data.frame(iod_amp = iod_fit$local_amplitude,
+             cv2_amp = cv2_fit$local_amplitude,
+             iod_center = iod_fit$center_rank,
+             cv2_center = cv2_fit$center_rank,
+             stringsAsFactors = FALSE)
 }
 
 wave_map <- function(tbl) {
@@ -477,12 +578,11 @@ wave_map <- function(tbl) {
   win <- build_windows(nrow(metric_df))
   rows <- lapply(seq_len(nrow(win)), function(i) cbind(win[i, , drop = FALSE], summarize_window(metric_df, win$lo_rank[i], win$hi_rank[i])))
   wm <- bind_rows(rows)
-  wm$iod_sm <- smooth_local_profile(wm$percentile, wm$iod_raw, spar = spline_spar)
-  wm$cv2_sm <- smooth_local_profile(wm$percentile, wm$cv2_raw, spar = spline_spar)
-  wm$diff <- wm$iod_sm - wm$cv2_sm
+  iod_s <- if (all(is.na(wm$iod_amp))) rep(NA_real_, nrow(wm)) else scales::rescale(wm$iod_amp, to = c(0,1), from = range(wm$iod_amp, na.rm = TRUE))
+  cv2_s <- if (all(is.na(wm$cv2_amp))) rep(NA_real_, nrow(wm)) else scales::rescale(wm$cv2_amp, to = c(0,1), from = range(wm$cv2_amp, na.rm = TRUE))
   wm$center_dist <- abs(wm$iod_center - wm$cv2_center)
   wm$center_agree <- 1 / (1 + wm$center_dist)
-  wm$score <- abs(wm$diff)
+  wm$score <- iod_s + cv2_s + wm$center_agree
   list(metric_df = metric_df, wave = wm)
 }
 
@@ -490,18 +590,20 @@ combine_waves <- function(trt_wave, ctrl_wave) {
   if (is.null(trt_wave) || is.null(ctrl_wave)) return(NULL)
   a <- trt_wave$wave; b <- ctrl_wave$wave
   if (is.null(a) || is.null(b) || !nrow(a) || !nrow(b)) return(NULL)
-  keep <- c("percentile","center_rank","iod_sm","cv2_sm","iod_center","cv2_center","score")
+  keep <- c("percentile","center_rank","iod_amp","cv2_amp","iod_center","cv2_center","score")
   a2 <- a[, keep, drop = FALSE]; b2 <- b[, keep, drop = FALSE]
   names(a2)[names(a2) != "percentile"] <- paste0(names(a2)[names(a2) != "percentile"], "_trt")
   names(b2)[names(b2) != "percentile"] <- paste0(names(b2)[names(b2) != "percentile"], "_ctrl")
   out <- inner_join(a2, b2, by = "percentile")
   out$combined_center_rank <- round((out$center_rank_trt + out$center_rank_ctrl)/2)
-  out$combined_iod_sm <- rowMeans(cbind(out$iod_sm_trt, out$iod_sm_ctrl), na.rm = TRUE)
-  out$combined_cv2_sm <- rowMeans(cbind(out$cv2_sm_trt, out$cv2_sm_ctrl), na.rm = TRUE)
+  out$combined_iod_amp <- out$iod_amp_trt + out$iod_amp_ctrl
+  out$combined_cv2_amp <- out$cv2_amp_trt + out$cv2_amp_ctrl
   out$combined_center_dist <- abs(((out$iod_center_trt + out$iod_center_ctrl)/2) - ((out$cv2_center_trt + out$cv2_center_ctrl)/2))
   out$combined_center_agree <- 1 / (1 + out$combined_center_dist)
-  out$combined_score <- abs(out$combined_iod_sm - out$combined_cv2_sm)
-  out$diff <- out$combined_iod_sm - out$combined_cv2_sm
+  iod_s <- if (all(is.na(out$combined_iod_amp))) rep(NA_real_, nrow(out)) else scales::rescale(out$combined_iod_amp, to = c(0,1), from = range(out$combined_iod_amp, na.rm = TRUE))
+  cv2_s <- if (all(is.na(out$combined_cv2_amp))) rep(NA_real_, nrow(out)) else scales::rescale(out$combined_cv2_amp, to = c(0,1), from = range(out$combined_cv2_amp, na.rm = TRUE))
+  out$combined_score <- iod_s + cv2_s + out$combined_center_agree
+  out$diff <- out$combined_iod_amp - out$combined_cv2_amp
   out
 }
 
@@ -578,7 +680,7 @@ backup_crossing <- function(wave_obj, label = "group") {
   df <- wave_obj$wave
   diff_df <- data.frame(percentile = df$percentile,
                         combined_center_rank = round(df$center_rank),
-                        diff = df$iod_sm - df$cv2_sm, stringsAsFactors = FALSE)
+                        diff = df$iod_amp - df$cv2_amp, stringsAsFactors = FALSE)
   tab <- find_crossings(diff_df)
   tab <- label_stable(diff_df, tab)
   if (!nrow(tab)) return(list(selected = NULL, reason = paste0(label, "_no_crossing"), table = tab, diff_df = diff_df))
@@ -834,14 +936,14 @@ plot_wave_single <- function(wave_obj, cmp, group_label, backup = NULL) {
   df <- wave_obj$wave
   line_col <- if (group_label == "Treatment") pal$treatment else pal$control
   p <- ggplot(df, aes(percentile)) +
-    geom_line(aes(y = iod_sm, color = "IOD"), linewidth = 0.9) +
-    geom_line(aes(y = cv2_sm, color = "CV2"), linewidth = 0.9) +
+    geom_line(aes(y = iod_amp, color = "IOD"), linewidth = 0.9) +
+    geom_line(aes(y = cv2_amp, color = "CV2"), linewidth = 0.9) +
     scale_color_manual(values = c("IOD" = pal$treatment, "CV2" = pal$control)) +
-    labs(title = paste0(group_label, " | smoothed local regime profiles"),
-         x = "Percentile center", y = "Smoothed local profile", color = NULL) +
+    labs(title = paste0(group_label, " | local regime lines"),
+         x = "Percentile center", y = "Local amplitude", color = NULL) +
     theme_seq()
   if (!is.null(backup) && nrow(backup)) {
-    ymax <- max(c(df$iod_sm, df$cv2_sm), na.rm = TRUE)
+    ymax <- max(c(df$iod_amp, df$cv2_amp), na.rm = TRUE)
     p <- p +
       geom_vline(xintercept = backup$crossing_percentile[1], linetype = "dotted", linewidth = 0.9, colour = line_col) +
       annotate("label", x = backup$crossing_percentile[1], y = ymax,
@@ -855,13 +957,13 @@ plot_wave_single <- function(wave_obj, cmp, group_label, backup = NULL) {
 plot_combined_wave <- function(cmb, cmp, trt_bk = NULL, ctrl_bk = NULL, crossing = NULL, final_rank = NA_integer_) {
   if (is.null(cmb) || !nrow(cmb)) return(NULL)
   p <- ggplot(cmb, aes(percentile)) +
-    geom_line(aes(y = combined_iod_sm, color = "Composite IOD"), linewidth = 0.95) +
-    geom_line(aes(y = combined_cv2_sm, color = "Composite CV2"), linewidth = 0.95) +
+    geom_line(aes(y = combined_iod_amp, color = "Composite IOD"), linewidth = 0.95) +
+    geom_line(aes(y = combined_cv2_amp, color = "Composite CV2"), linewidth = 0.95) +
     scale_color_manual(values = c("Composite IOD" = pal$treatment, "Composite CV2" = pal$control)) +
-    labs(title = paste0(cmp, " | combined smoothed local regime profiles"),
-         x = "Percentile center", y = "Composite smoothed local profile", color = NULL) +
+    labs(title = paste0(cmp, " | combined local Fourier wave"),
+         x = "Percentile center", y = "Composite local amplitude", color = NULL) +
     theme_seq()
-  ymax <- max(c(cmb$combined_iod_sm, cmb$combined_cv2_sm), na.rm = TRUE)
+  ymax <- max(c(cmb$combined_iod_amp, cmb$combined_cv2_amp), na.rm = TRUE)
   if (!is.null(crossing) && nrow(crossing)) {
     p <- p + geom_vline(xintercept = crossing$crossing_percentile[1], linetype = "dashed", linewidth = 0.95, colour = pal$threshold) +
       annotate("label", x = crossing$crossing_percentile[1], y = ymax,
@@ -898,18 +1000,18 @@ plot_score_curve <- function(cmb, cmp) {
   if (is.null(cmb) || !nrow(cmb)) return(NULL)
   ggplot(cmb, aes(percentile, combined_score)) +
     geom_col(width = 0.008, fill = pal$threshold) +
-    labs(title = paste0(cmp, " | descriptive crossing-separation profile"),
+    labs(title = paste0(cmp, " | descriptive score profile"),
          x = "Percentile center", y = "Score") +
     theme_seq()
 }
 
-plot_spline_panel <- function(cmp, trt_wave, ctrl_wave, cmb, trt_bk, ctrl_bk, crossing, final_rank) {
+plot_fourier_panel <- function(cmp, trt_wave, ctrl_wave, cmb, trt_bk, ctrl_bk, crossing, final_rank) {
   p1 <- plot_wave_single(trt_wave, cmp, "Treatment", trt_bk)
   p2 <- plot_wave_single(ctrl_wave, cmp, "Control", ctrl_bk)
   p3 <- plot_combined_wave(cmb, cmp, trt_bk, ctrl_bk, crossing, final_rank)
   p4 <- plot_score_curve(cmb, cmp)
   arrangeGrob(p1, p2, p3, p4, ncol = 2,
-              top = textGrob(paste0(cmp, " | Spline summary panel"), gp = gpar(fontface = "bold", cex = 1.04)))
+              top = textGrob(paste0(cmp, " | Fourier summary panel"), gp = gpar(fontface = "bold", cex = 1.04)))
 }
 
 fmt_num <- function(x, d = 3) {
@@ -971,7 +1073,7 @@ plot_raw_wald_search <- function(scan, cmp, trt_rank = NA_integer_, ctrl_rank = 
   coarse <- if (!is.null(scan$coarse)) as.data.frame(scan$coarse, stringsAsFactors = FALSE) else data.frame()
   sel <- as.data.frame(scan$selected_row, stringsAsFactors = FALSE)
   sel_rank <- as.integer(scan$selected_rank)
-  n_total <- max(fine$n_lead + fine$n_rem, na.rm = TRUE)
+  n_total <- max(fine$n_leading_edge + fine$n_remainder, na.rm = TRUE)
   sel_pct <- rank_to_pct(sel_rank, n_total)
   trt_pct <- rank_to_pct(trt_rank, n_total)
   ctrl_pct <- rank_to_pct(ctrl_rank, n_total)
@@ -983,8 +1085,8 @@ plot_raw_wald_search <- function(scan, cmp, trt_rank = NA_integer_, ctrl_rank = 
     "
 distortion = ", fmt_num(sel$total_distortion[1]),
     "
-lead n = ", sel$n_lead[1],
-    " | rem n = ", sel$n_rem[1]
+lead n = ", sel$n_leading_edge[1],
+    " | rem n = ", sel$n_remainder[1]
   )
   p <- ggplot(fine, aes(rank_index, total_distortion)) +
     geom_line(linewidth = 0.85, colour = "grey35") +
@@ -1167,8 +1269,8 @@ build_split <- function(count_mat, coldata, cmp_name) {
   final_method <- if (!is.null(sel_cross) && nrow(sel_cross)) "last_stable_crossing_before_divergence" else "fixed_top_n"
 
   raw_scan <- NULL
+  full_raw_fit <- run_core(count_mat, coldata, paste0(cmp_name, "_raw_wald_reference"), annot)
   if (isTRUE(raw_wald_scan)) {
-    full_raw_fit <- run_core(count_mat, coldata, paste0(cmp_name, "_raw_wald_reference"), annot)
     trt_rank <- if (!is.null(trt_bk$selected) && nrow(trt_bk$selected)) as.integer(trt_bk$selected$crossing_rank[1]) else final_rank
     ctrl_rank <- if (!is.null(ctrl_bk$selected) && nrow(ctrl_bk$selected)) as.integer(ctrl_bk$selected$crossing_rank[1]) else final_rank
     bracket_lo <- min(trt_rank, ctrl_rank, final_rank, na.rm = TRUE)
@@ -1193,6 +1295,7 @@ build_split <- function(count_mat, coldata, cmp_name) {
     cross_tab = cross_tab, sel_cross = sel_cross,
     trt_bk = trt_bk, ctrl_bk = ctrl_bk,
     shared = shared,
+    raw_ref = full_raw_fit,
     raw_scan = raw_scan,
     final_rank = final_rank,
     final_method = final_method,
@@ -1256,13 +1359,13 @@ run_cmp <- function(cmp_name, count_mat, coldata) {
   save_csv(rem_fit$results[, intersect(keep_main, names(rem_fit$results)), drop = FALSE],
            file.path(tab_dir, paste0(cmp_name, "_rem_results_main.csv")))
 
-  fig_spline <- plot_spline_panel(
+  fig_fourier <- plot_fourier_panel(
     cmp_name, sp$trt_wave, sp$ctrl_wave, sp$cmb,
     sp$trt_bk$selected, sp$ctrl_bk$selected, sp$sel_cross, sp$final_rank
   )
-  ggsave(file.path(fig_dir, paste0(cmp_name, '_spline_summary_panel.png')),
-         fig_spline, width = 16, height = 10, dpi = figure_dpi, units = 'in', limitsize = FALSE, bg = 'white')
-  log_step(cmp_name, 'spline summary panel exported')
+  ggsave(file.path(fig_dir, paste0(cmp_name, '_fourier_summary_panel.png')),
+         fig_fourier, width = 16, height = 10, dpi = figure_dpi, units = 'in', limitsize = FALSE, bg = 'white')
+  log_step(cmp_name, 'Fourier summary panel exported')
 
   fig_rawscan <- plot_raw_wald_panel(cmp_name, sp$raw_scan, trt_rank, ctrl_rank)
   if (!is.null(fig_rawscan)) {
