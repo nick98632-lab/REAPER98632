@@ -414,14 +414,29 @@ build_windows <- function(n_total) {
 }
 
 smooth_local_profile <- function(x, y, spar = spline_spar) {
-  x <- as.numeric(x); y <- as.numeric(y)
-  keep <- is.finite(x) & !is.na(x) & is.finite(y) & !is.na(y)
-  x <- x[keep]; y <- y[keep]
-  if (length(x) < 8L) return(rep(NA_real_, length(x)))
-  fit <- tryCatch(stats::smooth.spline(x = x, y = y, spar = spar), error = function(e) NULL)
-  if (is.null(fit)) return(rep(NA_real_, length(x)))
-  pred <- tryCatch(stats::predict(fit, x = x)$y, error = function(e) rep(NA_real_, length(x)))
-  as.numeric(pred)
+  x0 <- as.numeric(x)
+  y0 <- as.numeric(y)
+  out <- rep(NA_real_, length(x0))
+
+  keep <- is.finite(x0) & !is.na(x0) & is.finite(y0) & !is.na(y0)
+  x <- x0[keep]
+  y <- y0[keep]
+
+  if (length(x) < 8L) return(out)
+
+  fit <- tryCatch(
+    stats::smooth.spline(x = x, y = y, spar = spar),
+    error = function(e) NULL
+  )
+  if (is.null(fit)) return(out)
+
+  pred <- tryCatch(
+    stats::predict(fit, x = x)$y,
+    error = function(e) rep(NA_real_, length(x))
+  )
+
+  out[keep] <- as.numeric(pred)
+  out
 }
 
 rank_metric_tbl <- function(tbl) {
