@@ -435,13 +435,32 @@ find_all_crossings <- function(composite_wave_map) {
 
   out <- out[seq_len(idx - 1L)]
   if (!length(out)) {
-    stop("No crossings were found across the local Fourier wave map.", call. = FALSE)
+    return(data.frame(
+      crossing_id = character(),
+      rank_left = integer(),
+      rank_right = integer(),
+      crossing_rank = integer(),
+      regime_difference_left = numeric(),
+      regime_difference_right = numeric(),
+      stringsAsFactors = FALSE
+    ))
   }
 
   bind_rows(out) %>% arrange(crossing_rank)
 }
 
 select_last_crossing_before_divergence <- function(crossing_tbl) {
+  if (!nrow(crossing_tbl)) {
+    return(data.frame(
+      crossing_id = NA_character_,
+      rank_left = NA_integer_,
+      rank_right = NA_integer_,
+      crossing_rank = NA_integer_,
+      regime_difference_left = NA_real_,
+      regime_difference_right = NA_real_,
+      stringsAsFactors = FALSE
+    ))
+  }
   crossing_tbl %>% arrange(desc(crossing_rank)) %>% slice(1)
 }
 
@@ -486,6 +505,26 @@ run_stage1_method <- function(trt_loading_tbl, ctrl_loading_tbl, comparison_name
   cat("Finding crossings", if (nzchar(comparison_name)) paste0(" for ", comparison_name) else "", "...\n", sep = "")
   crossing_tbl <- find_all_crossings(composite_wave_map)
   selected_crossing <- select_last_crossing_before_divergence(crossing_tbl)
+
+  if (!nrow(crossing_tbl)) {
+    return(list(
+      trt_wave_map = trt_wave_map,
+      ctrl_wave_map = ctrl_wave_map,
+      shared_evs_tbl = shared_evs_tbl,
+      composite_wave_map = composite_wave_map,
+      crossing_tbl = crossing_tbl,
+      selected_crossing = selected_crossing,
+      rank_cutoff = NA_integer_,
+      split_obj = NULL,
+      leading_edge_ids = character(),
+      remainder_ids = character(),
+      leading_edge_union_n = NA_integer_,
+      remainder_union_n = NA_integer_,
+      n_total = nrow(shared_evs_tbl),
+      selected_reason = "no_crossing_detected"
+    ))
+  }
+
   rank_cutoff <- max(1L, as.integer(selected_crossing$crossing_rank[1]))
   split_obj <- build_eigenvector_split(shared_evs_tbl, rank_cutoff)
 
@@ -560,26 +599,9 @@ plot_composite_overlap <- function(stage1_obj, comparison_name) {
   sc <- stage1_obj$selected_crossing
   ymax <- max(c(df$composite_iod, df$composite_cv2), na.rm = TRUE)
 
-  ggplot(df, aes(combined_rank)) +
+  p <- ggplot(df, aes(combined_rank)) +
     geom_line(aes(y = composite_iod, color = "Composite IOD"), linewidth = 0.9) +
     geom_line(aes(y = composite_cv2, color = "Composite CV²"), linewidth = 0.9) +
-    geom_vline(xintercept = sc$crossing_rank[1], linetype = "dashed", linewidth = 0.9, colour = plot_colors$diff) +
-    annotate(
-      "label",
-      x = sc$crossing_rank[1],
-      y = ymax,
-      label = paste0(
-        "Last crossing before divergence\n",
-        "rank cutoff = ", stage1_obj$rank_cutoff, "\n",
-        "leading edge n = ", stage1_obj$leading_edge_union_n, "\n",
-        "remainder n = ", stage1_obj$remainder_union_n
-      ),
-      fill = "white",
-      colour = plot_colors$diff,
-      size = 3,
-      label.size = 0.15,
-      vjust = -0.5
-    ) +
     scale_color_manual(values = c("Composite IOD" = plot_colors$iod, "Composite CV²" = plot_colors$cv2)) +
     labs(
       title = paste0(comparison_name, " | treatment-control overlap"),
@@ -587,34 +609,93 @@ plot_composite_overlap <- function(stage1_obj, comparison_name) {
       y = "Composite fitted value"
     ) +
     plain_theme()
+
+  if (isTRUE(stage1_obj$selected_reason == "last_crossing_before_divergence") && is.finite(sc$crossing_rank[1])) {
+    p <- p +
+      geom_vline(xintercept = sc$crossing_rank[1], linetype = "dashed", linewidth = 0.9, colour = plot_colors$diff) +
+      annotate(
+        "label",
+        x = sc$crossing_rank[1],
+        y = ymax,
+        label = paste0(
+          "Last crossing before divergence
+",
+          "rank cutoff = ", stage1_obj$rank_cutoff, "
+",
+          "leading edge n = ", stage1_obj$leading_edge_union_n, "
+",
+          "remainder n = ", stage1_obj$remainder_union_n
+        ),
+        fill = "white",
+        colour = plot_colors$diff,
+        size = 3,
+        label.size = 0.15,
+        vjust = -0.5
+      )
+  } else {
+    p <- p +
+      annotate(
+        "label",
+        x = median(df$combined_rank, na.rm = TRUE),
+        y = ymax,
+        label = "No crossing detected
+Diagnostic plot only",
+        fill = "white",
+        colour = plot_colors$diff,
+        size = 3,
+        label.size = 0.15,
+        vjust = -0.5
+      )
+  }
+
+  p
 }
 
 plot_difference_curve <- function(stage1_obj, comparison_name) {
   df <- stage1_obj$composite_wave_map
   sc <- stage1_obj$selected_crossing
 
-  ggplot(df, aes(combined_rank, regime_difference)) +
+  p <- ggplot(df, aes(combined_rank, regime_difference)) +
     geom_hline(yintercept = 0, colour = "grey50", linewidth = 0.5) +
     geom_line(colour = plot_colors$diff, linewidth = 0.9) +
-    geom_vline(xintercept = sc$crossing_rank[1], linetype = "dashed", linewidth = 0.9, colour = plot_colors$diff) +
-    geom_point(data = data.frame(combined_rank = sc$crossing_rank[1], regime_difference = 0), aes(combined_rank, regime_difference), inherit.aes = FALSE, size = 2) +
-    annotate(
-      "label",
-      x = sc$crossing_rank[1],
-      y = 0,
-      label = paste0("rank cutoff = ", stage1_obj$rank_cutoff),
-      fill = "white",
-      colour = plot_colors$diff,
-      size = 3,
-      label.size = 0.15,
-      vjust = -0.8
-    ) +
     labs(
       title = paste0(comparison_name, " | IOD minus CV² crossing curve"),
       x = "Combined EVS rank",
       y = "IOD − CV²"
     ) +
     plain_theme()
+
+  if (isTRUE(stage1_obj$selected_reason == "last_crossing_before_divergence") && is.finite(sc$crossing_rank[1])) {
+    p <- p +
+      geom_vline(xintercept = sc$crossing_rank[1], linetype = "dashed", linewidth = 0.9, colour = plot_colors$diff) +
+      geom_point(data = data.frame(combined_rank = sc$crossing_rank[1], regime_difference = 0), aes(combined_rank, regime_difference), inherit.aes = FALSE, size = 2) +
+      annotate(
+        "label",
+        x = sc$crossing_rank[1],
+        y = 0,
+        label = paste0("rank cutoff = ", stage1_obj$rank_cutoff),
+        fill = "white",
+        colour = plot_colors$diff,
+        size = 3,
+        label.size = 0.15,
+        vjust = -0.8
+      )
+  } else {
+    p <- p +
+      annotate(
+        "label",
+        x = median(df$combined_rank, na.rm = TRUE),
+        y = 0,
+        label = "No crossing detected",
+        fill = "white",
+        colour = plot_colors$diff,
+        size = 3,
+        label.size = 0.15,
+        vjust = -0.8
+      )
+  }
+
+  p
 }
 
 plot_loading_rank_curve <- function(loading_tbl, rank_cutoff, group_label, comparison_name) {
@@ -698,11 +779,6 @@ run_one_comparison <- function(comparison_row, count_matrix, annot_df) {
   dir.create(table_dir, recursive = TRUE, showWarnings = FALSE)
   dir.create(figure_dir, recursive = TRUE, showWarnings = FALSE)
 
-  leading_raw <- subset_matrix_by_ids(comp$count_matrix, stage1_obj$leading_edge_ids)
-  remainder_raw <- subset_matrix_by_ids(comp$count_matrix, stage1_obj$remainder_ids)
-  leading_norm <- subset_matrix_by_ids(norm_counts, stage1_obj$leading_edge_ids)
-  remainder_norm <- subset_matrix_by_ids(norm_counts, stage1_obj$remainder_ids)
-
   save_csv(trt_loading_tbl, file.path(table_dir, paste0(comparison_name, "_treatment_loading_table.csv")))
   save_csv(ctrl_loading_tbl, file.path(table_dir, paste0(comparison_name, "_control_loading_table.csv")))
   save_csv(stage1_obj$trt_wave_map, file.path(table_dir, paste0(comparison_name, "_treatment_local_fourier_wave_map.csv")))
@@ -710,12 +786,7 @@ run_one_comparison <- function(comparison_row, count_matrix, annot_df) {
   save_csv(stage1_obj$shared_evs_tbl, file.path(table_dir, paste0(comparison_name, "_shared_evs_table.csv")))
   save_csv(stage1_obj$composite_wave_map, file.path(table_dir, paste0(comparison_name, "_composite_local_fourier_wave_map.csv")))
   save_csv(stage1_obj$crossing_tbl, file.path(table_dir, paste0(comparison_name, "_crossing_table.csv")))
-  save_csv(stage1_obj$split_obj$membership_tbl, file.path(table_dir, paste0(comparison_name, "_split_membership_table.csv")))
   save_csv(build_stage1_summary_table(stage1_obj, comparison_name), file.path(table_dir, paste0(comparison_name, "_stage1_summary.csv")))
-  save_csv(matrix_to_export_table(leading_raw, annot_df), file.path(table_dir, paste0(comparison_name, "_leading_edge_raw_counts.csv")))
-  save_csv(matrix_to_export_table(remainder_raw, annot_df), file.path(table_dir, paste0(comparison_name, "_remainder_raw_counts.csv")))
-  save_csv(matrix_to_export_table(leading_norm, annot_df), file.path(table_dir, paste0(comparison_name, "_leading_edge_normalized_counts.csv")))
-  save_csv(matrix_to_export_table(remainder_norm, annot_df), file.path(table_dir, paste0(comparison_name, "_remainder_normalized_counts.csv")))
 
   save_plot(plot_group_wave_map(stage1_obj$trt_wave_map, "treatment", comparison_name), file.path(figure_dir, paste0(comparison_name, "_treatment_local_fourier_wave_map.png")))
   save_plot(plot_group_wave_map(stage1_obj$ctrl_wave_map, "control", comparison_name), file.path(figure_dir, paste0(comparison_name, "_control_local_fourier_wave_map.png")))
@@ -723,6 +794,21 @@ run_one_comparison <- function(comparison_row, count_matrix, annot_df) {
   save_plot(plot_difference_curve(stage1_obj, comparison_name), file.path(figure_dir, paste0(comparison_name, "_iod_minus_cv2_crossing_curve.png")))
   save_grob(build_fourier_panel(stage1_obj, comparison_name), file.path(figure_dir, paste0(comparison_name, "_fourier_panel.png")))
   save_grob(build_evs_panel(trt_loading_tbl, ctrl_loading_tbl, stage1_obj$rank_cutoff, comparison_name), file.path(figure_dir, paste0(comparison_name, "_evs_panel.png")))
+
+  if (!is.null(stage1_obj$split_obj)) {
+    leading_raw <- subset_matrix_by_ids(comp$count_matrix, stage1_obj$leading_edge_ids)
+    remainder_raw <- subset_matrix_by_ids(comp$count_matrix, stage1_obj$remainder_ids)
+    leading_norm <- subset_matrix_by_ids(norm_counts, stage1_obj$leading_edge_ids)
+    remainder_norm <- subset_matrix_by_ids(norm_counts, stage1_obj$remainder_ids)
+
+    save_csv(stage1_obj$split_obj$membership_tbl, file.path(table_dir, paste0(comparison_name, "_split_membership_table.csv")))
+    save_csv(matrix_to_export_table(leading_raw, annot_df), file.path(table_dir, paste0(comparison_name, "_leading_edge_raw_counts.csv")))
+    save_csv(matrix_to_export_table(remainder_raw, annot_df), file.path(table_dir, paste0(comparison_name, "_remainder_raw_counts.csv")))
+    save_csv(matrix_to_export_table(leading_norm, annot_df), file.path(table_dir, paste0(comparison_name, "_leading_edge_normalized_counts.csv")))
+    save_csv(matrix_to_export_table(remainder_norm, annot_df), file.path(table_dir, paste0(comparison_name, "_remainder_normalized_counts.csv")))
+  } else {
+    save_csv(data.frame(note = "No crossing detected; split datasets were not created.", stringsAsFactors = FALSE), file.path(table_dir, paste0(comparison_name, "_split_status.csv")))
+  }
 
   build_stage1_summary_table(stage1_obj, comparison_name)
 }
