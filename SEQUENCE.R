@@ -97,6 +97,22 @@ plot_colors <- list(
 # These helper functions keep I/O, plotting, and validation behavior simple and
 # explicit so that the methodological code below remains readable.
 
+
+rescale_to_unit_interval <- function(x) {
+  x <- as.numeric(x)
+  out <- rep(NA_real_, length(x))
+  ok <- is.finite(x)
+  if (!any(ok)) return(out)
+  xmin <- min(x[ok])
+  xmax <- max(x[ok])
+  if (!is.finite(xmin) || !is.finite(xmax)) return(out)
+  if (identical(xmax, xmin) || abs(xmax - xmin) < .Machine$double.eps) {
+    out[ok] <- 0
+    return(out)
+  }
+  out[ok] <- (x[ok] - xmin) / (xmax - xmin)
+  out
+}
 assert_columns <- function(df, cols, object_name) {
   missing_cols <- setdiff(cols, names(df))
   if (length(missing_cols) > 0L) {
