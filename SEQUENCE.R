@@ -6,9 +6,9 @@
 # 1. Read the raw count matrix.
 # 2. Normalize counts with DESeq2.
 # 3. Build treatment and control EVS loading tables from PC1 absolute loadings.
-# 4. Build local Fourier amplitude maps at every gene rank for NB-derived IOD and CV2.
+# 4. Build local Fourier half-range amplitude maps at every gene rank for NB-derived IOD and CV2.
 # 5. Build a treatment-control composite amplitude overlap curve on the shared EVS axis.
-# 6. Select the last local-amplitude crossing before divergence.
+# 6. Select the last local half-range amplitude crossing before divergence.
 # 7. Perform union-based eigenvector splitting at that cutoff rank.
 # 8. Export leading-edge and remainder datasets, tables, and panels.
 #
@@ -39,6 +39,11 @@ suppressPackageStartupMessages({
 # =============================================================================
 # USER SETTINGS
 # =============================================================================
+# These settings define the analysis scope and the local Fourier model used for
+# Stage 1. The goal of this stage is not endpoint significance calling. Rather,
+# it is to identify a data-defined structural transition along the EVS-ranked
+# axis, then use that transition to split the feature space into a leading edge
+# and a remainder for downstream analysis.
 
 repo_dir <- getwd()
 input_dir <- file.path(repo_dir, "data")
@@ -89,6 +94,8 @@ plot_colors <- list(
 # =============================================================================
 # BASIC HELPERS
 # =============================================================================
+# These helper functions keep I/O, plotting, and validation behavior simple and
+# explicit so that the methodological code below remains readable.
 
 assert_columns <- function(df, cols, object_name) {
   missing_cols <- setdiff(cols, names(df))
@@ -140,6 +147,10 @@ detect_gene_symbol_column <- function(df) {
 # =============================================================================
 # INPUT AND PREP
 # =============================================================================
+# The input stage reads the raw count matrix, identifies the feature identifier
+# columns, subsets the comparison-specific samples, and generates normalized
+# counts for EVS ranking. Group-specific negative-binomial summary quantities are
+# then estimated for later construction of the IOD and CV2 local-amplitude maps.
 
 read_count_matrix <- function(path, meta_ids) {
   if (!file.exists(path)) {
@@ -208,6 +219,9 @@ compute_normalized_counts <- function(count_matrix, coldata) {
   counts(dds, normalized = TRUE)
 }
 
+# Estimate group-specific negative-binomial mean and dispersion terms.
+# These quantities define IOD = 1 + alpha*mu and CV2 = 1/mu + alpha at the
+# feature level before local oscillatory modeling.
 compute_group_feature_metrics <- function(count_submatrix) {
   dds <- DESeqDataSetFromMatrix(
     countData = round(as.matrix(count_submatrix)),
@@ -226,7 +240,14 @@ compute_group_feature_metrics <- function(count_submatrix) {
 # =============================================================================
 # EVS LOADING TABLES
 # =============================================================================
+# EVS is represented here through PC1 loading geometry within each group. The
+# absolute PC1 loading rank defines the within-group ordering. The treatment and
+# control rank tables are then merged onto a shared EVS axis, which is used for
+# local-amplitude comparison and final eigenvector splitting.
 
+# Build the within-group EVS ranking table. Features are ordered by the absolute
+# magnitude of the first principal-component loading computed from log2(normalized
+# count + 1) data.
 compute_pc1_loading_table <- function(norm_counts, sample_ids, feature_metrics, annot_df) {
   x <- log2(as.matrix(norm_counts[, sample_ids, drop = FALSE]) + 1)
   pca_fit <- prcomp(t(x), scale. = FALSE, rank. = 2)
@@ -276,6 +297,11 @@ build_shared_evs_table <- function(trt_loading_tbl, ctrl_loading_tbl) {
 # =============================================================================
 # LOCAL FOURIER AMPLITUDE MAPS AT EVERY GENE
 # =============================================================================
+# This is the core structural measurement stage. For each EVS rank, the script
+# fits a local truncated Fourier model within a neighborhood centered at that
+# rank. The resulting local amplitude is interpreted as the strength of the
+# local oscillatory regime for the metric of interest. This is done separately
+# for IOD and CV2 within treatment and control.
 
 build_fourier_design <- function(rank_vec, n_harmonics = fourier_harmonics) {
   x <- as.numeric(rank_vec)
@@ -288,6 +314,13 @@ build_fourier_design <- function(rank_vec, n_harmonics = fourier_harmonics) {
   out
 }
 
+# Fit a local truncated Fourier model at every EVS rank and return the local
+# oscillatory amplitude. Here amplitude is defined on the fitted local curve
+# itself, not directly from the coefficient vector. For each local window, the
+# fitted waveform is evaluated across the window and the local amplitude is
+# defined as one-half of the fitted peak-to-trough range. This centers the
+# oscillatory measurement on the local midline of the fitted wave and preserves
+# the bounded amplitude behavior that motivated the Stage 1 crossing rule.
 fit_local_fourier_amplitude <- function(rank_vec, y_vec, n_harmonics = fourier_harmonics,
                                         window_fraction = local_window_fraction) {
   keep <- is.finite(rank_vec) & is.finite(y_vec)
@@ -306,6 +339,7 @@ fit_local_fourier_amplitude <- function(rank_vec, y_vec, n_harmonics = fourier_h
   x_mat_full <- cbind(`(Intercept)` = 1, as.matrix(design_full[, x_cols, drop = FALSE]))
 
   local_amplitude <- rep(NA_real_, n)
+  local_midpoint <- rep(NA_real_, n)
   left_rank <- rep(NA_integer_, n)
   right_rank <- rep(NA_integer_, n)
   window_n <- rep(NA_integer_, n)
@@ -325,15 +359,12 @@ fit_local_fourier_amplitude <- function(rank_vec, y_vec, n_harmonics = fourier_h
     coef_vec <- fit$coefficients
     coef_vec[!is.finite(coef_vec)] <- 0
 
-    harmonic_amplitudes <- vapply(seq_len(n_harmonics), function(k) {
-      sin_name <- paste0("sin_", k)
-      cos_name <- paste0("cos_", k)
-      a <- if (sin_name %in% names(coef_vec)) unname(coef_vec[sin_name]) else 0
-      b <- if (cos_name %in% names(coef_vec)) unname(coef_vec[cos_name]) else 0
-      sqrt(a^2 + b^2)
-    }, numeric(1))
+    fitted_window <- as.numeric(x_mat_full[idx, , drop = FALSE] %*% coef_vec)
+    fitted_max <- max(fitted_window, na.rm = TRUE)
+    fitted_min <- min(fitted_window, na.rm = TRUE)
 
-    local_amplitude[i] <- sqrt(sum(harmonic_amplitudes^2))
+    local_amplitude[i] <- 0.5 * (fitted_max - fitted_min)
+    local_midpoint[i] <- 0.5 * (fitted_max + fitted_min)
     left_rank[i] <- as.integer(rank_vec[left_idx])
     right_rank[i] <- as.integer(rank_vec[right_idx])
     window_n[i] <- as.integer(length(idx))
@@ -342,6 +373,7 @@ fit_local_fourier_amplitude <- function(rank_vec, y_vec, n_harmonics = fourier_h
   data.frame(
     rank = as.integer(rank_vec),
     local_amplitude = local_amplitude,
+    local_midpoint = local_midpoint,
     local_window_left_rank = left_rank,
     local_window_right_rank = right_rank,
     local_window_n = window_n,
@@ -382,6 +414,11 @@ build_group_wave_map <- function(loading_tbl) {
 # =============================================================================
 # CROSSING AND EVS SPLITTING
 # =============================================================================
+# The treatment and control local-amplitude maps are combined onto a shared EVS
+# axis. The selected cutoff is the last local-amplitude crossing before
+# persistent divergence. That rank is then projected back onto the treatment and
+# control EVS tables, and the leading edge is defined as the union of all
+# features retained by either side at or above that EVS threshold.
 
 build_composite_wave_map <- function(trt_wave_map, ctrl_wave_map) {
   trt_use <- trt_wave_map[, c("feature_id", "rank", "iod_local_amplitude", "cv2_local_amplitude", "local_window_left_rank", "local_window_right_rank", "local_window_n"), drop = FALSE]
@@ -406,6 +443,8 @@ build_composite_wave_map <- function(trt_wave_map, ctrl_wave_map) {
   merged
 }
 
+# Find all zero crossings of the composite local-amplitude difference function
+# D(r) = A_IOD(r) - A_CV2(r) on the shared EVS axis.
 find_all_crossings <- function(composite_wave_map) {
   df <- composite_wave_map %>%
     filter(is.finite(combined_rank), is.finite(regime_difference)) %>%
@@ -460,6 +499,8 @@ find_all_crossings <- function(composite_wave_map) {
   bind_rows(out) %>% arrange(crossing_rank)
 }
 
+# Select the rightmost crossing. This is the operational definition of the last
+# local-amplitude crossing before divergence used for Stage 1 splitting.
 select_last_crossing_before_divergence <- function(crossing_tbl) {
   if (!nrow(crossing_tbl)) {
     return(data.frame(
@@ -475,6 +516,9 @@ select_last_crossing_before_divergence <- function(crossing_tbl) {
   crossing_tbl %>% arrange(desc(crossing_rank)) %>% slice(1)
 }
 
+# Project the selected shared cutoff back onto the treatment and control EVS
+# rank tables, then define the leading edge as the union of retained treatment
+# and control features. All remaining features are assigned to the remainder.
 build_eigenvector_split <- function(shared_evs_tbl, rank_cutoff) {
   membership_tbl <- shared_evs_tbl %>%
     mutate(
@@ -560,6 +604,8 @@ run_stage1_method <- function(trt_loading_tbl, ctrl_loading_tbl, comparison_name
 # =============================================================================
 # EXPORT HELPERS
 # =============================================================================
+# Export helpers write manuscript-readable tables and preserve the split
+# datasets needed for later downstream analysis.
 
 subset_matrix_by_ids <- function(mat, ids) {
   keep_ids <- intersect(ids, rownames(mat))
@@ -591,6 +637,10 @@ build_stage1_summary_table <- function(stage1_obj, comparison_name) {
 # =============================================================================
 # PLOTS
 # =============================================================================
+# The figures are intended to make the method visually interpretable. They show
+# within-group local amplitudes, the shared treatment-control overlap, the
+# difference curve whose zero identifies the crossing, and the EVS geometry used
+# for the final union-based split.
 
 plot_group_wave_map <- function(group_wave_map, group_label, comparison_name) {
   ggplot(group_wave_map, aes(rank)) +
@@ -599,6 +649,7 @@ plot_group_wave_map <- function(group_wave_map, group_label, comparison_name) {
     scale_color_manual(values = c("IOD" = plot_colors$iod, "CV²" = plot_colors$cv2)) +
     labs(
       title = paste0(comparison_name, " | ", group_label, " local Fourier amplitude map"),
+      subtitle = "Local amplitude defined as one-half the fitted peak-to-trough range within each local Fourier window",
       x = "EVS rank",
       y = "Local amplitude"
     ) +
@@ -616,6 +667,7 @@ plot_composite_overlap <- function(stage1_obj, comparison_name) {
     scale_color_manual(values = c("Composite IOD" = plot_colors$iod, "Composite CV²" = plot_colors$cv2)) +
     labs(
       title = paste0(comparison_name, " | treatment-control local amplitude overlap"),
+      subtitle = "Composite local amplitudes derived from one-half fitted peak-to-trough ranges on the shared EVS axis",
       x = "Combined EVS rank",
       y = "Composite local amplitude"
     ) +
@@ -668,7 +720,8 @@ plot_difference_curve <- function(stage1_obj, comparison_name) {
     geom_hline(yintercept = 0, colour = "grey50", linewidth = 0.5) +
     geom_line(colour = plot_colors$diff, linewidth = 0.9) +
     labs(
-      title = paste0(comparison_name, " | IOD amplitude minus CV² amplitude"),
+      title = paste0(comparison_name, " | local half-range amplitude difference (IOD minus CV²)"),
+      subtitle = "The selected cutoff is the last zero crossing before persistent divergence",
       x = "Combined EVS rank",
       y = "IOD amplitude − CV² amplitude"
     ) +
@@ -711,6 +764,7 @@ plot_loading_rank_curve <- function(loading_tbl, rank_cutoff, group_label, compa
     geom_vline(xintercept = rank_cutoff, linetype = "dashed", linewidth = 0.9, colour = plot_colors$diff) +
     labs(
       title = paste0(comparison_name, " | ", group_label, " EVS loading rank curve"),
+      subtitle = "Absolute PC1 loading defines the within-group EVS rank",
       x = "EVS rank",
       y = "Absolute PC1 loading"
     ) +
@@ -722,6 +776,7 @@ plot_loading_histogram <- function(loading_tbl, group_label, comparison_name) {
     geom_histogram(bins = 60, fill = plot_colors$hist, colour = "white") +
     labs(
       title = paste0(comparison_name, " | ", group_label, " EVS loading histogram"),
+      subtitle = "Distribution of absolute PC1 loading magnitudes",
       x = "Absolute PC1 loading",
       y = "Count"
     ) +
@@ -738,7 +793,7 @@ build_fourier_panel <- function(stage1_obj, comparison_name) {
     grobs = list(p1, p2, p3, p4),
     ncol = 2,
     top = grid::textGrob(
-      paste0(comparison_name, " | treatment, control, local-amplitude overlap, and crossing panels"),
+      paste0(comparison_name, " | local Fourier amplitude panels and crossing summary"),
       gp = grid::gpar(fontface = "bold", cex = 1.05)
     )
   )
@@ -754,7 +809,7 @@ build_evs_panel <- function(trt_loading_tbl, ctrl_loading_tbl, rank_cutoff, comp
     grobs = list(p1, p2, p3, p4),
     ncol = 2,
     top = grid::textGrob(
-      paste0(comparison_name, " | EVS rank and histogram panels"),
+      paste0(comparison_name, " | EVS geometry panels"),
       gp = grid::gpar(fontface = "bold", cex = 1.05)
     )
   )
