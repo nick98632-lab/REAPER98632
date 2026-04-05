@@ -1,5 +1,3 @@
-Use this complete script.
-
 # =============================================================================
 # SEQUENCE STAGE 1: AGGREGATE RANK METHODS
 # -----------------------------------------------------------------------------
@@ -30,17 +28,6 @@ Use this complete script.
 #     - require IOD to begin increasing, CV2 to begin decreasing, and the
 #       absolute gap to begin widening after that point
 #     - if no such point is found, use the global minimum-gap point
-#
-# Outputs
-#   For each comparison:
-#     exports/aggregate_rank_methods/<comparison>_cutoff_folder/
-#       - feature_level_metrics.csv
-#       - control_aggregate_bins.csv
-#       - treatment_aggregate_bins.csv
-#       - control_aggregate_panel.png
-#       - treatment_aggregate_panel.png
-#       - cutoff_range_panel.png
-#       - cutoff_summary.csv
 # =============================================================================
 
 suppressPackageStartupMessages({
@@ -84,10 +71,10 @@ meta_all <- data.frame(
 rownames(meta_all) <- meta_all$id
 meta_all$condition <- factor(meta_all$condition, levels = c("untrt", "trt"))
 
-percentile_step <- 0.01      # 100 equal-size bins
-smoother_k <- 5L             # odd integer for rolling median
-divergence_k <- 4L           # number of forward bins used for divergence check
-leading_edge_fraction <- 0.60 # search cutoff in first 60% of ranked axis
+percentile_step <- 0.01
+smoother_k <- 5L
+divergence_k <- 4L
+leading_edge_fraction <- 0.60
 
 # =============================================================================
 # HELPERS
@@ -228,8 +215,8 @@ build_equal_bins <- function(n, step = 0.01) {
   n_bins <- max(1L, round(1 / step))
   breaks <- unique(round(seq(0, n, length.out = n_bins + 1L)))
   if (tail(breaks, 1L) != n) breaks[length(breaks)] <- n
-  bins <- vector("list", length = length(breaks) - 1L)
 
+  bins <- vector("list", length = length(breaks) - 1L)
   for (i in seq_len(length(bins))) {
     lo <- breaks[i] + 1L
     hi <- breaks[i + 1L]
