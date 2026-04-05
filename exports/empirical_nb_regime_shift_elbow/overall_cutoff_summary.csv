@@ -1,0 +1,5 @@
+"comparison","control_cutoff_mode","control_cutoff_rank","control_cutoff_fraction","treatment_cutoff_mode","treatment_cutoff_rank","treatment_cutoff_fraction","cutoff_range_rank_min","cutoff_range_rank_max","cutoff_range_fraction_min","cutoff_range_fraction_max"
+"RT0_ZT6","first broad elbow on smoothed empirical alpha*mu",7008,0.22067575652612,"first broad elbow on smoothed empirical alpha*mu",5438,0.171237837327203,5438,7008,0.171237837327203,0.22067575652612
+"RT2_ZT8","first broad elbow on smoothed empirical alpha*mu",6401,0.20156186037724,"first broad elbow on smoothed empirical alpha*mu",8414,0.264949459961583,6401,8414,0.20156186037724,0.264949459961583
+"RT4_ZT10","first broad elbow on smoothed empirical alpha*mu",4264,0.134269609849797,"first broad elbow on smoothed empirical alpha*mu",5935,0.186887930220109,4264,5935,0.134269609849797,0.186887930220109
+"RT8_ZT14","first broad elbow on smoothed empirical alpha*mu",6967,0.219384702585257,"first broad elbow on smoothed empirical alpha*mu",7155,0.225304657240923,6967,7155,0.219384702585257,0.225304657240923
