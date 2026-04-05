@@ -1,4 +1,0 @@
-"crossing_id","percentile_left","percentile_right","rank_left","rank_right","crossing_percentile","crossing_rank","regime_difference_left","regime_difference_right"
-"crossing_1",0.09,0.1,2760,3066,0.0993049385532357,3045,0.0931455840982865,-0.0069578003199762
-"crossing_2",0.1,0.11,3066,3372,0.101598489294519,3115,-0.0069578003199762,0.0365695498088708
-"crossing_3",0.11,0.12,3372,3679,0.116498652153288,3572,0.0365695498088708,-0.01970296477766
