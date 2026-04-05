@@ -57,6 +57,7 @@ figure_dpi <- 320
 base_theme_size <- 10
 fourier_harmonics <- 1L
 local_window_fraction <- 0.005
+local_percentile_step <- 0.005
 min_features_required <- 25L
 
 comparison_table <- data.frame(
@@ -305,7 +306,7 @@ build_shared_evs_table <- function(trt_loading_tbl, ctrl_loading_tbl) {
       rank_ctrl = as.integer(rank_ctrl),
       combined_rank = round(rowMeans(cbind(rank_trt, rank_ctrl), na.rm = TRUE))
     ) %>%
-    arrange(combined_rank, feature_id)
+    arrange(combined_rank)
 
   merged
 }
@@ -330,69 +331,80 @@ build_fourier_design <- function(rank_vec, n_harmonics = fourier_harmonics) {
   out
 }
 
-# Fit a local truncated Fourier model at every EVS rank and return the local
-# oscillatory amplitude. Here amplitude is defined on the fitted local curve
-# itself, not directly from the coefficient vector. For each local window, the
-# fitted waveform is evaluated across the window and the local amplitude is
-# defined as one-half of the fitted peak-to-trough range. This centers the
-# oscillatory measurement on the local midline of the fitted wave and preserves
-# the bounded amplitude behavior that motivated the Stage 1 crossing rule.
-fit_local_fourier_amplitude <- function(rank_vec, y_vec, n_harmonics = fourier_harmonics,
-                                        window_fraction = local_window_fraction) {
+# Fit a one-harmonic local Fourier model inside one window and summarize the
+# fitted oscillation by its midpoint and half-range amplitude.
+fit_local_fourier_window_summary <- function(rank_vec, y_vec, n_harmonics = fourier_harmonics) {
   keep <- is.finite(rank_vec) & is.finite(y_vec)
   rank_vec <- as.numeric(rank_vec[keep])
   y_vec <- as.numeric(y_vec[keep])
 
-  n <- length(rank_vec)
-  min_needed <- as.integer(2L * n_harmonics + 1L)
-  if (n < min_needed) {
-    stop("Not enough finite points to fit local Fourier amplitudes at every gene.", call. = FALSE)
-  }
+  min_needed <- as.integer(2L * n_harmonics + 3L)
+  if (length(rank_vec) < min_needed) return(NULL)
 
-  half_window <- max(1L, floor(n * window_fraction / 2))
   design_full <- build_fourier_design(rank_vec, n_harmonics = n_harmonics)
   x_cols <- c("x01", unlist(lapply(seq_len(n_harmonics), function(k) c(paste0("sin_", k), paste0("cos_", k)))))
-  x_mat_full <- cbind(`(Intercept)` = 1, as.matrix(design_full[, x_cols, drop = FALSE]))
+  x_mat <- cbind(`(Intercept)` = 1, as.matrix(design_full[, x_cols, drop = FALSE]))
+  fit <- stats::lm.fit(x = x_mat, y = y_vec)
+  coef_vec <- fit$coefficients
+  coef_vec[!is.finite(coef_vec)] <- 0
+  fitted_y <- as.numeric(x_mat %*% coef_vec)
+  fitted_max <- max(fitted_y, na.rm = TRUE)
+  fitted_min <- min(fitted_y, na.rm = TRUE)
+  peak_idx <- which.max(fitted_y)
+  trough_idx <- which.min(fitted_y)
 
-  local_amplitude <- rep(NA_real_, n)
-  local_midpoint <- rep(NA_real_, n)
-  left_rank <- rep(NA_integer_, n)
-  right_rank <- rep(NA_integer_, n)
-  window_n <- rep(NA_integer_, n)
+  list(
+    local_amplitude = 0.5 * (fitted_max - fitted_min),
+    local_midpoint = 0.5 * (fitted_max + fitted_min),
+    peak_rank = as.integer(rank_vec[peak_idx]),
+    trough_rank = as.integer(rank_vec[trough_idx]),
+    center_rank = as.integer(round(mean(c(rank_vec[peak_idx], rank_vec[trough_idx]))))
+  )
+}
 
-  for (i in seq_len(n)) {
-    left_idx <- max(1L, i - half_window)
-    right_idx <- min(n, i + half_window)
-
-    while ((right_idx - left_idx + 1L) < min_needed && (left_idx > 1L || right_idx < n)) {
-      if (left_idx > 1L) left_idx <- left_idx - 1L
-      if ((right_idx - left_idx + 1L) >= min_needed) break
-      if (right_idx < n) right_idx <- right_idx + 1L
-    }
-
-    idx <- left_idx:right_idx
-    fit <- stats::lm.fit(x = x_mat_full[idx, , drop = FALSE], y = y_vec[idx])
-    coef_vec <- fit$coefficients
-    coef_vec[!is.finite(coef_vec)] <- 0
-
-    fitted_window <- as.numeric(x_mat_full[idx, , drop = FALSE] %*% coef_vec)
-    fitted_max <- max(fitted_window, na.rm = TRUE)
-    fitted_min <- min(fitted_window, na.rm = TRUE)
-
-    local_amplitude[i] <- 0.5 * (fitted_max - fitted_min)
-    local_midpoint[i] <- 0.5 * (fitted_max + fitted_min)
-    left_rank[i] <- as.integer(rank_vec[left_idx])
-    right_rank[i] <- as.integer(rank_vec[right_idx])
-    window_n[i] <- as.integer(length(idx))
-  }
-
+build_percentile_windows <- function(n_total,
+                                     step = local_percentile_step,
+                                     window_fraction = local_window_fraction) {
+  pct_grid <- seq(step, 1, by = step)
+  center_ranks <- pmax(1L, pmin(n_total, round(pct_grid * n_total)))
+  half_window <- max(1L, round((window_fraction * n_total) / 2))
   data.frame(
-    rank = as.integer(rank_vec),
-    local_amplitude = local_amplitude,
-    local_midpoint = local_midpoint,
-    local_window_left_rank = left_rank,
-    local_window_right_rank = right_rank,
-    local_window_n = window_n,
+    percentile = pct_grid,
+    center_rank = center_ranks,
+    lo_rank = pmax(1L, center_ranks - half_window),
+    hi_rank = pmin(n_total, center_ranks + half_window),
+    stringsAsFactors = FALSE
+  )
+}
+
+summarize_percentile_window <- function(metric_df, lo_rank, hi_rank) {
+  sub <- metric_df[metric_df$rank >= lo_rank & metric_df$rank <= hi_rank, , drop = FALSE]
+  iod_fit <- fit_local_fourier_window_summary(sub$rank, sub$log_iod_nb)
+  cv2_fit <- fit_local_fourier_window_summary(sub$rank, sub$log_cv2_nb)
+  if (is.null(iod_fit) || is.null(cv2_fit)) {
+    return(data.frame(
+      iod_local_amplitude = NA_real_,
+      cv2_local_amplitude = NA_real_,
+      iod_local_midpoint = NA_real_,
+      cv2_local_midpoint = NA_real_,
+      iod_peak_rank = NA_integer_,
+      iod_trough_rank = NA_integer_,
+      cv2_peak_rank = NA_integer_,
+      cv2_trough_rank = NA_integer_,
+      local_window_n = nrow(sub),
+      stringsAsFactors = FALSE
+    ))
+  }
+  data.frame(
+    iod_local_amplitude = iod_fit$local_amplitude,
+    cv2_local_amplitude = cv2_fit$local_amplitude,
+    iod_local_midpoint = iod_fit$local_midpoint,
+    cv2_local_midpoint = cv2_fit$local_midpoint,
+    iod_peak_rank = iod_fit$peak_rank,
+    iod_trough_rank = iod_fit$trough_rank,
+    cv2_peak_rank = cv2_fit$peak_rank,
+    cv2_trough_rank = cv2_fit$trough_rank,
+    local_window_n = nrow(sub),
     stringsAsFactors = FALSE
   )
 }
@@ -415,17 +427,15 @@ build_group_wave_map <- function(loading_tbl) {
   df$log_iod_nb <- log10(df$iod_nb)
   df$log_cv2_nb <- log10(df$cv2_nb)
 
-  iod_wave <- fit_local_fourier_amplitude(df$rank, df$log_iod_nb)
-  cv2_wave <- fit_local_fourier_amplitude(df$rank, df$log_cv2_nb)
-
-  wave_map <- df[, c("feature_id", "gene_symbol", "rank", "baseMean", "dispGeneEst"), drop = FALSE]
-  wave_map$iod_local_amplitude <- iod_wave$local_amplitude
-  wave_map$cv2_local_amplitude <- cv2_wave$local_amplitude
+  windows <- build_percentile_windows(nrow(df), step = local_percentile_step, window_fraction = local_window_fraction)
+  rows <- lapply(seq_len(nrow(windows)), function(i) {
+    ww <- windows[i, , drop = FALSE]
+    ss <- summarize_percentile_window(df, ww$lo_rank, ww$hi_rank)
+    cbind(ww, ss, stringsAsFactors = FALSE)
+  })
+  wave_map <- dplyr::bind_rows(rows)
   wave_map$iod_local_amplitude_scaled <- rescale_to_unit_interval(wave_map$iod_local_amplitude)
   wave_map$cv2_local_amplitude_scaled <- rescale_to_unit_interval(wave_map$cv2_local_amplitude)
-  wave_map$local_window_left_rank <- iod_wave$local_window_left_rank
-  wave_map$local_window_right_rank <- iod_wave$local_window_right_rank
-  wave_map$local_window_n <- iod_wave$local_window_n
   wave_map
 }
 
@@ -442,26 +452,20 @@ build_group_wave_map <- function(loading_tbl) {
 # retained by either side at or above that EVS threshold.
 
 build_composite_wave_map <- function(trt_wave_map, ctrl_wave_map) {
-  trt_use <- trt_wave_map[, c("feature_id", "rank", "iod_local_amplitude", "cv2_local_amplitude", "iod_local_amplitude_scaled", "cv2_local_amplitude_scaled", "local_window_left_rank", "local_window_right_rank", "local_window_n"), drop = FALSE]
-  ctrl_use <- ctrl_wave_map[, c("feature_id", "rank", "iod_local_amplitude", "cv2_local_amplitude", "iod_local_amplitude_scaled", "cv2_local_amplitude_scaled", "local_window_left_rank", "local_window_right_rank", "local_window_n"), drop = FALSE]
+  trt_use <- trt_wave_map[, c("percentile", "center_rank", "iod_local_amplitude_scaled", "cv2_local_amplitude_scaled", "local_window_n"), drop = FALSE]
+  ctrl_use <- ctrl_wave_map[, c("percentile", "center_rank", "iod_local_amplitude_scaled", "cv2_local_amplitude_scaled", "local_window_n"), drop = FALSE]
+  names(trt_use) <- c("percentile", "center_rank_trt", "iod_local_amplitude_scaled_trt", "cv2_local_amplitude_scaled_trt", "window_n_trt")
+  names(ctrl_use) <- c("percentile", "center_rank_ctrl", "iod_local_amplitude_scaled_ctrl", "cv2_local_amplitude_scaled_ctrl", "window_n_ctrl")
 
-  names(trt_use) <- c("feature_id", "rank_trt", "iod_local_amplitude_trt", "cv2_local_amplitude_trt", "iod_local_amplitude_scaled_trt", "cv2_local_amplitude_scaled_trt", "window_left_trt", "window_right_trt", "window_n_trt")
-  names(ctrl_use) <- c("feature_id", "rank_ctrl", "iod_local_amplitude_ctrl", "cv2_local_amplitude_ctrl", "iod_local_amplitude_scaled_ctrl", "cv2_local_amplitude_scaled_ctrl", "window_left_ctrl", "window_right_ctrl", "window_n_ctrl")
-
-  merged <- inner_join(trt_use, ctrl_use, by = "feature_id")
-  merged <- merged %>%
+  inner_join(trt_use, ctrl_use, by = "percentile") %>%
     mutate(
-      combined_rank = round(rowMeans(cbind(rank_trt, rank_ctrl), na.rm = TRUE)),
+      combined_rank = round(rowMeans(cbind(center_rank_trt, center_rank_ctrl), na.rm = TRUE)),
       composite_iod_amplitude = iod_local_amplitude_scaled_trt + iod_local_amplitude_scaled_ctrl,
       composite_cv2_amplitude = cv2_local_amplitude_scaled_trt + cv2_local_amplitude_scaled_ctrl,
       regime_difference = composite_iod_amplitude - composite_cv2_amplitude,
-      local_window_left_rank = pmin(window_left_trt, window_left_ctrl, na.rm = TRUE),
-      local_window_right_rank = pmax(window_right_trt, window_right_ctrl, na.rm = TRUE),
       local_window_n = pmax(window_n_trt, window_n_ctrl, na.rm = TRUE)
     ) %>%
-    arrange(combined_rank, feature_id)
-
-  merged
+    arrange(percentile)
 }
 
 # Find all zero crossings of the composite local-amplitude difference function
@@ -469,7 +473,7 @@ build_composite_wave_map <- function(trt_wave_map, ctrl_wave_map) {
 find_all_crossings <- function(composite_wave_map) {
   df <- composite_wave_map %>%
     filter(is.finite(combined_rank), is.finite(regime_difference)) %>%
-    arrange(combined_rank, feature_id)
+    arrange(combined_rank)
 
   if (nrow(df) < 2L) {
     stop("Not enough points to evaluate crossings on the local wave map.", call. = FALSE)
@@ -554,9 +558,6 @@ build_eigenvector_split <- function(shared_evs_tbl, rank_cutoff) {
 
   if (!length(leading_edge_ids)) {
     stop("Leading edge is empty after eigenvector splitting.", call. = FALSE)
-  }
-  if (!length(remainder_ids)) {
-    stop("Remainder is empty after eigenvector splitting.", call. = FALSE)
   }
 
   list(
@@ -664,14 +665,14 @@ build_stage1_summary_table <- function(stage1_obj, comparison_name) {
 # for the final union-based split.
 
 plot_group_wave_map <- function(group_wave_map, group_label, comparison_name) {
-  ggplot(group_wave_map, aes(rank)) +
+  ggplot(group_wave_map, aes(percentile)) +
     geom_line(aes(y = iod_local_amplitude_scaled, color = "IOD"), linewidth = 0.9) +
     geom_line(aes(y = cv2_local_amplitude_scaled, color = "CV²"), linewidth = 0.9) +
     scale_color_manual(values = c("IOD" = plot_colors$iod, "CV²" = plot_colors$cv2)) +
     labs(
       title = paste0(comparison_name, " | ", group_label, " local Fourier amplitude map"),
-      subtitle = "Local half-range amplitudes were rescaled to 0 to 1 within group before treatment-control comparison",
-      x = "EVS rank",
+      subtitle = "Evaluated on a 0.5% percentile-center grid with 0.5% window width; amplitudes were rescaled to 0 to 1 within group",
+      x = "Percentile center",
       y = "Scaled local amplitude (0-1)"
     ) +
     plain_theme()
@@ -682,24 +683,24 @@ plot_composite_overlap <- function(stage1_obj, comparison_name) {
   sc <- stage1_obj$selected_crossing
   ymax <- max(c(df$composite_iod_amplitude, df$composite_cv2_amplitude), na.rm = TRUE)
 
-  p <- ggplot(df, aes(combined_rank)) +
+  p <- ggplot(df, aes(percentile)) +
     geom_line(aes(y = composite_iod_amplitude, color = "Composite IOD"), linewidth = 0.9) +
     geom_line(aes(y = composite_cv2_amplitude, color = "Composite CV²"), linewidth = 0.9) +
     scale_color_manual(values = c("Composite IOD" = plot_colors$iod, "Composite CV²" = plot_colors$cv2)) +
     labs(
       title = paste0(comparison_name, " | treatment-control local amplitude overlap"),
-      subtitle = "Composite local amplitudes derived from one-half fitted peak-to-trough ranges on the shared EVS axis",
-      x = "Combined EVS rank",
+      subtitle = "Composite amplitudes on the shared 0.5% percentile-center grid after within-group 0 to 1 rescaling",
+      x = "Percentile center",
       y = "Composite local amplitude"
     ) +
     plain_theme()
 
   if (isTRUE(stage1_obj$selected_reason == "last_local_amplitude_crossing_before_divergence") && is.finite(sc$crossing_rank[1])) {
     p <- p +
-      geom_vline(xintercept = sc$crossing_rank[1], linetype = "dashed", linewidth = 0.9, colour = plot_colors$diff) +
+      geom_vline(xintercept = approx(x = df$combined_rank, y = df$percentile, xout = sc$crossing_rank[1], ties = "ordered")$y, linetype = "dashed", linewidth = 0.9, colour = plot_colors$diff) +
       annotate(
         "label",
-        x = sc$crossing_rank[1],
+        x = approx(x = df$combined_rank, y = df$percentile, xout = sc$crossing_rank[1], ties = "ordered")$y,
         y = ymax,
         label = paste0(
           "Last local-amplitude crossing before divergence
@@ -719,7 +720,7 @@ plot_composite_overlap <- function(stage1_obj, comparison_name) {
     p <- p +
       annotate(
         "label",
-        x = median(df$combined_rank, na.rm = TRUE),
+        x = median(df$percentile, na.rm = TRUE),
         y = ymax,
         label = "No crossing detected
 Diagnostic plot only",
@@ -737,24 +738,24 @@ plot_difference_curve <- function(stage1_obj, comparison_name) {
   df <- stage1_obj$composite_wave_map
   sc <- stage1_obj$selected_crossing
 
-  p <- ggplot(df, aes(combined_rank, regime_difference)) +
+  p <- ggplot(df, aes(percentile, regime_difference)) +
     geom_hline(yintercept = 0, colour = "grey50", linewidth = 0.5) +
     geom_line(colour = plot_colors$diff, linewidth = 0.9) +
     labs(
       title = paste0(comparison_name, " | local half-range amplitude difference (IOD minus CV²)"),
-      subtitle = "The selected cutoff is the last zero crossing before persistent divergence",
-      x = "Combined EVS rank",
+      subtitle = "Computed on the 0.5% percentile-center grid; the selected cutoff is the last zero crossing before persistent divergence",
+      x = "Percentile center",
       y = "IOD amplitude − CV² amplitude"
     ) +
     plain_theme()
 
   if (isTRUE(stage1_obj$selected_reason == "last_local_amplitude_crossing_before_divergence") && is.finite(sc$crossing_rank[1])) {
     p <- p +
-      geom_vline(xintercept = sc$crossing_rank[1], linetype = "dashed", linewidth = 0.9, colour = plot_colors$diff) +
-      geom_point(data = data.frame(combined_rank = sc$crossing_rank[1], regime_difference = 0), aes(combined_rank, regime_difference), inherit.aes = FALSE, size = 2) +
+      geom_vline(xintercept = approx(x = df$combined_rank, y = df$percentile, xout = sc$crossing_rank[1], ties = "ordered")$y, linetype = "dashed", linewidth = 0.9, colour = plot_colors$diff) +
+      geom_point(data = data.frame(percentile = approx(x = df$combined_rank, y = df$percentile, xout = sc$crossing_rank[1], ties = "ordered")$y, regime_difference = 0), aes(percentile, regime_difference), inherit.aes = FALSE, size = 2) +
       annotate(
         "label",
-        x = sc$crossing_rank[1],
+        x = approx(x = df$combined_rank, y = df$percentile, xout = sc$crossing_rank[1], ties = "ordered")$y,
         y = 0,
         label = paste0("rank cutoff = ", stage1_obj$rank_cutoff),
         fill = "white",
@@ -766,7 +767,7 @@ plot_difference_curve <- function(stage1_obj, comparison_name) {
     p <- p +
       annotate(
         "label",
-        x = median(df$combined_rank, na.rm = TRUE),
+        x = median(df$percentile, na.rm = TRUE),
         y = 0,
         label = "No crossing detected",
         fill = "white",
@@ -889,6 +890,9 @@ run_one_comparison <- function(comparison_row, count_matrix, annot_df) {
     save_csv(matrix_to_export_table(remainder_raw, annot_df), file.path(table_dir, paste0(comparison_name, "_remainder_raw_counts.csv")))
     save_csv(matrix_to_export_table(leading_norm, annot_df), file.path(table_dir, paste0(comparison_name, "_leading_edge_normalized_counts.csv")))
     save_csv(matrix_to_export_table(remainder_norm, annot_df), file.path(table_dir, paste0(comparison_name, "_remainder_normalized_counts.csv")))
+    if (!length(stage1_obj$remainder_ids)) {
+      save_csv(data.frame(note = "Selected cutoff places all features in the leading-edge union; remainder export is intentionally empty.", stringsAsFactors = FALSE), file.path(table_dir, paste0(comparison_name, "_remainder_status.csv")))
+    }
   } else {
     save_csv(data.frame(note = "No local-amplitude crossing detected; split datasets were not created.", stringsAsFactors = FALSE), file.path(table_dir, paste0(comparison_name, "_split_status.csv")))
   }
