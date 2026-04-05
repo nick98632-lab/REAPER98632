@@ -347,10 +347,10 @@ summarize_by_percentile_median <- function(df, value_cols, percentile_step = 0.0
 add_group_differences <- function(sum_df) {
   sum_df %>%
     mutate(
-      diff_emp = iod_emp - cv2_emp,
-      diff_nb_gw = iod_nb_gw - cv2_nb_gw,
-      diff_nb_fit = iod_nb_fit - cv2_nb_fit,
-      diff_nb_final = iod_nb_final - cv2_nb_final
+      diff_emp = if ("diff_emp" %in% names(.)) diff_emp else iod_emp - cv2_emp,
+      diff_nb_gw = if ("diff_nb_gw" %in% names(.)) diff_nb_gw else iod_nb_gw - cv2_nb_gw,
+      diff_nb_fit = if ("diff_nb_fit" %in% names(.)) diff_nb_fit else iod_nb_fit - cv2_nb_fit,
+      diff_nb_final = if ("diff_nb_final" %in% names(.)) diff_nb_final else iod_nb_final - cv2_nb_final
     )
 }
 
@@ -505,34 +505,28 @@ for (i in seq_len(nrow(comparison_table))) {
       alpha_gene_wise, alpha_fitted, alpha_final
     )
 
-  value_cols <- c(
-    "mu", "variance",
-    "iod_emp", "cv2_emp",
-    "iod_nb_gw", "cv2_nb_gw",
-    "iod_nb_fit", "cv2_nb_fit",
-    "iod_nb_final", "cv2_nb_final",
-    "alpha_gene_wise", "alpha_fitted", "alpha_final"
-  )
-
-  ctrl_sum <- summarize_by_percentile_median(ctrl_rank_tbl, value_cols, percentile_step, min_bin_n) %>% add_group_differences()
-  trt_sum  <- summarize_by_percentile_median(trt_rank_tbl, value_cols, percentile_step, min_bin_n) %>% add_group_differences()
-
-  utils::write.csv(ctrl_sum, file.path(cmp_dir, paste0(cmp_name, "_control_percentile_median_summary.csv")), row.names = FALSE)
-  utils::write.csv(trt_sum, file.path(cmp_dir, paste0(cmp_name, "_treatment_percentile_median_summary.csv")), row.names = FALSE)
-
-  ctrl_plot_info <- build_group_plot(ctrl_sum, paste0(cmp_name, " control"), file.path(cmp_dir, paste0(cmp_name, "_control_cutoff_playbook.png")))
-  trt_plot_info <- build_group_plot(trt_sum, paste0(cmp_name, " treatment"), file.path(cmp_dir, paste0(cmp_name, "_treatment_cutoff_playbook.png")))
-
-  combined_sum <- left_join(
-    ctrl_sum %>% select(percentile, rank_index, mu, variance, iod_emp, cv2_emp, iod_nb_gw, cv2_nb_gw, iod_nb_fit, cv2_nb_fit, iod_nb_final, cv2_nb_final, alpha_gene_wise, alpha_fitted, alpha_final) %>%
-      rename_with(~ paste0(.x, "_ctrl"), -c(percentile, rank_index)),
-    trt_sum %>% select(percentile, rank_index, mu, variance, iod_emp, cv2_emp, iod_nb_gw, cv2_nb_gw, iod_nb_fit, cv2_nb_fit, iod_nb_final, cv2_nb_final, alpha_gene_wise, alpha_fitted, alpha_final) %>%
-      rename_with(~ paste0(.x, "_trt"), -c(percentile, rank_index)),
-    by = c("percentile", "rank_index")
-  ) %>%
+  ctrl_rank_tbl <- ctrl_rank_tbl %>%
     mutate(
+      diff_emp = iod_emp - cv2_emp,
+      diff_nb_gw = iod_nb_gw - cv2_nb_gw,
+      diff_nb_fit = iod_nb_fit - cv2_nb_fit,
+      diff_nb_final = iod_nb_final - cv2_nb_final
+    )
+
+  trt_rank_tbl <- trt_rank_tbl %>%
+    mutate(
+      diff_emp = iod_emp - cv2_emp,
+      diff_nb_gw = iod_nb_gw - cv2_nb_gw,
+      diff_nb_fit = iod_nb_fit - cv2_nb_fit,
+      diff_nb_final = iod_nb_final - cv2_nb_final
+    )
+
+  combined_rank_tbl <- full_tbl %>%
+    arrange(combined_rank) %>%
+    transmute(
+      feature_id, gene_symbol, rank = combined_rank,
       mu = mu_ctrl + mu_trt,
-      variance = variance_ctrl + variance_trt,
+      variance = var_ctrl + var_trt,
       iod_emp = iod_emp_ctrl + iod_emp_trt,
       cv2_emp = cv2_emp_ctrl + cv2_emp_trt,
       iod_nb_gw = iod_nb_gw_ctrl + iod_nb_gw_trt,
@@ -541,14 +535,36 @@ for (i in seq_len(nrow(comparison_table))) {
       cv2_nb_fit = cv2_nb_fit_ctrl + cv2_nb_fit_trt,
       iod_nb_final = iod_nb_final_ctrl + iod_nb_final_trt,
       cv2_nb_final = cv2_nb_final_ctrl + cv2_nb_final_trt,
-      alpha_gene_wise = alpha_gene_wise_ctrl + alpha_gene_wise_trt,
-      alpha_fitted = alpha_fitted_ctrl + alpha_fitted_trt,
-      alpha_final = alpha_final_ctrl + alpha_final_trt
-    ) %>%
-    select(percentile, rank_index, mu, variance, iod_emp, cv2_emp, iod_nb_gw, cv2_nb_gw, iod_nb_fit, cv2_nb_fit, iod_nb_final, cv2_nb_final, alpha_gene_wise, alpha_fitted, alpha_final) %>%
-    add_group_differences()
+      alpha_gene_wise = alpha_gene_wise,
+      alpha_fitted = alpha_fitted,
+      alpha_final = alpha_final,
+      diff_emp = (iod_emp_ctrl - cv2_emp_ctrl) + (iod_emp_trt - cv2_emp_trt),
+      diff_nb_gw = (iod_nb_gw_ctrl - cv2_nb_gw_ctrl) + (iod_nb_gw_trt - cv2_nb_gw_trt),
+      diff_nb_fit = (iod_nb_fit_ctrl - cv2_nb_fit_ctrl) + (iod_nb_fit_trt - cv2_nb_fit_trt),
+      diff_nb_final = (iod_nb_final_ctrl - cv2_nb_final_ctrl) + (iod_nb_final_trt - cv2_nb_final_trt)
+    )
 
+  value_cols <- c(
+    "mu", "variance",
+    "iod_emp", "cv2_emp",
+    "iod_nb_gw", "cv2_nb_gw",
+    "iod_nb_fit", "cv2_nb_fit",
+    "iod_nb_final", "cv2_nb_final",
+    "alpha_gene_wise", "alpha_fitted", "alpha_final",
+    "diff_emp", "diff_nb_gw", "diff_nb_fit", "diff_nb_final"
+  )
+
+  ctrl_sum <- summarize_by_percentile_median(ctrl_rank_tbl, value_cols, percentile_step, min_bin_n) %>% add_group_differences()
+  trt_sum  <- summarize_by_percentile_median(trt_rank_tbl, value_cols, percentile_step, min_bin_n) %>% add_group_differences()
+  combined_sum <- summarize_by_percentile_median(combined_rank_tbl, value_cols, percentile_step, min_bin_n) %>% add_group_differences()
+
+  utils::write.csv(ctrl_sum, file.path(cmp_dir, paste0(cmp_name, "_control_percentile_median_summary.csv")), row.names = FALSE)
+  utils::write.csv(trt_sum, file.path(cmp_dir, paste0(cmp_name, "_treatment_percentile_median_summary.csv")), row.names = FALSE)
+  utils::write.csv(combined_rank_tbl, file.path(cmp_dir, paste0(cmp_name, "_combined_feature_level_metrics.csv")), row.names = FALSE)
   utils::write.csv(combined_sum, file.path(cmp_dir, paste0(cmp_name, "_combined_percentile_median_summary.csv")), row.names = FALSE)
+
+  ctrl_plot_info <- build_group_plot(ctrl_sum, paste0(cmp_name, " control"), file.path(cmp_dir, paste0(cmp_name, "_control_cutoff_playbook.png")))
+  trt_plot_info <- build_group_plot(trt_sum, paste0(cmp_name, " treatment"), file.path(cmp_dir, paste0(cmp_name, "_treatment_cutoff_playbook.png")))
   combined_plot_info <- build_group_plot(combined_sum, paste0(cmp_name, " combined"), file.path(cmp_dir, paste0(cmp_name, "_combined_cutoff_playbook.png")))
 
   crossing_tbl <- bind_rows(
