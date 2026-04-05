@@ -1,2 +1,7 @@
-"comparison","empirical_control_crossing","empirical_treatment_crossing","empirical_combined_crossing","theoretical_combined_crossing"
-"RT2_ZT8",0.808273200251794,0.839029647984374,NA,NA
+"dataset","mode","cutoff_percentile"
+"control_empirical","last_zero_crossing",0.808273200251794
+"control_nb","last_zero_crossing",0.808972840924605
+"treatment_empirical","last_zero_crossing",0.839029647984374
+"treatment_nb","last_zero_crossing",0.94
+"combined_empirical","closest_to_zero",0.52
+"combined_nb","closest_to_zero",0.52

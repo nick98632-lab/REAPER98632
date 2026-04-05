@@ -1,5 +1,5 @@
-"comparison","empirical_control_crossing","empirical_treatment_crossing","empirical_combined_crossing","theoretical_combined_crossing"
-"RT0_ZT6",0.939230192015714,0.90074381220622,NA,NA
-"RT2_ZT8",0.808273200251794,0.839029647984374,NA,NA
-"RT4_ZT10",0.877734773106593,0.904888289566133,NA,NA
-"RT8_ZT14",0.871871516746808,0.629422347136235,NA,NA
+"comparison","n_features","control_empirical_cutoff","treatment_empirical_cutoff","combined_empirical_cutoff","combined_nb_cutoff"
+"RT0_ZT6",31553,0.939230192015714,0.90074381220622,0.65,0.65
+"RT2_ZT8",31534,0.808273200251794,0.839029647984374,0.52,0.52
+"RT4_ZT10",31658,0.877734773106593,0.904888289566133,0.64,0.99
+"RT8_ZT14",31580,0.871871516746808,0.629422347136235,1,1
