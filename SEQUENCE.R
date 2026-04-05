@@ -1,33 +1,30 @@
+Use this no-bins version.
+
 # =============================================================================
-# SEQUENCE STAGE 1: AGGREGATE RANK METHODS
+# SEQUENCE STAGE 1: NO-BIN AGGREGATE RANK METHODS
+# FINAL CLEAN VERSION: DIRECT RANK SERIES, NO PERCENTILE BINS
 # -----------------------------------------------------------------------------
 # Purpose
-#   Build treatment- and control-specific aggregate rank curves using only
-#   matched raw-data quantities:
-#     - feature-level mean from raw counts
-#     - feature-level variance from raw counts
-#   then aggregate within equal-size EVS rank bins:
-#     - total mean  M_j = sum(mu_i)
-#     - total variance V_j = sum(var_i)
-#   and derive:
-#     - IOD_agg  = V_j / M_j
-#     - CV2_agg  = V_j / M_j^2
-#     - IOD/CV2  = M_j
-#     - CV2/IOD  = 1 / M_j
+#   Use the EVS rank series directly, without percentile bins.
 #
-#   No DESeq2-normalized means or variances are used in the aggregate curves.
-#   No mixed summaries are used. Everything in each bin comes from the same
-#   matched aggregate mean and aggregate variance.
+#   For each comparison and each arm (control, treatment):
+#     1. rank features by absolute PC1 loading magnitude
+#     2. compute feature-level raw-count mean and raw-count variance
+#     3. compute feature-level empirical:
+#          IOD  = variance / mean
+#          CV²  = variance / mean²
+#     4. smooth only for display/cutoff support using a rolling median
+#     5. define the cutoff from the leading-edge side as the first local
+#        minimum-gap region where the smoothed log-gap begins reopening
 #
-#   EVS ranking is based on the absolute value of PC1 loadings:
-#     |loading_PC1|
+#   Final display uses only:
+#     - absolute loading series
+#     - log(1 + IOD) and log(1 + CV²)
+#     - log-ratio = log(IOD / CV²)
+#     - shaded log-gap
 #
-#   The cutoff is selected from the leading-edge side using a minimum-gap then
-#   divergence rule:
-#     - find where aggregate IOD and aggregate CV2 come closest
-#     - require IOD to begin increasing, CV2 to begin decreasing, and the
-#       absolute gap to begin widening after that point
-#     - if no such point is found, use the global minimum-gap point
+#   No bins. No combined cutoff. Treatment and control are separate, and the
+#   final range panel shows the range between the two cutoffs.
 # =============================================================================
 
 suppressPackageStartupMessages({
@@ -43,7 +40,7 @@ suppressPackageStartupMessages({
 repo_dir <- getwd()
 input_dir <- file.path(repo_dir, "data")
 count_file <- file.path(input_dir, "WTTS-Seq_2022.2_DE_raw_read_numbers.csv")
-out_root <- file.path(repo_dir, "exports", "aggregate_rank_methods")
+out_root <- file.path(repo_dir, "exports", "no_bin_rank_methods")
 dir.create(out_root, recursive = TRUE, showWarnings = FALSE)
 
 comparison_table <- data.frame(
@@ -71,9 +68,8 @@ meta_all <- data.frame(
 rownames(meta_all) <- meta_all$id
 meta_all$condition <- factor(meta_all$condition, levels = c("untrt", "trt"))
 
-percentile_step <- 0.01
-smoother_k <- 5L
-divergence_k <- 4L
+smoother_k <- 101L          # odd integer; light smoothing across ranks
+divergence_k <- 75L         # number of forward ranks for divergence check
 leading_edge_fraction <- 0.60
 
 # =============================================================================
@@ -193,7 +189,7 @@ safe_var <- function(x) {
   stats::var(x)
 }
 
-roll_median <- function(x, k = 5L) {
+roll_median <- function(x, k = 101L) {
   x <- as.numeric(x)
   n <- length(x)
   if (k < 1L) return(x)
@@ -209,31 +205,6 @@ roll_median <- function(x, k = 5L) {
     out[i] <- if (length(vals)) median(vals) else NA_real_
   }
   out
-}
-
-build_equal_bins <- function(n, step = 0.01) {
-  n_bins <- max(1L, round(1 / step))
-  breaks <- unique(round(seq(0, n, length.out = n_bins + 1L)))
-  if (tail(breaks, 1L) != n) breaks[length(breaks)] <- n
-
-  bins <- vector("list", length = length(breaks) - 1L)
-  for (i in seq_len(length(bins))) {
-    lo <- breaks[i] + 1L
-    hi <- breaks[i + 1L]
-    if (lo <= hi) {
-      bins[[i]] <- data.frame(
-        bin = i,
-        lo_rank = lo,
-        hi_rank = hi,
-        n_bin = hi - lo + 1L,
-        percentile = hi / n,
-        stringsAsFactors = FALSE
-      )
-    } else {
-      bins[[i]] <- NULL
-    }
-  }
-  bind_rows(bins)
 }
 
 compute_group_pc1_loadings <- function(count_mat, group_cols) {
@@ -281,53 +252,53 @@ compute_feature_metrics_raw <- function(count_mat, ctrl_cols, trt_cols, feature_
     )
 }
 
-summarize_aggregate_bins <- function(rank_tbl, rank_col, percentile_step = 0.01) {
-  rank_tbl <- rank_tbl %>% arrange(.data[[rank_col]])
-  bins <- build_equal_bins(nrow(rank_tbl), percentile_step)
+build_rank_series <- function(full_tbl, arm = c("control", "treatment")) {
+  arm <- match.arg(arm)
 
-  out <- vector("list", nrow(bins))
-  for (i in seq_len(nrow(bins))) {
-    lo <- bins$lo_rank[i]
-    hi <- bins$hi_rank[i]
-    chunk <- rank_tbl[lo:hi, , drop = FALSE]
-
-    total_mean <- sum(chunk$mu, na.rm = TRUE)
-    total_variance <- sum(chunk$variance, na.rm = TRUE)
-    median_abs_loading <- median(chunk$abs_loading[is.finite(chunk$abs_loading)], na.rm = TRUE)
-
-    iod_agg <- if (is.finite(total_mean) && total_mean > 0) total_variance / total_mean else NA_real_
-    cv2_agg <- if (is.finite(total_mean) && total_mean > 0) total_variance / (total_mean ^ 2) else NA_real_
-    ratio_iod_cv2 <- if (is.finite(cv2_agg) && cv2_agg != 0) iod_agg / cv2_agg else NA_real_
-    ratio_cv2_iod <- if (is.finite(iod_agg) && iod_agg != 0) cv2_agg / iod_agg else NA_real_
-    gap <- if (is.finite(iod_agg) && is.finite(cv2_agg)) iod_agg - cv2_agg else NA_real_
-
-    out[[i]] <- tibble(
-      bin = bins$bin[i],
-      percentile = bins$percentile[i],
-      lo_rank = lo,
-      hi_rank = hi,
-      n_bin = bins$n_bin[i],
-      total_mean = total_mean,
-      total_variance = total_variance,
-      median_abs_loading = median_abs_loading,
-      iod_agg = iod_agg,
-      cv2_agg = cv2_agg,
-      ratio_iod_cv2 = ratio_iod_cv2,
-      ratio_cv2_iod = ratio_cv2_iod,
-      gap = gap
-    )
+  if (arm == "control") {
+    out <- full_tbl %>%
+      transmute(
+        feature_id,
+        gene_symbol,
+        rank = rank_ctrl,
+        abs_loading = ctrl_abs_loading,
+        mu = mu_ctrl,
+        variance = var_ctrl,
+        iod = iod_ctrl,
+        cv2 = cv2_ctrl
+      ) %>%
+      arrange(rank)
+  } else {
+    out <- full_tbl %>%
+      transmute(
+        feature_id,
+        gene_symbol,
+        rank = rank_trt,
+        abs_loading = trt_abs_loading,
+        mu = mu_trt,
+        variance = var_trt,
+        iod = iod_trt,
+        cv2 = cv2_trt
+      ) %>%
+      arrange(rank)
   }
 
-  bind_rows(out)
+  out %>%
+    mutate(
+      log_iod = ifelse(is.finite(iod) & iod >= 0, log1p(iod), NA_real_),
+      log_cv2 = ifelse(is.finite(cv2) & cv2 >= 0, log1p(cv2), NA_real_),
+      log_ratio = ifelse(is.finite(iod) & is.finite(cv2) & iod > 0 & cv2 > 0, log(iod / cv2), NA_real_),
+      gap_log = ifelse(is.finite(log_iod) & is.finite(log_cv2), log_iod - log_cv2, NA_real_)
+    )
 }
 
-select_leading_edge_cutoff <- function(bin_df, k = 5L, divergence_k = 4L, leading_edge_fraction = 0.60) {
-  df <- bin_df %>%
+select_leading_edge_cutoff <- function(rank_df, k = 101L, divergence_k = 75L, leading_edge_fraction = 0.60) {
+  df <- rank_df %>%
     mutate(
-      gap_sm = roll_median(gap, k),
-      iod_sm = roll_median(iod_agg, k),
-      cv2_sm = roll_median(cv2_agg, k),
-      abs_gap_sm = abs(gap_sm)
+      log_iod_sm = roll_median(log_iod, k),
+      log_cv2_sm = roll_median(log_cv2, k),
+      gap_log_sm = roll_median(gap_log, k),
+      abs_gap_log_sm = abs(gap_log_sm)
     )
 
   n <- nrow(df)
@@ -338,21 +309,17 @@ select_leading_edge_cutoff <- function(bin_df, k = 5L, divergence_k = 4L, leadin
     for (i in 2:search_end) {
       local_lo <- max(1L, i - 1L)
       local_hi <- min(n, i + 1L)
-      local_vals <- df$abs_gap_sm[local_lo:local_hi]
-      if (!all(is.finite(local_vals)) || !is.finite(df$abs_gap_sm[i])) next
+      local_vals <- df$abs_gap_log_sm[local_lo:local_hi]
+      if (!all(is.finite(local_vals)) || !is.finite(df$abs_gap_log_sm[i])) next
 
-      is_local_min <- df$abs_gap_sm[i] <= min(local_vals, na.rm = TRUE)
+      is_local_min <- df$abs_gap_log_sm[i] <= min(local_vals, na.rm = TRUE)
       if (!is_local_min) next
 
       f_hi <- min(n, i + divergence_k)
       if (f_hi <= i + 1L) next
 
-      iod_trend <- mean(diff(df$iod_sm[i:f_hi]), na.rm = TRUE)
-      cv2_trend <- mean(diff(df$cv2_sm[i:f_hi]), na.rm = TRUE)
-      gap_trend <- mean(diff(df$abs_gap_sm[i:f_hi]), na.rm = TRUE)
-
-      if (is.finite(iod_trend) && is.finite(cv2_trend) && is.finite(gap_trend) &&
-          iod_trend > 0 && cv2_trend < 0 && gap_trend > 0) {
+      gap_trend <- mean(diff(df$abs_gap_log_sm[i:f_hi]), na.rm = TRUE)
+      if (is.finite(gap_trend) && gap_trend > 0) {
         candidates <- c(candidates, i)
       }
     }
@@ -360,126 +327,117 @@ select_leading_edge_cutoff <- function(bin_df, k = 5L, divergence_k = 4L, leadin
 
   if (length(candidates) > 0L) {
     idx <- candidates[1L]
-    mode <- "minimum-gap then divergence"
+    mode <- "minimum-log-gap then reopening"
   } else {
-    valid <- which(is.finite(df$abs_gap_sm))
+    valid <- which(is.finite(df$abs_gap_log_sm))
     if (!length(valid)) {
       idx <- 1L
     } else {
       search_valid <- valid[valid <= max(search_end, 1L)]
       if (!length(search_valid)) search_valid <- valid
-      idx <- search_valid[which.min(df$abs_gap_sm[search_valid])]
+      idx <- search_valid[which.min(df$abs_gap_log_sm[search_valid])]
     }
-    mode <- "minimum-gap fallback"
+    mode <- "minimum-log-gap fallback"
   }
 
   list(
     mode = mode,
-    bin_index = idx,
-    cutoff_percentile = df$percentile[idx],
-    cutoff_rank = df$hi_rank[idx],
-    cutoff_gap = df$gap[idx],
-    cutoff_gap_sm = df$gap_sm[idx],
+    cutoff_rank = df$rank[idx],
+    cutoff_index = idx,
+    cutoff_fraction = idx / n,
     curve_df = df
   )
 }
 
-build_dataset_panel <- function(bin_df, cutoff_info, title_prefix, out_file) {
+build_dataset_panel <- function(rank_df, cutoff_info, title_prefix, out_file) {
   df <- cutoff_info$curve_df
-  cutoff_p <- cutoff_info$cutoff_percentile
-  cutoff_r <- cutoff_info$cutoff_rank
-  cutoff_label <- paste0(
-    cutoff_info$mode,
-    "\nPercentile = ", sprintf("%.3f", cutoff_p),
-    "\nRank = ", cutoff_r
-  )
+  cutoff_x <- cutoff_info$cutoff_rank
 
-  p1 <- ggplot(df, aes(percentile)) +
-    geom_line(aes(y = median_abs_loading), linewidth = 0.9) +
-    geom_vline(xintercept = cutoff_p, linetype = 2, linewidth = 0.8) +
-    annotate("label", x = cutoff_p, y = max(df$median_abs_loading, na.rm = TRUE), label = cutoff_label, hjust = 0, vjust = 1, size = 3) +
+  p1 <- ggplot(df, aes(rank, abs_loading)) +
+    geom_line(linewidth = 0.8) +
+    geom_vline(xintercept = cutoff_x, linetype = 2, linewidth = 0.8) +
+    annotate(
+      "label",
+      x = cutoff_x,
+      y = max(df$abs_loading, na.rm = TRUE),
+      label = paste0(
+        cutoff_info$mode,
+        "\nRank = ", cutoff_info$cutoff_rank,
+        "\nFraction = ", sprintf("%.3f", cutoff_info$cutoff_fraction)
+      ),
+      hjust = 0, vjust = 1, size = 3
+    ) +
     labs(
-      title = paste0(title_prefix, ": median absolute PC1 loading by equal-size rank bins"),
-      x = "EVS percentile",
-      y = "Median |PC1 loading|"
+      title = paste0(title_prefix, ": absolute PC1 loading series"),
+      x = "EVS rank",
+      y = "|PC1 loading|"
     ) +
     theme_bw(base_size = 10)
 
-  p2 <- ggplot(df, aes(percentile)) +
-    geom_line(aes(y = total_mean, color = "Total raw-count mean"), linewidth = 0.9) +
-    geom_line(aes(y = total_variance, color = "Total raw-count variance"), linewidth = 0.9) +
-    geom_vline(xintercept = cutoff_p, linetype = 2, linewidth = 0.8) +
+  p2 <- ggplot(df, aes(rank)) +
+    geom_line(aes(y = log_iod_sm, color = "Smoothed log(1 + IOD)"), linewidth = 1.0) +
+    geom_line(aes(y = log_cv2_sm, color = "Smoothed log(1 + CV²)"), linewidth = 1.0) +
+    geom_vline(xintercept = cutoff_x, linetype = 2, linewidth = 0.8) +
     labs(
-      title = paste0(title_prefix, ": aggregate raw mean and variance"),
-      x = "EVS percentile",
-      y = "Aggregate bin total"
+      title = paste0(title_prefix, ": smoothed log IOD and log CV²"),
+      x = "EVS rank",
+      y = "Log value"
     ) +
     theme_bw(base_size = 10) +
     theme(legend.position = "bottom")
 
-  p3 <- ggplot(df, aes(percentile)) +
-    geom_line(aes(y = iod_agg, color = "Aggregate IOD"), linewidth = 0.9) +
-    geom_line(aes(y = cv2_agg, color = "Aggregate CV²"), linewidth = 0.9) +
-    geom_vline(xintercept = cutoff_p, linetype = 2, linewidth = 0.8) +
-    labs(
-      title = paste0(title_prefix, ": aggregate IOD and CV²"),
-      x = "EVS percentile",
-      y = "Aggregate quantity"
-    ) +
-    theme_bw(base_size = 10) +
-    theme(legend.position = "bottom")
-
-  p4 <- ggplot(df, aes(percentile)) +
+  p3 <- ggplot(df, aes(rank, log_ratio)) +
     geom_hline(yintercept = 0, linetype = 2) +
-    geom_line(aes(y = gap, color = "Gap = IOD - CV²"), linewidth = 0.8) +
-    geom_line(aes(y = gap_sm, color = "Smoothed gap"), linewidth = 1.0) +
-    geom_vline(xintercept = cutoff_p, linetype = 2, linewidth = 0.8) +
+    geom_line(linewidth = 0.8, alpha = 0.35) +
+    geom_line(aes(y = roll_median(log_ratio, 101L)), linewidth = 1.0) +
+    geom_vline(xintercept = cutoff_x, linetype = 2, linewidth = 0.8) +
     labs(
-      title = paste0(title_prefix, ": aggregate gap and selected cutoff"),
-      x = "EVS percentile",
-      y = "Gap"
+      title = paste0(title_prefix, ": log(IOD / CV²)"),
+      x = "EVS rank",
+      y = "Log-ratio"
+    ) +
+    theme_bw(base_size = 10)
+
+  p4 <- ggplot(df, aes(rank)) +
+    geom_ribbon(aes(ymin = pmin(log_iod_sm, log_cv2_sm), ymax = pmax(log_iod_sm, log_cv2_sm)), alpha = 0.20) +
+    geom_line(aes(y = log_iod_sm, color = "Smoothed log(1 + IOD)"), linewidth = 1.0) +
+    geom_line(aes(y = log_cv2_sm, color = "Smoothed log(1 + CV²)"), linewidth = 1.0) +
+    geom_line(aes(y = gap_log_sm, color = "Smoothed log-gap"), linewidth = 1.0, linetype = 2) +
+    geom_vline(xintercept = cutoff_x, linetype = 2, linewidth = 0.8) +
+    labs(
+      title = paste0(title_prefix, ": shaded log-gap and selected cutoff"),
+      x = "EVS rank",
+      y = "Log value / gap"
     ) +
     theme_bw(base_size = 10) +
     theme(legend.position = "bottom")
 
-  p5 <- ggplot(df, aes(percentile)) +
-    geom_line(aes(y = ratio_iod_cv2, color = "IOD / CV²"), linewidth = 0.9) +
-    geom_line(aes(y = ratio_cv2_iod, color = "CV² / IOD"), linewidth = 0.9) +
-    geom_vline(xintercept = cutoff_p, linetype = 2, linewidth = 0.8) +
-    labs(
-      title = paste0(title_prefix, ": aggregate ratio curves"),
-      x = "EVS percentile",
-      y = "Ratio"
-    ) +
-    theme_bw(base_size = 10) +
-    theme(legend.position = "bottom")
-
-  png(out_file, width = 2200, height = 2800, res = 200)
-  grid.arrange(p1, p2, p3, p4, p5, ncol = 1)
+  png(out_file, width = 2200, height = 2400, res = 200)
+  grid.arrange(p1, p2, p3, p4, ncol = 1)
   dev.off()
 }
 
 build_range_panel <- function(ctrl_cutoff, trt_cutoff, ctrl_df, trt_df, title_prefix, out_file) {
   p <- ggplot() +
     geom_hline(yintercept = 0, linetype = 2) +
-    geom_line(data = ctrl_df, aes(percentile, gap_sm, color = "Control smoothed gap"), linewidth = 0.9) +
-    geom_line(data = trt_df, aes(percentile, gap_sm, color = "Treatment smoothed gap"), linewidth = 0.9) +
+    geom_line(data = ctrl_df, aes(rank, gap_log_sm, color = "Control smoothed log-gap"), linewidth = 1.0) +
+    geom_line(data = trt_df, aes(rank, gap_log_sm, color = "Treatment smoothed log-gap"), linewidth = 1.0) +
     annotate(
       "rect",
-      xmin = min(ctrl_cutoff$cutoff_percentile, trt_cutoff$cutoff_percentile),
-      xmax = max(ctrl_cutoff$cutoff_percentile, trt_cutoff$cutoff_percentile),
+      xmin = min(ctrl_cutoff$cutoff_rank, trt_cutoff$cutoff_rank),
+      xmax = max(ctrl_cutoff$cutoff_rank, trt_cutoff$cutoff_rank),
       ymin = -Inf, ymax = Inf, alpha = 0.08
     ) +
-    geom_vline(xintercept = ctrl_cutoff$cutoff_percentile, linetype = 2, linewidth = 0.8) +
-    geom_vline(xintercept = trt_cutoff$cutoff_percentile, linetype = 3, linewidth = 0.8) +
+    geom_vline(xintercept = ctrl_cutoff$cutoff_rank, linetype = 2, linewidth = 0.8) +
+    geom_vline(xintercept = trt_cutoff$cutoff_rank, linetype = 3, linewidth = 0.8) +
     labs(
       title = paste0(title_prefix, ": treatment/control cutoff range"),
       subtitle = paste0(
         "Control rank = ", ctrl_cutoff$cutoff_rank,
         " | Treatment rank = ", trt_cutoff$cutoff_rank
       ),
-      x = "EVS percentile",
-      y = "Smoothed aggregate gap"
+      x = "EVS rank",
+      y = "Smoothed log-gap"
     ) +
     theme_bw(base_size = 10) +
     theme(legend.position = "bottom")
@@ -527,68 +485,46 @@ for (i in seq_len(nrow(comparison_table))) {
 
   utils::write.csv(full_tbl, file.path(cmp_dir, paste0(cmp_name, "_feature_level_metrics.csv")), row.names = FALSE)
 
-  ctrl_rank_tbl <- full_tbl %>%
-    transmute(
-      feature_id,
-      gene_symbol,
-      rank = rank_ctrl,
-      abs_loading = ctrl_abs_loading,
-      mu = mu_ctrl,
-      variance = var_ctrl
-    ) %>%
-    arrange(rank)
+  ctrl_rank_df <- build_rank_series(full_tbl, "control")
+  trt_rank_df  <- build_rank_series(full_tbl, "treatment")
 
-  trt_rank_tbl <- full_tbl %>%
-    transmute(
-      feature_id,
-      gene_symbol,
-      rank = rank_trt,
-      abs_loading = trt_abs_loading,
-      mu = mu_trt,
-      variance = var_trt
-    ) %>%
-    arrange(rank)
+  utils::write.csv(ctrl_rank_df, file.path(cmp_dir, paste0(cmp_name, "_control_rank_series.csv")), row.names = FALSE)
+  utils::write.csv(trt_rank_df, file.path(cmp_dir, paste0(cmp_name, "_treatment_rank_series.csv")), row.names = FALSE)
 
-  ctrl_bins <- summarize_aggregate_bins(ctrl_rank_tbl, "rank", percentile_step)
-  trt_bins  <- summarize_aggregate_bins(trt_rank_tbl, "rank", percentile_step)
-
-  utils::write.csv(ctrl_bins, file.path(cmp_dir, paste0(cmp_name, "_control_aggregate_bins.csv")), row.names = FALSE)
-  utils::write.csv(trt_bins, file.path(cmp_dir, paste0(cmp_name, "_treatment_aggregate_bins.csv")), row.names = FALSE)
-
-  ctrl_cutoff <- select_leading_edge_cutoff(ctrl_bins, smoother_k, divergence_k, leading_edge_fraction)
-  trt_cutoff  <- select_leading_edge_cutoff(trt_bins,  smoother_k, divergence_k, leading_edge_fraction)
+  ctrl_cutoff <- select_leading_edge_cutoff(ctrl_rank_df, smoother_k, divergence_k, leading_edge_fraction)
+  trt_cutoff  <- select_leading_edge_cutoff(trt_rank_df, smoother_k, divergence_k, leading_edge_fraction)
 
   build_dataset_panel(
-    ctrl_bins, ctrl_cutoff,
+    ctrl_rank_df, ctrl_cutoff,
     paste0(cmp_name, " control"),
-    file.path(cmp_dir, paste0(cmp_name, "_control_aggregate_panel.png"))
+    file.path(cmp_dir, paste0(cmp_name, "_control_rank_panel.png"))
   )
 
   build_dataset_panel(
-    trt_bins, trt_cutoff,
+    trt_rank_df, trt_cutoff,
     paste0(cmp_name, " treatment"),
-    file.path(cmp_dir, paste0(cmp_name, "_treatment_aggregate_panel.png"))
+    file.path(cmp_dir, paste0(cmp_name, "_treatment_rank_panel.png"))
   )
 
   build_range_panel(
     ctrl_cutoff, trt_cutoff,
     ctrl_cutoff$curve_df, trt_cutoff$curve_df,
-    paste0(cmp_name),
+    cmp_name,
     file.path(cmp_dir, paste0(cmp_name, "_cutoff_range_panel.png"))
   )
 
   cutoff_summary <- tibble(
     comparison = cmp_name,
     control_cutoff_mode = ctrl_cutoff$mode,
-    control_cutoff_percentile = ctrl_cutoff$cutoff_percentile,
     control_cutoff_rank = ctrl_cutoff$cutoff_rank,
+    control_cutoff_fraction = ctrl_cutoff$cutoff_fraction,
     treatment_cutoff_mode = trt_cutoff$mode,
-    treatment_cutoff_percentile = trt_cutoff$cutoff_percentile,
     treatment_cutoff_rank = trt_cutoff$cutoff_rank,
-    cutoff_range_percentile_min = min(ctrl_cutoff$cutoff_percentile, trt_cutoff$cutoff_percentile),
-    cutoff_range_percentile_max = max(ctrl_cutoff$cutoff_percentile, trt_cutoff$cutoff_percentile),
+    treatment_cutoff_fraction = trt_cutoff$cutoff_fraction,
     cutoff_range_rank_min = min(ctrl_cutoff$cutoff_rank, trt_cutoff$cutoff_rank),
-    cutoff_range_rank_max = max(ctrl_cutoff$cutoff_rank, trt_cutoff$cutoff_rank)
+    cutoff_range_rank_max = max(ctrl_cutoff$cutoff_rank, trt_cutoff$cutoff_rank),
+    cutoff_range_fraction_min = min(ctrl_cutoff$cutoff_fraction, trt_cutoff$cutoff_fraction),
+    cutoff_range_fraction_max = max(ctrl_cutoff$cutoff_fraction, trt_cutoff$cutoff_fraction)
   )
 
   utils::write.csv(cutoff_summary, file.path(cmp_dir, paste0(cmp_name, "_cutoff_summary.csv")), row.names = FALSE)
