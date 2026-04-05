@@ -3,10 +3,10 @@
 "control","nb_gene_wise",NA
 "control","nb_fitted",NA
 "control","nb_final",NA
-"treatment","empirical",0.625274536866263
-"treatment","nb_gene_wise",NA
-"treatment","nb_fitted",NA
-"treatment","nb_final",0.581693766071016
+"treatment","empirical",0.625349937671421
+"treatment","nb_gene_wise",0.623065181465602
+"treatment","nb_fitted",0.62278946754464
+"treatment","nb_final",0.623470049699983
 "combined","empirical",NA
 "combined","nb_gene_wise",NA
 "combined","nb_fitted",NA
