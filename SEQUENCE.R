@@ -1,29 +1,5 @@
 # =============================================================================
 # SEQUENCE STAGE 1: NEGATIVE-BINOMIAL MEAN-VARIANCE REGIME ANALYSIS
-# -----------------------------------------------------------------------------
-# This script replaces the wave-based cutoff logic with a negative-binomial
-# interpretation of the EVS-ranked axis.
-#
-# Core model:
-#   Var(X) = mu + alpha * mu^2
-#
-# Therefore:
-#   IOD  = Var(X) / mu   = 1 + alpha * mu
-#   CV^2 = Var(X) / mu^2 = 1 / mu + alpha
-#
-# The goal is to examine whether the EVS-ranked axis reveals a transition in
-# the relative dominance of these two NB-derived variance normalizations.
-#
-# This script:
-#   1. reads the raw count matrix
-#   2. builds EVS ranks for each comparison from treatment and control PC1
-#      absolute loadings
-#   3. estimates DESeq2 size factors and feature-wise dispersions
-#   4. computes empirical and NB-theoretical IOD and CV^2 for each feature
-#   5. summarizes trajectories over percentile bins
-#   6. computes the empirical and theoretical difference curves
-#   7. identifies the last crossing before divergence
-#   8. exports tables and figures
 # =============================================================================
 
 suppressPackageStartupMessages({
@@ -34,6 +10,7 @@ suppressPackageStartupMessages({
   library(tidyr)
   library(scales)
   library(gridExtra)
+  library(tibble)
 })
 
 # =============================================================================
@@ -59,26 +36,41 @@ min_bin_n <- 5L
 # HELPERS
 # =============================================================================
 
-
 resolve_counts_file <- function(path_hint) {
-  candidates <- c(
+  path_hint <- as.character(path_hint[[1]])
+  repo_dir_local <- normalizePath(getwd(), winslash = "/", mustWork = FALSE)
+  base_name <- basename(path_hint)
+
+  candidates <- unique(c(
     path_hint,
-    file.path('data', path_hint),
-    file.path('.', path_hint),
-    '/root/REAPER98632/WTTS-Seq_2022.2_DE_raw_read_numbers.csv',
-    '/root/REAPER98632/data/WTTS-Seq_2022.2_DE_raw_read_numbers.csv'
-  )
-  candidates <- unique(candidates)
+    base_name,
+    file.path(repo_dir_local, base_name),
+    file.path(repo_dir_local, "data", base_name),
+    "/root/REAPER98632/WTTS-Seq_2022.2_DE_raw_read_numbers.csv",
+    "/root/REAPER98632/data/WTTS-Seq_2022.2_DE_raw_read_numbers.csv"
+  ))
+
   existing <- candidates[file.exists(candidates)]
-  if (length(existing)) return(existing[[1]])
+  if (length(existing) > 0) {
+    return(normalizePath(existing[[1]], winslash = "/", mustWork = TRUE))
+  }
 
-  found <- Sys.glob('/root/REAPER98632/**/WTTS-Seq_2022.2_DE_raw_read_numbers.csv')
+  found <- list.files(
+    path = repo_dir_local,
+    pattern = "^WTTS-Seq_2022\\.2_DE_raw_read_numbers\\.csv$",
+    recursive = TRUE,
+    full.names = TRUE
+  )
   found <- found[file.exists(found)]
-  if (length(found)) return(found[[1]])
+  if (length(found) > 0) {
+    return(normalizePath(found[[1]], winslash = "/", mustWork = TRUE))
+  }
 
-  stop(sprintf('Count file not found. Tried: %s', paste(candidates, collapse=', ')))
+  stop(sprintf(
+    "Count file not found. Tried: %s",
+    paste(candidates, collapse = ", ")
+  ))
 }
-
 
 safe_var <- function(x) {
   x <- as.numeric(x)
@@ -100,7 +92,7 @@ rescale01 <- function(x) {
   out <- rep(NA_real_, length(x))
   if (!any(ok)) return(out)
   rng <- range(x[ok], na.rm = TRUE)
-  if (!is.finite(rng[1]) || !is.finite(rng[2]) || rng[1] == rng[2]) {
+  if (!all(is.finite(rng)) || rng[1] == rng[2]) {
     out[ok] <- 0
     return(out)
   }
@@ -121,12 +113,13 @@ find_last_zero_crossing <- function(x, y) {
     if (!is.finite(yi) || !is.finite(yj)) next
     if (yi == 0 || yi * yj < 0) crossings <- c(crossings, i)
   }
-
   if (!length(crossings)) return(NULL)
 
   i <- max(crossings)
-  x1 <- x[i]; x2 <- x[i + 1L]
-  y1 <- y[i]; y2 <- y[i + 1L]
+  x1 <- x[i]
+  x2 <- x[i + 1L]
+  y1 <- y[i]
+  y2 <- y[i + 1L]
 
   if (isTRUE(all.equal(y1, 0))) {
     x_cross <- x1
@@ -141,7 +134,7 @@ find_last_zero_crossing <- function(x, y) {
 
 make_percentile_bins <- function(n, step = 0.01) {
   probs <- seq(step, 1, by = step)
-  if (tail(probs, 1) < 1) probs <- c(probs, 1)
+  if (length(probs) == 0L || tail(probs, 1) < 1) probs <- c(probs, 1)
   centers <- unique(pmax(1L, pmin(n, round(probs * n))))
   tibble(percentile = probs[seq_along(centers)], rank_index = centers)
 }
@@ -173,8 +166,8 @@ build_evs_table <- function(norm_counts_mat, ctrl_cols, trt_cols, feature_ids) {
 }
 
 compute_feature_metrics <- function(norm_counts_mat, ctrl_cols, trt_cols, dispersions, feature_ids) {
-  ctrl_mu <- apply(norm_counts_mat[, ctrl_cols, drop = FALSE], 1L, safe_mean)
-  trt_mu  <- apply(norm_counts_mat[, trt_cols, drop = FALSE], 1L, safe_mean)
+  ctrl_mu  <- apply(norm_counts_mat[, ctrl_cols, drop = FALSE], 1L, safe_mean)
+  trt_mu   <- apply(norm_counts_mat[, trt_cols, drop = FALSE], 1L, safe_mean)
   ctrl_var <- apply(norm_counts_mat[, ctrl_cols, drop = FALSE], 1L, safe_var)
   trt_var  <- apply(norm_counts_mat[, trt_cols, drop = FALSE], 1L, safe_var)
 
@@ -188,13 +181,13 @@ compute_feature_metrics <- function(norm_counts_mat, ctrl_cols, trt_cols, disper
   ) %>%
     mutate(
       iod_emp_ctrl = ifelse(mu_ctrl > 0, var_ctrl / mu_ctrl, NA_real_),
-      iod_emp_trt  = ifelse(mu_trt  > 0, var_trt  / mu_trt,  NA_real_),
+      iod_emp_trt  = ifelse(mu_trt > 0, var_trt / mu_trt, NA_real_),
       cv2_emp_ctrl = ifelse(mu_ctrl > 0, var_ctrl / (mu_ctrl ^ 2), NA_real_),
-      cv2_emp_trt  = ifelse(mu_trt  > 0, var_trt  / (mu_trt  ^ 2), NA_real_),
+      cv2_emp_trt  = ifelse(mu_trt > 0, var_trt / (mu_trt ^ 2), NA_real_),
       iod_nb_ctrl  = ifelse(mu_ctrl > 0 & is.finite(alpha), 1 + alpha * mu_ctrl, NA_real_),
-      iod_nb_trt   = ifelse(mu_trt  > 0 & is.finite(alpha), 1 + alpha * mu_trt,  NA_real_),
+      iod_nb_trt   = ifelse(mu_trt > 0 & is.finite(alpha), 1 + alpha * mu_trt, NA_real_),
       cv2_nb_ctrl  = ifelse(mu_ctrl > 0 & is.finite(alpha), (1 / mu_ctrl) + alpha, NA_real_),
-      cv2_nb_trt   = ifelse(mu_trt  > 0 & is.finite(alpha), (1 / mu_trt)  + alpha, NA_real_)
+      cv2_nb_trt   = ifelse(mu_trt > 0 & is.finite(alpha), (1 / mu_trt) + alpha, NA_real_)
     )
 }
 
@@ -277,8 +270,10 @@ make_group_plots <- function(sum_df, title_prefix, out_file) {
 # DATA IMPORT
 # =============================================================================
 
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 counts_file <- resolve_counts_file(counts_file)
 message(sprintf("Reading raw count matrix from: %s", counts_file))
+
 raw_df <- read_csv(counts_file, show_col_types = FALSE)
 feature_id_col <- names(raw_df)[1]
 feature_ids <- raw_df[[feature_id_col]]
@@ -300,12 +295,15 @@ for (cmp_name in names(comparison_map)) {
   trt_pat  <- comparison_map[[cmp_name]]$trt
 
   ctrl_cols <- grep(ctrl_pat, colnames(count_mat), value = TRUE)
-  trt_cols  <- grep(trt_pat,  colnames(count_mat), value = TRUE)
+  trt_cols  <- grep(trt_pat, colnames(count_mat), value = TRUE)
   if (!length(ctrl_cols) || !length(trt_cols)) next
 
   cmp_cols <- c(ctrl_cols, trt_cols)
   cmp_counts <- count_mat[, cmp_cols, drop = FALSE]
-  col_data <- data.frame(row.names = cmp_cols, condition = factor(c(rep("ctrl", length(ctrl_cols)), rep("trt", length(trt_cols)))))
+  col_data <- data.frame(
+    row.names = cmp_cols,
+    condition = factor(c(rep("ctrl", length(ctrl_cols)), rep("trt", length(trt_cols))))
+  )
 
   dds <- DESeqDataSetFromMatrix(countData = round(cmp_counts), colData = col_data, design = ~ condition)
   dds <- estimateSizeFactors(dds)
@@ -320,17 +318,32 @@ for (cmp_name in names(comparison_map)) {
 
   write_csv(full_tbl, file.path(out_dir, paste0(cmp_name, "_feature_metrics.csv")))
 
-  ctrl_rank_tbl <- full_tbl %>% arrange(rank_ctrl) %>% transmute(feature_id, rank = rank_ctrl, iod_emp = iod_emp_ctrl, cv2_emp = cv2_emp_ctrl, iod_nb = iod_nb_ctrl, cv2_nb = cv2_nb_ctrl)
-  trt_rank_tbl  <- full_tbl %>% arrange(rank_trt)  %>% transmute(feature_id, rank = rank_trt,  iod_emp = iod_emp_trt,  cv2_emp = cv2_emp_trt,  iod_nb = iod_nb_trt,  cv2_nb = cv2_nb_trt)
+  ctrl_rank_tbl <- full_tbl %>%
+    arrange(rank_ctrl) %>%
+    transmute(feature_id, rank = rank_ctrl, iod_emp = iod_emp_ctrl, cv2_emp = cv2_emp_ctrl, iod_nb = iod_nb_ctrl, cv2_nb = cv2_nb_ctrl)
+
+  trt_rank_tbl <- full_tbl %>%
+    arrange(rank_trt) %>%
+    transmute(feature_id, rank = rank_trt, iod_emp = iod_emp_trt, cv2_emp = cv2_emp_trt, iod_nb = iod_nb_trt, cv2_nb = cv2_nb_trt)
 
   ctrl_sum <- summarize_by_percentile(ctrl_rank_tbl, c("iod_emp", "cv2_emp", "iod_nb", "cv2_nb"), percentile_step, min_bin_n) %>%
-    mutate(iod_emp_scaled = rescale01(iod_emp), cv2_emp_scaled = rescale01(cv2_emp), iod_nb_scaled = rescale01(iod_nb), cv2_nb_scaled = rescale01(cv2_nb))
+    mutate(
+      iod_emp_scaled = rescale01(iod_emp),
+      cv2_emp_scaled = rescale01(cv2_emp),
+      iod_nb_scaled = rescale01(iod_nb),
+      cv2_nb_scaled = rescale01(cv2_nb)
+    )
 
   trt_sum <- summarize_by_percentile(trt_rank_tbl, c("iod_emp", "cv2_emp", "iod_nb", "cv2_nb"), percentile_step, min_bin_n) %>%
-    mutate(iod_emp_scaled = rescale01(iod_emp), cv2_emp_scaled = rescale01(cv2_emp), iod_nb_scaled = rescale01(iod_nb), cv2_nb_scaled = rescale01(cv2_nb))
+    mutate(
+      iod_emp_scaled = rescale01(iod_emp),
+      cv2_emp_scaled = rescale01(cv2_emp),
+      iod_nb_scaled = rescale01(iod_nb),
+      cv2_nb_scaled = rescale01(cv2_nb)
+    )
 
   write_csv(ctrl_sum, file.path(out_dir, paste0(cmp_name, "_control_percentile_summary.csv")))
-  write_csv(trt_sum,  file.path(out_dir, paste0(cmp_name, "_treatment_percentile_summary.csv")))
+  write_csv(trt_sum, file.path(out_dir, paste0(cmp_name, "_treatment_percentile_summary.csv")))
 
   ctrl_info <- make_group_plots(ctrl_sum, paste0(cmp_name, " control"), file.path(out_dir, paste0(cmp_name, "_control_nb_regime.png")))
   trt_info  <- make_group_plots(trt_sum,  paste0(cmp_name, " treatment"), file.path(out_dir, paste0(cmp_name, "_treatment_nb_regime.png")))
