@@ -1,5 +1,15 @@
 # =============================================================================
 # SEQUENCE STAGE 1: NEGATIVE-BINOMIAL MEAN-VARIANCE REGIME ANALYSIS
+# PRETTY OUTPUT VERSION
+# -----------------------------------------------------------------------------
+# Keeps the current working analysis logic but improves output structure and
+# figure labeling.
+#
+# Main changes:
+#   1. one folder per comparison under exports/nb_regime_analysis_pretty
+#   2. cleaner plot themes and legends
+#   3. explicit final cutoff labels on the difference panels
+#   4. final cutoff rank reported as percentile and approximate EVS rank
 # =============================================================================
 
 suppressPackageStartupMessages({
@@ -18,8 +28,8 @@ suppressPackageStartupMessages({
 repo_dir <- getwd()
 input_dir <- file.path(repo_dir, "data")
 count_file <- file.path(input_dir, "WTTS-Seq_2022.2_DE_raw_read_numbers.csv")
-out_dir <- file.path(repo_dir, "exports", "nb_regime_analysis")
-dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+out_root <- file.path(repo_dir, "exports", "nb_regime_analysis_pretty")
+dir.create(out_root, recursive = TRUE, showWarnings = FALSE)
 
 comparison_table <- data.frame(
   comparison_name = c("RT0_ZT6", "RT2_ZT8", "RT4_ZT10", "RT8_ZT14"),
@@ -94,23 +104,15 @@ detect_gene_symbol_column <- function(df) {
 }
 
 read_count_matrix <- function(path, meta_ids) {
-  if (!file.exists(path)) {
-    stop(paste0("Count file not found: ", path), call. = FALSE)
-  }
+  if (!file.exists(path)) stop(paste0("Count file not found: ", path), call. = FALSE)
 
   raw_df <- utils::read.csv(path, check.names = FALSE, stringsAsFactors = FALSE)
   feature_col <- detect_feature_id_column(raw_df)
   symbol_col <- detect_gene_symbol_column(raw_df)
   sample_cols <- intersect(meta_ids, names(raw_df))
+  if (length(sample_cols) == 0L) stop("No count columns matched the metadata sample IDs.", call. = FALSE)
 
-  if (length(sample_cols) == 0L) {
-    stop("No count columns matched the metadata sample IDs.", call. = FALSE)
-  }
-
-  annot_df <- data.frame(
-    feature_id = as.character(raw_df[[feature_col]]),
-    stringsAsFactors = FALSE
-  )
+  annot_df <- data.frame(feature_id = as.character(raw_df[[feature_col]]), stringsAsFactors = FALSE)
   annot_df$gene_symbol <- if (!is.null(symbol_col)) as.character(raw_df[[symbol_col]]) else annot_df$feature_id
   keep <- !is.na(annot_df$feature_id) & nzchar(annot_df$feature_id)
   annot_df <- annot_df[keep, , drop = FALSE]
@@ -299,7 +301,27 @@ summarize_by_percentile <- function(df, value_cols, percentile_step = 0.01, min_
   dplyr::bind_rows(out)
 }
 
-make_group_plots <- function(sum_df, title_prefix, out_file) {
+pretty_theme <- function() {
+  theme_bw(base_size = 10) +
+    theme(
+      legend.position = "bottom",
+      plot.title = element_text(face = "bold"),
+      panel.grid.minor = element_blank()
+    )
+}
+
+add_cutoff_label <- function(plot_obj, crossing, n_features, color = "black") {
+  if (is.null(crossing) || !is.finite(crossing$crossing_x)) return(plot_obj)
+  cutoff_rank <- max(1L, min(n_features, round(crossing$crossing_x * n_features)))
+  label_txt <- paste0("Final cutoff\nPercentile = ", sprintf("%.3f", crossing$crossing_x),
+                      "\nRank = ", format(cutoff_rank, big.mark = ","))
+  plot_obj +
+    geom_vline(xintercept = crossing$crossing_x, linetype = 2, linewidth = 0.8) +
+    annotate("label", x = crossing$crossing_x, y = Inf, vjust = 1.1,
+             label = label_txt, size = 3, color = color)
+}
+
+make_group_plots <- function(sum_df, title_prefix, out_file, n_features) {
   long_df <- dplyr::bind_rows(
     dplyr::transmute(sum_df, percentile, value = iod_emp_scaled, metric = "IOD empirical"),
     dplyr::transmute(sum_df, percentile, value = cv2_emp_scaled, metric = "CV² empirical"),
@@ -319,29 +341,51 @@ make_group_plots <- function(sum_df, title_prefix, out_file) {
 
   p1 <- ggplot(long_df, aes(percentile, value, color = metric)) +
     geom_line(linewidth = 0.9) +
-    labs(title = paste0(title_prefix, ": empirical and NB trajectories"), x = "EVS percentile", y = "Scaled trajectory (0 to 1)") +
-    theme_bw(base_size = 10) +
-    theme(legend.position = "bottom")
+    labs(title = paste0(title_prefix, ": empirical and NB trajectories"),
+         x = "EVS percentile", y = "Scaled trajectory (0 to 1)") +
+    pretty_theme()
 
   p2 <- ggplot(diff_df, aes(percentile, empirical_difference)) +
-    geom_hline(yintercept = 0, linetype = 2) +
+    geom_hline(yintercept = 0, linetype = 2, linewidth = 0.6) +
     geom_line(linewidth = 0.9) +
-    labs(title = paste0(title_prefix, ": empirical difference curve"), x = "EVS percentile", y = "IOD - CV²") +
-    theme_bw(base_size = 10)
-  if (!is.null(crossing_emp)) p2 <- p2 + geom_vline(xintercept = crossing_emp$crossing_x, linetype = 2)
+    labs(title = paste0(title_prefix, ": empirical difference curve"),
+         x = "EVS percentile", y = "IOD - CV²") +
+    pretty_theme()
+  p2 <- add_cutoff_label(p2, crossing_emp, n_features)
 
   p3 <- ggplot(diff_df, aes(percentile, theoretical_difference)) +
-    geom_hline(yintercept = 0, linetype = 2) +
+    geom_hline(yintercept = 0, linetype = 2, linewidth = 0.6) +
     geom_line(linewidth = 0.9) +
-    labs(title = paste0(title_prefix, ": NB-theoretical difference curve"), x = "EVS percentile", y = "IOD - CV²") +
-    theme_bw(base_size = 10)
-  if (!is.null(crossing_nb)) p3 <- p3 + geom_vline(xintercept = crossing_nb$crossing_x, linetype = 2)
+    labs(title = paste0(title_prefix, ": NB-theoretical difference curve"),
+         x = "EVS percentile", y = "IOD - CV²") +
+    pretty_theme()
+  p3 <- add_cutoff_label(p3, crossing_nb, n_features)
 
-  png(out_file, width = 2000, height = 1600, res = 200)
+  png(out_file, width = 2200, height = 1800, res = 220)
   gridExtra::grid.arrange(p1, p2, p3, ncol = 1)
   dev.off()
 
   list(crossing_emp = crossing_emp, crossing_nb = crossing_nb)
+}
+
+make_combined_plots <- function(combined_sum, cmp_name, out_file, n_features) {
+  cross_emp <- find_last_zero_crossing(combined_sum$percentile, combined_sum$diff_emp)
+  cross_nb <- find_last_zero_crossing(combined_sum$percentile, combined_sum$diff_nb)
+
+  p1 <- ggplot(combined_sum, aes(percentile)) +
+    geom_hline(yintercept = 0, linetype = 2, linewidth = 0.6) +
+    geom_line(aes(y = diff_emp, color = "Empirical difference"), linewidth = 0.9) +
+    geom_line(aes(y = diff_nb, color = "NB difference"), linewidth = 0.9, linetype = 2) +
+    labs(title = paste0(cmp_name, ": combined feature-level difference curves"),
+         x = "EVS percentile", y = "IOD - CV²") +
+    pretty_theme()
+  p1 <- add_cutoff_label(p1, cross_emp, n_features)
+
+  png(out_file, width = 2200, height = 1200, res = 220)
+  print(p1)
+  dev.off()
+
+  list(crossing_emp = cross_emp, crossing_nb = cross_nb)
 }
 
 # =============================================================================
@@ -365,6 +409,9 @@ for (i in seq_len(nrow(comparison_table))) {
   cmp_name <- comparison_row$comparison_name[[1]]
   message("Processing ", cmp_name, "...")
 
+  cmp_dir <- file.path(out_root, cmp_name)
+  dir.create(cmp_dir, recursive = TRUE, showWarnings = FALSE)
+
   comp <- subset_comparison(count_mat, comparison_row, meta_all)
   cmp_counts <- comp$count_matrix
   col_data <- comp$coldata
@@ -387,7 +434,7 @@ for (i in seq_len(nrow(comparison_table))) {
   full_tbl <- dplyr::left_join(evs_tbl, metrics_tbl, by = "feature_id") %>%
     dplyr::arrange(combined_rank)
 
-  utils::write.csv(full_tbl, file.path(out_dir, paste0(cmp_name, "_feature_metrics.csv")), row.names = FALSE)
+  utils::write.csv(full_tbl, file.path(cmp_dir, paste0(cmp_name, "_feature_metrics.csv")), row.names = FALSE)
 
   ctrl_rank_tbl <- full_tbl %>%
     dplyr::arrange(rank_ctrl) %>%
@@ -412,79 +459,45 @@ for (i in seq_len(nrow(comparison_table))) {
       cv2_nb_scaled = rescale01(cv2_nb)
     )
 
-  utils::write.csv(ctrl_sum, file.path(out_dir, paste0(cmp_name, "_control_percentile_summary.csv")), row.names = FALSE)
-  utils::write.csv(trt_sum, file.path(out_dir, paste0(cmp_name, "_treatment_percentile_summary.csv")), row.names = FALSE)
+  utils::write.csv(ctrl_sum, file.path(cmp_dir, paste0(cmp_name, "_control_percentile_summary.csv")), row.names = FALSE)
+  utils::write.csv(trt_sum, file.path(cmp_dir, paste0(cmp_name, "_treatment_percentile_summary.csv")), row.names = FALSE)
 
-  ctrl_info <- make_group_plots(ctrl_sum, paste0(cmp_name, " control"), file.path(out_dir, paste0(cmp_name, "_control_nb_regime.png")))
-  trt_info <- make_group_plots(trt_sum, paste0(cmp_name, " treatment"), file.path(out_dir, paste0(cmp_name, "_treatment_nb_regime.png")))
+  ctrl_info <- make_group_plots(ctrl_sum, paste0(cmp_name, " control"), file.path(cmp_dir, paste0(cmp_name, "_control_nb_regime.png")), nrow(ctrl_rank_tbl))
+  trt_info <- make_group_plots(trt_sum, paste0(cmp_name, " treatment"), file.path(cmp_dir, paste0(cmp_name, "_treatment_nb_regime.png")), nrow(trt_rank_tbl))
 
-  combined_sum <- ctrl_sum %>%
-    dplyr::select(percentile, rank_index, iod_emp_scaled, cv2_emp_scaled, iod_nb_scaled, cv2_nb_scaled) %>%
-    dplyr::rename_with(~ paste0(.x, "_ctrl"), -c(percentile, rank_index)) %>%
-    dplyr::left_join(
-      trt_sum %>%
-        dplyr::select(percentile, rank_index, iod_emp_scaled, cv2_emp_scaled, iod_nb_scaled, cv2_nb_scaled) %>%
-        dplyr::rename_with(~ paste0(.x, "_trt"), -c(percentile, rank_index)),
-      by = c("percentile", "rank_index")
-    ) %>%
-    dplyr::mutate(
-      iod_emp_combined = iod_emp_scaled_ctrl + iod_emp_scaled_trt,
-      cv2_emp_combined = cv2_emp_scaled_ctrl + cv2_emp_scaled_trt,
-      iod_nb_combined = iod_nb_scaled_ctrl + iod_nb_scaled_trt,
-      cv2_nb_combined = cv2_nb_scaled_ctrl + cv2_nb_scaled_trt,
-      empirical_difference = iod_emp_combined - cv2_emp_combined,
-      theoretical_difference = iod_nb_combined - cv2_nb_combined
+  combined_rank_tbl <- full_tbl %>%
+    dplyr::arrange(combined_rank) %>%
+    dplyr::transmute(
+      feature_id,
+      rank = combined_rank,
+      diff_emp = (iod_emp_ctrl - cv2_emp_ctrl) + (iod_emp_trt - cv2_emp_trt),
+      diff_nb = (iod_nb_ctrl - cv2_nb_ctrl) + (iod_nb_trt - cv2_nb_trt)
     )
 
-  utils::write.csv(combined_sum, file.path(out_dir, paste0(cmp_name, "_combined_percentile_summary.csv")), row.names = FALSE)
+  combined_sum <- summarize_by_percentile(
+    combined_rank_tbl,
+    c("diff_emp", "diff_nb"),
+    percentile_step,
+    min_bin_n
+  )
 
-  cross_emp <- find_last_zero_crossing(combined_sum$percentile, combined_sum$empirical_difference)
-  cross_nb <- find_last_zero_crossing(combined_sum$percentile, combined_sum$theoretical_difference)
+  utils::write.csv(combined_rank_tbl, file.path(cmp_dir, paste0(cmp_name, "_combined_feature_level_differences.csv")), row.names = FALSE)
+  utils::write.csv(combined_sum, file.path(cmp_dir, paste0(cmp_name, "_combined_percentile_summary.csv")), row.names = FALSE)
+
+  combined_info <- make_combined_plots(combined_sum, cmp_name, file.path(cmp_dir, paste0(cmp_name, "_combined_nb_regime.png")), nrow(combined_rank_tbl))
 
   crossing_tbl <- dplyr::tibble(
     comparison = cmp_name,
-    empirical_crossing_percentile = if (is.null(cross_emp)) NA_real_ else cross_emp$crossing_x,
-    theoretical_crossing_percentile = if (is.null(cross_nb)) NA_real_ else cross_nb$crossing_x
-  )
-  utils::write.csv(crossing_tbl, file.path(out_dir, paste0(cmp_name, "_crossings.csv")), row.names = FALSE)
-
-  p_comb_1 <- ggplot(combined_sum, aes(percentile)) +
-    geom_line(aes(y = iod_emp_combined, color = "IOD empirical"), linewidth = 0.9) +
-    geom_line(aes(y = cv2_emp_combined, color = "CV² empirical"), linewidth = 0.9) +
-    geom_line(aes(y = iod_nb_combined, color = "IOD NB"), linewidth = 0.9, linetype = 2) +
-    geom_line(aes(y = cv2_nb_combined, color = "CV² NB"), linewidth = 0.9, linetype = 2) +
-    labs(title = paste0(cmp_name, ": combined percentile trajectories"), x = "EVS percentile", y = "Scaled combined trajectory") +
-    theme_bw(base_size = 10) +
-    theme(legend.position = "bottom")
-
-  p_comb_2 <- ggplot(combined_sum, aes(percentile, empirical_difference)) +
-    geom_hline(yintercept = 0, linetype = 2) +
-    geom_line(linewidth = 0.9) +
-    labs(title = paste0(cmp_name, ": empirical combined difference"), x = "EVS percentile", y = "IOD - CV²") +
-    theme_bw(base_size = 10)
-  if (!is.null(cross_emp)) p_comb_2 <- p_comb_2 + geom_vline(xintercept = cross_emp$crossing_x, linetype = 2)
-
-  p_comb_3 <- ggplot(combined_sum, aes(percentile, theoretical_difference)) +
-    geom_hline(yintercept = 0, linetype = 2) +
-    geom_line(linewidth = 0.9) +
-    labs(title = paste0(cmp_name, ": NB-theoretical combined difference"), x = "EVS percentile", y = "IOD - CV²") +
-    theme_bw(base_size = 10)
-  if (!is.null(cross_nb)) p_comb_3 <- p_comb_3 + geom_vline(xintercept = cross_nb$crossing_x, linetype = 2)
-
-  png(file.path(out_dir, paste0(cmp_name, "_combined_nb_regime.png")), width = 2000, height = 1600, res = 200)
-  gridExtra::grid.arrange(p_comb_1, p_comb_2, p_comb_3, ncol = 1)
-  dev.off()
-
-  summary_rows[[cmp_name]] <- dplyr::tibble(
-    comparison = cmp_name,
-    n_features = nrow(full_tbl),
     empirical_control_crossing = if (is.null(ctrl_info$crossing_emp)) NA_real_ else ctrl_info$crossing_emp$crossing_x,
     empirical_treatment_crossing = if (is.null(trt_info$crossing_emp)) NA_real_ else trt_info$crossing_emp$crossing_x,
-    empirical_combined_crossing = if (is.null(cross_emp)) NA_real_ else cross_emp$crossing_x,
-    theoretical_combined_crossing = if (is.null(cross_nb)) NA_real_ else cross_nb$crossing_x
+    empirical_combined_crossing = if (is.null(combined_info$crossing_emp)) NA_real_ else combined_info$crossing_emp$crossing_x,
+    theoretical_combined_crossing = if (is.null(combined_info$crossing_nb)) NA_real_ else combined_info$crossing_nb$crossing_x
   )
+  utils::write.csv(crossing_tbl, file.path(cmp_dir, paste0(cmp_name, "_crossings.csv")), row.names = FALSE)
+
+  summary_rows[[cmp_name]] <- crossing_tbl
 }
 
 summary_tbl <- dplyr::bind_rows(summary_rows)
-utils::write.csv(summary_tbl, file.path(out_dir, "nb_regime_summary.csv"), row.names = FALSE)
-message("Done. Outputs written to: ", out_dir)
+utils::write.csv(summary_tbl, file.path(out_root, "nb_regime_summary.csv"), row.names = FALSE)
+message("Done. Outputs written to: ", out_root)
