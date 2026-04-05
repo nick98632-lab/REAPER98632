@@ -1,0 +1,2 @@
+"comparison","treatment_cutoff_percentile","treatment_cutoff_rank","treatment_cutoff_method","control_cutoff_percentile","control_cutoff_rank","control_cutoff_method","cutoff_range_rank_min","cutoff_range_rank_max"
+"RT8_ZT14",0.59,18632,"leading_edge_divergence",0.34,10737,"leading_edge_divergence",10737,18632

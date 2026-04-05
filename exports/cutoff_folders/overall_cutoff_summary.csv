@@ -1,0 +1,5 @@
+"comparison","n_features","treatment_cutoff_rank","control_cutoff_rank","cutoff_range_rank_min","cutoff_range_rank_max"
+"RT0_ZT6",31553,9781,15145,9781,15145
+"RT2_ZT8",31534,9460,9145,9145,9460
+"RT4_ZT10",31658,23427,6648,6648,23427
+"RT8_ZT14",31580,18632,10737,10737,18632

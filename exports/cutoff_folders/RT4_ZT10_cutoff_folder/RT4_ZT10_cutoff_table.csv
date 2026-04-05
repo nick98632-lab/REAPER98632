@@ -1,0 +1,2 @@
+"comparison","treatment_cutoff_percentile","treatment_cutoff_rank","treatment_cutoff_method","control_cutoff_percentile","control_cutoff_rank","control_cutoff_method","cutoff_range_rank_min","cutoff_range_rank_max"
+"RT4_ZT10",0.74,23427,"leading_edge_divergence",0.21,6648,"leading_edge_divergence",6648,23427
