@@ -1,11 +1,7 @@
 Reading raw count matrix from: /root/REAPER98632/data/WTTS-Seq_2022.2_DE_raw_read_numbers.csv
 Processing RT0_ZT6...
-converting counts to integer mode
 Processing RT2_ZT8...
-converting counts to integer mode
 Processing RT4_ZT10...
-converting counts to integer mode
 Processing RT8_ZT14...
-converting counts to integer mode
-There were 48 warnings (use warnings() to see them)
-Done. Outputs written to: /root/REAPER98632/exports/nb_alpha_mu_regime_shift
+There were 50 or more warnings (use warnings() to see the first 50)
+Done. Outputs written to: /root/REAPER98632/exports/empirical_nb_regime_shift

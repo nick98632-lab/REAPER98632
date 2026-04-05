@@ -1,0 +1,2 @@
+"comparison","control_cutoff_mode","control_cutoff_rank","control_cutoff_fraction","treatment_cutoff_mode","treatment_cutoff_rank","treatment_cutoff_fraction","cutoff_range_rank_min","cutoff_range_rank_max","cutoff_range_fraction_min","cutoff_range_fraction_max"
+"RT0_ZT6","minimum distance to empirical alpha*mu = 1, then reopening",637,0.0200585697641465,"minimum distance to empirical alpha*mu = 1, then reopening",722,0.0227351450073999,637,722,0.0200585697641465,0.0227351450073999

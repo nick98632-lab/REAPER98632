@@ -1,2 +1,0 @@
-"comparison","control_cutoff_mode","control_cutoff_rank","control_cutoff_fraction","treatment_cutoff_mode","treatment_cutoff_rank","treatment_cutoff_fraction","cutoff_range_rank_min","cutoff_range_rank_max","cutoff_range_fraction_min","cutoff_range_fraction_max"
-"RT2_ZT8","minimum distance to alpha*mu = 1, then reopening",361,0.0114479609310585,"minimum distance to alpha*mu = 1, then reopening",177,0.00561298915456333,177,361,0.00561298915456333,0.0114479609310585
