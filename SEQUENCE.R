@@ -40,7 +40,9 @@ suppressPackageStartupMessages({
 # USER SETTINGS
 # =============================================================================
 
-counts_file <- "WTTS-Seq_2022.2_DE_raw_read_numbers.csv"
+repo_dir <- getwd()
+input_dir <- file.path(repo_dir, "data")
+counts_file <- file.path(input_dir, "WTTS-Seq_2022.2_DE_raw_read_numbers.csv")
 out_dir <- "exports/nb_regime_analysis"
 
 comparison_map <- list(
@@ -275,7 +277,8 @@ make_group_plots <- function(sum_df, title_prefix, out_file) {
 # DATA IMPORT
 # =============================================================================
 
-message("Reading raw count matrix...")
+counts_file <- resolve_counts_file(counts_file)
+message(sprintf("Reading raw count matrix from: %s", counts_file))
 raw_df <- read_csv(counts_file, show_col_types = FALSE)
 feature_id_col <- names(raw_df)[1]
 feature_ids <- raw_df[[feature_id_col]]
