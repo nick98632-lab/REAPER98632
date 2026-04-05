@@ -1,5 +1,37 @@
 # =============================================================================
-# SEQUENCE STAGE 1: NEGATIVE-BINOMIAL MEAN-VARIANCE REGIME ANALYSIS
+# SEQUENCE STAGE 1: EMPIRICAL + GENE-WISE NB LEADING-EDGE CUTOFF ANALYSIS
+# -----------------------------------------------------------------------------
+# Purpose
+#   Build treatment- and control-specific leading-edge cutoffs using:
+#     1. EVS ranks from PC1 absolute loadings
+#     2. empirical mean and variance from the actual count data
+#     3. DESeq2 gene-wise dispersion estimates only
+#     4. median summaries within EVS percentile bins
+#
+# Core quantities
+#   empirical IOD   = variance / mean
+#   empirical CV^2  = variance / mean^2
+#   NB IOD          = 1 + alpha_gene_wise * mean
+#   NB CV^2         = 1 / mean + alpha_gene_wise
+#
+# Cutoff definition
+#   For treatment and control separately, the cutoff is defined on the
+#   leading-edge side as the first meaningful near-balance point at which
+#   IOD and CV^2 come together and then begin to diverge with:
+#     - IOD increasing
+#     - CV^2 decreasing
+#     - the gap |IOD - CV^2| beginning to widen
+#
+# Outputs
+#   For each comparison folder:
+#     - feature-level metrics
+#     - treatment percentile-median summary
+#     - control percentile-median summary
+#     - cutoff table with treatment/control/range
+#     - a final 3-panel figure:
+#         1) treatment trajectories with labeled cutoff
+#         2) control trajectories with labeled cutoff
+#         3) treatment vs control difference curves with shaded cutoff range
 # =============================================================================
 
 suppressPackageStartupMessages({
@@ -7,8 +39,9 @@ suppressPackageStartupMessages({
   library(ggplot2)
   library(dplyr)
   library(tidyr)
-  library(scales)
   library(gridExtra)
+  library(tibble)
+  library(SummarizedExperiment)
 })
 
 # =============================================================================
@@ -18,8 +51,8 @@ suppressPackageStartupMessages({
 repo_dir <- getwd()
 input_dir <- file.path(repo_dir, "data")
 count_file <- file.path(input_dir, "WTTS-Seq_2022.2_DE_raw_read_numbers.csv")
-out_dir <- file.path(repo_dir, "exports", "nb_regime_analysis")
-dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+out_root <- file.path(repo_dir, "exports", "cutoff_folders")
+dir.create(out_root, recursive = TRUE, showWarnings = FALSE)
 
 comparison_table <- data.frame(
   comparison_name = c("RT0_ZT6", "RT2_ZT8", "RT4_ZT10", "RT8_ZT14"),
@@ -48,6 +81,8 @@ meta_all$condition <- factor(meta_all$condition, levels = c("untrt", "trt"))
 
 percentile_step <- 0.01
 min_bin_n <- 5L
+forward_window_bins <- 3L
+search_fraction_limit <- 0.80
 
 # =============================================================================
 # HELPERS
@@ -94,10 +129,6 @@ detect_gene_symbol_column <- function(df) {
 }
 
 read_count_matrix <- function(path, meta_ids) {
-  if (!file.exists(path)) {
-    stop(paste0("Count file not found: ", path), call. = FALSE)
-  }
-
   raw_df <- utils::read.csv(path, check.names = FALSE, stringsAsFactors = FALSE)
   feature_col <- detect_feature_id_column(raw_df)
   symbol_col <- detect_gene_symbol_column(raw_df)
@@ -141,7 +172,12 @@ subset_comparison <- function(count_matrix, comparison_row, meta_all) {
   missing_ids <- setdiff(keep_ids, colnames(count_matrix))
   if (length(missing_ids) > 0L) {
     stop(
-      paste0("Missing samples for comparison ", comparison_row$comparison_name, ": ", paste(missing_ids, collapse = ", ")),
+      paste0(
+        "Missing samples for comparison ",
+        comparison_row$comparison_name,
+        ": ",
+        paste(missing_ids, collapse = ", ")
+      ),
       call. = FALSE
     )
   }
@@ -168,59 +204,26 @@ safe_mean <- function(x) {
   mean(x)
 }
 
-rescale01 <- function(x) {
-  x <- as.numeric(x)
-  ok <- is.finite(x)
-  out <- rep(NA_real_, length(x))
-  if (!any(ok)) return(out)
-  rng <- range(x[ok], na.rm = TRUE)
-  if (!is.finite(rng[1]) || !is.finite(rng[2]) || abs(rng[2] - rng[1]) < .Machine$double.eps) {
-    out[ok] <- 0
-    return(out)
-  }
-  out[ok] <- (x[ok] - rng[1]) / (rng[2] - rng[1])
-  out
-}
-
-find_last_zero_crossing <- function(x, y) {
-  ok <- is.finite(x) & is.finite(y)
-  x <- x[ok]
-  y <- y[ok]
-  if (length(x) < 2L) return(NULL)
-
-  crossings <- integer(0)
-  for (i in seq_len(length(y) - 1L)) {
-    yi <- y[i]
-    yj <- y[i + 1L]
-    if (!is.finite(yi) || !is.finite(yj)) next
-    if (yi == 0 || yi * yj < 0) crossings <- c(crossings, i)
-  }
-  if (!length(crossings)) return(NULL)
-
-  i <- max(crossings)
-  x1 <- x[i]; x2 <- x[i + 1L]
-  y1 <- y[i]; y2 <- y[i + 1L]
-
-  if (isTRUE(all.equal(y1, 0))) {
-    x_cross <- x1
-  } else if (isTRUE(all.equal(y2, 0))) {
-    x_cross <- x2
-  } else {
-    x_cross <- x1 - y1 * (x2 - x1) / (y2 - y1)
-  }
-
-  list(index_left = i, crossing_x = x_cross, y_left = y1, y_right = y2)
-}
-
 make_percentile_bins <- function(n, step = 0.01) {
   probs <- seq(step, 1, by = step)
   if (tail(probs, 1) < 1) probs <- c(probs, 1)
   centers <- unique(pmax(1L, pmin(n, round(probs * n))))
-  dplyr::tibble(percentile = probs[seq_along(centers)], rank_index = centers)
+  tibble(percentile = probs[seq_along(centers)], rank_index = centers)
 }
 
-compute_group_pc1_loadings <- function(norm_counts_mat, group_cols) {
-  mat <- norm_counts_mat[, group_cols, drop = FALSE]
+approx_rank_from_percentile <- function(percentile_value, sum_df) {
+  ok <- is.finite(sum_df$percentile) & is.finite(sum_df$rank_index)
+  if (!any(ok) || !is.finite(percentile_value)) return(NA_real_)
+  approx(
+    x = sum_df$percentile[ok],
+    y = sum_df$rank_index[ok],
+    xout = percentile_value,
+    rule = 2
+  )$y
+}
+
+compute_group_pc1_loadings <- function(count_mat, group_cols) {
+  mat <- count_mat[, group_cols, drop = FALSE]
   mat <- log2(mat + 1)
   mat <- t(mat)
   if (nrow(mat) < 2L) return(rep(NA_real_, ncol(mat)))
@@ -228,50 +231,60 @@ compute_group_pc1_loadings <- function(norm_counts_mat, group_cols) {
   abs(pca$rotation[, 1L])
 }
 
-build_evs_table <- function(norm_counts_mat, ctrl_cols, trt_cols, feature_ids) {
-  ctrl_load <- compute_group_pc1_loadings(norm_counts_mat, ctrl_cols)
-  trt_load  <- compute_group_pc1_loadings(norm_counts_mat, trt_cols)
+build_evs_table <- function(count_mat, ctrl_cols, trt_cols, feature_ids) {
+  ctrl_load <- compute_group_pc1_loadings(count_mat, ctrl_cols)
+  trt_load  <- compute_group_pc1_loadings(count_mat, trt_cols)
 
-  dplyr::tibble(
+  tibble(
     feature_id = feature_ids,
     ctrl_abs_loading = ctrl_load,
     trt_abs_loading  = trt_load
   ) %>%
-    dplyr::mutate(
+    mutate(
       rank_ctrl = rank(-ctrl_abs_loading, ties.method = "first"),
       rank_trt  = rank(-trt_abs_loading, ties.method = "first"),
       combined_rank = pmin(rank_ctrl, rank_trt, na.rm = TRUE)
     ) %>%
-    dplyr::arrange(combined_rank, rank_ctrl, rank_trt)
+    arrange(combined_rank, rank_ctrl, rank_trt)
 }
 
-compute_feature_metrics <- function(norm_counts_mat, ctrl_cols, trt_cols, dispersions, feature_ids) {
-  ctrl_mu  <- apply(norm_counts_mat[, ctrl_cols, drop = FALSE], 1L, safe_mean)
-  trt_mu   <- apply(norm_counts_mat[, trt_cols, drop = FALSE], 1L, safe_mean)
-  ctrl_var <- apply(norm_counts_mat[, ctrl_cols, drop = FALSE], 1L, safe_var)
-  trt_var  <- apply(norm_counts_mat[, trt_cols, drop = FALSE], 1L, safe_var)
+compute_feature_metrics <- function(raw_count_mat, ctrl_cols, trt_cols, alpha_gene_wise_named, feature_ids) {
+  raw_count_mat <- raw_count_mat[feature_ids, , drop = FALSE]
+  alpha_tbl <- tibble(
+    feature_id = names(alpha_gene_wise_named),
+    alpha_gene_wise = as.numeric(alpha_gene_wise_named)
+  )
 
-  dplyr::tibble(
+  ctrl_mu  <- apply(raw_count_mat[, ctrl_cols, drop = FALSE], 1L, safe_mean)
+  trt_mu   <- apply(raw_count_mat[, trt_cols, drop = FALSE], 1L, safe_mean)
+  ctrl_var <- apply(raw_count_mat[, ctrl_cols, drop = FALSE], 1L, safe_var)
+  trt_var  <- apply(raw_count_mat[, trt_cols, drop = FALSE], 1L, safe_var)
+
+  tibble(
     feature_id = feature_ids,
-    alpha = as.numeric(dispersions),
     mu_ctrl = ctrl_mu,
     mu_trt = trt_mu,
     var_ctrl = ctrl_var,
     var_trt = trt_var
   ) %>%
-    dplyr::mutate(
+    left_join(alpha_tbl, by = "feature_id") %>%
+    mutate(
       iod_emp_ctrl = ifelse(mu_ctrl > 0, var_ctrl / mu_ctrl, NA_real_),
       iod_emp_trt  = ifelse(mu_trt  > 0, var_trt / mu_trt, NA_real_),
       cv2_emp_ctrl = ifelse(mu_ctrl > 0, var_ctrl / (mu_ctrl ^ 2), NA_real_),
       cv2_emp_trt  = ifelse(mu_trt  > 0, var_trt / (mu_trt ^ 2), NA_real_),
-      iod_nb_ctrl  = ifelse(mu_ctrl > 0 & is.finite(alpha), 1 + alpha * mu_ctrl, NA_real_),
-      iod_nb_trt   = ifelse(mu_trt  > 0 & is.finite(alpha), 1 + alpha * mu_trt, NA_real_),
-      cv2_nb_ctrl  = ifelse(mu_ctrl > 0 & is.finite(alpha), (1 / mu_ctrl) + alpha, NA_real_),
-      cv2_nb_trt   = ifelse(mu_trt  > 0 & is.finite(alpha), (1 / mu_trt) + alpha, NA_real_)
+      iod_nb_ctrl  = ifelse(mu_ctrl > 0 & is.finite(alpha_gene_wise), 1 + alpha_gene_wise * mu_ctrl, NA_real_),
+      iod_nb_trt   = ifelse(mu_trt  > 0 & is.finite(alpha_gene_wise), 1 + alpha_gene_wise * mu_trt, NA_real_),
+      cv2_nb_ctrl  = ifelse(mu_ctrl > 0 & is.finite(alpha_gene_wise), (1 / mu_ctrl) + alpha_gene_wise, NA_real_),
+      cv2_nb_trt   = ifelse(mu_trt  > 0 & is.finite(alpha_gene_wise), (1 / mu_trt) + alpha_gene_wise, NA_real_),
+      diff_emp_ctrl = iod_emp_ctrl - cv2_emp_ctrl,
+      diff_emp_trt  = iod_emp_trt - cv2_emp_trt,
+      diff_nb_ctrl  = iod_nb_ctrl - cv2_nb_ctrl,
+      diff_nb_trt   = iod_nb_trt - cv2_nb_trt
     )
 }
 
-summarize_by_percentile <- function(df, value_cols, percentile_step = 0.01, min_bin_n = 5L) {
+summarize_by_percentile_median <- function(df, value_cols, percentile_step = 0.01, min_bin_n = 5L) {
   n <- nrow(df)
   bins <- make_percentile_bins(n, percentile_step)
   out <- vector("list", nrow(bins))
@@ -281,7 +294,7 @@ summarize_by_percentile <- function(df, value_cols, percentile_step = 0.01, min_
     hi <- bins$rank_index[i]
     chunk <- df[lo:hi, , drop = FALSE]
 
-    row <- dplyr::tibble(
+    row <- tibble(
       percentile = bins$percentile[i],
       rank_index = bins$rank_index[i],
       lo_rank = lo,
@@ -294,54 +307,151 @@ summarize_by_percentile <- function(df, value_cols, percentile_step = 0.01, min_
       vals <- vals[is.finite(vals)]
       row[[nm]] <- if (length(vals) >= min_bin_n) stats::median(vals) else NA_real_
     }
+
     out[[i]] <- row
   }
-  dplyr::bind_rows(out)
+
+  bind_rows(out)
 }
 
-make_group_plots <- function(sum_df, title_prefix, out_file) {
-  long_df <- dplyr::bind_rows(
-    dplyr::transmute(sum_df, percentile, value = iod_emp_scaled, metric = "IOD empirical"),
-    dplyr::transmute(sum_df, percentile, value = cv2_emp_scaled, metric = "CV² empirical"),
-    dplyr::transmute(sum_df, percentile, value = iod_nb_scaled, metric = "IOD NB"),
-    dplyr::transmute(sum_df, percentile, value = cv2_nb_scaled, metric = "CV² NB")
+find_leading_edge_cutoff <- function(sum_df, iod_col, cv2_col, forward_window_bins = 3L, search_fraction_limit = 0.80) {
+  keep <- is.finite(sum_df$percentile) & is.finite(sum_df[[iod_col]]) & is.finite(sum_df[[cv2_col]])
+  df <- sum_df[keep, c("percentile", "rank_index", iod_col, cv2_col), drop = FALSE]
+  names(df) <- c("percentile", "rank_index", "iod", "cv2")
+  n <- nrow(df)
+  if (n < (forward_window_bins + 2L)) {
+    idx <- which.min(abs(df$iod - df$cv2))
+    return(list(
+      cutoff_percentile = df$percentile[idx],
+      cutoff_rank = df$rank_index[idx],
+      cutoff_method = "minimum_gap_fallback"
+    ))
+  }
+
+  max_i <- max(1L, min(n - forward_window_bins, floor(n * search_fraction_limit)))
+  df$gap <- abs(df$iod - df$cv2)
+
+  candidates <- vector("list", max_i)
+  k <- 0L
+  for (i in seq_len(max_i)) {
+    iod0 <- df$iod[i]
+    cv20 <- df$cv2[i]
+    iod_f <- df$iod[min(n, i + forward_window_bins)]
+    cv2_f <- df$cv2[min(n, i + forward_window_bins)]
+    gap0 <- df$gap[i]
+    gap_f <- df$gap[min(n, i + forward_window_bins)]
+
+    if (!all(is.finite(c(iod0, cv20, iod_f, cv2_f, gap0, gap_f)))) next
+
+    if ((iod_f > iod0) && (cv2_f < cv20) && (gap_f > gap0)) {
+      k <- k + 1L
+      candidates[[k]] <- tibble(
+        idx = i,
+        percentile = df$percentile[i],
+        rank_index = df$rank_index[i],
+        gap = gap0,
+        forward_gap = gap_f,
+        forward_iod = iod_f - iod0,
+        forward_cv2 = cv2_f - cv20
+      )
+    }
+  }
+
+  if (k > 0L) {
+    cand_df <- bind_rows(candidates[seq_len(k)]) %>%
+      arrange(gap, percentile)
+    best <- cand_df[1, , drop = FALSE]
+    return(list(
+      cutoff_percentile = best$percentile[[1]],
+      cutoff_rank = best$rank_index[[1]],
+      cutoff_method = "leading_edge_divergence"
+    ))
+  }
+
+  idx <- which.min(df$gap[seq_len(max_i)])
+  list(
+    cutoff_percentile = df$percentile[idx],
+    cutoff_rank = df$rank_index[idx],
+    cutoff_method = "minimum_gap_fallback"
+  )
+}
+
+build_single_group_plot <- function(sum_df, group_label, iod_emp_col, cv2_emp_col, iod_nb_col, cv2_nb_col, cutoff_info) {
+  curve_df <- bind_rows(
+    transmute(sum_df, percentile, value = .data[[iod_emp_col]], curve = "IOD empirical"),
+    transmute(sum_df, percentile, value = .data[[cv2_emp_col]], curve = "CV² empirical"),
+    transmute(sum_df, percentile, value = .data[[iod_nb_col]], curve = "IOD NB gene-wise"),
+    transmute(sum_df, percentile, value = .data[[cv2_nb_col]], curve = "CV² NB gene-wise")
   )
 
-  diff_df <- dplyr::transmute(
-    sum_df,
-    percentile,
-    empirical_difference = iod_emp_scaled - cv2_emp_scaled,
-    theoretical_difference = iod_nb_scaled - cv2_nb_scaled
+  label_text <- paste0(
+    group_label,
+    " cutoff\nmethod = ", cutoff_info$cutoff_method,
+    "\npercentile = ", sprintf("%.3f", cutoff_info$cutoff_percentile),
+    "\nrank = ", round(cutoff_info$cutoff_rank)
   )
 
-  crossing_emp <- find_last_zero_crossing(diff_df$percentile, diff_df$empirical_difference)
-  crossing_nb <- find_last_zero_crossing(diff_df$percentile, diff_df$theoretical_difference)
-
-  p1 <- ggplot(long_df, aes(percentile, value, color = metric)) +
-    geom_line(linewidth = 0.9) +
-    labs(title = paste0(title_prefix, ": empirical and NB trajectories"), x = "EVS percentile", y = "Scaled trajectory (0 to 1)") +
+  ggplot(curve_df, aes(percentile, value, color = curve)) +
+    geom_line(linewidth = 0.95) +
+    geom_vline(xintercept = cutoff_info$cutoff_percentile, linetype = 2, linewidth = 0.9) +
+    annotate(
+      "label",
+      x = cutoff_info$cutoff_percentile,
+      y = max(curve_df$value, na.rm = TRUE),
+      label = label_text,
+      hjust = -0.02,
+      vjust = 1,
+      size = 3.1,
+      label.size = 0.25
+    ) +
+    labs(
+      title = paste0(group_label, ": median trajectories of empirical and gene-wise NB quantities"),
+      subtitle = "Bins summarize feature-level values by the median. Empirical mean and variance come from the actual count data.",
+      x = "EVS percentile (leading edge to remainder)",
+      y = "Median bin value"
+    ) +
     theme_bw(base_size = 10) +
     theme(legend.position = "bottom")
+}
 
-  p2 <- ggplot(diff_df, aes(percentile, empirical_difference)) +
+build_range_panel <- function(trt_sum, ctrl_sum, trt_cutoff, ctrl_cutoff, trt_diff_col, ctrl_diff_col) {
+  diff_df <- bind_rows(
+    transmute(trt_sum, percentile, value = .data[[trt_diff_col]], group = "Treatment difference (IOD - CV²)"),
+    transmute(ctrl_sum, percentile, value = .data[[ctrl_diff_col]], group = "Control difference (IOD - CV²)")
+  )
+
+  range_min <- min(c(trt_cutoff$cutoff_percentile, ctrl_cutoff$cutoff_percentile), na.rm = TRUE)
+  range_max <- max(c(trt_cutoff$cutoff_percentile, ctrl_cutoff$cutoff_percentile), na.rm = TRUE)
+
+  ggplot(diff_df, aes(percentile, value, color = group)) +
+    annotate("rect", xmin = range_min, xmax = range_max, ymin = -Inf, ymax = Inf, alpha = 0.08) +
     geom_hline(yintercept = 0, linetype = 2) +
-    geom_line(linewidth = 0.9) +
-    labs(title = paste0(title_prefix, ": empirical difference curve"), x = "EVS percentile", y = "IOD - CV²") +
-    theme_bw(base_size = 10)
-  if (!is.null(crossing_emp)) p2 <- p2 + geom_vline(xintercept = crossing_emp$crossing_x, linetype = 2)
-
-  p3 <- ggplot(diff_df, aes(percentile, theoretical_difference)) +
-    geom_hline(yintercept = 0, linetype = 2) +
-    geom_line(linewidth = 0.9) +
-    labs(title = paste0(title_prefix, ": NB-theoretical difference curve"), x = "EVS percentile", y = "IOD - CV²") +
-    theme_bw(base_size = 10)
-  if (!is.null(crossing_nb)) p3 <- p3 + geom_vline(xintercept = crossing_nb$crossing_x, linetype = 2)
-
-  png(out_file, width = 2000, height = 1600, res = 200)
-  gridExtra::grid.arrange(p1, p2, p3, ncol = 1)
-  dev.off()
-
-  list(crossing_emp = crossing_emp, crossing_nb = crossing_nb)
+    geom_line(linewidth = 0.95) +
+    geom_vline(xintercept = trt_cutoff$cutoff_percentile, linetype = 2, linewidth = 0.8) +
+    geom_vline(xintercept = ctrl_cutoff$cutoff_percentile, linetype = 3, linewidth = 0.8) +
+    annotate(
+      "label",
+      x = mean(c(range_min, range_max)),
+      y = max(diff_df$value, na.rm = TRUE),
+      label = paste0(
+        "Cutoff range\n",
+        "treatment rank = ", round(trt_cutoff$cutoff_rank),
+        "\ncontrol rank = ", round(ctrl_cutoff$cutoff_rank),
+        "\nrange = [", round(min(c(trt_cutoff$cutoff_rank, ctrl_cutoff$cutoff_rank))),
+        ", ", round(max(c(trt_cutoff$cutoff_rank, ctrl_cutoff$cutoff_rank))), "]"
+      ),
+      vjust = 1,
+      size = 3.1,
+      label.size = 0.25
+    ) +
+    labs(
+      title = "Treatment-control cutoff range from the leading-edge side",
+      subtitle = "The shaded band spans the treatment and control leading-edge cutoffs. Curves are median summaries of feature-level differences.",
+      x = "EVS percentile (leading edge to remainder)",
+      y = "Median difference"
+    ) +
+    theme_bw(base_size = 10) +
+    theme(legend.position = "bottom")
 }
 
 # =============================================================================
@@ -352,18 +462,21 @@ count_file <- resolve_counts_file(count_file)
 message("Reading raw count matrix from: ", count_file)
 loaded <- read_count_matrix(count_file, meta_all$id)
 count_mat <- loaded$count_matrix
-feature_ids <- rownames(count_mat)
+annot_df <- loaded$annot_df
 
 # =============================================================================
 # MAIN LOOP
 # =============================================================================
 
-summary_rows <- list()
+overall_summary_rows <- list()
 
 for (i in seq_len(nrow(comparison_table))) {
   comparison_row <- comparison_table[i, , drop = FALSE]
   cmp_name <- comparison_row$comparison_name[[1]]
   message("Processing ", cmp_name, "...")
+
+  cmp_dir <- file.path(out_root, paste0(cmp_name, "_cutoff_folder"))
+  dir.create(cmp_dir, recursive = TRUE, showWarnings = FALSE)
 
   comp <- subset_comparison(count_mat, comparison_row, meta_all)
   cmp_counts <- comp$count_matrix
@@ -378,113 +491,96 @@ for (i in seq_len(nrow(comparison_table))) {
   dds <- estimateSizeFactors(dds)
   dds <- estimateDispersions(dds, quiet = TRUE)
 
-  norm_counts <- counts(dds, normalized = TRUE)
   disp_df <- as.data.frame(SummarizedExperiment::mcols(dds))
-  dispersions <- if ("dispGeneEst" %in% names(disp_df)) disp_df$dispGeneEst else disp_df$dispersion
+  alpha_gene_wise <- if ("dispGeneEst" %in% names(disp_df)) disp_df$dispGeneEst else disp_df$dispersion
+  names(alpha_gene_wise) <- rownames(disp_df)
 
-  evs_tbl <- build_evs_table(norm_counts, comp$ctrl_ids, comp$trt_ids, rownames(norm_counts))
-  metrics_tbl <- compute_feature_metrics(norm_counts, comp$ctrl_ids, comp$trt_ids, dispersions, rownames(norm_counts))
-  full_tbl <- dplyr::left_join(evs_tbl, metrics_tbl, by = "feature_id") %>%
-    dplyr::arrange(combined_rank)
+  raw_counts_aligned <- as.matrix(counts(dds, normalized = FALSE))
+  evs_tbl <- build_evs_table(raw_counts_aligned, comp$ctrl_ids, comp$trt_ids, rownames(raw_counts_aligned))
+  metrics_tbl <- compute_feature_metrics(raw_counts_aligned, comp$ctrl_ids, comp$trt_ids, alpha_gene_wise, rownames(raw_counts_aligned))
 
-  utils::write.csv(full_tbl, file.path(out_dir, paste0(cmp_name, "_feature_metrics.csv")), row.names = FALSE)
+  full_tbl <- left_join(evs_tbl, metrics_tbl, by = "feature_id") %>%
+    left_join(annot_df, by = c("feature_id" = "feature_id")) %>%
+    arrange(combined_rank)
+
+  utils::write.csv(full_tbl, file.path(cmp_dir, paste0(cmp_name, "_feature_level_metrics.csv")), row.names = FALSE)
+
+  trt_rank_tbl <- full_tbl %>%
+    arrange(rank_trt) %>%
+    transmute(
+      feature_id,
+      gene_symbol,
+      rank = rank_trt,
+      mu = mu_trt,
+      variance = var_trt,
+      iod_emp = iod_emp_trt,
+      cv2_emp = cv2_emp_trt,
+      iod_nb = iod_nb_trt,
+      cv2_nb = cv2_nb_trt,
+      diff_emp = diff_emp_trt,
+      diff_nb = diff_nb_trt,
+      alpha_gene_wise = alpha_gene_wise
+    )
 
   ctrl_rank_tbl <- full_tbl %>%
-    dplyr::arrange(rank_ctrl) %>%
-    dplyr::transmute(feature_id, rank = rank_ctrl, iod_emp = iod_emp_ctrl, cv2_emp = cv2_emp_ctrl, iod_nb = iod_nb_ctrl, cv2_nb = cv2_nb_ctrl)
-  trt_rank_tbl <- full_tbl %>%
-    dplyr::arrange(rank_trt) %>%
-    dplyr::transmute(feature_id, rank = rank_trt, iod_emp = iod_emp_trt, cv2_emp = cv2_emp_trt, iod_nb = iod_nb_trt, cv2_nb = cv2_nb_trt)
-
-  ctrl_sum <- summarize_by_percentile(ctrl_rank_tbl, c("iod_emp", "cv2_emp", "iod_nb", "cv2_nb"), percentile_step, min_bin_n) %>%
-    dplyr::mutate(
-      iod_emp_scaled = rescale01(iod_emp),
-      cv2_emp_scaled = rescale01(cv2_emp),
-      iod_nb_scaled = rescale01(iod_nb),
-      cv2_nb_scaled = rescale01(cv2_nb)
+    arrange(rank_ctrl) %>%
+    transmute(
+      feature_id,
+      gene_symbol,
+      rank = rank_ctrl,
+      mu = mu_ctrl,
+      variance = var_ctrl,
+      iod_emp = iod_emp_ctrl,
+      cv2_emp = cv2_emp_ctrl,
+      iod_nb = iod_nb_ctrl,
+      cv2_nb = cv2_nb_ctrl,
+      diff_emp = diff_emp_ctrl,
+      diff_nb = diff_nb_ctrl,
+      alpha_gene_wise = alpha_gene_wise
     )
 
-  trt_sum <- summarize_by_percentile(trt_rank_tbl, c("iod_emp", "cv2_emp", "iod_nb", "cv2_nb"), percentile_step, min_bin_n) %>%
-    dplyr::mutate(
-      iod_emp_scaled = rescale01(iod_emp),
-      cv2_emp_scaled = rescale01(cv2_emp),
-      iod_nb_scaled = rescale01(iod_nb),
-      cv2_nb_scaled = rescale01(cv2_nb)
-    )
+  value_cols <- c("mu", "variance", "iod_emp", "cv2_emp", "iod_nb", "cv2_nb", "diff_emp", "diff_nb", "alpha_gene_wise")
 
-  utils::write.csv(ctrl_sum, file.path(out_dir, paste0(cmp_name, "_control_percentile_summary.csv")), row.names = FALSE)
-  utils::write.csv(trt_sum, file.path(out_dir, paste0(cmp_name, "_treatment_percentile_summary.csv")), row.names = FALSE)
+  trt_sum <- summarize_by_percentile_median(trt_rank_tbl, value_cols, percentile_step, min_bin_n)
+  ctrl_sum <- summarize_by_percentile_median(ctrl_rank_tbl, value_cols, percentile_step, min_bin_n)
 
-  ctrl_info <- make_group_plots(ctrl_sum, paste0(cmp_name, " control"), file.path(out_dir, paste0(cmp_name, "_control_nb_regime.png")))
-  trt_info <- make_group_plots(trt_sum, paste0(cmp_name, " treatment"), file.path(out_dir, paste0(cmp_name, "_treatment_nb_regime.png")))
+  utils::write.csv(trt_sum, file.path(cmp_dir, paste0(cmp_name, "_treatment_percentile_median_summary.csv")), row.names = FALSE)
+  utils::write.csv(ctrl_sum, file.path(cmp_dir, paste0(cmp_name, "_control_percentile_median_summary.csv")), row.names = FALSE)
 
-  combined_sum <- ctrl_sum %>%
-    dplyr::select(percentile, rank_index, iod_emp_scaled, cv2_emp_scaled, iod_nb_scaled, cv2_nb_scaled) %>%
-    dplyr::rename_with(~ paste0(.x, "_ctrl"), -c(percentile, rank_index)) %>%
-    dplyr::left_join(
-      trt_sum %>%
-        dplyr::select(percentile, rank_index, iod_emp_scaled, cv2_emp_scaled, iod_nb_scaled, cv2_nb_scaled) %>%
-        dplyr::rename_with(~ paste0(.x, "_trt"), -c(percentile, rank_index)),
-      by = c("percentile", "rank_index")
-    ) %>%
-    dplyr::mutate(
-      iod_emp_combined = iod_emp_scaled_ctrl + iod_emp_scaled_trt,
-      cv2_emp_combined = cv2_emp_scaled_ctrl + cv2_emp_scaled_trt,
-      iod_nb_combined = iod_nb_scaled_ctrl + iod_nb_scaled_trt,
-      cv2_nb_combined = cv2_nb_scaled_ctrl + cv2_nb_scaled_trt,
-      empirical_difference = iod_emp_combined - cv2_emp_combined,
-      theoretical_difference = iod_nb_combined - cv2_nb_combined
-    )
+  trt_cutoff <- find_leading_edge_cutoff(trt_sum, "iod_emp", "cv2_emp", forward_window_bins, search_fraction_limit)
+  ctrl_cutoff <- find_leading_edge_cutoff(ctrl_sum, "iod_emp", "cv2_emp", forward_window_bins, search_fraction_limit)
 
-  utils::write.csv(combined_sum, file.path(out_dir, paste0(cmp_name, "_combined_percentile_summary.csv")), row.names = FALSE)
-
-  cross_emp <- find_last_zero_crossing(combined_sum$percentile, combined_sum$empirical_difference)
-  cross_nb <- find_last_zero_crossing(combined_sum$percentile, combined_sum$theoretical_difference)
-
-  crossing_tbl <- dplyr::tibble(
+  cutoff_tbl <- tibble(
     comparison = cmp_name,
-    empirical_crossing_percentile = if (is.null(cross_emp)) NA_real_ else cross_emp$crossing_x,
-    theoretical_crossing_percentile = if (is.null(cross_nb)) NA_real_ else cross_nb$crossing_x
+    treatment_cutoff_percentile = trt_cutoff$cutoff_percentile,
+    treatment_cutoff_rank = trt_cutoff$cutoff_rank,
+    treatment_cutoff_method = trt_cutoff$cutoff_method,
+    control_cutoff_percentile = ctrl_cutoff$cutoff_percentile,
+    control_cutoff_rank = ctrl_cutoff$cutoff_rank,
+    control_cutoff_method = ctrl_cutoff$cutoff_method,
+    cutoff_range_rank_min = min(c(trt_cutoff$cutoff_rank, ctrl_cutoff$cutoff_rank), na.rm = TRUE),
+    cutoff_range_rank_max = max(c(trt_cutoff$cutoff_rank, ctrl_cutoff$cutoff_rank), na.rm = TRUE)
   )
-  utils::write.csv(crossing_tbl, file.path(out_dir, paste0(cmp_name, "_crossings.csv")), row.names = FALSE)
+  utils::write.csv(cutoff_tbl, file.path(cmp_dir, paste0(cmp_name, "_cutoff_table.csv")), row.names = FALSE)
 
-  p_comb_1 <- ggplot(combined_sum, aes(percentile)) +
-    geom_line(aes(y = iod_emp_combined, color = "IOD empirical"), linewidth = 0.9) +
-    geom_line(aes(y = cv2_emp_combined, color = "CV² empirical"), linewidth = 0.9) +
-    geom_line(aes(y = iod_nb_combined, color = "IOD NB"), linewidth = 0.9, linetype = 2) +
-    geom_line(aes(y = cv2_nb_combined, color = "CV² NB"), linewidth = 0.9, linetype = 2) +
-    labs(title = paste0(cmp_name, ": combined percentile trajectories"), x = "EVS percentile", y = "Scaled combined trajectory") +
-    theme_bw(base_size = 10) +
-    theme(legend.position = "bottom")
+  p_trt <- build_single_group_plot(trt_sum, paste0(cmp_name, " treatment"), "iod_emp", "cv2_emp", "iod_nb", "cv2_nb", trt_cutoff)
+  p_ctrl <- build_single_group_plot(ctrl_sum, paste0(cmp_name, " control"), "iod_emp", "cv2_emp", "iod_nb", "cv2_nb", ctrl_cutoff)
+  p_range <- build_range_panel(trt_sum, ctrl_sum, trt_cutoff, ctrl_cutoff, "diff_emp", "diff_emp")
 
-  p_comb_2 <- ggplot(combined_sum, aes(percentile, empirical_difference)) +
-    geom_hline(yintercept = 0, linetype = 2) +
-    geom_line(linewidth = 0.9) +
-    labs(title = paste0(cmp_name, ": empirical combined difference"), x = "EVS percentile", y = "IOD - CV²") +
-    theme_bw(base_size = 10)
-  if (!is.null(cross_emp)) p_comb_2 <- p_comb_2 + geom_vline(xintercept = cross_emp$crossing_x, linetype = 2)
-
-  p_comb_3 <- ggplot(combined_sum, aes(percentile, theoretical_difference)) +
-    geom_hline(yintercept = 0, linetype = 2) +
-    geom_line(linewidth = 0.9) +
-    labs(title = paste0(cmp_name, ": NB-theoretical combined difference"), x = "EVS percentile", y = "IOD - CV²") +
-    theme_bw(base_size = 10)
-  if (!is.null(cross_nb)) p_comb_3 <- p_comb_3 + geom_vline(xintercept = cross_nb$crossing_x, linetype = 2)
-
-  png(file.path(out_dir, paste0(cmp_name, "_combined_nb_regime.png")), width = 2000, height = 1600, res = 200)
-  gridExtra::grid.arrange(p_comb_1, p_comb_2, p_comb_3, ncol = 1)
+  png(file.path(cmp_dir, paste0(cmp_name, "_final_cutoff_panel.png")), width = 2200, height = 2200, res = 200)
+  grid.arrange(p_trt, p_ctrl, p_range, ncol = 1)
   dev.off()
 
-  summary_rows[[cmp_name]] <- dplyr::tibble(
+  overall_summary_rows[[cmp_name]] <- tibble(
     comparison = cmp_name,
     n_features = nrow(full_tbl),
-    empirical_control_crossing = if (is.null(ctrl_info$crossing_emp)) NA_real_ else ctrl_info$crossing_emp$crossing_x,
-    empirical_treatment_crossing = if (is.null(trt_info$crossing_emp)) NA_real_ else trt_info$crossing_emp$crossing_x,
-    empirical_combined_crossing = if (is.null(cross_emp)) NA_real_ else cross_emp$crossing_x,
-    theoretical_combined_crossing = if (is.null(cross_nb)) NA_real_ else cross_nb$crossing_x
+    treatment_cutoff_rank = trt_cutoff$cutoff_rank,
+    control_cutoff_rank = ctrl_cutoff$cutoff_rank,
+    cutoff_range_rank_min = min(c(trt_cutoff$cutoff_rank, ctrl_cutoff$cutoff_rank), na.rm = TRUE),
+    cutoff_range_rank_max = max(c(trt_cutoff$cutoff_rank, ctrl_cutoff$cutoff_rank), na.rm = TRUE)
   )
 }
 
-summary_tbl <- dplyr::bind_rows(summary_rows)
-utils::write.csv(summary_tbl, file.path(out_dir, "nb_regime_summary.csv"), row.names = FALSE)
-message("Done. Outputs written to: ", out_dir)
+overall_summary_tbl <- bind_rows(overall_summary_rows)
+utils::write.csv(overall_summary_tbl, file.path(out_root, "overall_cutoff_summary.csv"), row.names = FALSE)
+message("Done. Outputs written to: ", out_root)
