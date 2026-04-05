@@ -1,20 +1,26 @@
+Use this revised script. It keeps the empirical NB framework you liked, but changes only the selector so it finds the first major elbow after the initial left-edge drop, instead of the first tiny early minimum.
+
 # =============================================================================
 # SEQUENCE STAGE 1: EMPIRICAL NB REGIME SHIFT
+# ELBOW-BASED LEADING-EDGE CUTOFF
 # -----------------------------------------------------------------------------
-# Keep the same figure structure as the alpha*mu version, but replace DESeq2
-# gene-wise dispersion with empirical dispersion from raw counts:
+# Core idea
+#   Keep the empirical NB balance quantity:
 #
-#   Var = mu + alpha * mu^2
-#   alpha_emp = (Var - mu) / mu^2
-#   alpha_emp * mu = (Var - mu) / mu = IOD - 1
+#       alpha_emp = (Var - mu) / mu^2
+#       alpha_emp * mu = (Var - mu) / mu
 #
-# This version uses only:
-#   - raw-count mean
-#   - raw-count variance
-#   - empirical dispersion derived from them
+#   but replace the old "minimum distance then reopening" cutoff selector with
+#   an elbow selector on the smoothed log(alpha_emp * mu) curve.
+#
+#   The cutoff is now:
+#     - after a small left-edge exclusion zone
+#     - within an early leading-edge search window
+#     - the first strong elbow where the initial steep drop transitions into a
+#       flatter remainder regime
 #
 # Output:
-#   exports/empirical_nb_regime_shift/<comparison>_cutoff_folder/
+#   exports/empirical_nb_regime_shift_elbow/<comparison>_cutoff_folder/
 # =============================================================================
 
 suppressPackageStartupMessages({
@@ -30,7 +36,7 @@ suppressPackageStartupMessages({
 repo_dir <- getwd()
 input_dir <- file.path(repo_dir, "data")
 count_file <- file.path(input_dir, "WTTS-Seq_2022.2_DE_raw_read_numbers.csv")
-out_root <- file.path(repo_dir, "exports", "empirical_nb_regime_shift")
+out_root <- file.path(repo_dir, "exports", "empirical_nb_regime_shift_elbow")
 dir.create(out_root, recursive = TRUE, showWarnings = FALSE)
 
 comparison_table <- data.frame(
@@ -59,9 +65,9 @@ rownames(meta_all) <- meta_all$id
 meta_all$condition <- factor(meta_all$condition, levels = c("untrt", "trt"))
 
 smoother_k <- 101L
-divergence_k <- 75L
-leading_edge_fraction <- 0.60
 left_edge_exclusion_fraction <- 0.02
+leading_edge_fraction <- 0.35
+min_rank_buffer <- 25L
 
 # =============================================================================
 # HELPERS
@@ -284,56 +290,70 @@ build_rank_series <- function(full_tbl, arm = c("control", "treatment")) {
     )
 }
 
-select_leading_edge_cutoff <- function(rank_df, k = 101L, divergence_k = 75L,
-                                       leading_edge_fraction = 0.60,
-                                       left_edge_exclusion_fraction = 0.02) {
+# -----------------------------------------------------------------------------
+# NEW ELBOW SELECTOR
+# -----------------------------------------------------------------------------
+select_leading_edge_cutoff <- function(rank_df,
+                                       k = 101L,
+                                       left_edge_exclusion_fraction = 0.02,
+                                       leading_edge_fraction = 0.35,
+                                       min_rank_buffer = 25L) {
   df <- rank_df %>%
     mutate(
-      log_alpha_mu_sm = roll_median(log_alpha_mu, k),
-      dist_to_zero = abs(log_alpha_mu_sm)
+      log_alpha_mu_sm = roll_median(log_alpha_mu, k)
     )
 
   n <- nrow(df)
-  search_start <- max(2L, floor(n * left_edge_exclusion_fraction))
-  search_end <- max(search_start + 2L, min(n - divergence_k, floor(n * leading_edge_fraction)))
-  candidates <- integer(0)
+  idx_all <- seq_len(n)
 
-  if (search_end >= (search_start + 1L)) {
-    for (i in search_start:search_end) {
-      local_lo <- max(search_start, i - 1L)
-      local_hi <- min(search_end, i + 1L)
-      local_vals <- df$dist_to_zero[local_lo:local_hi]
-      if (!all(is.finite(local_vals)) || !is.finite(df$dist_to_zero[i])) next
+  search_start <- max(2L, floor(n * left_edge_exclusion_fraction), min_rank_buffer)
+  search_end <- max(search_start + 10L, floor(n * leading_edge_fraction))
+  search_end <- min(search_end, n - 2L)
 
-      is_local_min <- df$dist_to_zero[i] <= min(local_vals, na.rm = TRUE)
-      if (!is_local_min) next
+  x <- idx_all
+  y <- df$log_alpha_mu_sm
 
-      f_hi <- min(n, i + divergence_k)
-      if (f_hi <= i + 1L) next
+  valid <- which(is.finite(y))
+  valid <- valid[valid >= search_start & valid <= search_end]
 
-      reopen_trend <- mean(diff(df$dist_to_zero[i:f_hi]), na.rm = TRUE)
-      if (is.finite(reopen_trend) && reopen_trend > 0) {
-        candidates <- c(candidates, i)
-      }
-    }
+  if (length(valid) < 10L) {
+    idx <- max(search_start, min(n, floor(n * 0.05)))
+    return(list(
+      mode = "fallback early elbow",
+      cutoff_rank = df$rank[idx],
+      cutoff_index = idx,
+      cutoff_fraction = idx / n,
+      curve_df = df
+    ))
   }
 
-  if (length(candidates) > 0L) {
-    idx <- candidates[1L]
-    mode <- "minimum distance to empirical alpha*mu = 1, then reopening"
-  } else {
-    valid <- which(is.finite(df$dist_to_zero))
-    valid <- valid[valid >= search_start & valid <= search_end]
-    if (!length(valid)) {
-      idx <- search_start
-    } else {
-      idx <- valid[which.min(df$dist_to_zero[valid])]
-    }
-    mode <- "minimum distance fallback"
+  x1 <- search_start
+  y1 <- y[x1]
+  x2 <- search_end
+  y2 <- y[x2]
+
+  # Distance from each point to the straight line joining the early search window ends
+  denom <- sqrt((y2 - y1)^2 + (x2 - x1)^2)
+  if (!is.finite(denom) || denom == 0) denom <- 1
+
+  elbow_score <- rep(NA_real_, n)
+  for (i in valid) {
+    elbow_score[i] <- abs((y2 - y1) * x[i] - (x2 - x1) * y[i] + x2 * y1 - y2 * x1) / denom
   }
+
+  # Favor early elbows but not the extreme edge
+  rel_pos <- (x - search_start) / max(1, (search_end - search_start))
+  early_weight <- rep(NA_real_, n)
+  early_weight[valid] <- 1 - 0.35 * rel_pos[valid]
+
+  weighted_score <- elbow_score * early_weight
+  idx <- valid[which.max(weighted_score[valid])]
+
+  df$elbow_score <- elbow_score
+  df$weighted_elbow_score <- weighted_score
 
   list(
-    mode = mode,
+    mode = "first broad elbow on smoothed empirical alpha*mu",
     cutoff_rank = df$rank[idx],
     cutoff_index = idx,
     cutoff_fraction = idx / n,
@@ -374,8 +394,7 @@ build_dataset_panel <- function(rank_df, cutoff_info, title_prefix, out_file) {
     theme(legend.position = "bottom")
 
   p3 <- ggplot(df, aes(rank)) +
-    geom_hline(yintercept = 0, linetype = 2) +
-    geom_line(aes(y = log_alpha_mu, color = "Raw log(empirical alpha*mu)"), linewidth = 0.8, alpha = 0.30) +
+    geom_line(aes(y = log_alpha_mu, color = "Raw log(empirical alpha*mu)"), linewidth = 0.5, alpha = 0.20) +
     geom_line(aes(y = log_alpha_mu_sm, color = "Smoothed log(empirical alpha*mu)"), linewidth = 1.0) +
     geom_vline(xintercept = cutoff_x, linetype = 2, linewidth = 0.8) +
     labs(
@@ -387,13 +406,12 @@ build_dataset_panel <- function(rank_df, cutoff_info, title_prefix, out_file) {
     theme(legend.position = "bottom")
 
   p4 <- ggplot(df, aes(rank)) +
-    geom_ribbon(aes(ymin = 0, ymax = dist_to_zero), alpha = 0.20) +
-    geom_line(aes(y = dist_to_zero, color = "Distance to log(empirical alpha*mu)=0"), linewidth = 1.0) +
+    geom_line(aes(y = weighted_elbow_score, color = "Elbow score"), linewidth = 1.0) +
     geom_vline(xintercept = cutoff_x, linetype = 2, linewidth = 0.8) +
     labs(
-      title = paste0(title_prefix, ": shaded distance-to-balance and selected cutoff"),
+      title = paste0(title_prefix, ": elbow score and selected cutoff"),
       x = "EVS rank",
-      y = "|log(empirical alpha*mu)|"
+      y = "Weighted elbow score"
     ) +
     theme_bw(base_size = 10) +
     theme(legend.position = "bottom")
@@ -405,8 +423,8 @@ build_dataset_panel <- function(rank_df, cutoff_info, title_prefix, out_file) {
 
 build_range_panel <- function(ctrl_cutoff, trt_cutoff, ctrl_df, trt_df, title_prefix, out_file) {
   p <- ggplot() +
-    geom_line(data = ctrl_df, aes(rank, dist_to_zero, color = "Control distance to balance"), linewidth = 1.0) +
-    geom_line(data = trt_df, aes(rank, dist_to_zero, color = "Treatment distance to balance"), linewidth = 1.0) +
+    geom_line(data = ctrl_df, aes(rank, weighted_elbow_score, color = "Control elbow score"), linewidth = 1.0) +
+    geom_line(data = trt_df, aes(rank, weighted_elbow_score, color = "Treatment elbow score"), linewidth = 1.0) +
     annotate(
       "rect",
       xmin = min(ctrl_cutoff$cutoff_rank, trt_cutoff$cutoff_rank),
@@ -422,7 +440,7 @@ build_range_panel <- function(ctrl_cutoff, trt_cutoff, ctrl_df, trt_df, title_pr
         " | Treatment rank = ", trt_cutoff$cutoff_rank
       ),
       x = "EVS rank",
-      y = "|log(empirical alpha*mu)|"
+      y = "Weighted elbow score"
     ) +
     theme_bw(base_size = 10) +
     theme(legend.position = "bottom")
@@ -477,12 +495,18 @@ for (i in seq_len(nrow(comparison_table))) {
   utils::write.csv(trt_rank_df, file.path(cmp_dir, paste0(cmp_name, "_treatment_rank_series.csv")), row.names = FALSE)
 
   ctrl_cutoff <- select_leading_edge_cutoff(
-    ctrl_rank_df, smoother_k, divergence_k,
-    leading_edge_fraction, left_edge_exclusion_fraction
+    ctrl_rank_df,
+    smoother_k,
+    left_edge_exclusion_fraction,
+    leading_edge_fraction,
+    min_rank_buffer
   )
   trt_cutoff <- select_leading_edge_cutoff(
-    trt_rank_df, smoother_k, divergence_k,
-    leading_edge_fraction, left_edge_exclusion_fraction
+    trt_rank_df,
+    smoother_k,
+    left_edge_exclusion_fraction,
+    leading_edge_fraction,
+    min_rank_buffer
   )
 
   build_dataset_panel(
