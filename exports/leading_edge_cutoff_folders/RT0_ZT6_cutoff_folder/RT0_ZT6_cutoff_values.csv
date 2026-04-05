@@ -1,0 +1,3 @@
+"comparison","dataset","cutoff_mode","cutoff_percentile","cutoff_rank","note"
+"RT0_ZT6","control","first_sustained_positive_gap",0.01,316,"First sustained empirical IOD>CV² gap across 3 bins"
+"RT0_ZT6","treatment","first_sustained_positive_gap",0.01,316,"First sustained empirical IOD>CV² gap across 3 bins"
