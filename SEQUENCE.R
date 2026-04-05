@@ -43,10 +43,6 @@ suppressPackageStartupMessages({
 counts_file <- "WTTS-Seq_2022.2_DE_raw_read_numbers.csv"
 out_dir <- "exports/nb_regime_analysis"
 
-dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
-counts_file <- resolve_counts_file(counts_file)
-message(sprintf('Using count file: %s', counts_file))
-
 comparison_map <- list(
   RT0_ZT6   = list(ctrl = "^R0_", trt = "^ZT6_"),
   RT2_ZT8   = list(ctrl = "^R2_", trt = "^ZT8_"),
