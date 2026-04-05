@@ -1,15 +1,11 @@
 # =============================================================================
 # SEQUENCE STAGE 1: NEGATIVE-BINOMIAL MEAN-VARIANCE REGIME ANALYSIS
-# PRETTY OUTPUT VERSION
-# -----------------------------------------------------------------------------
-# Keeps the current working analysis logic but improves output structure and
-# figure labeling.
-#
-# Main changes:
-#   1. one folder per comparison under exports/nb_regime_analysis_pretty
-#   2. cleaner plot themes and legends
-#   3. explicit final cutoff labels on the difference panels
-#   4. final cutoff rank reported as percentile and approximate EVS rank
+# ----------------------------------------------------------------------------
+# This version uses MEDIAN summaries within EVS percentile bins.
+# For each feature, mean and variance are computed from DESeq2-normalized counts.
+# Within each EVS percentile bin, the median of those feature-level values is used.
+# Control and treatment are plotted separately, and the combined panel is built from
+# feature-level paired differences first, then summarized by percentile-bin medians.
 # =============================================================================
 
 suppressPackageStartupMessages({
@@ -17,13 +13,9 @@ suppressPackageStartupMessages({
   library(ggplot2)
   library(dplyr)
   library(tidyr)
-  library(scales)
   library(gridExtra)
+  library(SummarizedExperiment)
 })
-
-# =============================================================================
-# USER SETTINGS
-# =============================================================================
 
 repo_dir <- getwd()
 input_dir <- file.path(repo_dir, "data")
@@ -59,10 +51,6 @@ meta_all$condition <- factor(meta_all$condition, levels = c("untrt", "trt"))
 percentile_step <- 0.01
 min_bin_n <- 5L
 
-# =============================================================================
-# HELPERS
-# =============================================================================
-
 resolve_counts_file <- function(path_hint) {
   candidates <- unique(c(
     path_hint,
@@ -73,20 +61,10 @@ resolve_counts_file <- function(path_hint) {
   ))
   existing <- candidates[file.exists(candidates)]
   if (length(existing) > 0L) return(existing[[1]])
-
-  found <- list.files(
-    path = "/root/REAPER98632",
-    pattern = "WTTS-Seq_2022.2_DE_raw_read_numbers.csv",
-    recursive = TRUE,
-    full.names = TRUE
-  )
+  found <- list.files("/root/REAPER98632", pattern = "WTTS-Seq_2022.2_DE_raw_read_numbers.csv", recursive = TRUE, full.names = TRUE)
   found <- found[file.exists(found)]
   if (length(found) > 0L) return(found[[1]])
-
-  stop(
-    paste0("Count file not found. Tried: ", paste(candidates, collapse = ", ")),
-    call. = FALSE
-  )
+  stop("Count file not found.", call. = FALSE)
 }
 
 detect_feature_id_column <- function(df) {
@@ -104,34 +82,27 @@ detect_gene_symbol_column <- function(df) {
 }
 
 read_count_matrix <- function(path, meta_ids) {
-  if (!file.exists(path)) stop(paste0("Count file not found: ", path), call. = FALSE)
-
   raw_df <- utils::read.csv(path, check.names = FALSE, stringsAsFactors = FALSE)
   feature_col <- detect_feature_id_column(raw_df)
   symbol_col <- detect_gene_symbol_column(raw_df)
   sample_cols <- intersect(meta_ids, names(raw_df))
-  if (length(sample_cols) == 0L) stop("No count columns matched the metadata sample IDs.", call. = FALSE)
-
+  if (length(sample_cols) == 0L) stop("No count columns matched metadata sample IDs.", call. = FALSE)
   annot_df <- data.frame(feature_id = as.character(raw_df[[feature_col]]), stringsAsFactors = FALSE)
   annot_df$gene_symbol <- if (!is.null(symbol_col)) as.character(raw_df[[symbol_col]]) else annot_df$feature_id
   keep <- !is.na(annot_df$feature_id) & nzchar(annot_df$feature_id)
   annot_df <- annot_df[keep, , drop = FALSE]
-
   count_df <- raw_df[keep, sample_cols, drop = FALSE]
   count_mat <- as.matrix(count_df)
   mode(count_mat) <- "numeric"
   rownames(count_mat) <- annot_df$feature_id
   colnames(count_mat) <- sample_cols
-
   finite_rows <- rowSums(!is.finite(count_mat)) == 0L
   count_mat <- count_mat[finite_rows, , drop = FALSE]
   annot_df <- annot_df[finite_rows, , drop = FALSE]
-
   if (anyDuplicated(rownames(count_mat))) {
     count_mat <- rowsum(count_mat, rownames(count_mat), reorder = FALSE)
     annot_df <- annot_df[match(rownames(count_mat), annot_df$feature_id), , drop = FALSE]
   }
-
   list(count_matrix = count_mat, annot_df = annot_df)
 }
 
@@ -139,21 +110,9 @@ subset_comparison <- function(count_matrix, comparison_row, meta_all) {
   trt_ids <- meta_all$id[grepl(paste0("^", comparison_row$treatment_prefix, "_"), meta_all$id)]
   ctrl_ids <- meta_all$id[grepl(paste0("^", comparison_row$control_prefix, "_"), meta_all$id)]
   keep_ids <- c(trt_ids, ctrl_ids)
-
   missing_ids <- setdiff(keep_ids, colnames(count_matrix))
-  if (length(missing_ids) > 0L) {
-    stop(
-      paste0("Missing samples for comparison ", comparison_row$comparison_name, ": ", paste(missing_ids, collapse = ", ")),
-      call. = FALSE
-    )
-  }
-
-  list(
-    count_matrix = count_matrix[, keep_ids, drop = FALSE],
-    coldata = meta_all[keep_ids, , drop = FALSE],
-    trt_ids = trt_ids,
-    ctrl_ids = ctrl_ids
-  )
+  if (length(missing_ids) > 0L) stop(paste("Missing samples:", paste(missing_ids, collapse = ", ")), call. = FALSE)
+  list(count_matrix = count_matrix[, keep_ids, drop = FALSE], coldata = meta_all[keep_ids, , drop = FALSE], trt_ids = trt_ids, ctrl_ids = ctrl_ids)
 }
 
 safe_var <- function(x) {
@@ -168,6 +127,13 @@ safe_mean <- function(x) {
   x <- x[is.finite(x)]
   if (!length(x)) return(NA_real_)
   mean(x)
+}
+
+safe_median <- function(x) {
+  x <- as.numeric(x)
+  x <- x[is.finite(x)]
+  if (!length(x)) return(NA_real_)
+  stats::median(x)
 }
 
 rescale01 <- function(x) {
@@ -189,36 +155,36 @@ find_last_zero_crossing <- function(x, y) {
   x <- x[ok]
   y <- y[ok]
   if (length(x) < 2L) return(NULL)
-
   crossings <- integer(0)
   for (i in seq_len(length(y) - 1L)) {
-    yi <- y[i]
-    yj <- y[i + 1L]
+    yi <- y[i]; yj <- y[i + 1L]
     if (!is.finite(yi) || !is.finite(yj)) next
     if (yi == 0 || yi * yj < 0) crossings <- c(crossings, i)
   }
   if (!length(crossings)) return(NULL)
-
   i <- max(crossings)
-  x1 <- x[i]; x2 <- x[i + 1L]
-  y1 <- y[i]; y2 <- y[i + 1L]
-
-  if (isTRUE(all.equal(y1, 0))) {
-    x_cross <- x1
-  } else if (isTRUE(all.equal(y2, 0))) {
-    x_cross <- x2
-  } else {
-    x_cross <- x1 - y1 * (x2 - x1) / (y2 - y1)
-  }
-
+  x1 <- x[i]; x2 <- x[i + 1L]; y1 <- y[i]; y2 <- y[i + 1L]
+  if (isTRUE(all.equal(y1, 0))) x_cross <- x1 else if (isTRUE(all.equal(y2, 0))) x_cross <- x2 else x_cross <- x1 - y1 * (x2 - x1) / (y2 - y1)
   list(index_left = i, crossing_x = x_cross, y_left = y1, y_right = y2)
+}
+
+find_operational_cutoff <- function(x, y) {
+  cross <- find_last_zero_crossing(x, y)
+  if (!is.null(cross) && is.finite(cross$crossing_x)) {
+    return(list(mode = "last_zero_crossing", crossing_x = cross$crossing_x))
+  }
+  ok <- is.finite(x) & is.finite(y)
+  if (!any(ok)) return(list(mode = "fallback_last_finite", crossing_x = NA_real_))
+  x_ok <- x[ok]; y_ok <- y[ok]
+  idx <- max(which(abs(y_ok) == min(abs(y_ok), na.rm = TRUE)))
+  list(mode = "closest_to_zero", crossing_x = x_ok[idx])
 }
 
 make_percentile_bins <- function(n, step = 0.01) {
   probs <- seq(step, 1, by = step)
   if (tail(probs, 1) < 1) probs <- c(probs, 1)
   centers <- unique(pmax(1L, pmin(n, round(probs * n))))
-  dplyr::tibble(percentile = probs[seq_along(centers)], rank_index = centers)
+  tibble(percentile = probs[seq_along(centers)], rank_index = centers)
 }
 
 compute_group_pc1_loadings <- function(norm_counts_mat, group_cols) {
@@ -232,65 +198,39 @@ compute_group_pc1_loadings <- function(norm_counts_mat, group_cols) {
 
 build_evs_table <- function(norm_counts_mat, ctrl_cols, trt_cols, feature_ids) {
   ctrl_load <- compute_group_pc1_loadings(norm_counts_mat, ctrl_cols)
-  trt_load  <- compute_group_pc1_loadings(norm_counts_mat, trt_cols)
-
-  dplyr::tibble(
-    feature_id = feature_ids,
-    ctrl_abs_loading = ctrl_load,
-    trt_abs_loading  = trt_load
-  ) %>%
-    dplyr::mutate(
-      rank_ctrl = rank(-ctrl_abs_loading, ties.method = "first"),
-      rank_trt  = rank(-trt_abs_loading, ties.method = "first"),
-      combined_rank = pmin(rank_ctrl, rank_trt, na.rm = TRUE)
-    ) %>%
-    dplyr::arrange(combined_rank, rank_ctrl, rank_trt)
+  trt_load <- compute_group_pc1_loadings(norm_counts_mat, trt_cols)
+  tibble(feature_id = feature_ids, ctrl_abs_loading = ctrl_load, trt_abs_loading = trt_load) %>%
+    mutate(rank_ctrl = rank(-ctrl_abs_loading, ties.method = "first"), rank_trt = rank(-trt_abs_loading, ties.method = "first"), combined_rank = pmin(rank_ctrl, rank_trt, na.rm = TRUE)) %>%
+    arrange(combined_rank, rank_ctrl, rank_trt)
 }
 
 compute_feature_metrics <- function(norm_counts_mat, ctrl_cols, trt_cols, dispersions, feature_ids) {
-  ctrl_mu  <- apply(norm_counts_mat[, ctrl_cols, drop = FALSE], 1L, safe_mean)
-  trt_mu   <- apply(norm_counts_mat[, trt_cols, drop = FALSE], 1L, safe_mean)
+  ctrl_mu <- apply(norm_counts_mat[, ctrl_cols, drop = FALSE], 1L, safe_mean)
+  trt_mu <- apply(norm_counts_mat[, trt_cols, drop = FALSE], 1L, safe_mean)
   ctrl_var <- apply(norm_counts_mat[, ctrl_cols, drop = FALSE], 1L, safe_var)
-  trt_var  <- apply(norm_counts_mat[, trt_cols, drop = FALSE], 1L, safe_var)
-
-  dplyr::tibble(
-    feature_id = feature_ids,
-    alpha = as.numeric(dispersions),
-    mu_ctrl = ctrl_mu,
-    mu_trt = trt_mu,
-    var_ctrl = ctrl_var,
-    var_trt = trt_var
-  ) %>%
-    dplyr::mutate(
+  trt_var <- apply(norm_counts_mat[, trt_cols, drop = FALSE], 1L, safe_var)
+  tibble(feature_id = feature_ids, alpha = as.numeric(dispersions), mu_ctrl = ctrl_mu, mu_trt = trt_mu, var_ctrl = ctrl_var, var_trt = trt_var) %>%
+    mutate(
       iod_emp_ctrl = ifelse(mu_ctrl > 0, var_ctrl / mu_ctrl, NA_real_),
-      iod_emp_trt  = ifelse(mu_trt  > 0, var_trt / mu_trt, NA_real_),
+      iod_emp_trt  = ifelse(mu_trt > 0, var_trt / mu_trt, NA_real_),
       cv2_emp_ctrl = ifelse(mu_ctrl > 0, var_ctrl / (mu_ctrl ^ 2), NA_real_),
-      cv2_emp_trt  = ifelse(mu_trt  > 0, var_trt / (mu_trt ^ 2), NA_real_),
+      cv2_emp_trt  = ifelse(mu_trt > 0, var_trt / (mu_trt ^ 2), NA_real_),
       iod_nb_ctrl  = ifelse(mu_ctrl > 0 & is.finite(alpha), 1 + alpha * mu_ctrl, NA_real_),
-      iod_nb_trt   = ifelse(mu_trt  > 0 & is.finite(alpha), 1 + alpha * mu_trt, NA_real_),
+      iod_nb_trt   = ifelse(mu_trt > 0 & is.finite(alpha), 1 + alpha * mu_trt, NA_real_),
       cv2_nb_ctrl  = ifelse(mu_ctrl > 0 & is.finite(alpha), (1 / mu_ctrl) + alpha, NA_real_),
-      cv2_nb_trt   = ifelse(mu_trt  > 0 & is.finite(alpha), (1 / mu_trt) + alpha, NA_real_)
+      cv2_nb_trt   = ifelse(mu_trt > 0 & is.finite(alpha), (1 / mu_trt) + alpha, NA_real_)
     )
 }
 
-summarize_by_percentile <- function(df, value_cols, percentile_step = 0.01, min_bin_n = 5L) {
+summarize_by_percentile_median <- function(df, value_cols, percentile_step = 0.01, min_bin_n = 5L) {
   n <- nrow(df)
   bins <- make_percentile_bins(n, percentile_step)
   out <- vector("list", nrow(bins))
-
   for (i in seq_len(nrow(bins))) {
     lo <- if (i == 1L) 1L else bins$rank_index[i - 1L] + 1L
     hi <- bins$rank_index[i]
     chunk <- df[lo:hi, , drop = FALSE]
-
-    row <- dplyr::tibble(
-      percentile = bins$percentile[i],
-      rank_index = bins$rank_index[i],
-      lo_rank = lo,
-      hi_rank = hi,
-      n_bin = nrow(chunk)
-    )
-
+    row <- tibble(percentile = bins$percentile[i], rank_index = bins$rank_index[i], lo_rank = lo, hi_rank = hi, n_bin = nrow(chunk))
     for (nm in value_cols) {
       vals <- chunk[[nm]]
       vals <- vals[is.finite(vals)]
@@ -298,109 +238,97 @@ summarize_by_percentile <- function(df, value_cols, percentile_step = 0.01, min_
     }
     out[[i]] <- row
   }
-  dplyr::bind_rows(out)
+  bind_rows(out)
 }
 
 pretty_theme <- function() {
   theme_bw(base_size = 10) +
-    theme(
-      legend.position = "bottom",
-      plot.title = element_text(face = "bold"),
-      panel.grid.minor = element_blank()
-    )
+    theme(legend.position = "bottom", plot.title = element_text(face = "bold"), panel.grid.minor = element_blank())
 }
 
-add_cutoff_label <- function(plot_obj, crossing, n_features, color = "black") {
-  if (is.null(crossing) || !is.finite(crossing$crossing_x)) return(plot_obj)
-  cutoff_rank <- max(1L, min(n_features, round(crossing$crossing_x * n_features)))
-  label_txt <- paste0("Final cutoff\nPercentile = ", sprintf("%.3f", crossing$crossing_x),
-                      "\nRank = ", format(cutoff_rank, big.mark = ","))
-  plot_obj +
-    geom_vline(xintercept = crossing$crossing_x, linetype = 2, linewidth = 0.8) +
-    annotate("label", x = crossing$crossing_x, y = Inf, vjust = 1.1,
-             label = label_txt, size = 3, color = color)
+add_cutoff_label <- function(plot_obj, cutoff_info, n_features, color = "black") {
+  if (is.null(cutoff_info) || !is.finite(cutoff_info$crossing_x)) return(plot_obj)
+  cutoff_rank <- max(1L, min(n_features, round(cutoff_info$crossing_x * n_features)))
+  label_txt <- paste0("Final cutoff\n", gsub("_", " ", cutoff_info$mode), "\nPercentile = ", sprintf("%.3f", cutoff_info$crossing_x), "\nRank = ", format(cutoff_rank, big.mark = ","))
+  plot_obj + geom_vline(xintercept = cutoff_info$crossing_x, linetype = 2, linewidth = 0.8) + annotate("label", x = cutoff_info$crossing_x, y = Inf, vjust = 1.1, label = label_txt, size = 3, color = color)
 }
 
 make_group_plots <- function(sum_df, title_prefix, out_file, n_features) {
-  long_df <- dplyr::bind_rows(
-    dplyr::transmute(sum_df, percentile, value = iod_emp_scaled, metric = "IOD empirical"),
-    dplyr::transmute(sum_df, percentile, value = cv2_emp_scaled, metric = "CV² empirical"),
-    dplyr::transmute(sum_df, percentile, value = iod_nb_scaled, metric = "IOD NB"),
-    dplyr::transmute(sum_df, percentile, value = cv2_nb_scaled, metric = "CV² NB")
+  long_df <- bind_rows(
+    transmute(sum_df, percentile, value = iod_emp_scaled, metric = "IOD empirical"),
+    transmute(sum_df, percentile, value = cv2_emp_scaled, metric = "CV² empirical"),
+    transmute(sum_df, percentile, value = iod_nb_scaled, metric = "IOD NB"),
+    transmute(sum_df, percentile, value = cv2_nb_scaled, metric = "CV² NB")
   )
-
-  diff_df <- dplyr::transmute(
-    sum_df,
-    percentile,
-    empirical_difference = iod_emp_scaled - cv2_emp_scaled,
-    theoretical_difference = iod_nb_scaled - cv2_nb_scaled
-  )
-
-  crossing_emp <- find_last_zero_crossing(diff_df$percentile, diff_df$empirical_difference)
-  crossing_nb <- find_last_zero_crossing(diff_df$percentile, diff_df$theoretical_difference)
+  diff_df <- transmute(sum_df, percentile, empirical_difference = iod_emp_scaled - cv2_emp_scaled, theoretical_difference = iod_nb_scaled - cv2_nb_scaled)
+  crossing_emp <- find_operational_cutoff(diff_df$percentile, diff_df$empirical_difference)
+  crossing_nb <- find_operational_cutoff(diff_df$percentile, diff_df$theoretical_difference)
 
   p1 <- ggplot(long_df, aes(percentile, value, color = metric)) +
     geom_line(linewidth = 0.9) +
-    labs(title = paste0(title_prefix, ": empirical and NB trajectories"),
-         x = "EVS percentile", y = "Scaled trajectory (0 to 1)") +
+    labs(title = paste0(title_prefix, ": trajectories using MEDIAN bin summaries of feature-level values"), x = "EVS percentile", y = "Scaled trajectory (0 to 1)") +
     pretty_theme()
 
   p2 <- ggplot(diff_df, aes(percentile, empirical_difference)) +
     geom_hline(yintercept = 0, linetype = 2, linewidth = 0.6) +
     geom_line(linewidth = 0.9) +
-    labs(title = paste0(title_prefix, ": empirical difference curve"),
-         x = "EVS percentile", y = "IOD - CV²") +
+    labs(title = paste0(title_prefix, ": empirical difference using MEDIAN bin summaries"), x = "EVS percentile", y = "IOD - CV²") +
     pretty_theme()
   p2 <- add_cutoff_label(p2, crossing_emp, n_features)
 
   p3 <- ggplot(diff_df, aes(percentile, theoretical_difference)) +
     geom_hline(yintercept = 0, linetype = 2, linewidth = 0.6) +
     geom_line(linewidth = 0.9) +
-    labs(title = paste0(title_prefix, ": NB-theoretical difference curve"),
-         x = "EVS percentile", y = "IOD - CV²") +
+    labs(title = paste0(title_prefix, ": NB-theoretical difference using MEDIAN bin summaries"), x = "EVS percentile", y = "IOD - CV²") +
     pretty_theme()
   p3 <- add_cutoff_label(p3, crossing_nb, n_features)
 
   png(out_file, width = 2200, height = 1800, res = 220)
   gridExtra::grid.arrange(p1, p2, p3, ncol = 1)
   dev.off()
-
   list(crossing_emp = crossing_emp, crossing_nb = crossing_nb)
 }
 
-make_combined_plots <- function(combined_sum, cmp_name, out_file, n_features) {
-  cross_emp <- find_last_zero_crossing(combined_sum$percentile, combined_sum$diff_emp)
-  cross_nb <- find_last_zero_crossing(combined_sum$percentile, combined_sum$diff_nb)
+make_combined_plots <- function(combined_sum, ctrl_sum, trt_sum, cmp_name, out_file, n_features_combined, n_features_ctrl, n_features_trt) {
+  cross_ctrl <- find_operational_cutoff(ctrl_sum$percentile, ctrl_sum$iod_emp_scaled - ctrl_sum$cv2_emp_scaled)
+  cross_trt <- find_operational_cutoff(trt_sum$percentile, trt_sum$iod_emp_scaled - trt_sum$cv2_emp_scaled)
+  cross_comb_emp <- find_operational_cutoff(combined_sum$percentile, combined_sum$diff_emp)
+  cross_comb_nb <- find_operational_cutoff(combined_sum$percentile, combined_sum$diff_nb)
 
-  p1 <- ggplot(combined_sum, aes(percentile)) +
+  p_ctrl <- ggplot(ctrl_sum, aes(percentile, iod_emp_scaled - cv2_emp_scaled)) +
     geom_hline(yintercept = 0, linetype = 2, linewidth = 0.6) +
-    geom_line(aes(y = diff_emp, color = "Empirical difference"), linewidth = 0.9) +
-    geom_line(aes(y = diff_nb, color = "NB difference"), linewidth = 0.9, linetype = 2) +
-    labs(title = paste0(cmp_name, ": combined feature-level difference curves"),
-         x = "EVS percentile", y = "IOD - CV²") +
+    geom_line(linewidth = 0.9) +
+    labs(title = paste0(cmp_name, ": control cutoff curve"), x = "EVS percentile", y = "IOD - CV²") +
     pretty_theme()
-  p1 <- add_cutoff_label(p1, cross_emp, n_features)
+  p_ctrl <- add_cutoff_label(p_ctrl, cross_ctrl, n_features_ctrl)
 
-  png(out_file, width = 2200, height = 1200, res = 220)
-  print(p1)
+  p_trt <- ggplot(trt_sum, aes(percentile, iod_emp_scaled - cv2_emp_scaled)) +
+    geom_hline(yintercept = 0, linetype = 2, linewidth = 0.6) +
+    geom_line(linewidth = 0.9) +
+    labs(title = paste0(cmp_name, ": treatment cutoff curve"), x = "EVS percentile", y = "IOD - CV²") +
+    pretty_theme()
+  p_trt <- add_cutoff_label(p_trt, cross_trt, n_features_trt)
+
+  p_comb <- ggplot(combined_sum, aes(percentile)) +
+    geom_hline(yintercept = 0, linetype = 2, linewidth = 0.6) +
+    geom_line(aes(y = diff_emp, color = "Empirical paired difference"), linewidth = 0.9) +
+    geom_line(aes(y = diff_nb, color = "NB paired difference"), linewidth = 0.9, linetype = 2) +
+    labs(title = paste0(cmp_name, ": combined feature-level paired differences using MEDIAN bin summaries"), x = "EVS percentile", y = "IOD - CV²") +
+    pretty_theme()
+  p_comb <- add_cutoff_label(p_comb, cross_comb_emp, n_features_combined)
+
+  png(out_file, width = 2200, height = 2200, res = 220)
+  gridExtra::grid.arrange(p_ctrl, p_trt, p_comb, ncol = 1)
   dev.off()
 
-  list(crossing_emp = cross_emp, crossing_nb = cross_nb)
+  list(cross_ctrl = cross_ctrl, cross_trt = cross_trt, cross_emp = cross_comb_emp, cross_nb = cross_comb_nb)
 }
-
-# =============================================================================
-# DATA IMPORT
-# =============================================================================
 
 count_file <- resolve_counts_file(count_file)
 message("Reading raw count matrix from: ", count_file)
 loaded <- read_count_matrix(count_file, meta_all$id)
 count_mat <- loaded$count_matrix
 feature_ids <- rownames(count_mat)
-
-# =============================================================================
-# MAIN LOOP
-# =============================================================================
 
 summary_rows <- list()
 
@@ -416,11 +344,7 @@ for (i in seq_len(nrow(comparison_table))) {
   cmp_counts <- comp$count_matrix
   col_data <- comp$coldata
 
-  dds <- DESeqDataSetFromMatrix(
-    countData = round(as.matrix(cmp_counts)),
-    colData = col_data,
-    design = ~ condition
-  )
+  dds <- DESeqDataSetFromMatrix(countData = round(as.matrix(cmp_counts)), colData = col_data, design = ~ condition)
   dds <- dds[rowSums(counts(dds)) > 0, ]
   dds <- estimateSizeFactors(dds)
   dds <- estimateDispersions(dds, quiet = TRUE)
@@ -431,73 +355,56 @@ for (i in seq_len(nrow(comparison_table))) {
 
   evs_tbl <- build_evs_table(norm_counts, comp$ctrl_ids, comp$trt_ids, rownames(norm_counts))
   metrics_tbl <- compute_feature_metrics(norm_counts, comp$ctrl_ids, comp$trt_ids, dispersions, rownames(norm_counts))
-  full_tbl <- dplyr::left_join(evs_tbl, metrics_tbl, by = "feature_id") %>%
-    dplyr::arrange(combined_rank)
-
+  full_tbl <- left_join(evs_tbl, metrics_tbl, by = "feature_id") %>% arrange(combined_rank)
   utils::write.csv(full_tbl, file.path(cmp_dir, paste0(cmp_name, "_feature_metrics.csv")), row.names = FALSE)
 
-  ctrl_rank_tbl <- full_tbl %>%
-    dplyr::arrange(rank_ctrl) %>%
-    dplyr::transmute(feature_id, rank = rank_ctrl, iod_emp = iod_emp_ctrl, cv2_emp = cv2_emp_ctrl, iod_nb = iod_nb_ctrl, cv2_nb = cv2_nb_ctrl)
-  trt_rank_tbl <- full_tbl %>%
-    dplyr::arrange(rank_trt) %>%
-    dplyr::transmute(feature_id, rank = rank_trt, iod_emp = iod_emp_trt, cv2_emp = cv2_emp_trt, iod_nb = iod_nb_trt, cv2_nb = cv2_nb_trt)
+  ctrl_rank_tbl <- full_tbl %>% arrange(rank_ctrl) %>% transmute(feature_id, rank = rank_ctrl, iod_emp = iod_emp_ctrl, cv2_emp = cv2_emp_ctrl, iod_nb = iod_nb_ctrl, cv2_nb = cv2_nb_ctrl)
+  trt_rank_tbl <- full_tbl %>% arrange(rank_trt) %>% transmute(feature_id, rank = rank_trt, iod_emp = iod_emp_trt, cv2_emp = cv2_emp_trt, iod_nb = iod_nb_trt, cv2_nb = cv2_nb_trt)
 
-  ctrl_sum <- summarize_by_percentile(ctrl_rank_tbl, c("iod_emp", "cv2_emp", "iod_nb", "cv2_nb"), percentile_step, min_bin_n) %>%
-    dplyr::mutate(
-      iod_emp_scaled = rescale01(iod_emp),
-      cv2_emp_scaled = rescale01(cv2_emp),
-      iod_nb_scaled = rescale01(iod_nb),
-      cv2_nb_scaled = rescale01(cv2_nb)
-    )
+  ctrl_sum <- summarize_by_percentile_median(ctrl_rank_tbl, c("iod_emp", "cv2_emp", "iod_nb", "cv2_nb"), percentile_step, min_bin_n) %>%
+    mutate(iod_emp_scaled = rescale01(iod_emp), cv2_emp_scaled = rescale01(cv2_emp), iod_nb_scaled = rescale01(iod_nb), cv2_nb_scaled = rescale01(cv2_nb))
+  trt_sum <- summarize_by_percentile_median(trt_rank_tbl, c("iod_emp", "cv2_emp", "iod_nb", "cv2_nb"), percentile_step, min_bin_n) %>%
+    mutate(iod_emp_scaled = rescale01(iod_emp), cv2_emp_scaled = rescale01(cv2_emp), iod_nb_scaled = rescale01(iod_nb), cv2_nb_scaled = rescale01(cv2_nb))
 
-  trt_sum <- summarize_by_percentile(trt_rank_tbl, c("iod_emp", "cv2_emp", "iod_nb", "cv2_nb"), percentile_step, min_bin_n) %>%
-    dplyr::mutate(
-      iod_emp_scaled = rescale01(iod_emp),
-      cv2_emp_scaled = rescale01(cv2_emp),
-      iod_nb_scaled = rescale01(iod_nb),
-      cv2_nb_scaled = rescale01(cv2_nb)
-    )
-
-  utils::write.csv(ctrl_sum, file.path(cmp_dir, paste0(cmp_name, "_control_percentile_summary.csv")), row.names = FALSE)
-  utils::write.csv(trt_sum, file.path(cmp_dir, paste0(cmp_name, "_treatment_percentile_summary.csv")), row.names = FALSE)
+  utils::write.csv(ctrl_sum, file.path(cmp_dir, paste0(cmp_name, "_control_percentile_median_summary.csv")), row.names = FALSE)
+  utils::write.csv(trt_sum, file.path(cmp_dir, paste0(cmp_name, "_treatment_percentile_median_summary.csv")), row.names = FALSE)
 
   ctrl_info <- make_group_plots(ctrl_sum, paste0(cmp_name, " control"), file.path(cmp_dir, paste0(cmp_name, "_control_nb_regime.png")), nrow(ctrl_rank_tbl))
   trt_info <- make_group_plots(trt_sum, paste0(cmp_name, " treatment"), file.path(cmp_dir, paste0(cmp_name, "_treatment_nb_regime.png")), nrow(trt_rank_tbl))
 
   combined_rank_tbl <- full_tbl %>%
-    dplyr::arrange(combined_rank) %>%
-    dplyr::transmute(
+    arrange(combined_rank) %>%
+    transmute(
       feature_id,
       rank = combined_rank,
       diff_emp = (iod_emp_ctrl - cv2_emp_ctrl) + (iod_emp_trt - cv2_emp_trt),
       diff_nb = (iod_nb_ctrl - cv2_nb_ctrl) + (iod_nb_trt - cv2_nb_trt)
     )
 
-  combined_sum <- summarize_by_percentile(
-    combined_rank_tbl,
-    c("diff_emp", "diff_nb"),
-    percentile_step,
-    min_bin_n
-  )
+  combined_sum <- summarize_by_percentile_median(combined_rank_tbl, c("diff_emp", "diff_nb"), percentile_step, min_bin_n)
 
   utils::write.csv(combined_rank_tbl, file.path(cmp_dir, paste0(cmp_name, "_combined_feature_level_differences.csv")), row.names = FALSE)
-  utils::write.csv(combined_sum, file.path(cmp_dir, paste0(cmp_name, "_combined_percentile_summary.csv")), row.names = FALSE)
+  utils::write.csv(combined_sum, file.path(cmp_dir, paste0(cmp_name, "_combined_percentile_median_summary.csv")), row.names = FALSE)
 
-  combined_info <- make_combined_plots(combined_sum, cmp_name, file.path(cmp_dir, paste0(cmp_name, "_combined_nb_regime.png")), nrow(combined_rank_tbl))
+  combined_info <- make_combined_plots(combined_sum, ctrl_sum, trt_sum, cmp_name, file.path(cmp_dir, paste0(cmp_name, "_combined_nb_regime.png")), nrow(combined_rank_tbl), nrow(ctrl_rank_tbl), nrow(trt_rank_tbl))
 
-  crossing_tbl <- dplyr::tibble(
-    comparison = cmp_name,
-    empirical_control_crossing = if (is.null(ctrl_info$crossing_emp)) NA_real_ else ctrl_info$crossing_emp$crossing_x,
-    empirical_treatment_crossing = if (is.null(trt_info$crossing_emp)) NA_real_ else trt_info$crossing_emp$crossing_x,
-    empirical_combined_crossing = if (is.null(combined_info$crossing_emp)) NA_real_ else combined_info$crossing_emp$crossing_x,
-    theoretical_combined_crossing = if (is.null(combined_info$crossing_nb)) NA_real_ else combined_info$crossing_nb$crossing_x
+  crossing_tbl <- tibble(
+    dataset = c("control_empirical", "control_nb", "treatment_empirical", "treatment_nb", "combined_empirical", "combined_nb"),
+    mode = c(ctrl_info$crossing_emp$mode, ctrl_info$crossing_nb$mode, trt_info$crossing_emp$mode, trt_info$crossing_nb$mode, combined_info$cross_emp$mode, combined_info$cross_nb$mode),
+    cutoff_percentile = c(ctrl_info$crossing_emp$crossing_x, ctrl_info$crossing_nb$crossing_x, trt_info$crossing_emp$crossing_x, trt_info$crossing_nb$crossing_x, combined_info$cross_emp$crossing_x, combined_info$cross_nb$crossing_x)
   )
   utils::write.csv(crossing_tbl, file.path(cmp_dir, paste0(cmp_name, "_crossings.csv")), row.names = FALSE)
 
-  summary_rows[[cmp_name]] <- crossing_tbl
+  summary_rows[[cmp_name]] <- tibble(
+    comparison = cmp_name,
+    n_features = nrow(full_tbl),
+    control_empirical_cutoff = ctrl_info$crossing_emp$crossing_x,
+    treatment_empirical_cutoff = trt_info$crossing_emp$crossing_x,
+    combined_empirical_cutoff = combined_info$cross_emp$crossing_x,
+    combined_nb_cutoff = combined_info$cross_nb$crossing_x
+  )
 }
 
-summary_tbl <- dplyr::bind_rows(summary_rows)
+summary_tbl <- bind_rows(summary_rows)
 utils::write.csv(summary_tbl, file.path(out_root, "nb_regime_summary.csv"), row.names = FALSE)
 message("Done. Outputs written to: ", out_root)
