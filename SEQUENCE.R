@@ -292,7 +292,7 @@ summarize_by_percentile <- function(df, value_cols, percentile_step = 0.01, min_
     for (nm in value_cols) {
       vals <- chunk[[nm]]
       vals <- vals[is.finite(vals)]
-      row[[nm]] <- if (length(vals) >= min_bin_n) mean(vals) else NA_real_
+      row[[nm]] <- if (length(vals) >= min_bin_n) stats::median(vals) else NA_real_
     }
     out[[i]] <- row
   }
