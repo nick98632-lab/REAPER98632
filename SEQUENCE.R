@@ -1,5 +1,3 @@
-Use this no-bins version.
-
 # =============================================================================
 # SEQUENCE STAGE 1: NO-BIN AGGREGATE RANK METHODS
 # FINAL CLEAN VERSION: DIRECT RANK SERIES, NO PERCENTILE BINS
