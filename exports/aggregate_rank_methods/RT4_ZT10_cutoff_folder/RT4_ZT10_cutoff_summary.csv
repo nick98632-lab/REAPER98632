@@ -1,0 +1,2 @@
+"comparison","control_cutoff_mode","control_cutoff_percentile","control_cutoff_rank","treatment_cutoff_mode","treatment_cutoff_percentile","treatment_cutoff_rank","cutoff_range_percentile_min","cutoff_range_percentile_max","cutoff_range_rank_min","cutoff_range_rank_max"
+"RT4_ZT10","minimum-gap then divergence",0.190005353150487,6034,"minimum-gap then divergence",0.179991812828668,5716,0.179991812828668,0.190005353150487,5716,6034
