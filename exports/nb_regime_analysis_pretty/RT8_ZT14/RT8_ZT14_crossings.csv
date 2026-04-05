@@ -1,7 +1,0 @@
-"dataset","mode","cutoff_percentile"
-"control_empirical","last_zero_crossing",0.871871516746808
-"control_nb","last_zero_crossing",0.852733324483878
-"treatment_empirical","last_zero_crossing",0.629422347136235
-"treatment_nb","last_zero_crossing",0.629311058966539
-"combined_empirical","closest_to_zero",1
-"combined_nb","closest_to_zero",1
