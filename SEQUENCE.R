@@ -1,49 +1,26 @@
 # =============================================================================
-# SEQUENCE STAGE 1: NB REGIME-SHIFT BY ALPHA*MU
+# SEQUENCE STAGE 1: EMPIRICAL NB REGIME SHIFT
 # -----------------------------------------------------------------------------
-# Purpose
-#   Identify a non-arbitrary regime split on the EVS-ranked loading-score series
-#   using the negative-binomial variance decomposition:
+# Keep the same figure structure as the alpha*mu version, but replace DESeq2
+# gene-wise dispersion with empirical dispersion from raw counts:
 #
-#       Var(X) = mu + alpha * mu^2
+#   Var = mu + alpha * mu^2
+#   alpha_emp = (Var - mu) / mu^2
+#   alpha_emp * mu = (Var - mu) / mu = IOD - 1
 #
-#   The key NB balance quantity is:
+# This version uses only:
+#   - raw-count mean
+#   - raw-count variance
+#   - empirical dispersion derived from them
 #
-#       alpha * mu
-#
-#   because:
-#       - if alpha * mu < 1, the linear/Poisson-like term mu dominates
-#       - if alpha * mu > 1, the dispersion term alpha * mu^2 dominates
-#       - if alpha * mu = 1, the two parts are balanced
-#
-#   This script:
-#     1. ranks features by absolute PC1 loading (treatment and control separately)
-#     2. computes raw-count empirical mean per feature
-#     3. extracts DESeq2 gene-wise dispersion per feature
-#     4. computes alpha*mu and log(alpha*mu)
-#     5. smooths the rank series lightly with a rolling median
-#     6. defines the cutoff from the leading-edge side using the first local
-#        minimum distance to zero on log(alpha*mu), followed by sustained
-#        departure away from zero
-#     7. writes clean figures and cutoff tables for treatment and control
-#     8. writes a final cutoff-range panel for each comparison
-#
-# Final figures per dataset:
-#   Panel 1: absolute loading score by rank
-#   Panel 2: raw-count mean and gene-wise dispersion by rank (log scale)
-#   Panel 3: alpha*mu and log(alpha*mu) with zero line
-#   Panel 4: shaded balance zone around zero with cutoff line
-#
-# Output folders:
-#   exports/nb_alpha_mu_regime_shift/<comparison>_cutoff_folder/
+# Output:
+#   exports/empirical_nb_regime_shift/<comparison>_cutoff_folder/
 # =============================================================================
 
 suppressPackageStartupMessages({
-  library(DESeq2)
   library(ggplot2)
   library(dplyr)
   library(gridExtra)
-  library(SummarizedExperiment)
 })
 
 # =============================================================================
@@ -53,7 +30,7 @@ suppressPackageStartupMessages({
 repo_dir <- getwd()
 input_dir <- file.path(repo_dir, "data")
 count_file <- file.path(input_dir, "WTTS-Seq_2022.2_DE_raw_read_numbers.csv")
-out_root <- file.path(repo_dir, "exports", "nb_alpha_mu_regime_shift")
+out_root <- file.path(repo_dir, "exports", "empirical_nb_regime_shift")
 dir.create(out_root, recursive = TRUE, showWarnings = FALSE)
 
 comparison_table <- data.frame(
@@ -81,9 +58,10 @@ meta_all <- data.frame(
 rownames(meta_all) <- meta_all$id
 meta_all$condition <- factor(meta_all$condition, levels = c("untrt", "trt"))
 
-smoother_k <- 101L          # odd integer
-divergence_k <- 75L         # forward ranks for reopening check
+smoother_k <- 101L
+divergence_k <- 75L
 leading_edge_fraction <- 0.60
+left_edge_exclusion_fraction <- 0.02
 
 # =============================================================================
 # HELPERS
@@ -182,7 +160,6 @@ subset_comparison <- function(count_matrix, comparison_row, meta_all) {
 
   list(
     count_matrix = count_matrix[, keep_ids, drop = FALSE],
-    coldata = meta_all[keep_ids, , drop = FALSE],
     trt_ids = trt_ids,
     ctrl_ids = ctrl_ids
   )
@@ -193,6 +170,13 @@ safe_mean <- function(x) {
   x <- x[is.finite(x)]
   if (!length(x)) return(NA_real_)
   mean(x)
+}
+
+safe_var <- function(x) {
+  x <- as.numeric(x)
+  x <- x[is.finite(x)]
+  if (length(x) < 2L) return(NA_real_)
+  stats::var(x)
 }
 
 roll_median <- function(x, k = 101L) {
@@ -237,39 +221,26 @@ build_evs_table <- function(count_mat, ctrl_cols, trt_cols, feature_ids) {
     )
 }
 
-extract_gene_wise_dispersion <- function(dds) {
-  disp_df <- as.data.frame(SummarizedExperiment::mcols(dds))
-  feature_id <- rownames(disp_df)
-
-  alpha_gene_wise <- if ("dispGeneEst" %in% names(disp_df)) {
-    disp_df$dispGeneEst
-  } else if ("dispersion" %in% names(disp_df)) {
-    disp_df$dispersion
-  } else {
-    rep(NA_real_, nrow(disp_df))
-  }
-
-  tibble(
-    feature_id = feature_id,
-    alpha_gene_wise = as.numeric(alpha_gene_wise)
-  )
-}
-
-compute_feature_metrics <- function(raw_count_mat, ctrl_cols, trt_cols, alpha_tbl, feature_ids) {
-  ctrl_mu <- apply(raw_count_mat[, ctrl_cols, drop = FALSE], 1L, safe_mean)
-  trt_mu  <- apply(raw_count_mat[, trt_cols, drop = FALSE], 1L, safe_mean)
+compute_feature_metrics_empirical <- function(count_mat, ctrl_cols, trt_cols, feature_ids) {
+  ctrl_mu  <- apply(count_mat[, ctrl_cols, drop = FALSE], 1L, safe_mean)
+  trt_mu   <- apply(count_mat[, trt_cols, drop = FALSE], 1L, safe_mean)
+  ctrl_var <- apply(count_mat[, ctrl_cols, drop = FALSE], 1L, safe_var)
+  trt_var  <- apply(count_mat[, trt_cols, drop = FALSE], 1L, safe_var)
 
   tibble(
     feature_id = feature_ids,
     mu_ctrl = ctrl_mu,
-    mu_trt = trt_mu
+    mu_trt = trt_mu,
+    var_ctrl = ctrl_var,
+    var_trt = trt_var
   ) %>%
-    left_join(alpha_tbl, by = "feature_id") %>%
     mutate(
-      alpha_mu_ctrl = alpha_gene_wise * mu_ctrl,
-      alpha_mu_trt  = alpha_gene_wise * mu_trt,
+      alpha_emp_ctrl = ifelse(mu_ctrl > 0, (var_ctrl - mu_ctrl) / (mu_ctrl ^ 2), NA_real_),
+      alpha_emp_trt  = ifelse(mu_trt  > 0, (var_trt  - mu_trt)  / (mu_trt  ^ 2), NA_real_),
+      alpha_mu_ctrl  = ifelse(mu_ctrl > 0, (var_ctrl - mu_ctrl) / mu_ctrl, NA_real_),
+      alpha_mu_trt   = ifelse(mu_trt  > 0, (var_trt  - mu_trt)  / mu_trt,  NA_real_),
       log_alpha_mu_ctrl = ifelse(is.finite(alpha_mu_ctrl) & alpha_mu_ctrl > 0, log(alpha_mu_ctrl), NA_real_),
-      log_alpha_mu_trt  = ifelse(is.finite(alpha_mu_trt) & alpha_mu_trt > 0, log(alpha_mu_trt), NA_real_)
+      log_alpha_mu_trt  = ifelse(is.finite(alpha_mu_trt)  & alpha_mu_trt  > 0, log(alpha_mu_trt),  NA_real_)
     )
 }
 
@@ -284,7 +255,8 @@ build_rank_series <- function(full_tbl, arm = c("control", "treatment")) {
         rank = rank_ctrl,
         abs_loading = ctrl_abs_loading,
         mu = mu_ctrl,
-        alpha = alpha_gene_wise,
+        variance = var_ctrl,
+        alpha = alpha_emp_ctrl,
         alpha_mu = alpha_mu_ctrl,
         log_alpha_mu = log_alpha_mu_ctrl
       ) %>%
@@ -297,7 +269,8 @@ build_rank_series <- function(full_tbl, arm = c("control", "treatment")) {
         rank = rank_trt,
         abs_loading = trt_abs_loading,
         mu = mu_trt,
-        alpha = alpha_gene_wise,
+        variance = var_trt,
+        alpha = alpha_emp_trt,
         alpha_mu = alpha_mu_trt,
         log_alpha_mu = log_alpha_mu_trt
       ) %>%
@@ -311,7 +284,9 @@ build_rank_series <- function(full_tbl, arm = c("control", "treatment")) {
     )
 }
 
-select_leading_edge_cutoff <- function(rank_df, k = 101L, divergence_k = 75L, leading_edge_fraction = 0.60) {
+select_leading_edge_cutoff <- function(rank_df, k = 101L, divergence_k = 75L,
+                                       leading_edge_fraction = 0.60,
+                                       left_edge_exclusion_fraction = 0.02) {
   df <- rank_df %>%
     mutate(
       log_alpha_mu_sm = roll_median(log_alpha_mu, k),
@@ -319,13 +294,14 @@ select_leading_edge_cutoff <- function(rank_df, k = 101L, divergence_k = 75L, le
     )
 
   n <- nrow(df)
-  search_end <- max(3L, min(n - divergence_k, floor(n * leading_edge_fraction)))
+  search_start <- max(2L, floor(n * left_edge_exclusion_fraction))
+  search_end <- max(search_start + 2L, min(n - divergence_k, floor(n * leading_edge_fraction)))
   candidates <- integer(0)
 
-  if (search_end >= 3L) {
-    for (i in 2:search_end) {
-      local_lo <- max(1L, i - 1L)
-      local_hi <- min(n, i + 1L)
+  if (search_end >= (search_start + 1L)) {
+    for (i in search_start:search_end) {
+      local_lo <- max(search_start, i - 1L)
+      local_hi <- min(search_end, i + 1L)
       local_vals <- df$dist_to_zero[local_lo:local_hi]
       if (!all(is.finite(local_vals)) || !is.finite(df$dist_to_zero[i])) next
 
@@ -344,15 +320,14 @@ select_leading_edge_cutoff <- function(rank_df, k = 101L, divergence_k = 75L, le
 
   if (length(candidates) > 0L) {
     idx <- candidates[1L]
-    mode <- "minimum distance to alpha*mu = 1, then reopening"
+    mode <- "minimum distance to empirical alpha*mu = 1, then reopening"
   } else {
     valid <- which(is.finite(df$dist_to_zero))
+    valid <- valid[valid >= search_start & valid <= search_end]
     if (!length(valid)) {
-      idx <- 1L
+      idx <- search_start
     } else {
-      search_valid <- valid[valid <= max(search_end, 1L)]
-      if (!length(search_valid)) search_valid <- valid
-      idx <- search_valid[which.min(df$dist_to_zero[search_valid])]
+      idx <- valid[which.min(df$dist_to_zero[valid])]
     }
     mode <- "minimum distance fallback"
   }
@@ -387,11 +362,11 @@ build_dataset_panel <- function(rank_df, cutoff_info, title_prefix, out_file) {
     theme_bw(base_size = 10)
 
   p2 <- ggplot(df, aes(rank)) +
-    geom_line(aes(y = roll_median(log_mu, 101L), color = "Smoothed log(mean)"), linewidth = 1.0) +
-    geom_line(aes(y = roll_median(log_alpha, 101L), color = "Smoothed log(gene-wise dispersion)"), linewidth = 1.0) +
+    geom_line(aes(y = roll_median(log_mu, 101L), color = "Smoothed log(raw-count mean)"), linewidth = 1.0) +
+    geom_line(aes(y = roll_median(log_alpha, 101L), color = "Smoothed log(empirical dispersion)"), linewidth = 1.0) +
     geom_vline(xintercept = cutoff_x, linetype = 2, linewidth = 0.8) +
     labs(
-      title = paste0(title_prefix, ": raw-count mean and gene-wise dispersion"),
+      title = paste0(title_prefix, ": raw-count mean and empirical dispersion"),
       x = "EVS rank",
       y = "Log value"
     ) +
@@ -400,25 +375,25 @@ build_dataset_panel <- function(rank_df, cutoff_info, title_prefix, out_file) {
 
   p3 <- ggplot(df, aes(rank)) +
     geom_hline(yintercept = 0, linetype = 2) +
-    geom_line(aes(y = log_alpha_mu, color = "Raw log(alpha*mu)"), linewidth = 0.8, alpha = 0.30) +
-    geom_line(aes(y = log_alpha_mu_sm, color = "Smoothed log(alpha*mu)"), linewidth = 1.0) +
+    geom_line(aes(y = log_alpha_mu, color = "Raw log(empirical alpha*mu)"), linewidth = 0.8, alpha = 0.30) +
+    geom_line(aes(y = log_alpha_mu_sm, color = "Smoothed log(empirical alpha*mu)"), linewidth = 1.0) +
     geom_vline(xintercept = cutoff_x, linetype = 2, linewidth = 0.8) +
     labs(
-      title = paste0(title_prefix, ": NB balance curve log(alpha*mu)"),
+      title = paste0(title_prefix, ": empirical NB balance curve log(alpha*mu)"),
       x = "EVS rank",
-      y = "log(alpha*mu)"
+      y = "log(empirical alpha*mu)"
     ) +
     theme_bw(base_size = 10) +
     theme(legend.position = "bottom")
 
   p4 <- ggplot(df, aes(rank)) +
     geom_ribbon(aes(ymin = 0, ymax = dist_to_zero), alpha = 0.20) +
-    geom_line(aes(y = dist_to_zero, color = "Distance to log(alpha*mu)=0"), linewidth = 1.0) +
+    geom_line(aes(y = dist_to_zero, color = "Distance to log(empirical alpha*mu)=0"), linewidth = 1.0) +
     geom_vline(xintercept = cutoff_x, linetype = 2, linewidth = 0.8) +
     labs(
       title = paste0(title_prefix, ": shaded distance-to-balance and selected cutoff"),
       x = "EVS rank",
-      y = "|log(alpha*mu)|"
+      y = "|log(empirical alpha*mu)|"
     ) +
     theme_bw(base_size = 10) +
     theme(legend.position = "bottom")
@@ -447,7 +422,7 @@ build_range_panel <- function(ctrl_cutoff, trt_cutoff, ctrl_df, trt_df, title_pr
         " | Treatment rank = ", trt_cutoff$cutoff_rank
       ),
       x = "EVS rank",
-      y = "|log(alpha*mu)|"
+      y = "|log(empirical alpha*mu)|"
     ) +
     theme_bw(base_size = 10) +
     theme(legend.position = "bottom")
@@ -484,24 +459,10 @@ for (i in seq_len(nrow(comparison_table))) {
 
   comp <- subset_comparison(count_mat, comparison_row, meta_all)
   cmp_counts <- comp$count_matrix
-  col_data <- comp$coldata
   kept_ids <- rownames(cmp_counts)
 
-  dds <- DESeqDataSetFromMatrix(
-    countData = round(as.matrix(cmp_counts)),
-    colData = col_data,
-    design = ~ condition
-  )
-  dds <- dds[rowSums(counts(dds)) > 0, ]
-  dds <- estimateSizeFactors(dds)
-  dds <- estimateDispersions(dds, quiet = TRUE)
-
-  kept_ids <- rownames(dds)
-  cmp_counts_kept <- cmp_counts[kept_ids, , drop = FALSE]
-
-  evs_tbl <- build_evs_table(cmp_counts_kept, comp$ctrl_ids, comp$trt_ids, kept_ids)
-  alpha_tbl <- extract_gene_wise_dispersion(dds)
-  metrics_tbl <- compute_feature_metrics(cmp_counts_kept, comp$ctrl_ids, comp$trt_ids, alpha_tbl, kept_ids)
+  evs_tbl <- build_evs_table(cmp_counts, comp$ctrl_ids, comp$trt_ids, kept_ids)
+  metrics_tbl <- compute_feature_metrics_empirical(cmp_counts, comp$ctrl_ids, comp$trt_ids, kept_ids)
 
   full_tbl <- evs_tbl %>%
     left_join(metrics_tbl, by = "feature_id") %>%
@@ -515,8 +476,14 @@ for (i in seq_len(nrow(comparison_table))) {
   utils::write.csv(ctrl_rank_df, file.path(cmp_dir, paste0(cmp_name, "_control_rank_series.csv")), row.names = FALSE)
   utils::write.csv(trt_rank_df, file.path(cmp_dir, paste0(cmp_name, "_treatment_rank_series.csv")), row.names = FALSE)
 
-  ctrl_cutoff <- select_leading_edge_cutoff(ctrl_rank_df, smoother_k, divergence_k, leading_edge_fraction)
-  trt_cutoff  <- select_leading_edge_cutoff(trt_rank_df, smoother_k, divergence_k, leading_edge_fraction)
+  ctrl_cutoff <- select_leading_edge_cutoff(
+    ctrl_rank_df, smoother_k, divergence_k,
+    leading_edge_fraction, left_edge_exclusion_fraction
+  )
+  trt_cutoff <- select_leading_edge_cutoff(
+    trt_rank_df, smoother_k, divergence_k,
+    leading_edge_fraction, left_edge_exclusion_fraction
+  )
 
   build_dataset_panel(
     ctrl_rank_df, ctrl_cutoff,
@@ -551,7 +518,11 @@ for (i in seq_len(nrow(comparison_table))) {
     cutoff_range_fraction_max = max(ctrl_cutoff$cutoff_fraction, trt_cutoff$cutoff_fraction)
   )
 
-  utils::write.csv(cutoff_summary, file.path(cmp_dir, paste0(cmp_name, "_cutoff_summary.csv")), row.names = FALSE)
+  utils::write.csv(
+    cutoff_summary,
+    file.path(cmp_dir, paste0(cmp_name, "_cutoff_summary.csv")),
+    row.names = FALSE
+  )
   overall_rows[[cmp_name]] <- cutoff_summary
 }
 
