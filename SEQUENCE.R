@@ -1,5 +1,3 @@
-Use this revised script. It keeps the empirical NB framework you liked, but changes only the selector so it finds the first major elbow after the initial left-edge drop, instead of the first tiny early minimum.
-
 # =============================================================================
 # SEQUENCE STAGE 1: EMPIRICAL NB REGIME SHIFT
 # ELBOW-BASED LEADING-EDGE CUTOFF
