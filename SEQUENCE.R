@@ -55,8 +55,8 @@ dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
 count_file <- file.path(input_dir, "WTTS-Seq_2022.2_DE_raw_read_numbers.csv")
 figure_dpi <- 320
 base_theme_size <- 10
-fourier_harmonics <- 2L
-local_window_fraction <- 1.00
+fourier_harmonics <- 1L
+local_window_fraction <- 0.005
 local_percentile_step <- 0.005
 min_features_required <- 25L
 
