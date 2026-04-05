@@ -1,0 +1,5 @@
+"comparison_name","selected_reason","crossing_id","crossing_rank","rank_cutoff","n_total","leading_edge_union_n","remainder_union_n"
+"RT0_ZT6","last_local_amplitude_crossing_before_divergence","crossing_15",24659,24659,31553,29836,1717
+"RT2_ZT8","last_local_amplitude_crossing_before_divergence","crossing_12",30642,30642,31534,31534,0
+"RT4_ZT10","last_local_amplitude_crossing_before_divergence","crossing_32",30636,30636,31658,31654,4
+"RT8_ZT14","last_local_amplitude_crossing_before_divergence","crossing_33",28656,28656,31580,31292,288
