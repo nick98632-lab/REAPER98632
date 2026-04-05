@@ -1,0 +1,13 @@
+"dataset","method","crossing_percentile"
+"control","empirical",NA
+"control","nb_gene_wise",NA
+"control","nb_fitted",NA
+"control","nb_final",NA
+"treatment","empirical",0.833514891399396
+"treatment","nb_gene_wise",0.833227674375315
+"treatment","nb_fitted",0.830071012625405
+"treatment","nb_final",0.832453471975857
+"combined","empirical",0.320123181877668
+"combined","nb_gene_wise",NA
+"combined","nb_fitted",NA
+"combined","nb_final",NA

@@ -1,0 +1,2 @@
+"comparison","n_features","primary_cutoff_method","primary_cutoff_percentile","support_range_min","support_range_max","empirical_cutoff","gene_wise_cutoff","fitted_cutoff","final_cutoff"
+"RT2_ZT8",31534,"nb_final",NA,0.320123181877668,0.320123181877668,0.320123181877668,NA,NA,NA
