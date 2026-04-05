@@ -56,8 +56,8 @@ count_file <- file.path(input_dir, "WTTS-Seq_2022.2_DE_raw_read_numbers.csv")
 figure_dpi <- 320
 base_theme_size <- 10
 fourier_harmonics <- 2L
-local_window_fraction <- 0.005
-local_percentile_step <- 0.005
+local_window_fraction <- 0.12
+local_percentile_step <- 0.01
 min_features_required <- 25L
 
 comparison_table <- data.frame(
@@ -671,7 +671,7 @@ plot_group_wave_map <- function(group_wave_map, group_label, comparison_name) {
     scale_color_manual(values = c("IOD" = plot_colors$iod, "CV²" = plot_colors$cv2)) +
     labs(
       title = paste0(comparison_name, " | ", group_label, " local Fourier amplitude map"),
-      subtitle = "Evaluated on a 0.5% percentile-center grid with 0.5% window width; amplitudes were rescaled to 0 to 1 within group",
+      subtitle = "Evaluated on a 0.5% percentile-center grid with 12% window width; amplitudes were rescaled to 0 to 1 within group",
       x = "Percentile center",
       y = "Scaled local amplitude (0-1)"
     ) +
