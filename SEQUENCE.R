@@ -74,7 +74,8 @@ resolve_counts_file <- function(path_hint) {
 
   found <- list.files(
     path = "/root/REAPER98632",
-    pattern = "WTTS-Seq_2022\.2_DE_raw_read_numbers\.csv$",
+    pattern = "WTTS-Seq_2022.2_DE_raw_read_numbers.csv",
+    fixed = TRUE,
     recursive = TRUE,
     full.names = TRUE
   )
