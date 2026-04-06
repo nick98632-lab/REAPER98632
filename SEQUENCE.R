@@ -1,6 +1,7 @@
 # =============================================================================
 # SEQUENCE STAGE 1: EMPIRICAL VARIANCE + NB1/NB2 REGIME SPLIT
-# RIGHT-SIDE LEADING EDGE, TERMINAL INFLECTION SELECTOR
+# RIGHT-SIDE LEADING EDGE
+# AUTOMATIC CHANGEPOINT ON SMOOTHED VARIANCE-SLOPE
 # -----------------------------------------------------------------------------
 # Orientation
 #   - lowest absolute loading on the LEFT
@@ -16,14 +17,20 @@
 #   alpha_mu  = alpha_emp * mu = (Var - mu) / mu
 #
 # Main selector
-#   - fit a smooth curve to empirical log(1 + variance)
-#   - compute first and second derivatives from the smoothed curve
-#   - identify the TERMINAL right-side inflection / steepening region
-#   - require NB2 > NB1 support in the same neighborhood
-#   - define cutoff as the LEFT EDGE of the strongest sustained terminal block
+#   1. Rank features from lowest to highest absolute PC1 loading.
+#   2. Compute empirical raw-count variance for each feature.
+#   3. Fit a smooth spline to log1p(variance) across the full ranked series.
+#   4. Compute the first derivative of that smooth curve.
+#   5. Detect the TERMINAL sustained positive-slope run on the right.
+#   6. Detect changepoints on the derivative inside the interior search region.
+#      - If package "changepoint" is available, use cpt.meanvar(..., method="PELT")
+#      - Otherwise use a base-R mean-shift score fallback
+#   7. Define the cutoff as the LAST changepoint before the terminal sustained
+#      positive-slope run. If no changepoint is found, use the left edge of the
+#      terminal sustained positive-slope run itself.
 #
 # Output
-#   exports/variance_nb1_nb2_terminal_inflection/<comparison>_cutoff_folder/
+#   exports/variance_nb1_nb2_changepoint_terminal_run/<comparison>_cutoff_folder/
 # =============================================================================
 
 suppressPackageStartupMessages({
@@ -39,7 +46,7 @@ suppressPackageStartupMessages({
 repo_dir <- getwd()
 input_dir <- file.path(repo_dir, "data")
 count_file <- file.path(input_dir, "WTTS-Seq_2022.2_DE_raw_read_numbers.csv")
-out_root <- file.path(repo_dir, "exports", "variance_nb1_nb2_terminal_inflection")
+out_root <- file.path(repo_dir, "exports", "variance_nb1_nb2_changepoint_terminal_run")
 dir.create(out_root, recursive = TRUE, showWarnings = FALSE)
 
 comparison_table <- data.frame(
@@ -67,15 +74,18 @@ meta_all <- data.frame(
 rownames(meta_all) <- meta_all$id
 meta_all$condition <- factor(meta_all$condition, levels = c("untrt", "trt"))
 
-loess_span <- 0.08
-deriv_roll_k <- 151L
-left_baseline_fraction <- 0.15
-search_fraction_min <- 0.55
-search_fraction_max <- 0.995
+# smoothing and selector settings
 left_edge_buffer <- 50L
 right_edge_buffer <- 20L
-min_block_length <- 200L
-score_quantile_within_search <- 0.80
+search_fraction_min <- 0.20
+search_fraction_max <- 0.985
+
+spline_spar <- 0.60
+terminal_run_fraction <- 0.20
+terminal_run_min_length <- 250L
+terminal_positive_slope_quantile <- 0.70
+
+fallback_window <- 250L
 
 # =============================================================================
 # HELPERS
@@ -320,8 +330,6 @@ build_rank_series <- function(full_tbl, arm = c("control", "treatment")) {
   out %>%
     mutate(
       log_variance = ifelse(is.finite(variance) & variance >= 0, log1p(variance), NA_real_),
-      log_mu = ifelse(is.finite(mu) & mu > 0, log(mu), NA_real_),
-      log_alpha = ifelse(is.finite(alpha) & alpha > 0, log(alpha), NA_real_),
       log_nb1 = ifelse(is.finite(nb1) & nb1 >= 0, log1p(nb1), NA_real_),
       log_nb2 = ifelse(is.finite(nb2) & nb2 >= 0, log1p(nb2), NA_real_),
       nb_gap = log_nb2 - log_nb1,
@@ -329,44 +337,72 @@ build_rank_series <- function(full_tbl, arm = c("control", "treatment")) {
     )
 }
 
-find_best_block <- function(cond, score, search_start, search_end, min_block_length = 250L) {
+find_runs <- function(cond) {
   cond[is.na(cond)] <- FALSE
-  use <- cond[search_start:search_end]
-  r <- rle(use)
+  r <- rle(cond)
   ends <- cumsum(r$lengths)
   starts <- c(1L, head(ends, -1L) + 1L)
+  data.frame(start = starts, end = ends, value = r$values, length = r$lengths)
+}
 
-  block_ids <- which(r$values & r$lengths >= min_block_length)
-  if (!length(block_ids)) return(NULL)
+detect_changepoints <- function(x, search_start, search_end) {
+  x_use <- as.numeric(x[search_start:search_end])
+  x_use[!is.finite(x_use)] <- stats::median(x_use[is.finite(x_use)], na.rm = TRUE)
 
-  best_mean <- -Inf
-  best <- NULL
+  cps <- integer(0)
 
-  for (j in block_ids) {
-    lo_local <- starts[j]
-    hi_local <- ends[j]
-    lo_global <- search_start + lo_local - 1L
-    hi_global <- search_start + hi_local - 1L
-    m <- mean(score[lo_global:hi_global], na.rm = TRUE)
-    if (is.finite(m) && m > best_mean) {
-      best_mean <- m
-      best <- list(start = lo_global, end = hi_global, mean_score = m)
+  if (requireNamespace("changepoint", quietly = TRUE)) {
+    cp_obj <- tryCatch(
+      changepoint::cpt.meanvar(
+        x_use,
+        method = "PELT",
+        penalty = "MBIC",
+        class = TRUE
+      ),
+      error = function(e) NULL
+    )
+    if (!is.null(cp_obj)) {
+      cps <- changepoint::cpts(cp_obj)
+      cps <- cps[cps > 1L & cps < length(x_use)]
+      cps <- search_start + cps - 1L
     }
   }
 
-  best
+  if (!length(cps)) {
+    # base-R fallback: moving split mean-shift score on derivative
+    n <- length(x_use)
+    w <- max(25L, min(fallback_window, floor(n / 6)))
+    score <- rep(NA_real_, n)
+    for (i in seq.int(w + 1L, n - w)) {
+      left_mean <- mean(x_use[(i - w):(i - 1L)], na.rm = TRUE)
+      right_mean <- mean(x_use[i:(i + w - 1L)], na.rm = TRUE)
+      score[i] <- abs(right_mean - left_mean)
+    }
+    # pick top local maxima
+    score_cut <- as.numeric(stats::quantile(score[is.finite(score)], probs = 0.90, na.rm = TRUE, names = FALSE))
+    locmax <- rep(FALSE, n)
+    for (i in 2:(n - 1L)) {
+      if (is.finite(score[i]) && score[i] >= score_cut && score[i] >= score[i - 1L] && score[i] >= score[i + 1L]) {
+        locmax[i] <- TRUE
+      }
+    }
+    cps <- which(locmax)
+    cps <- search_start + cps - 1L
+  }
+
+  sort(unique(cps))
 }
 
-select_terminal_inflection_block <- function(rank_df,
-                                             loess_span = 0.08,
-                                             deriv_roll_k = 151L,
-                                             left_baseline_fraction = 0.15,
-                                             search_fraction_min = 0.55,
-                                             search_fraction_max = 0.995,
-                                             left_edge_buffer = 50L,
-                                             right_edge_buffer = 20L,
-                                             min_block_length = 200L,
-                                             score_quantile_within_search = 0.80) {
+select_cutoff_from_slope <- function(rank_df,
+                                     loess_span = 0.08,
+                                     left_baseline_fraction = 0.15,
+                                     search_fraction_min = 0.20,
+                                     search_fraction_max = 0.985,
+                                     left_edge_buffer = 50L,
+                                     right_edge_buffer = 20L,
+                                     terminal_run_fraction = 0.20,
+                                     terminal_run_min_length = 250L,
+                                     terminal_positive_slope_quantile = 0.70) {
   df <- rank_df
   n <- nrow(df)
   x <- df$rank
@@ -377,19 +413,59 @@ select_terminal_inflection_block <- function(rank_df,
   var_fit <- rep(NA_real_, n)
   var_fit[ok] <- stats::predict(lo_obj, newdata = data.frame(`x[ok]` = x[ok]))
 
-  # first derivative
   d1 <- c(NA_real_, diff(var_fit))
-  d1_sm <- roll_median(d1, deriv_roll_k)
-
-  # second derivative
+  d1_sm <- roll_median(d1, 151L)
   d2 <- c(NA_real_, diff(d1_sm))
-  d2_sm <- roll_median(d2, deriv_roll_k)
+  d2_sm <- roll_median(d2, 151L)
 
-  # smooth support quantities
-  nb_gap_sm <- roll_median(df$nb_gap, deriv_roll_k)
-  amu_sm <- roll_median(df$log_alpha_mu, deriv_roll_k)
+  nb_gap_sm <- roll_median(df$nb_gap, 151L)
+  amu_sm <- roll_median(df$log_alpha_mu, 151L)
 
-  # left baseline for support z scores
+  search_start <- max(left_edge_buffer + 1L, floor(search_fraction_min * n))
+  search_end <- min(n - right_edge_buffer, floor(search_fraction_max * n))
+
+  # terminal sustained positive-slope run on right
+  tail_start <- max(search_start, floor((1 - terminal_run_fraction) * n))
+  tail_idx <- seq.int(tail_start, search_end)
+
+  pos_cut <- as.numeric(stats::quantile(
+    d1_sm[tail_idx][is.finite(d1_sm[tail_idx])],
+    probs = terminal_positive_slope_quantile,
+    na.rm = TRUE,
+    names = FALSE
+  ))
+  terminal_cond <- rep(FALSE, n)
+  terminal_cond[tail_idx] <- is.finite(d1_sm[tail_idx]) & (d1_sm[tail_idx] >= pos_cut)
+
+  run_tbl <- find_runs(terminal_cond[tail_idx])
+  good_runs <- run_tbl[run_tbl$value & run_tbl$length >= terminal_run_min_length, , drop = FALSE]
+
+  if (nrow(good_runs)) {
+    # choose the leftmost run among terminal qualifying runs
+    terminal_local_start <- good_runs$start[1]
+    terminal_local_end <- good_runs$end[1]
+    terminal_start <- tail_start + terminal_local_start - 1L
+    terminal_end <- tail_start + terminal_local_end - 1L
+  } else {
+    # fallback: strongest positive-slope region on right
+    best_local <- which.max(d1_sm[tail_idx])
+    terminal_start <- tail_idx[max(1L, best_local - terminal_run_min_length + 1L)]
+    terminal_end <- tail_idx[min(length(tail_idx), best_local + terminal_run_min_length - 1L)]
+  }
+
+  cps <- detect_changepoints(d1_sm, search_start = search_start, search_end = terminal_start)
+
+  # choose last changepoint before terminal run
+  cps_before <- cps[cps < terminal_start]
+  if (length(cps_before)) {
+    cutoff_idx <- max(cps_before)
+    mode <- "last changepoint before terminal positive-slope run"
+  } else {
+    cutoff_idx <- terminal_start
+    mode <- "left edge of terminal positive-slope run fallback"
+  }
+
+  # support score for figure only
   base_end <- min(max(floor(left_baseline_fraction * n), left_edge_buffer + 100L), n - right_edge_buffer)
   base_idx <- seq.int(1L + left_edge_buffer, base_end)
 
@@ -413,68 +489,8 @@ select_terminal_inflection_block <- function(rank_df,
   gap_z[gap_ok] <- (nb_gap_sm[gap_ok] - gap_obj$center) / gap_obj$scale
   amu_z[amu_ok] <- (amu_sm[amu_ok] - amu_obj$center) / amu_obj$scale
 
-  # combined terminal-inflection score:
-  # high slope + high positive curvature + NB2>NB1 support + alpha*mu support
-  score_raw <- rowMeans(cbind(
-    scale01(d1_z),
-    scale01(d2_z),
-    scale01(gap_z),
-    scale01(amu_z)
-  ), na.rm = TRUE)
-  score_sm <- roll_median(score_raw, deriv_roll_k)
-
-  search_start <- max(base_end + 1L, floor(search_fraction_min * n))
-  search_end <- min(n - right_edge_buffer, floor(search_fraction_max * n))
-  search_idx <- seq.int(search_start, search_end)
-
-  score_cut <- as.numeric(stats::quantile(
-    score_sm[search_idx][is.finite(score_sm[search_idx])],
-    probs = score_quantile_within_search,
-    na.rm = TRUE,
-    names = FALSE
-  ))
-
-  cond <- rep(FALSE, n)
-  cond[search_idx] <- is.finite(score_sm[search_idx]) & (score_sm[search_idx] >= score_cut)
-
-  # choose strongest block, then prefer the one closest to right side if tied
-  use <- cond[search_start:search_end]
-  r <- rle(use)
-  ends <- cumsum(r$lengths)
-  starts <- c(1L, head(ends, -1L) + 1L)
-  block_ids <- which(r$values & r$lengths >= min_block_length)
-
-  if (!length(block_ids)) {
-    block_ids <- which(r$values & r$lengths >= max(50L, floor(min_block_length / 2)))
-  }
-
-  if (!length(block_ids)) {
-    best_idx <- search_idx[which.max(score_sm[search_idx])]
-    block_start <- best_idx
-    block_end <- best_idx
-    block_mean <- score_sm[best_idx]
-  } else {
-    block_tbl <- lapply(block_ids, function(j) {
-      lo_local <- starts[j]
-      hi_local <- ends[j]
-      lo_global <- search_start + lo_local - 1L
-      hi_global <- search_start + hi_local - 1L
-      data.frame(
-        start = lo_global,
-        end = hi_global,
-        mean_score = mean(score_sm[lo_global:hi_global], na.rm = TRUE),
-        rightness = hi_global
-      )
-    }) %>% bind_rows()
-
-    # strongest block, break ties by more rightward end
-    block_tbl <- block_tbl %>%
-      arrange(desc(mean_score), desc(rightness))
-
-    block_start <- block_tbl$start[1]
-    block_end <- block_tbl$end[1]
-    block_mean <- block_tbl$mean_score[1]
-  }
+  regime_score <- rowMeans(cbind(scale01(d1_z), scale01(d2_z), scale01(gap_z), scale01(amu_z)), na.rm = TRUE)
+  regime_score_sm <- roll_median(regime_score, 151L)
 
   df$var_fit <- var_fit
   df$d1_sm <- d1_sm
@@ -485,23 +501,21 @@ select_terminal_inflection_block <- function(rank_df,
   df$d2_z <- d2_z
   df$gap_z <- gap_z
   df$amu_z <- amu_z
-  df$score_raw <- score_raw
-  df$score_sm <- score_sm
-  df$score_cut <- score_cut
-  df$in_block <- FALSE
-  df$in_block[block_start:block_end] <- TRUE
+  df$regime_score_sm <- regime_score_sm
+  df$terminal_cond <- FALSE
+  df$terminal_cond[terminal_start:terminal_end] <- TRUE
 
   list(
-    onset_index = block_start,
-    onset_rank = df$rank[block_start],
-    block_end_index = block_end,
-    block_end_rank = df$rank[block_end],
-    mode = "left edge of strongest sustained terminal-inflection block",
-    baseline_end = base_end,
+    onset_index = cutoff_idx,
+    onset_rank = df$rank[cutoff_idx],
+    terminal_start_index = terminal_start,
+    terminal_start_rank = df$rank[terminal_start],
+    terminal_end_index = terminal_end,
+    terminal_end_rank = df$rank[terminal_end],
+    changepoints = cps,
+    mode = mode,
     search_start = search_start,
     search_end = search_end,
-    score_cut = score_cut,
-    block_mean_score = block_mean,
     curve_df = df
   )
 }
@@ -509,19 +523,22 @@ select_terminal_inflection_block <- function(rank_df,
 build_dataset_panel <- function(rank_df, onset_info, title_prefix, out_file) {
   df <- onset_info$curve_df
   cutoff_x <- onset_info$onset_rank
-  block_end_x <- onset_info$block_end_rank
+  term_start_x <- onset_info$terminal_start_rank
+  term_end_x <- onset_info$terminal_end_rank
+  cp_df <- data.frame(rank = onset_info$changepoints)
+
   label_text <- paste0(
     onset_info$mode,
-    "\nStart rank = ", cutoff_x,
-    "\nEnd rank = ", block_end_x
+    "\nCutoff rank = ", cutoff_x,
+    "\nTerminal run starts at ", term_start_x
   )
 
   p1 <- ggplot(df, aes(rank, abs_loading)) +
     geom_line(linewidth = 0.8) +
     annotate("rect",
-      xmin = cutoff_x,
-      xmax = block_end_x,
-      ymin = -Inf, ymax = Inf, alpha = 0.10
+      xmin = term_start_x,
+      xmax = term_end_x,
+      ymin = -Inf, ymax = Inf, alpha = 0.08
     ) +
     geom_vline(xintercept = cutoff_x, linetype = 2, linewidth = 0.8) +
     annotate("label",
@@ -540,10 +557,11 @@ build_dataset_panel <- function(rank_df, onset_info, title_prefix, out_file) {
 
   p2 <- ggplot(df, aes(rank)) +
     geom_line(aes(y = var_fit, color = "Loess fit: log(1 + variance)"), linewidth = 1.0) +
+    if (nrow(cp_df)) geom_vline(data = cp_df, aes(xintercept = rank), linetype = 3, linewidth = 0.4, alpha = 0.6) else NULL +
     annotate("rect",
-      xmin = cutoff_x,
-      xmax = block_end_x,
-      ymin = -Inf, ymax = Inf, alpha = 0.10
+      xmin = term_start_x,
+      xmax = term_end_x,
+      ymin = -Inf, ymax = Inf, alpha = 0.08
     ) +
     geom_point(
       data = df[df$rank == cutoff_x, , drop = FALSE],
@@ -560,56 +578,55 @@ build_dataset_panel <- function(rank_df, onset_info, title_prefix, out_file) {
     theme(legend.position = "bottom")
 
   p3 <- ggplot(df, aes(rank)) +
-    geom_line(aes(y = log_nb1, color = "NB1 = mu"), linewidth = 0.6, alpha = 0.35) +
-    geom_line(aes(y = log_nb2, color = "NB2 = variance - mu"), linewidth = 0.6, alpha = 0.35) +
-    geom_line(aes(y = nb_gap_sm, color = "Smoothed NB2 - NB1 gap"), linewidth = 1.0) +
+    geom_line(aes(y = d1_sm, color = "Smoothed slope"), linewidth = 1.0) +
+    geom_line(aes(y = d2_sm, color = "Smoothed curvature"), linewidth = 1.0) +
     annotate("rect",
-      xmin = cutoff_x,
-      xmax = block_end_x,
-      ymin = -Inf, ymax = Inf, alpha = 0.10
+      xmin = term_start_x,
+      xmax = term_end_x,
+      ymin = -Inf, ymax = Inf, alpha = 0.08
     ) +
+    if (nrow(cp_df)) geom_vline(data = cp_df, aes(xintercept = rank), linetype = 3, linewidth = 0.4, alpha = 0.6) else NULL +
     geom_vline(xintercept = cutoff_x, linetype = 2, linewidth = 0.8) +
     labs(
-      title = paste0(title_prefix, ": NB1 / NB2 support"),
+      title = paste0(title_prefix, ": slope / curvature changepoint support"),
       x = "EVS rank",
-      y = "Log value"
+      y = "Derivative value"
     ) +
     theme_bw(base_size = 10) +
     theme(legend.position = "bottom")
 
   p4 <- ggplot(df, aes(rank)) +
-    geom_line(aes(y = d1_z, color = "Slope z"), linewidth = 1.0) +
-    geom_line(aes(y = d2_z, color = "Curvature z"), linewidth = 1.0) +
-    geom_line(aes(y = gap_z, color = "NB2-NB1 gap z"), linewidth = 1.0) +
-    geom_line(aes(y = amu_z, color = "alpha*mu z"), linewidth = 1.0) +
+    geom_line(aes(y = log_nb1, color = "NB1 = mu"), linewidth = 0.5, alpha = 0.35) +
+    geom_line(aes(y = log_nb2, color = "NB2 = variance - mu"), linewidth = 0.5, alpha = 0.35) +
+    geom_line(aes(y = nb_gap_sm, color = "Smoothed NB2 - NB1 gap"), linewidth = 1.0) +
+    geom_line(aes(y = amu_sm, color = "Smoothed log(alpha*mu)"), linewidth = 1.0) +
     annotate("rect",
-      xmin = cutoff_x,
-      xmax = block_end_x,
-      ymin = -Inf, ymax = Inf, alpha = 0.10
+      xmin = term_start_x,
+      xmax = term_end_x,
+      ymin = -Inf, ymax = Inf, alpha = 0.08
     ) +
     geom_vline(xintercept = cutoff_x, linetype = 2, linewidth = 0.8) +
     labs(
-      title = paste0(title_prefix, ": standardized terminal-inflection support"),
+      title = paste0(title_prefix, ": NB1 / NB2 / alpha*mu support"),
       x = "EVS rank",
-      y = "Z score from left baseline"
+      y = "Support value"
     ) +
     theme_bw(base_size = 10) +
     theme(legend.position = "bottom")
 
-  p5 <- ggplot(df, aes(rank, score_sm)) +
+  p5 <- ggplot(df, aes(rank, regime_score_sm)) +
     geom_line(linewidth = 1.0) +
-    geom_hline(yintercept = onset_info$score_cut, linetype = 3) +
     annotate("rect",
-      xmin = cutoff_x,
-      xmax = block_end_x,
-      ymin = -Inf, ymax = Inf, alpha = 0.10
+      xmin = term_start_x,
+      xmax = term_end_x,
+      ymin = -Inf, ymax = Inf, alpha = 0.08
     ) +
     geom_vline(xintercept = cutoff_x, linetype = 2, linewidth = 0.8) +
     labs(
-      title = paste0(title_prefix, ": terminal-inflection regime score"),
-      subtitle = "Cutoff = left edge of strongest sustained terminal right-side block",
+      title = paste0(title_prefix, ": combined support score"),
+      subtitle = "Cutoff = last changepoint before terminal positive-slope run",
       x = "EVS rank",
-      y = "Smoothed regime score"
+      y = "Smoothed support score"
     ) +
     theme_bw(base_size = 10)
 
@@ -623,8 +640,8 @@ build_range_panel <- function(ctrl_onset, trt_onset, ctrl_df, trt_df, title_pref
   trt_plot_df  <- trt_onset$curve_df
 
   p <- ggplot() +
-    geom_line(data = ctrl_plot_df, aes(rank, score_sm, color = "Control regime score"), linewidth = 1.0) +
-    geom_line(data = trt_plot_df, aes(rank, score_sm, color = "Treatment regime score"), linewidth = 1.0) +
+    geom_line(data = ctrl_plot_df, aes(rank, var_fit, color = "Control variance fit"), linewidth = 1.0) +
+    geom_line(data = trt_plot_df, aes(rank, var_fit, color = "Treatment variance fit"), linewidth = 1.0) +
     annotate(
       "rect",
       xmin = min(ctrl_onset$onset_rank, trt_onset$onset_rank),
@@ -640,7 +657,7 @@ build_range_panel <- function(ctrl_onset, trt_onset, ctrl_df, trt_df, title_pref
         " | Treatment rank = ", trt_onset$onset_rank
       ),
       x = "EVS rank",
-      y = "Terminal-inflection regime score"
+      y = "Fitted log(1 + variance)"
     ) +
     theme_bw(base_size = 10) +
     theme(legend.position = "bottom")
@@ -694,33 +711,33 @@ for (i in seq_len(nrow(comparison_table))) {
   utils::write.csv(ctrl_rank_df, file.path(cmp_dir, paste0(cmp_name, "_control_rank_series.csv")), row.names = FALSE)
   utils::write.csv(trt_rank_df, file.path(cmp_dir, paste0(cmp_name, "_treatment_rank_series.csv")), row.names = FALSE)
 
-  message("Selecting control terminal-inflection block for ", cmp_name); flush.console()
-  ctrl_onset <- select_terminal_inflection_block(
+  message("Selecting control changepoint cutoff for ", cmp_name); flush.console()
+  ctrl_onset <- select_cutoff_from_slope(
     ctrl_rank_df,
     loess_span = loess_span,
-    deriv_roll_k = deriv_roll_k,
     left_baseline_fraction = left_baseline_fraction,
     search_fraction_min = search_fraction_min,
     search_fraction_max = search_fraction_max,
     left_edge_buffer = left_edge_buffer,
     right_edge_buffer = right_edge_buffer,
-    min_block_length = min_block_length,
-    score_quantile_within_search = score_quantile_within_search
+    terminal_run_fraction = terminal_run_fraction,
+    terminal_run_min_length = terminal_run_min_length,
+    terminal_positive_slope_quantile = terminal_positive_slope_quantile
   )
   message("Control onset rank: ", ctrl_onset$onset_rank); flush.console()
 
-  message("Selecting treatment terminal-inflection block for ", cmp_name); flush.console()
-  trt_onset <- select_terminal_inflection_block(
+  message("Selecting treatment changepoint cutoff for ", cmp_name); flush.console()
+  trt_onset <- select_cutoff_from_slope(
     trt_rank_df,
     loess_span = loess_span,
-    deriv_roll_k = deriv_roll_k,
     left_baseline_fraction = left_baseline_fraction,
     search_fraction_min = search_fraction_min,
     search_fraction_max = search_fraction_max,
     left_edge_buffer = left_edge_buffer,
     right_edge_buffer = right_edge_buffer,
-    min_block_length = min_block_length,
-    score_quantile_within_search = score_quantile_within_search
+    terminal_run_fraction = terminal_run_fraction,
+    terminal_run_min_length = terminal_run_min_length,
+    terminal_positive_slope_quantile = terminal_positive_slope_quantile
   )
   message("Treatment onset rank: ", trt_onset$onset_rank); flush.console()
 
@@ -742,15 +759,13 @@ for (i in seq_len(nrow(comparison_table))) {
     control_cutoff_mode = ctrl_onset$mode,
     control_cutoff_rank = ctrl_onset$onset_rank,
     control_cutoff_fraction = ctrl_onset$onset_rank / nrow(ctrl_rank_df),
-    control_block_end_rank = ctrl_onset$block_end_rank,
+    control_terminal_start_rank = ctrl_onset$terminal_start_rank,
     treatment_cutoff_mode = trt_onset$mode,
     treatment_cutoff_rank = trt_onset$onset_rank,
     treatment_cutoff_fraction = trt_onset$onset_rank / nrow(trt_rank_df),
-    treatment_block_end_rank = trt_onset$block_end_rank,
+    treatment_terminal_start_rank = trt_onset$terminal_start_rank,
     cutoff_range_rank_min = min(ctrl_onset$onset_rank, trt_onset$onset_rank),
-    cutoff_range_rank_max = max(ctrl_onset$onset_rank, trt_onset$onset_rank),
-    cutoff_range_fraction_min = min(ctrl_onset$onset_rank / nrow(ctrl_rank_df), trt_onset$onset_rank / nrow(trt_rank_df)),
-    cutoff_range_fraction_max = max(ctrl_onset$onset_rank / nrow(ctrl_rank_df), trt_onset$onset_rank / nrow(trt_rank_df))
+    cutoff_range_rank_max = max(ctrl_onset$onset_rank, trt_onset$onset_rank)
   )
 
   utils::write.csv(
