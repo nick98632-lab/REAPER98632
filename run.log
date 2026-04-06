@@ -4,24 +4,24 @@ Using count file: /root/REAPER98632/data/WTTS-Seq_2022.2_DE_raw_read_numbers.csv
 Reading count matrix...
 Count matrix dimensions: 31757 features x 40 samples
 Processing comparison: RT0_ZT6
-Fitting control breakpoint for RT0_ZT6
-Control breakpoint rank: 19054
-Fitting treatment breakpoint for RT0_ZT6
-Treatment breakpoint rank: 30807
+Selecting control regime onset for RT0_ZT6
+Control onset rank: 5619
+Selecting treatment regime onset for RT0_ZT6
+Treatment onset rank: 16736
 Processing comparison: RT2_ZT8
-Fitting control breakpoint for RT2_ZT8
-Control breakpoint rank: 19054
-Fitting treatment breakpoint for RT2_ZT8
-Treatment breakpoint rank: 30912
+Selecting control regime onset for RT2_ZT8
+Control onset rank: 9153
+Selecting treatment regime onset for RT2_ZT8
+Treatment onset rank: 17833
 Processing comparison: RT4_ZT10
-Fitting control breakpoint for RT4_ZT10
-Control breakpoint rank: 19054
-Fitting treatment breakpoint for RT4_ZT10
-Treatment breakpoint rank: 19054
+Selecting control regime onset for RT4_ZT10
+Control onset rank: 8936
+Selecting treatment regime onset for RT4_ZT10
+Treatment onset rank: 5597
 Processing comparison: RT8_ZT14
-Fitting control breakpoint for RT8_ZT14
-Control breakpoint rank: 19054
-Fitting treatment breakpoint for RT8_ZT14
-Treatment breakpoint rank: 19054
-There were 24 warnings (use warnings() to see them)
-Done. Outputs written to: /root/REAPER98632/exports/variance_nb1_nb2_right_leading_edge
+Selecting control regime onset for RT8_ZT14
+Control onset rank: 16180
+Selecting treatment regime onset for RT8_ZT14
+Treatment onset rank: 5600
+There were 16 warnings (use warnings() to see them)
+Done. Outputs written to: /root/REAPER98632/exports/variance_nb1_nb2_right_left_baseline_onset
