@@ -2,6 +2,7 @@
 # SEQUENCE STAGE 1: EMPIRICAL VARIANCE + NB1/NB2 REGIME SPLIT
 # RIGHT-SIDE LEADING EDGE
 # AUTOMATIC CHANGEPOINT ON SMOOTHED VARIANCE-SLOPE
+# FULL FIXED VERSION
 # -----------------------------------------------------------------------------
 # Orientation
 #   - lowest absolute loading on the LEFT
@@ -20,7 +21,7 @@
 #   1. Rank features from lowest to highest absolute PC1 loading.
 #   2. Compute empirical raw-count variance for each feature.
 #   3. Fit a smooth spline to log1p(variance) across the full ranked series.
-#   4. Compute the first and second derivatives of that smooth curve.
+#   4. Compute first and second derivatives of that smooth curve.
 #   5. Detect the terminal sustained positive-slope run on the right.
 #   6. Detect changepoints on the derivative in the interior region.
 #      - If package "changepoint" is available, use PELT.
@@ -356,8 +357,25 @@ build_rank_series <- function(full_tbl, arm = c("control", "treatment")) {
 }
 
 detect_changepoints <- function(x, search_start, search_end, fallback_window = 250L) {
-  x_use <- as.numeric(x[search_start:search_end])
-  x_use[!is.finite(x_use)] <- stats::median(x_use[is.finite(x_use)], na.rm = TRUE)
+  x_all <- as.numeric(x)
+  n_all <- length(x_all)
+
+  search_start <- max(1L, search_start)
+  search_end <- min(n_all, search_end)
+
+  if (search_end <= search_start + 5L) {
+    return(integer(0))
+  }
+
+  x_use <- x_all[search_start:search_end]
+
+  finite_use <- is.finite(x_use)
+  if (!any(finite_use)) {
+    return(integer(0))
+  }
+
+  fill_value <- stats::median(x_use[finite_use], na.rm = TRUE)
+  x_use[!finite_use] <- fill_value
 
   cps <- integer(0)
 
@@ -369,35 +387,82 @@ detect_changepoints <- function(x, search_start, search_end, fallback_window = 2
         penalty = "MBIC",
         class = TRUE
       ),
-      error = function(e) NULL
+      error = function(e) NULL,
+      warning = function(w) NULL
     )
+
     if (!is.null(cp_obj)) {
       cps <- changepoint::cpts(cp_obj)
+      cps <- cps[is.finite(cps)]
       cps <- cps[cps > 1L & cps < length(x_use)]
       cps <- search_start + cps - 1L
+      cps <- sort(unique(cps))
     }
   }
 
+  if (length(cps) > 0L) {
+    return(cps)
+  }
+
+  n <- length(x_use)
+  w <- max(25L, min(fallback_window, floor(n / 6)))
+
+  if (n < (2L * w + 3L)) {
+    return(integer(0))
+  }
+
+  score <- rep(NA_real_, n)
+
+  for (i in seq.int(w + 1L, n - w)) {
+    left_vals <- x_use[(i - w):(i - 1L)]
+    right_vals <- x_use[i:(i + w - 1L)]
+
+    left_vals <- left_vals[is.finite(left_vals)]
+    right_vals <- right_vals[is.finite(right_vals)]
+
+    if (!length(left_vals) || !length(right_vals)) next
+
+    left_mean <- mean(left_vals)
+    right_mean <- mean(right_vals)
+    score[i] <- abs(right_mean - left_mean)
+  }
+
+  finite_score <- is.finite(score)
+  if (!any(finite_score)) {
+    return(integer(0))
+  }
+
+  score_cut <- stats::quantile(
+    score[finite_score],
+    probs = 0.90,
+    na.rm = TRUE,
+    names = FALSE
+  )
+
+  if (!is.finite(score_cut)) {
+    return(integer(0))
+  }
+
+  locmax <- rep(FALSE, n)
+
+  for (i in 2:(n - 1L)) {
+    if (!is.finite(score[i])) next
+    if (!is.finite(score[i - 1L])) next
+    if (!is.finite(score[i + 1L])) next
+
+    if (score[i] >= score_cut &&
+        score[i] >= score[i - 1L] &&
+        score[i] >= score[i + 1L]) {
+      locmax[i] <- TRUE
+    }
+  }
+
+  cps <- which(locmax)
   if (!length(cps)) {
-    n <- length(x_use)
-    w <- max(25L, min(fallback_window, floor(n / 6)))
-    score <- rep(NA_real_, n)
-    for (i in seq.int(w + 1L, n - w)) {
-      left_mean <- mean(x_use[(i - w):(i - 1L)], na.rm = TRUE)
-      right_mean <- mean(x_use[i:(i + w - 1L)], na.rm = TRUE)
-      score[i] <- abs(right_mean - left_mean)
-    }
-    score_cut <- as.numeric(stats::quantile(score[is.finite(score)], probs = 0.90, na.rm = TRUE, names = FALSE))
-    locmax <- rep(FALSE, n)
-    for (i in 2:(n - 1L)) {
-      if (is.finite(score[i]) && score[i] >= score_cut && score[i] >= score[i - 1L] && score[i] >= score[i + 1L]) {
-        locmax[i] <- TRUE
-      }
-    }
-    cps <- which(locmax)
-    cps <- search_start + cps - 1L
+    return(integer(0))
   }
 
+  cps <- search_start + cps - 1L
   sort(unique(cps))
 }
 
@@ -437,37 +502,54 @@ select_cutoff_from_slope <- function(rank_df,
 
   search_start <- max(left_edge_buffer + 1L, floor(search_fraction_min * n))
   search_end <- min(n - right_edge_buffer, floor(search_fraction_max * n))
+  if (search_end <= search_start + 10L) {
+    search_start <- max(1L, left_edge_buffer + 1L)
+    search_end <- min(n - right_edge_buffer, n - 1L)
+  }
 
   tail_start <- max(search_start, floor((1 - terminal_run_fraction) * n))
   tail_idx <- seq.int(tail_start, search_end)
+  finite_tail <- is.finite(d1_sm[tail_idx])
 
-  pos_cut <- as.numeric(stats::quantile(
-    d1_sm[tail_idx][is.finite(d1_sm[tail_idx])],
-    probs = terminal_positive_slope_quantile,
-    na.rm = TRUE,
-    names = FALSE
-  ))
-  terminal_cond <- rep(FALSE, n)
-  terminal_cond[tail_idx] <- is.finite(d1_sm[tail_idx]) & (d1_sm[tail_idx] >= pos_cut)
-
-  run_tbl <- find_runs(terminal_cond[tail_idx])
-  good_runs <- run_tbl[run_tbl$value & run_tbl$length >= terminal_run_min_length, , drop = FALSE]
-
-  if (nrow(good_runs)) {
-    terminal_local_start <- good_runs$start[1]
-    terminal_local_end <- good_runs$end[1]
-    terminal_start <- tail_start + terminal_local_start - 1L
-    terminal_end <- tail_start + terminal_local_end - 1L
+  if (!any(finite_tail)) {
+    terminal_start <- tail_start
+    terminal_end <- search_end
   } else {
-    best_local <- which.max(d1_sm[tail_idx])
-    terminal_start <- tail_idx[max(1L, best_local - terminal_run_min_length + 1L)]
-    terminal_end <- tail_idx[min(length(tail_idx), best_local + terminal_run_min_length - 1L)]
+    pos_cut <- as.numeric(stats::quantile(
+      d1_sm[tail_idx][finite_tail],
+      probs = terminal_positive_slope_quantile,
+      na.rm = TRUE,
+      names = FALSE
+    ))
+
+    if (!is.finite(pos_cut)) {
+      pos_cut <- stats::median(d1_sm[tail_idx][finite_tail], na.rm = TRUE)
+    }
+
+    terminal_cond <- rep(FALSE, n)
+    terminal_cond[tail_idx] <- is.finite(d1_sm[tail_idx]) & (d1_sm[tail_idx] >= pos_cut)
+
+    run_tbl <- find_runs(terminal_cond[tail_idx])
+    good_runs <- run_tbl[run_tbl$value & run_tbl$length >= terminal_run_min_length, , drop = FALSE]
+
+    if (nrow(good_runs)) {
+      terminal_local_start <- good_runs$start[1]
+      terminal_local_end <- good_runs$end[1]
+      terminal_start <- tail_start + terminal_local_start - 1L
+      terminal_end <- tail_start + terminal_local_end - 1L
+    } else {
+      best_local <- which.max(replace(d1_sm[tail_idx], !is.finite(d1_sm[tail_idx]), -Inf))
+      if (!length(best_local) || !is.finite(best_local)) best_local <- 1L
+      terminal_start <- tail_idx[max(1L, best_local - terminal_run_min_length + 1L)]
+      terminal_end <- tail_idx[min(length(tail_idx), best_local + terminal_run_min_length - 1L)]
+    }
   }
 
+  cp_search_end <- max(search_start + 5L, min(terminal_start, search_end))
   cps <- detect_changepoints(
     x = d1_sm,
     search_start = search_start,
-    search_end = terminal_start,
+    search_end = cp_search_end,
     fallback_window = fallback_window
   )
 
@@ -537,6 +619,7 @@ build_dataset_panel <- function(rank_df, onset_info, title_prefix, out_file) {
   term_start_x <- onset_info$terminal_start_rank
   term_end_x <- onset_info$terminal_end_rank
   cp_df <- data.frame(rank = onset_info$changepoints)
+  cp_df <- cp_df[is.finite(cp_df$rank), , drop = FALSE]
 
   label_text <- paste0(
     onset_info$mode,
@@ -545,7 +628,7 @@ build_dataset_panel <- function(rank_df, onset_info, title_prefix, out_file) {
   )
 
   p1 <- ggplot(df, aes(rank, abs_loading)) +
-    geom_line(linewidth = 0.8) +
+    geom_line(linewidth = 0.8, na.rm = TRUE) +
     annotate("rect",
       xmin = term_start_x,
       xmax = term_end_x,
@@ -566,17 +649,18 @@ build_dataset_panel <- function(rank_df, onset_info, title_prefix, out_file) {
     ) +
     theme_bw(base_size = 10)
 
-  p2 <- ggplot(df, aes(rank)) +
-    geom_line(aes(y = var_fit, color = "Spline fit: log(1 + variance)"), linewidth = 1.0) +
+  p2 <- ggplot(df, aes(rank, var_fit)) +
+    geom_line(linewidth = 1.0, na.rm = TRUE) +
     annotate("rect",
       xmin = term_start_x,
       xmax = term_end_x,
       ymin = -Inf, ymax = Inf, alpha = 0.08
     ) +
     geom_point(
-      data = df[df$rank == cutoff_x, , drop = FALSE],
+      data = df[is.finite(df$rank) & df$rank == cutoff_x & is.finite(df$var_fit), , drop = FALSE],
       aes(x = rank, y = var_fit),
-      size = 2.5
+      size = 2.5,
+      inherit.aes = FALSE
     ) +
     geom_vline(xintercept = cutoff_x, linetype = 2, linewidth = 0.8) +
     labs(
@@ -584,21 +668,22 @@ build_dataset_panel <- function(rank_df, onset_info, title_prefix, out_file) {
       x = "EVS rank",
       y = "Fitted log(1 + variance)"
     ) +
-    theme_bw(base_size = 10) +
-    theme(legend.position = "bottom")
+    theme_bw(base_size = 10)
+
   if (nrow(cp_df) > 0L) {
     p2 <- p2 + geom_vline(
       data = cp_df,
       aes(xintercept = rank),
       linetype = 3,
       linewidth = 0.4,
-      alpha = 0.6
+      alpha = 0.6,
+      inherit.aes = FALSE
     )
   }
 
   p3 <- ggplot(df, aes(rank)) +
-    geom_line(aes(y = d1_sm, color = "Smoothed slope"), linewidth = 1.0) +
-    geom_line(aes(y = d2_sm, color = "Smoothed curvature"), linewidth = 1.0) +
+    geom_line(aes(y = d1_sm, color = "Smoothed slope"), linewidth = 1.0, na.rm = TRUE) +
+    geom_line(aes(y = d2_sm, color = "Smoothed curvature"), linewidth = 1.0, na.rm = TRUE) +
     annotate("rect",
       xmin = term_start_x,
       xmax = term_end_x,
@@ -612,21 +697,23 @@ build_dataset_panel <- function(rank_df, onset_info, title_prefix, out_file) {
     ) +
     theme_bw(base_size = 10) +
     theme(legend.position = "bottom")
+
   if (nrow(cp_df) > 0L) {
     p3 <- p3 + geom_vline(
       data = cp_df,
       aes(xintercept = rank),
       linetype = 3,
       linewidth = 0.4,
-      alpha = 0.6
+      alpha = 0.6,
+      inherit.aes = FALSE
     )
   }
 
   p4 <- ggplot(df, aes(rank)) +
-    geom_line(aes(y = log_nb1, color = "NB1 = mu"), linewidth = 0.5, alpha = 0.35) +
-    geom_line(aes(y = log_nb2, color = "NB2 = variance - mu"), linewidth = 0.5, alpha = 0.35) +
-    geom_line(aes(y = nb_gap_sm, color = "Smoothed NB2 - NB1 gap"), linewidth = 1.0) +
-    geom_line(aes(y = amu_sm, color = "Smoothed log(alpha*mu)"), linewidth = 1.0) +
+    geom_line(aes(y = log_nb1, color = "NB1 = mu"), linewidth = 0.5, alpha = 0.35, na.rm = TRUE) +
+    geom_line(aes(y = log_nb2, color = "NB2 = variance - mu"), linewidth = 0.5, alpha = 0.35, na.rm = TRUE) +
+    geom_line(aes(y = nb_gap_sm, color = "Smoothed NB2 - NB1 gap"), linewidth = 1.0, na.rm = TRUE) +
+    geom_line(aes(y = amu_sm, color = "Smoothed log(alpha*mu)"), linewidth = 1.0, na.rm = TRUE) +
     annotate("rect",
       xmin = term_start_x,
       xmax = term_end_x,
@@ -642,7 +729,7 @@ build_dataset_panel <- function(rank_df, onset_info, title_prefix, out_file) {
     theme(legend.position = "bottom")
 
   p5 <- ggplot(df, aes(rank, regime_score_sm)) +
-    geom_line(linewidth = 1.0) +
+    geom_line(linewidth = 1.0, na.rm = TRUE) +
     annotate("rect",
       xmin = term_start_x,
       xmax = term_end_x,
@@ -658,7 +745,7 @@ build_dataset_panel <- function(rank_df, onset_info, title_prefix, out_file) {
     theme_bw(base_size = 10)
 
   png(out_file, width = 2200, height = 3000, res = 200)
-  grid.arrange(p1, p2, p3, p4, p5, ncol = 1)
+  gridExtra::grid.arrange(p1, p2, p3, p4, p5, ncol = 1)
   dev.off()
 }
 
@@ -667,8 +754,8 @@ build_range_panel <- function(ctrl_onset, trt_onset, title_prefix, out_file) {
   trt_plot_df  <- trt_onset$curve_df
 
   p <- ggplot() +
-    geom_line(data = ctrl_plot_df, aes(rank, var_fit, color = "Control variance fit"), linewidth = 1.0) +
-    geom_line(data = trt_plot_df, aes(rank, var_fit, color = "Treatment variance fit"), linewidth = 1.0) +
+    geom_line(data = ctrl_plot_df, aes(rank, var_fit, color = "Control variance fit"), linewidth = 1.0, na.rm = TRUE) +
+    geom_line(data = trt_plot_df, aes(rank, var_fit, color = "Treatment variance fit"), linewidth = 1.0, na.rm = TRUE) +
     annotate(
       "rect",
       xmin = min(ctrl_onset$onset_rank, trt_onset$onset_rank),
