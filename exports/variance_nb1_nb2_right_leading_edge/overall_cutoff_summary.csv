@@ -1,0 +1,5 @@
+"comparison","control_cutoff_mode","control_cutoff_rank","control_cutoff_fraction","treatment_cutoff_mode","treatment_cutoff_rank","treatment_cutoff_fraction","cutoff_range_rank_min","cutoff_range_rank_max","cutoff_range_fraction_min","cutoff_range_fraction_max"
+"RT0_ZT6","right-side variance regime breakpoint",19054,0.599993702175898,"right-side variance regime breakpoint",30807,0.970085335516579,19054,30807,0.599993702175898,0.970085335516579
+"RT2_ZT8","right-side variance regime breakpoint",19054,0.599993702175898,"right-side variance regime breakpoint",30912,0.97339169317001,19054,30912,0.599993702175898,0.97339169317001
+"RT4_ZT10","right-side variance regime breakpoint",19054,0.599993702175898,"right-side variance regime breakpoint",19054,0.599993702175898,19054,19054,0.599993702175898,0.599993702175898
+"RT8_ZT14","right-side variance regime breakpoint",19054,0.599993702175898,"right-side variance regime breakpoint",19054,0.599993702175898,19054,19054,0.599993702175898,0.599993702175898

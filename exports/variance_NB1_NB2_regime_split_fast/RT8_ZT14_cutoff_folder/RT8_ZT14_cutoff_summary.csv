@@ -1,2 +1,0 @@
-"comparison","control_cutoff_mode","control_cutoff_rank","control_cutoff_fraction","treatment_cutoff_mode","treatment_cutoff_rank","treatment_cutoff_fraction","cutoff_range_rank_min","cutoff_range_rank_max","cutoff_range_fraction_min","cutoff_range_fraction_max"
-"RT8_ZT14","fast global piecewise breakpoint",30007,0.944894039109488,"fast global piecewise breakpoint",24771,0.780017004125075,24771,30007,0.780017004125075,0.944894039109488

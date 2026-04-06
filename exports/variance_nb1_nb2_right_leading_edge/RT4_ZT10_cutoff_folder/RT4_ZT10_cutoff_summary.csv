@@ -1,0 +1,2 @@
+"comparison","control_cutoff_mode","control_cutoff_rank","control_cutoff_fraction","treatment_cutoff_mode","treatment_cutoff_rank","treatment_cutoff_fraction","cutoff_range_rank_min","cutoff_range_rank_max","cutoff_range_fraction_min","cutoff_range_fraction_max"
+"RT4_ZT10","right-side variance regime breakpoint",19054,0.599993702175898,"right-side variance regime breakpoint",19054,0.599993702175898,19054,19054,0.599993702175898,0.599993702175898

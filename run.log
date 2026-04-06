@@ -5,23 +5,23 @@ Reading count matrix...
 Count matrix dimensions: 31757 features x 40 samples
 Processing comparison: RT0_ZT6
 Fitting control breakpoint for RT0_ZT6
-Control breakpoint rank: 25647
+Control breakpoint rank: 19054
 Fitting treatment breakpoint for RT0_ZT6
-Treatment breakpoint rank: 29021
+Treatment breakpoint rank: 30807
 Processing comparison: RT2_ZT8
 Fitting control breakpoint for RT2_ZT8
-Control breakpoint rank: 29214
+Control breakpoint rank: 19054
 Fitting treatment breakpoint for RT2_ZT8
-Treatment breakpoint rank: 25925
+Treatment breakpoint rank: 30912
 Processing comparison: RT4_ZT10
 Fitting control breakpoint for RT4_ZT10
-Control breakpoint rank: 29098
+Control breakpoint rank: 19054
 Fitting treatment breakpoint for RT4_ZT10
-Treatment breakpoint rank: 17888
+Treatment breakpoint rank: 19054
 Processing comparison: RT8_ZT14
 Fitting control breakpoint for RT8_ZT14
-Control breakpoint rank: 30007
+Control breakpoint rank: 19054
 Fitting treatment breakpoint for RT8_ZT14
-Treatment breakpoint rank: 24771
-There were 12 warnings (use warnings() to see them)
-Done. Outputs written to: /root/REAPER98632/exports/variance_NB1_NB2_regime_split_fast
+Treatment breakpoint rank: 19054
+There were 24 warnings (use warnings() to see them)
+Done. Outputs written to: /root/REAPER98632/exports/variance_nb1_nb2_right_leading_edge
