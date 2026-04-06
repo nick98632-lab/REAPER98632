@@ -20,14 +20,13 @@
 #   1. Rank features from lowest to highest absolute PC1 loading.
 #   2. Compute empirical raw-count variance for each feature.
 #   3. Fit a smooth spline to log1p(variance) across the full ranked series.
-#   4. Compute the first derivative of that smooth curve.
-#   5. Detect the TERMINAL sustained positive-slope run on the right.
-#   6. Detect changepoints on the derivative inside the interior search region.
-#      - If package "changepoint" is available, use cpt.meanvar(..., method="PELT")
-#      - Otherwise use a base-R mean-shift score fallback
-#   7. Define the cutoff as the LAST changepoint before the terminal sustained
-#      positive-slope run. If no changepoint is found, use the left edge of the
-#      terminal sustained positive-slope run itself.
+#   4. Compute the first and second derivatives of that smooth curve.
+#   5. Detect the terminal sustained positive-slope run on the right.
+#   6. Detect changepoints on the derivative in the interior region.
+#      - If package "changepoint" is available, use PELT.
+#      - Otherwise use a base-R moving-window mean-shift fallback.
+#   7. Define the cutoff as the last changepoint before the terminal positive-
+#      slope run. If none is found, use the left edge of the terminal run.
 #
 # Output
 #   exports/variance_nb1_nb2_changepoint_terminal_run/<comparison>_cutoff_folder/
@@ -39,21 +38,22 @@ suppressPackageStartupMessages({
   library(gridExtra)
 })
 
+options(warn = 1)
+
 # =============================================================================
 # USER SETTINGS
 # =============================================================================
 
 repo_dir <- getwd()
-input_dir <- file.path(repo_dir, "data")
-count_file <- file.path(input_dir, "WTTS-Seq_2022.2_DE_raw_read_numbers.csv")
+count_file <- file.path(repo_dir, "data", "WTTS-Seq_2022.2_DE_raw_read_numbers.csv")
 out_root <- file.path(repo_dir, "exports", "variance_nb1_nb2_changepoint_terminal_run")
 dir.create(out_root, recursive = TRUE, showWarnings = FALSE)
 
 comparison_table <- data.frame(
-  comparison_name   = c("RT0_ZT6", "RT2_ZT8", "RT4_ZT10", "RT8_ZT14"),
-  treatment_prefix  = c("R0", "R2", "R4", "R8"),
-  control_prefix    = c("ZT6", "ZT8", "ZT10", "ZT14"),
-  stringsAsFactors  = FALSE
+  comparison_name  = c("RT0_ZT6", "RT2_ZT8", "RT4_ZT10", "RT8_ZT14"),
+  treatment_prefix = c("R0", "R2", "R4", "R8"),
+  control_prefix   = c("ZT6", "ZT8", "ZT10", "ZT14"),
+  stringsAsFactors = FALSE
 )
 
 meta_all <- data.frame(
@@ -74,7 +74,6 @@ meta_all <- data.frame(
 rownames(meta_all) <- meta_all$id
 meta_all$condition <- factor(meta_all$condition, levels = c("untrt", "trt"))
 
-# smoothing and selector settings
 left_edge_buffer <- 50L
 right_edge_buffer <- 20L
 search_fraction_min <- 0.20
@@ -245,6 +244,14 @@ robust_center_scale <- function(x) {
   list(z = out, center = med, scale = madv)
 }
 
+find_runs <- function(cond) {
+  cond[is.na(cond)] <- FALSE
+  r <- rle(cond)
+  ends <- cumsum(r$lengths)
+  starts <- c(1L, head(ends, -1L) + 1L)
+  data.frame(start = starts, end = ends, value = r$values, length = r$lengths)
+}
+
 compute_group_pc1_loadings <- function(count_mat, group_cols) {
   mat <- count_mat[, group_cols, drop = FALSE]
   mat <- log2(mat + 1)
@@ -327,25 +334,28 @@ build_rank_series <- function(full_tbl, arm = c("control", "treatment")) {
       arrange(rank)
   }
 
-  out %>%
-    mutate(
-      log_variance = ifelse(is.finite(variance) & variance >= 0, log1p(variance), NA_real_),
-      log_nb1 = ifelse(is.finite(nb1) & nb1 >= 0, log1p(nb1), NA_real_),
-      log_nb2 = ifelse(is.finite(nb2) & nb2 >= 0, log1p(nb2), NA_real_),
-      nb_gap = log_nb2 - log_nb1,
-      log_alpha_mu = ifelse(is.finite(alpha_mu) & alpha_mu > 0, log(alpha_mu), NA_real_)
-    )
+  out$log_variance <- NA_real_
+  idx <- is.finite(out$variance) & out$variance >= 0
+  out$log_variance[idx] <- log1p(out$variance[idx])
+
+  out$log_nb1 <- NA_real_
+  idx <- is.finite(out$nb1) & out$nb1 >= 0
+  out$log_nb1[idx] <- log1p(out$nb1[idx])
+
+  out$log_nb2 <- NA_real_
+  idx <- is.finite(out$nb2) & out$nb2 >= 0
+  out$log_nb2[idx] <- log1p(out$nb2[idx])
+
+  out$nb_gap <- out$log_nb2 - out$log_nb1
+
+  out$log_alpha_mu <- NA_real_
+  idx <- is.finite(out$alpha_mu) & out$alpha_mu > 0
+  out$log_alpha_mu[idx] <- log(out$alpha_mu[idx])
+
+  out
 }
 
-find_runs <- function(cond) {
-  cond[is.na(cond)] <- FALSE
-  r <- rle(cond)
-  ends <- cumsum(r$lengths)
-  starts <- c(1L, head(ends, -1L) + 1L)
-  data.frame(start = starts, end = ends, value = r$values, length = r$lengths)
-}
-
-detect_changepoints <- function(x, search_start, search_end) {
+detect_changepoints <- function(x, search_start, search_end, fallback_window = 250L) {
   x_use <- as.numeric(x[search_start:search_end])
   x_use[!is.finite(x_use)] <- stats::median(x_use[is.finite(x_use)], na.rm = TRUE)
 
@@ -369,7 +379,6 @@ detect_changepoints <- function(x, search_start, search_end) {
   }
 
   if (!length(cps)) {
-    # base-R fallback: moving split mean-shift score on derivative
     n <- length(x_use)
     w <- max(25L, min(fallback_window, floor(n / 6)))
     score <- rep(NA_real_, n)
@@ -378,7 +387,6 @@ detect_changepoints <- function(x, search_start, search_end) {
       right_mean <- mean(x_use[i:(i + w - 1L)], na.rm = TRUE)
       score[i] <- abs(right_mean - left_mean)
     }
-    # pick top local maxima
     score_cut <- as.numeric(stats::quantile(score[is.finite(score)], probs = 0.90, na.rm = TRUE, names = FALSE))
     locmax <- rep(FALSE, n)
     for (i in 2:(n - 1L)) {
@@ -394,29 +402,35 @@ detect_changepoints <- function(x, search_start, search_end) {
 }
 
 select_cutoff_from_slope <- function(rank_df,
-                                     loess_span = 0.08,
-                                     left_baseline_fraction = 0.15,
+                                     spline_spar = 0.60,
                                      search_fraction_min = 0.20,
                                      search_fraction_max = 0.985,
                                      left_edge_buffer = 50L,
                                      right_edge_buffer = 20L,
                                      terminal_run_fraction = 0.20,
                                      terminal_run_min_length = 250L,
-                                     terminal_positive_slope_quantile = 0.70) {
+                                     terminal_positive_slope_quantile = 0.70,
+                                     fallback_window = 250L) {
   df <- rank_df
   n <- nrow(df)
   x <- df$rank
   y <- df$log_variance
 
   ok <- is.finite(x) & is.finite(y)
-  lo_obj <- loess(y[ok] ~ x[ok], span = loess_span, degree = 2, family = "gaussian", surface = "direct")
-  var_fit <- rep(NA_real_, n)
-  var_fit[ok] <- stats::predict(lo_obj, newdata = data.frame(`x[ok]` = x[ok]))
+  if (sum(ok) < 10L) stop("Not enough finite variance points for smoothing.", call. = FALSE)
 
-  d1 <- c(NA_real_, diff(var_fit))
-  d1_sm <- roll_median(d1, 151L)
-  d2 <- c(NA_real_, diff(d1_sm))
-  d2_sm <- roll_median(d2, 151L)
+  sp_fit <- smooth.spline(x = x[ok], y = y[ok], spar = spline_spar)
+  pred0 <- predict(sp_fit, x = x[ok], deriv = 0)
+  pred1 <- predict(sp_fit, x = x[ok], deriv = 1)
+  pred2 <- predict(sp_fit, x = x[ok], deriv = 2)
+
+  var_fit <- rep(NA_real_, n)
+  d1_sm <- rep(NA_real_, n)
+  d2_sm <- rep(NA_real_, n)
+
+  var_fit[ok] <- pred0$y
+  d1_sm[ok] <- pred1$y
+  d2_sm[ok] <- pred2$y
 
   nb_gap_sm <- roll_median(df$nb_gap, 151L)
   amu_sm <- roll_median(df$log_alpha_mu, 151L)
@@ -424,7 +438,6 @@ select_cutoff_from_slope <- function(rank_df,
   search_start <- max(left_edge_buffer + 1L, floor(search_fraction_min * n))
   search_end <- min(n - right_edge_buffer, floor(search_fraction_max * n))
 
-  # terminal sustained positive-slope run on right
   tail_start <- max(search_start, floor((1 - terminal_run_fraction) * n))
   tail_idx <- seq.int(tail_start, search_end)
 
@@ -441,21 +454,23 @@ select_cutoff_from_slope <- function(rank_df,
   good_runs <- run_tbl[run_tbl$value & run_tbl$length >= terminal_run_min_length, , drop = FALSE]
 
   if (nrow(good_runs)) {
-    # choose the leftmost run among terminal qualifying runs
     terminal_local_start <- good_runs$start[1]
     terminal_local_end <- good_runs$end[1]
     terminal_start <- tail_start + terminal_local_start - 1L
     terminal_end <- tail_start + terminal_local_end - 1L
   } else {
-    # fallback: strongest positive-slope region on right
     best_local <- which.max(d1_sm[tail_idx])
     terminal_start <- tail_idx[max(1L, best_local - terminal_run_min_length + 1L)]
     terminal_end <- tail_idx[min(length(tail_idx), best_local + terminal_run_min_length - 1L)]
   }
 
-  cps <- detect_changepoints(d1_sm, search_start = search_start, search_end = terminal_start)
+  cps <- detect_changepoints(
+    x = d1_sm,
+    search_start = search_start,
+    search_end = terminal_start,
+    fallback_window = fallback_window
+  )
 
-  # choose last changepoint before terminal run
   cps_before <- cps[cps < terminal_start]
   if (length(cps_before)) {
     cutoff_idx <- max(cps_before)
@@ -465,14 +480,10 @@ select_cutoff_from_slope <- function(rank_df,
     mode <- "left edge of terminal positive-slope run fallback"
   }
 
-  # support score for figure only
-  base_end <- min(max(floor(left_baseline_fraction * n), left_edge_buffer + 100L), n - right_edge_buffer)
-  base_idx <- seq.int(1L + left_edge_buffer, base_end)
-
-  d1_obj <- robust_center_scale(d1_sm[base_idx])
-  d2_obj <- robust_center_scale(d2_sm[base_idx])
-  gap_obj <- robust_center_scale(nb_gap_sm[base_idx])
-  amu_obj <- robust_center_scale(amu_sm[base_idx])
+  d1_obj <- robust_center_scale(d1_sm[search_start:search_end])
+  d2_obj <- robust_center_scale(d2_sm[search_start:search_end])
+  gap_obj <- robust_center_scale(nb_gap_sm[search_start:search_end])
+  amu_obj <- robust_center_scale(amu_sm[search_start:search_end])
 
   d1_z <- rep(NA_real_, n)
   d2_z <- rep(NA_real_, n)
@@ -556,8 +567,7 @@ build_dataset_panel <- function(rank_df, onset_info, title_prefix, out_file) {
     theme_bw(base_size = 10)
 
   p2 <- ggplot(df, aes(rank)) +
-    geom_line(aes(y = var_fit, color = "Loess fit: log(1 + variance)"), linewidth = 1.0) +
-    if (nrow(cp_df)) geom_vline(data = cp_df, aes(xintercept = rank), linetype = 3, linewidth = 0.4, alpha = 0.6) else NULL +
+    geom_line(aes(y = var_fit, color = "Spline fit: log(1 + variance)"), linewidth = 1.0) +
     annotate("rect",
       xmin = term_start_x,
       xmax = term_end_x,
@@ -576,6 +586,15 @@ build_dataset_panel <- function(rank_df, onset_info, title_prefix, out_file) {
     ) +
     theme_bw(base_size = 10) +
     theme(legend.position = "bottom")
+  if (nrow(cp_df) > 0L) {
+    p2 <- p2 + geom_vline(
+      data = cp_df,
+      aes(xintercept = rank),
+      linetype = 3,
+      linewidth = 0.4,
+      alpha = 0.6
+    )
+  }
 
   p3 <- ggplot(df, aes(rank)) +
     geom_line(aes(y = d1_sm, color = "Smoothed slope"), linewidth = 1.0) +
@@ -585,7 +604,6 @@ build_dataset_panel <- function(rank_df, onset_info, title_prefix, out_file) {
       xmax = term_end_x,
       ymin = -Inf, ymax = Inf, alpha = 0.08
     ) +
-    if (nrow(cp_df)) geom_vline(data = cp_df, aes(xintercept = rank), linetype = 3, linewidth = 0.4, alpha = 0.6) else NULL +
     geom_vline(xintercept = cutoff_x, linetype = 2, linewidth = 0.8) +
     labs(
       title = paste0(title_prefix, ": slope / curvature changepoint support"),
@@ -594,6 +612,15 @@ build_dataset_panel <- function(rank_df, onset_info, title_prefix, out_file) {
     ) +
     theme_bw(base_size = 10) +
     theme(legend.position = "bottom")
+  if (nrow(cp_df) > 0L) {
+    p3 <- p3 + geom_vline(
+      data = cp_df,
+      aes(xintercept = rank),
+      linetype = 3,
+      linewidth = 0.4,
+      alpha = 0.6
+    )
+  }
 
   p4 <- ggplot(df, aes(rank)) +
     geom_line(aes(y = log_nb1, color = "NB1 = mu"), linewidth = 0.5, alpha = 0.35) +
@@ -635,7 +662,7 @@ build_dataset_panel <- function(rank_df, onset_info, title_prefix, out_file) {
   dev.off()
 }
 
-build_range_panel <- function(ctrl_onset, trt_onset, ctrl_df, trt_df, title_prefix, out_file) {
+build_range_panel <- function(ctrl_onset, trt_onset, title_prefix, out_file) {
   ctrl_plot_df <- ctrl_onset$curve_df
   trt_plot_df  <- trt_onset$curve_df
 
@@ -714,30 +741,30 @@ for (i in seq_len(nrow(comparison_table))) {
   message("Selecting control changepoint cutoff for ", cmp_name); flush.console()
   ctrl_onset <- select_cutoff_from_slope(
     ctrl_rank_df,
-    loess_span = loess_span,
-    left_baseline_fraction = left_baseline_fraction,
+    spline_spar = spline_spar,
     search_fraction_min = search_fraction_min,
     search_fraction_max = search_fraction_max,
     left_edge_buffer = left_edge_buffer,
     right_edge_buffer = right_edge_buffer,
     terminal_run_fraction = terminal_run_fraction,
     terminal_run_min_length = terminal_run_min_length,
-    terminal_positive_slope_quantile = terminal_positive_slope_quantile
+    terminal_positive_slope_quantile = terminal_positive_slope_quantile,
+    fallback_window = fallback_window
   )
   message("Control onset rank: ", ctrl_onset$onset_rank); flush.console()
 
   message("Selecting treatment changepoint cutoff for ", cmp_name); flush.console()
   trt_onset <- select_cutoff_from_slope(
     trt_rank_df,
-    loess_span = loess_span,
-    left_baseline_fraction = left_baseline_fraction,
+    spline_spar = spline_spar,
     search_fraction_min = search_fraction_min,
     search_fraction_max = search_fraction_max,
     left_edge_buffer = left_edge_buffer,
     right_edge_buffer = right_edge_buffer,
     terminal_run_fraction = terminal_run_fraction,
     terminal_run_min_length = terminal_run_min_length,
-    terminal_positive_slope_quantile = terminal_positive_slope_quantile
+    terminal_positive_slope_quantile = terminal_positive_slope_quantile,
+    fallback_window = fallback_window
   )
   message("Treatment onset rank: ", trt_onset$onset_rank); flush.console()
 
@@ -750,7 +777,7 @@ for (i in seq_len(nrow(comparison_table))) {
     file.path(cmp_dir, paste0(cmp_name, "_treatment_rank_panel.png"))
   )
   build_range_panel(
-    ctrl_onset, trt_onset, ctrl_rank_df, trt_rank_df, cmp_name,
+    ctrl_onset, trt_onset, cmp_name,
     file.path(cmp_dir, paste0(cmp_name, "_cutoff_range_panel.png"))
   )
 
