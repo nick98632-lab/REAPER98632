@@ -1,5 +1,0 @@
-"comparison","control_cutoff_mode","control_cutoff_rank","control_cutoff_fraction","treatment_cutoff_mode","treatment_cutoff_rank","treatment_cutoff_fraction","cutoff_range_rank_min","cutoff_range_rank_max","cutoff_range_fraction_min","cutoff_range_fraction_max"
-"RT0_ZT6","first sustained upward departure from left-side baseline",5619,0.176937368139308,"first sustained upward departure from left-side baseline",16736,0.527001920836351,5619,16736,0.176937368139308,0.527001920836351
-"RT2_ZT8","first sustained upward departure from left-side baseline",9153,0.288219920017634,"first sustained upward departure from left-side baseline",17833,0.561545486034575,9153,17833,0.288219920017634,0.561545486034575
-"RT4_ZT10","first sustained upward departure from left-side baseline",8936,0.28138678086721,"first sustained upward departure from left-side baseline",5597,0.176244607488113,5597,8936,0.176244607488113,0.28138678086721
-"RT8_ZT14","first sustained upward departure from left-side baseline",16180,0.509493969833423,"first sustained upward departure from left-side baseline",5600,0.176339074849639,5600,16180,0.176339074849639,0.509493969833423

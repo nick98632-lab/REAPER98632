@@ -4,24 +4,23 @@ Using count file: /root/REAPER98632/data/WTTS-Seq_2022.2_DE_raw_read_numbers.csv
 Reading count matrix...
 Count matrix dimensions: 31757 features x 40 samples
 Processing comparison: RT0_ZT6
-Selecting control regime onset for RT0_ZT6
-Control onset rank: 5619
-Selecting treatment regime onset for RT0_ZT6
-Treatment onset rank: 16736
+Selecting control changepoint cutoff for RT0_ZT6
+Control onset rank: 16667
+Selecting treatment changepoint cutoff for RT0_ZT6
+Treatment onset rank: 24130
 Processing comparison: RT2_ZT8
-Selecting control regime onset for RT2_ZT8
-Control onset rank: 9153
-Selecting treatment regime onset for RT2_ZT8
-Treatment onset rank: 17833
+Selecting control changepoint cutoff for RT2_ZT8
+Control onset rank: 24876
+Selecting treatment changepoint cutoff for RT2_ZT8
+Treatment onset rank: 24712
 Processing comparison: RT4_ZT10
-Selecting control regime onset for RT4_ZT10
-Control onset rank: 8936
-Selecting treatment regime onset for RT4_ZT10
-Treatment onset rank: 5597
+Selecting control changepoint cutoff for RT4_ZT10
+Control onset rank: 23718
+Selecting treatment changepoint cutoff for RT4_ZT10
+Treatment onset rank: 19023
 Processing comparison: RT8_ZT14
-Selecting control regime onset for RT8_ZT14
-Control onset rank: 16180
-Selecting treatment regime onset for RT8_ZT14
-Treatment onset rank: 5600
-There were 16 warnings (use warnings() to see them)
-Done. Outputs written to: /root/REAPER98632/exports/variance_nb1_nb2_right_left_baseline_onset
+Selecting control changepoint cutoff for RT8_ZT14
+Control onset rank: 24605
+Selecting treatment changepoint cutoff for RT8_ZT14
+Treatment onset rank: 13938
+Done. Outputs written to: /root/REAPER98632/exports/variance_nb1_nb2_changepoint_terminal_run

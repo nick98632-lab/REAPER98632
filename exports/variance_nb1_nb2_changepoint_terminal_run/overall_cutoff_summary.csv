@@ -1,0 +1,5 @@
+"comparison","control_cutoff_mode","control_cutoff_rank","control_cutoff_fraction","control_terminal_start_rank","treatment_cutoff_mode","treatment_cutoff_rank","treatment_cutoff_fraction","treatment_terminal_start_rank","cutoff_range_rank_min","cutoff_range_rank_max"
+"RT0_ZT6","last changepoint before terminal positive-slope run",16667,0.524829171521239,28896,"last changepoint before terminal positive-slope run",24130,0.759832477878893,26430,16667,24130
+"RT2_ZT8","last changepoint before terminal positive-slope run",24876,0.783323361778505,25405,"last changepoint before terminal positive-slope run",24712,0.778159146015052,26350,24712,24876
+"RT4_ZT10","last changepoint before terminal positive-slope run",23718,0.746858960229241,25885,"last changepoint before terminal positive-slope run",19023,0.599017539440123,26156,19023,23718
+"RT8_ZT14","last changepoint before terminal positive-slope run",24605,0.774789810120603,26612,"last changepoint before terminal positive-slope run",13938,0.438895361652549,29440,13938,24605
