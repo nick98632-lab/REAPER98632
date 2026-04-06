@@ -1,16 +1,11 @@
 # =============================================================================
-# SEQUENCE STAGE 1: VARIANCE + NB1/NB2 REGIME SPLIT
-# RIGHT-SIDE LEADING EDGE VERSION
+# SEQUENCE STAGE 1: EMPIRICAL VARIANCE + NB1/NB2 REGIME SPLIT
+# RIGHT-SIDE LEADING EDGE, PERSISTENT EMPIRICAL REGIME-ONSET SELECTOR
 # -----------------------------------------------------------------------------
 # Orientation
 #   - lowest absolute loading on the LEFT
 #   - highest absolute loading on the RIGHT
 #   - leading edge is on the RIGHT
-#
-# Main claim
-#   - absolute empirical variance is highest in the leading edge
-#   - remainder is more NB1-like
-#   - leading edge is more NB2-like
 #
 # Empirical quantities from raw counts
 #   mu        = mean(raw counts)
@@ -20,16 +15,23 @@
 #   NB2       = Var - mu = alpha_emp * mu^2
 #   alpha_mu  = alpha_emp * mu = (Var - mu) / mu
 #
-# Breakpoint
-#   - primary breakpoint is chosen from the VARIANCE curve
-#   - rank axis is increasing absolute loading
-#   - breakpoint is the first major transition INTO the right-side high-variance
-#     leading-edge regime
-#   - search is performed on the interior right-side region only
-#   - coarse-to-fine piecewise search for speed
+# Primary cutoff logic
+#   The cutoff is NOT chosen by a bounded breakpoint optimizer.
+#   Instead, it is defined as the first sustained onset of the RIGHT-SIDE
+#   leading-edge regime on the FULL ranked series.
+#
+#   The right-side leading-edge regime is defined empirically from the
+#   right-tail behavior itself:
+#     1. high empirical variance
+#     2. NB2 dominance over NB1
+#     3. elevated empirical alpha*mu support
+#
+#   For each smoothed series, the right-tail lower-quartile is used as the
+#   empirical threshold. The cutoff is the first rank where all three
+#   conditions are sustained for a minimum run length.
 #
 # Output
-#   exports/variance_nb1_nb2_right_leading_edge/<comparison>_cutoff_folder/
+#   exports/variance_nb1_nb2_right_regime_onset/<comparison>_cutoff_folder/
 # =============================================================================
 
 suppressPackageStartupMessages({
@@ -45,7 +47,7 @@ suppressPackageStartupMessages({
 repo_dir <- getwd()
 input_dir <- file.path(repo_dir, "data")
 count_file <- file.path(input_dir, "WTTS-Seq_2022.2_DE_raw_read_numbers.csv")
-out_root <- file.path(repo_dir, "exports", "variance_nb1_nb2_right_leading_edge")
+out_root <- file.path(repo_dir, "exports", "variance_nb1_nb2_right_regime_onset")
 dir.create(out_root, recursive = TRUE, showWarnings = FALSE)
 
 comparison_table <- data.frame(
@@ -74,11 +76,10 @@ rownames(meta_all) <- meta_all$id
 meta_all$condition <- factor(meta_all$condition, levels = c("untrt", "trt"))
 
 smoother_k <- 101L
-search_fraction_min <- 0.60   # interior right-side search
-search_fraction_max <- 0.98
-min_segment_size <- 200L
-coarse_step <- 100L
-refine_radius <- 500L
+right_tail_fraction <- 0.10
+min_run_length <- 250L
+right_edge_buffer <- 50L
+left_edge_buffer <- 50L
 
 # =============================================================================
 # HELPERS
@@ -127,9 +128,7 @@ read_count_matrix <- function(path, meta_ids) {
   feature_col <- detect_feature_id_column(raw_df)
   symbol_col <- detect_gene_symbol_column(raw_df)
   sample_cols <- intersect(meta_ids, names(raw_df))
-  if (length(sample_cols) == 0L) {
-    stop("No count columns matched metadata sample IDs.", call. = FALSE)
-  }
+  if (length(sample_cols) == 0L) stop("No count columns matched metadata sample IDs.", call. = FALSE)
 
   annot_df <- data.frame(
     feature_id = as.character(raw_df[[feature_col]]),
@@ -210,6 +209,20 @@ roll_median <- function(x, k = 101L) {
   out
 }
 
+scale01 <- function(x) {
+  x <- as.numeric(x)
+  ok <- is.finite(x)
+  out <- rep(NA_real_, length(x))
+  if (!any(ok)) return(out)
+  rng <- range(x[ok], na.rm = TRUE)
+  if (!is.finite(rng[1]) || !is.finite(rng[2]) || abs(rng[2] - rng[1]) < .Machine$double.eps) {
+    out[ok] <- 0
+    return(out)
+  }
+  out[ok] <- (x[ok] - rng[1]) / (rng[2] - rng[1])
+  out
+}
+
 compute_group_pc1_loadings <- function(count_mat, group_cols) {
   mat <- count_mat[, group_cols, drop = FALSE]
   mat <- log2(mat + 1)
@@ -229,7 +242,7 @@ build_evs_table <- function(count_mat, ctrl_cols, trt_cols, feature_ids) {
     trt_abs_loading  = trt_load
   ) %>%
     mutate(
-      # RIGHT-SIDE LEADING EDGE: largest loading gets largest rank
+      # RIGHT-SIDE LEADING EDGE
       rank_ctrl = rank(ctrl_abs_loading, ties.method = "first"),
       rank_trt  = rank(trt_abs_loading, ties.method = "first")
     )
@@ -300,143 +313,144 @@ build_rank_series <- function(full_tbl, arm = c("control", "treatment")) {
       log_alpha = ifelse(is.finite(alpha) & alpha > 0, log(alpha), NA_real_),
       log_nb1 = ifelse(is.finite(nb1) & nb1 >= 0, log1p(nb1), NA_real_),
       log_nb2 = ifelse(is.finite(nb2) & nb2 >= 0, log1p(nb2), NA_real_),
+      nb_gap = log_nb2 - log_nb1,
       log_alpha_mu = ifelse(is.finite(alpha_mu) & alpha_mu > 0, log(alpha_mu), NA_real_)
     )
 }
 
-fit_piecewise_breakpoint_fast <- function(x, y,
-                                          search_fraction_min = 0.60,
-                                          search_fraction_max = 0.98,
-                                          min_segment_size = 200L,
-                                          coarse_step = 100L,
-                                          refine_radius = 500L) {
-  x <- as.numeric(x)
-  y <- as.numeric(y)
-  ok <- is.finite(x) & is.finite(y)
-  n <- length(y)
+find_first_sustained_run <- function(cond, min_run = 250L, start_idx = 1L, end_idx = length(cond)) {
+  cond[is.na(cond)] <- FALSE
+  start_idx <- max(1L, start_idx)
+  end_idx <- min(length(cond), end_idx)
+  if (end_idx < start_idx) return(NA_integer_)
 
-  fitted_full <- rep(NA_real_, n)
-  score <- rep(NA_real_, n)
+  r <- rle(cond[start_idx:end_idx])
+  ends <- cumsum(r$lengths)
+  starts <- c(1L, head(ends, -1L) + 1L)
 
-  if (sum(ok) < (2L * min_segment_size + 5L)) {
-    idx <- max(1L, min(n, floor(n * 0.80)))
-    return(list(
-      breakpoint_index = idx,
-      breakpoint_rank = x[idx],
-      mode = "fallback insufficient data",
-      fitted = fitted_full,
-      rss = NA_real_,
-      search_start = NA_integer_,
-      search_end = NA_integer_,
-      score = score
-    ))
-  }
+  good <- which(r$values & r$lengths >= min_run)
+  if (!length(good)) return(NA_integer_)
 
-  valid_idx <- which(ok)
-  first_ok <- min(valid_idx)
-  last_ok <- max(valid_idx)
-
-  search_start <- max(first_ok, floor(n * search_fraction_min), min_segment_size)
-  search_end <- min(last_ok, floor(n * search_fraction_max), n - min_segment_size)
-
-  coarse_candidates <- seq(search_start, search_end, by = coarse_step)
-  coarse_candidates <- coarse_candidates[
-    coarse_candidates > min_segment_size &
-      coarse_candidates < (n - min_segment_size)
-  ]
-
-  if (length(coarse_candidates) < 3L) {
-    coarse_candidates <- seq(search_start, search_end, by = 1L)
-  }
-
-  fit_rss_at_c <- function(cut_idx) {
-    z <- pmax(0, x - x[cut_idx])
-    fit_df <- data.frame(y = y, x = x, z = z)
-    fit_df <- fit_df[is.finite(fit_df$y) & is.finite(fit_df$x) & is.finite(fit_df$z), , drop = FALSE]
-    if (nrow(fit_df) < (2L * min_segment_size + 5L)) return(list(rss = Inf, fit = NULL))
-    fit <- lm(y ~ x + z, data = fit_df)
-    list(rss = sum(resid(fit)^2), fit = fit)
-  }
-
-  best_coarse_rss <- Inf
-  best_coarse_c <- coarse_candidates[1]
-
-  for (c in coarse_candidates) {
-    ans <- fit_rss_at_c(c)
-    score[c] <- ans$rss
-    if (is.finite(ans$rss) && ans$rss < best_coarse_rss) {
-      best_coarse_rss <- ans$rss
-      best_coarse_c <- c
-    }
-  }
-
-  refine_start <- max(search_start, best_coarse_c - refine_radius)
-  refine_end   <- min(search_end, best_coarse_c + refine_radius)
-  refine_candidates <- seq(refine_start, refine_end, by = 1L)
-  refine_candidates <- refine_candidates[
-    refine_candidates > min_segment_size &
-      refine_candidates < (n - min_segment_size)
-  ]
-
-  best_rss <- Inf
-  best_c <- best_coarse_c
-  best_fit <- NULL
-
-  for (c in refine_candidates) {
-    ans <- fit_rss_at_c(c)
-    score[c] <- ans$rss
-    if (is.finite(ans$rss) && ans$rss < best_rss) {
-      best_rss <- ans$rss
-      best_c <- c
-      best_fit <- ans$fit
-    }
-  }
-
-  if (!is.null(best_fit)) {
-    fitted_full[ok] <- predict(
-      best_fit,
-      newdata = data.frame(
-        x = x[ok],
-        z = pmax(0, x[ok] - x[best_c])
-      )
-    )
-  }
-
-  list(
-    breakpoint_index = best_c,
-    breakpoint_rank = x[best_c],
-    mode = "right-side variance regime breakpoint",
-    fitted = fitted_full,
-    rss = best_rss,
-    search_start = search_start,
-    search_end = search_end,
-    score = score
-  )
+  local_start <- starts[good[1]]
+  start_idx + local_start - 1L
 }
 
-build_dataset_panel <- function(rank_df, breakpoint_info, title_prefix, out_file) {
+select_right_regime_onset <- function(rank_df,
+                                      smoother_k = 101L,
+                                      right_tail_fraction = 0.10,
+                                      min_run_length = 250L,
+                                      left_edge_buffer = 50L,
+                                      right_edge_buffer = 50L) {
   df <- rank_df %>%
     mutate(
       log_variance_sm = roll_median(log_variance, smoother_k),
       log_nb1_sm = roll_median(log_nb1, smoother_k),
       log_nb2_sm = roll_median(log_nb2, smoother_k),
-      log_alpha_mu_sm = roll_median(log_alpha_mu, smoother_k),
-      fitted_piecewise = breakpoint_info$fitted
+      nb_gap_sm = roll_median(nb_gap, smoother_k),
+      log_alpha_mu_sm = roll_median(log_alpha_mu, smoother_k)
     )
 
-  cutoff_x <- breakpoint_info$breakpoint_rank
+  n <- nrow(df)
+  tail_start <- max(1L, floor((1 - right_tail_fraction) * n))
+  tail_idx <- tail_start:n
+  tail_idx <- tail_idx[tail_idx <= (n - right_edge_buffer)]
+
+  var_tail <- df$log_variance_sm[tail_idx]
+  gap_tail <- df$nb_gap_sm[tail_idx]
+  amu_tail <- df$log_alpha_mu_sm[tail_idx]
+
+  var_lb <- as.numeric(stats::quantile(var_tail[is.finite(var_tail)], probs = 0.25, na.rm = TRUE, names = FALSE))
+  gap_lb <- as.numeric(stats::quantile(gap_tail[is.finite(gap_tail)], probs = 0.25, na.rm = TRUE, names = FALSE))
+  amu_lb <- as.numeric(stats::quantile(amu_tail[is.finite(amu_tail)], probs = 0.25, na.rm = TRUE, names = FALSE))
+
+  cond_var <- is.finite(df$log_variance_sm) & (df$log_variance_sm >= var_lb)
+  cond_gap <- is.finite(df$nb_gap_sm) & (df$nb_gap_sm >= gap_lb)
+  cond_amu <- is.finite(df$log_alpha_mu_sm) & (df$log_alpha_mu_sm >= amu_lb)
+
+  cond_all <- cond_var & cond_gap & cond_amu
+
+  onset_idx <- find_first_sustained_run(
+    cond = cond_all,
+    min_run = min_run_length,
+    start_idx = 1L + left_edge_buffer,
+    end_idx = n - right_edge_buffer
+  )
+
+  # Fallback 1: first sustained run on majority support
+  support_count <- cond_var + cond_gap + cond_amu
+  cond_majority <- support_count >= 2L
+  if (is.na(onset_idx)) {
+    onset_idx <- find_first_sustained_run(
+      cond = cond_majority,
+      min_run = min_run_length,
+      start_idx = 1L + left_edge_buffer,
+      end_idx = n - right_edge_buffer
+    )
+  }
+
+  # Fallback 2: first sustained high support score
+  var_sc <- scale01(df$log_variance_sm)
+  gap_sc <- scale01(df$nb_gap_sm)
+  amu_sc <- scale01(df$log_alpha_mu_sm)
+  support_score <- rowMeans(cbind(var_sc, gap_sc, amu_sc), na.rm = TRUE)
+
+  if (is.na(onset_idx)) {
+    score_tail <- support_score[tail_idx]
+    score_lb <- as.numeric(stats::quantile(score_tail[is.finite(score_tail)], probs = 0.25, na.rm = TRUE, names = FALSE))
+    cond_score <- is.finite(support_score) & (support_score >= score_lb)
+    onset_idx <- find_first_sustained_run(
+      cond = cond_score,
+      min_run = min_run_length,
+      start_idx = 1L + left_edge_buffer,
+      end_idx = n - right_edge_buffer
+    )
+  }
+
+  # Final fallback: earliest index with maximal rolling support score
+  if (is.na(onset_idx)) {
+    win <- max(25L, min_run_length)
+    rolling_support <- rep(NA_real_, n)
+    for (i in seq_len(n)) {
+      hi <- min(n, i + win - 1L)
+      rolling_support[i] <- mean(support_score[i:hi], na.rm = TRUE)
+    }
+    search_idx <- seq.int(1L + left_edge_buffer, n - right_edge_buffer)
+    onset_idx <- search_idx[which.max(rolling_support[search_idx])]
+  }
+
+  df$cond_var <- cond_var
+  df$cond_gap <- cond_gap
+  df$cond_amu <- cond_amu
+  df$cond_all <- cond_all
+  df$support_score <- support_score
+
+  list(
+    onset_index = onset_idx,
+    onset_rank = df$rank[onset_idx],
+    mode = "first sustained empirical right-side regime onset",
+    tail_start = tail_start,
+    var_lb = var_lb,
+    gap_lb = gap_lb,
+    amu_lb = amu_lb,
+    curve_df = df
+  )
+}
+
+build_dataset_panel <- function(rank_df, onset_info, title_prefix, out_file) {
+  df <- onset_info$curve_df
+  cutoff_x <- onset_info$onset_rank
   label_text <- paste0(
-    breakpoint_info$mode,
+    onset_info$mode,
     "\nRank = ", cutoff_x,
-    "\nSearch = [", breakpoint_info$search_start, ", ", breakpoint_info$search_end, "]"
+    "\nRight-tail reference starts at rank ", onset_info$tail_start
   )
 
   p1 <- ggplot(df, aes(rank, abs_loading)) +
     geom_line(linewidth = 0.8) +
     annotate("rect",
-      xmin = breakpoint_info$search_start,
-      xmax = breakpoint_info$search_end,
-      ymin = -Inf, ymax = Inf, alpha = 0.06
+      xmin = onset_info$tail_start,
+      xmax = max(df$rank),
+      ymin = -Inf, ymax = Inf, alpha = 0.05
     ) +
     geom_vline(xintercept = cutoff_x, linetype = 2, linewidth = 0.8) +
     annotate("label",
@@ -455,11 +469,10 @@ build_dataset_panel <- function(rank_df, breakpoint_info, title_prefix, out_file
 
   p2 <- ggplot(df, aes(rank)) +
     geom_line(aes(y = log_variance_sm, color = "Smoothed log(1 + variance)"), linewidth = 1.0) +
-    geom_line(aes(y = fitted_piecewise, color = "Piecewise fit"), linewidth = 1.0, linetype = 2) +
     annotate("rect",
-      xmin = breakpoint_info$search_start,
-      xmax = breakpoint_info$search_end,
-      ymin = -Inf, ymax = Inf, alpha = 0.06
+      xmin = onset_info$tail_start,
+      xmax = max(df$rank),
+      ymin = onset_info$var_lb, ymax = Inf, alpha = 0.06
     ) +
     geom_point(
       data = df[df$rank == cutoff_x, , drop = FALSE],
@@ -478,11 +491,6 @@ build_dataset_panel <- function(rank_df, breakpoint_info, title_prefix, out_file
   p3 <- ggplot(df, aes(rank)) +
     geom_line(aes(y = log_nb1_sm, color = "Smoothed log(1 + NB1 = mu)"), linewidth = 1.0) +
     geom_line(aes(y = log_nb2_sm, color = "Smoothed log(1 + NB2 = variance - mu)"), linewidth = 1.0) +
-    annotate("rect",
-      xmin = breakpoint_info$search_start,
-      xmax = breakpoint_info$search_end,
-      ymin = -Inf, ymax = Inf, alpha = 0.06
-    ) +
     geom_vline(xintercept = cutoff_x, linetype = 2, linewidth = 0.8) +
     labs(
       title = paste0(title_prefix, ": NB1 vs NB2 support"),
@@ -493,43 +501,28 @@ build_dataset_panel <- function(rank_df, breakpoint_info, title_prefix, out_file
     theme(legend.position = "bottom")
 
   p4 <- ggplot(df, aes(rank)) +
+    geom_line(aes(y = nb_gap_sm, color = "Smoothed NB2 - NB1 log-gap"), linewidth = 1.0) +
     geom_line(aes(y = log_alpha_mu_sm, color = "Smoothed log(alpha*mu)"), linewidth = 1.0) +
-    annotate("rect",
-      xmin = breakpoint_info$search_start,
-      xmax = breakpoint_info$search_end,
-      ymin = -Inf, ymax = Inf, alpha = 0.06
-    ) +
+    geom_hline(yintercept = onset_info$gap_lb, linetype = 3) +
+    geom_hline(yintercept = onset_info$amu_lb, linetype = 3) +
     geom_vline(xintercept = cutoff_x, linetype = 2, linewidth = 0.8) +
     labs(
-      title = paste0(title_prefix, ": empirical NB balance support"),
+      title = paste0(title_prefix, ": empirical NB support"),
       x = "EVS rank",
-      y = "log(alpha*mu)"
+      y = "Support value"
     ) +
     theme_bw(base_size = 10) +
     theme(legend.position = "bottom")
 
-  score_df <- data.frame(
-    rank = seq_along(breakpoint_info$score),
-    score = breakpoint_info$score
-  )
-
-  p5 <- ggplot(score_df, aes(rank, score)) +
+  p5 <- ggplot(df, aes(rank, support_score)) +
     geom_line(linewidth = 1.0) +
-    annotate("rect",
-      xmin = breakpoint_info$search_start,
-      xmax = breakpoint_info$search_end,
-      ymin = -Inf, ymax = Inf, alpha = 0.06
-    ) +
-    geom_point(
-      data = data.frame(rank = cutoff_x, score = breakpoint_info$rss),
-      aes(x = rank, y = score),
-      size = 2.5
-    ) +
     geom_vline(xintercept = cutoff_x, linetype = 2, linewidth = 0.8) +
+    geom_ribbon(aes(ymin = 0, ymax = ifelse(cond_all, support_score, 0)), alpha = 0.20) +
     labs(
-      title = paste0(title_prefix, ": breakpoint fit score (RSS)"),
-      x = "Candidate breakpoint rank",
-      y = "Residual sum of squares"
+      title = paste0(title_prefix, ": empirical regime-onset support score"),
+      subtitle = "Shaded where variance, NB2>NB1, and alpha*mu support are all satisfied",
+      x = "EVS rank",
+      y = "Mean scaled support"
     ) +
     theme_bw(base_size = 10)
 
@@ -538,26 +531,26 @@ build_dataset_panel <- function(rank_df, breakpoint_info, title_prefix, out_file
   dev.off()
 }
 
-build_range_panel <- function(ctrl_bp, trt_bp, ctrl_df, trt_df, title_prefix, out_file) {
-  ctrl_plot_df <- ctrl_df %>% mutate(log_variance_sm = roll_median(log_variance, smoother_k))
-  trt_plot_df  <- trt_df  %>% mutate(log_variance_sm = roll_median(log_variance, smoother_k))
+build_range_panel <- function(ctrl_onset, trt_onset, ctrl_df, trt_df, title_prefix, out_file) {
+  ctrl_plot_df <- ctrl_onset$curve_df
+  trt_plot_df  <- trt_onset$curve_df
 
   p <- ggplot() +
     geom_line(data = ctrl_plot_df, aes(rank, log_variance_sm, color = "Control smoothed log(1 + variance)"), linewidth = 1.0) +
     geom_line(data = trt_plot_df, aes(rank, log_variance_sm, color = "Treatment smoothed log(1 + variance)"), linewidth = 1.0) +
     annotate(
       "rect",
-      xmin = min(ctrl_bp$breakpoint_rank, trt_bp$breakpoint_rank),
-      xmax = max(ctrl_bp$breakpoint_rank, trt_bp$breakpoint_rank),
+      xmin = min(ctrl_onset$onset_rank, trt_onset$onset_rank),
+      xmax = max(ctrl_onset$onset_rank, trt_onset$onset_rank),
       ymin = -Inf, ymax = Inf, alpha = 0.08
     ) +
-    geom_vline(xintercept = ctrl_bp$breakpoint_rank, linetype = 2, linewidth = 0.8) +
-    geom_vline(xintercept = trt_bp$breakpoint_rank, linetype = 3, linewidth = 0.8) +
+    geom_vline(xintercept = ctrl_onset$onset_rank, linetype = 2, linewidth = 0.8) +
+    geom_vline(xintercept = trt_onset$onset_rank, linetype = 3, linewidth = 0.8) +
     labs(
       title = paste0(title_prefix, ": treatment/control regime-change range"),
       subtitle = paste0(
-        "Control rank = ", ctrl_bp$breakpoint_rank,
-        " | Treatment rank = ", trt_bp$breakpoint_rank
+        "Control rank = ", ctrl_onset$onset_rank,
+        " | Treatment rank = ", trt_onset$onset_rank
       ),
       x = "EVS rank",
       y = "Smoothed log(1 + variance)"
@@ -574,30 +567,23 @@ build_range_panel <- function(ctrl_bp, trt_bp, ctrl_df, trt_df, title_prefix, ou
 # MAIN
 # =============================================================================
 
-message("SEQUENCE.R started")
-flush.console()
-
-message("Resolving count file...")
-flush.console()
+message("SEQUENCE.R started"); flush.console()
+message("Resolving count file..."); flush.console()
 count_file <- resolve_counts_file(count_file)
-message("Using count file: ", count_file)
-flush.console()
+message("Using count file: ", count_file); flush.console()
 
-message("Reading count matrix...")
-flush.console()
+message("Reading count matrix..."); flush.console()
 loaded <- read_count_matrix(count_file, meta_all$id)
 count_mat <- loaded$count_matrix
 annot_df <- loaded$annot_df
-message("Count matrix dimensions: ", nrow(count_mat), " features x ", ncol(count_mat), " samples")
-flush.console()
+message("Count matrix dimensions: ", nrow(count_mat), " features x ", ncol(count_mat), " samples"); flush.console()
 
 overall_rows <- list()
 
 for (i in seq_len(nrow(comparison_table))) {
   comparison_row <- comparison_table[i, , drop = FALSE]
   cmp_name <- comparison_row$comparison_name[[1]]
-  message("Processing comparison: ", cmp_name)
-  flush.console()
+  message("Processing comparison: ", cmp_name); flush.console()
 
   cmp_dir <- file.path(out_root, paste0(cmp_name, "_cutoff_folder"))
   dir.create(cmp_dir, recursive = TRUE, showWarnings = FALSE)
@@ -613,79 +599,67 @@ for (i in seq_len(nrow(comparison_table))) {
     left_join(metrics_tbl, by = "feature_id") %>%
     left_join(annot_df, by = "feature_id")
 
-  utils::write.csv(
-    full_tbl,
-    file.path(cmp_dir, paste0(cmp_name, "_feature_level_metrics.csv")),
-    row.names = FALSE
-  )
+  utils::write.csv(full_tbl, file.path(cmp_dir, paste0(cmp_name, "_feature_level_metrics.csv")), row.names = FALSE)
 
   ctrl_rank_df <- build_rank_series(full_tbl, "control")
   trt_rank_df  <- build_rank_series(full_tbl, "treatment")
 
-  utils::write.csv(
+  utils::write.csv(ctrl_rank_df, file.path(cmp_dir, paste0(cmp_name, "_control_rank_series.csv")), row.names = FALSE)
+  utils::write.csv(trt_rank_df, file.path(cmp_dir, paste0(cmp_name, "_treatment_rank_series.csv")), row.names = FALSE)
+
+  message("Selecting control regime onset for ", cmp_name); flush.console()
+  ctrl_onset <- select_right_regime_onset(
     ctrl_rank_df,
-    file.path(cmp_dir, paste0(cmp_name, "_control_rank_series.csv")),
-    row.names = FALSE
+    smoother_k = smoother_k,
+    right_tail_fraction = right_tail_fraction,
+    min_run_length = min_run_length,
+    left_edge_buffer = left_edge_buffer,
+    right_edge_buffer = right_edge_buffer
   )
-  utils::write.csv(
+  message("Control onset rank: ", ctrl_onset$onset_rank); flush.console()
+
+  message("Selecting treatment regime onset for ", cmp_name); flush.console()
+  trt_onset <- select_right_regime_onset(
     trt_rank_df,
-    file.path(cmp_dir, paste0(cmp_name, "_treatment_rank_series.csv")),
-    row.names = FALSE
+    smoother_k = smoother_k,
+    right_tail_fraction = right_tail_fraction,
+    min_run_length = min_run_length,
+    left_edge_buffer = left_edge_buffer,
+    right_edge_buffer = right_edge_buffer
   )
-
-  message("Fitting control breakpoint for ", cmp_name)
-  flush.console()
-  ctrl_bp <- fit_piecewise_breakpoint_fast(
-    x = ctrl_rank_df$rank,
-    y = roll_median(ctrl_rank_df$log_variance, smoother_k),
-    search_fraction_min = search_fraction_min,
-    search_fraction_max = search_fraction_max,
-    min_segment_size = min_segment_size,
-    coarse_step = coarse_step,
-    refine_radius = refine_radius
-  )
-  message("Control breakpoint rank: ", ctrl_bp$breakpoint_rank)
-  flush.console()
-
-  message("Fitting treatment breakpoint for ", cmp_name)
-  flush.console()
-  trt_bp <- fit_piecewise_breakpoint_fast(
-    x = trt_rank_df$rank,
-    y = roll_median(trt_rank_df$log_variance, smoother_k),
-    search_fraction_min = search_fraction_min,
-    search_fraction_max = search_fraction_max,
-    min_segment_size = min_segment_size,
-    coarse_step = coarse_step,
-    refine_radius = refine_radius
-  )
-  message("Treatment breakpoint rank: ", trt_bp$breakpoint_rank)
-  flush.console()
+  message("Treatment onset rank: ", trt_onset$onset_rank); flush.console()
 
   build_dataset_panel(
-    ctrl_rank_df, ctrl_bp, paste0(cmp_name, " control"),
+    ctrl_rank_df, ctrl_onset, paste0(cmp_name, " control"),
     file.path(cmp_dir, paste0(cmp_name, "_control_rank_panel.png"))
   )
   build_dataset_panel(
-    trt_rank_df, trt_bp, paste0(cmp_name, " treatment"),
+    trt_rank_df, trt_onset, paste0(cmp_name, " treatment"),
     file.path(cmp_dir, paste0(cmp_name, "_treatment_rank_panel.png"))
   )
   build_range_panel(
-    ctrl_bp, trt_bp, ctrl_rank_df, trt_rank_df, cmp_name,
+    ctrl_onset, trt_onset, ctrl_rank_df, trt_rank_df, cmp_name,
     file.path(cmp_dir, paste0(cmp_name, "_cutoff_range_panel.png"))
   )
 
   cutoff_summary <- tibble(
     comparison = cmp_name,
-    control_cutoff_mode = ctrl_bp$mode,
-    control_cutoff_rank = ctrl_bp$breakpoint_rank,
-    control_cutoff_fraction = ctrl_bp$breakpoint_rank / nrow(ctrl_rank_df),
-    treatment_cutoff_mode = trt_bp$mode,
-    treatment_cutoff_rank = trt_bp$breakpoint_rank,
-    treatment_cutoff_fraction = trt_bp$breakpoint_rank / nrow(trt_rank_df),
-    cutoff_range_rank_min = min(ctrl_bp$breakpoint_rank, trt_bp$breakpoint_rank),
-    cutoff_range_rank_max = max(ctrl_bp$breakpoint_rank, trt_bp$breakpoint_rank),
-    cutoff_range_fraction_min = min(ctrl_bp$breakpoint_rank / nrow(ctrl_rank_df), trt_bp$breakpoint_rank / nrow(trt_rank_df)),
-    cutoff_range_fraction_max = max(ctrl_bp$breakpoint_rank / nrow(ctrl_rank_df), trt_bp$breakpoint_rank / nrow(trt_rank_df))
+    control_cutoff_mode = ctrl_onset$mode,
+    control_cutoff_rank = ctrl_onset$onset_rank,
+    control_cutoff_fraction = ctrl_onset$onset_rank / nrow(ctrl_rank_df),
+    treatment_cutoff_mode = trt_onset$mode,
+    treatment_cutoff_rank = trt_onset$onset_rank,
+    treatment_cutoff_fraction = trt_onset$onset_rank / nrow(trt_rank_df),
+    cutoff_range_rank_min = min(ctrl_onset$onset_rank, trt_onset$onset_rank),
+    cutoff_range_rank_max = max(ctrl_onset$onset_rank, trt_onset$onset_rank),
+    cutoff_range_fraction_min = min(ctrl_onset$onset_rank / nrow(ctrl_rank_df), trt_onset$onset_rank / nrow(trt_rank_df)),
+    cutoff_range_fraction_max = max(ctrl_onset$onset_rank / nrow(ctrl_rank_df), trt_onset$onset_rank / nrow(trt_rank_df)),
+    control_var_lb = ctrl_onset$var_lb,
+    control_gap_lb = ctrl_onset$gap_lb,
+    control_alpha_mu_lb = ctrl_onset$amu_lb,
+    treatment_var_lb = trt_onset$var_lb,
+    treatment_gap_lb = trt_onset$gap_lb,
+    treatment_alpha_mu_lb = trt_onset$amu_lb
   )
 
   utils::write.csv(
@@ -703,5 +677,4 @@ utils::write.csv(
   row.names = FALSE
 )
 
-message("Done. Outputs written to: ", out_root)
-flush.console()
+message("Done. Outputs written to: ", out_root); flush.console()
