@@ -1,0 +1,2 @@
+"comparison","control_cutoff_mode","control_cutoff_rank","control_cutoff_fraction","treatment_cutoff_mode","treatment_cutoff_rank","treatment_cutoff_fraction","cutoff_range_rank_min","cutoff_range_rank_max","cutoff_range_fraction_min","cutoff_range_fraction_max"
+"RT0_ZT6","fast global piecewise breakpoint",25647,0.80760147369084,"fast global piecewise breakpoint",29021,0.913845766287748,25647,29021,0.80760147369084,0.913845766287748

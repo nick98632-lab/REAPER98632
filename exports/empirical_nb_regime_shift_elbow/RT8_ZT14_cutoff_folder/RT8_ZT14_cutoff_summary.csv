@@ -1,2 +1,0 @@
-"comparison","control_cutoff_mode","control_cutoff_rank","control_cutoff_fraction","treatment_cutoff_mode","treatment_cutoff_rank","treatment_cutoff_fraction","cutoff_range_rank_min","cutoff_range_rank_max","cutoff_range_fraction_min","cutoff_range_fraction_max"
-"RT8_ZT14","first broad elbow on smoothed empirical alpha*mu",6967,0.219384702585257,"first broad elbow on smoothed empirical alpha*mu",7155,0.225304657240923,6967,7155,0.219384702585257,0.225304657240923

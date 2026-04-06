@@ -1,0 +1,5 @@
+"comparison","control_cutoff_mode","control_cutoff_rank","control_cutoff_fraction","treatment_cutoff_mode","treatment_cutoff_rank","treatment_cutoff_fraction","cutoff_range_rank_min","cutoff_range_rank_max","cutoff_range_fraction_min","cutoff_range_fraction_max"
+"RT0_ZT6","fast global piecewise breakpoint",25647,0.80760147369084,"fast global piecewise breakpoint",29021,0.913845766287748,25647,29021,0.80760147369084,0.913845766287748
+"RT2_ZT8","fast global piecewise breakpoint",29214,0.919923166545958,"fast global piecewise breakpoint",25925,0.816355449192304,25925,29214,0.816355449192304,0.919923166545958
+"RT4_ZT10","fast global piecewise breakpoint",29098,0.91627042856693,"fast global piecewise breakpoint",17888,0.563277387662563,17888,29098,0.563277387662563,0.91627042856693
+"RT8_ZT14","fast global piecewise breakpoint",30007,0.944894039109488,"fast global piecewise breakpoint",24771,0.780017004125075,24771,30007,0.780017004125075,0.944894039109488

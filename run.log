@@ -1,7 +1,27 @@
-Reading raw count matrix from: /root/REAPER98632/data/WTTS-Seq_2022.2_DE_raw_read_numbers.csv
-Processing RT0_ZT6...
-Processing RT2_ZT8...
-Processing RT4_ZT10...
-Processing RT8_ZT14...
-There were 50 or more warnings (use warnings() to see the first 50)
-Done. Outputs written to: /root/REAPER98632/exports/empirical_nb_regime_shift_elbow
+SEQUENCE.R started
+Resolving count file...
+Using count file: /root/REAPER98632/data/WTTS-Seq_2022.2_DE_raw_read_numbers.csv
+Reading count matrix...
+Count matrix dimensions: 31757 features x 40 samples
+Processing comparison: RT0_ZT6
+Fitting control breakpoint for RT0_ZT6
+Control breakpoint rank: 25647
+Fitting treatment breakpoint for RT0_ZT6
+Treatment breakpoint rank: 29021
+Processing comparison: RT2_ZT8
+Fitting control breakpoint for RT2_ZT8
+Control breakpoint rank: 29214
+Fitting treatment breakpoint for RT2_ZT8
+Treatment breakpoint rank: 25925
+Processing comparison: RT4_ZT10
+Fitting control breakpoint for RT4_ZT10
+Control breakpoint rank: 29098
+Fitting treatment breakpoint for RT4_ZT10
+Treatment breakpoint rank: 17888
+Processing comparison: RT8_ZT14
+Fitting control breakpoint for RT8_ZT14
+Control breakpoint rank: 30007
+Fitting treatment breakpoint for RT8_ZT14
+Treatment breakpoint rank: 24771
+There were 12 warnings (use warnings() to see them)
+Done. Outputs written to: /root/REAPER98632/exports/variance_NB1_NB2_regime_split_fast

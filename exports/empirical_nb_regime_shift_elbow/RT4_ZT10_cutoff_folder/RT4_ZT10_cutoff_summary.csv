@@ -1,2 +1,0 @@
-"comparison","control_cutoff_mode","control_cutoff_rank","control_cutoff_fraction","treatment_cutoff_mode","treatment_cutoff_rank","treatment_cutoff_fraction","cutoff_range_rank_min","cutoff_range_rank_max","cutoff_range_fraction_min","cutoff_range_fraction_max"
-"RT4_ZT10","first broad elbow on smoothed empirical alpha*mu",4264,0.134269609849797,"first broad elbow on smoothed empirical alpha*mu",5935,0.186887930220109,4264,5935,0.134269609849797,0.186887930220109
