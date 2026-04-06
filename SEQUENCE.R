@@ -2,32 +2,18 @@
 # SEQUENCE STAGE 1: EMPIRICAL NB REGIME SHIFT
 # GLOBAL PIECEWISE BREAKPOINT OVER FULL INTERIOR RANK SERIES
 # -----------------------------------------------------------------------------
-# Purpose
-#   Define a less arbitrary leading-edge regime-change cutoff on the EVS-ranked
-#   absolute loading-score series by fitting a global two-segment piecewise
-#   linear model to the smoothed empirical NB balance curve.
+# Empirical NB quantities from raw counts:
+#   mu        = mean(raw counts)
+#   Var       = variance(raw counts)
+#   alpha_emp = (Var - mu) / mu^2
+#   alpha_mu  = alpha_emp * mu = (Var - mu) / mu
 #
-#   Empirical NB quantities from raw counts:
-#       mu        = mean(raw counts)
-#       Var       = variance(raw counts)
-#       alpha_emp = (Var - mu) / mu^2
-#       alpha_mu  = alpha_emp * mu = (Var - mu) / mu
+# Regime curve:
+#   y(r) = log(alpha_mu(r)) for alpha_mu(r) > 0
 #
-#   Balance curve:
-#       y(r) = log(alpha_mu(r))          for alpha_mu(r) > 0
-#
-#   Method
-#     1. Rank features by absolute PC1 loading, separately for treatment and
-#        control.
-#     2. Compute raw-count empirical mean and variance per feature.
-#     3. Compute empirical alpha*mu and smooth log(alpha*mu) lightly.
-#     4. Fit a global two-segment continuous piecewise linear model across the
-#        full interior rank series (excluding only small left/right edge zones).
-#     5. Select the breakpoint minimizing residual sum of squares (RSS).
-#     6. Report treatment and control breakpoints and the range between them.
-#
-# Outputs
-#   exports/empirical_nb_piecewise_breakpoint/<comparison>_cutoff_folder/
+# Breakpoint:
+#   Global two-segment continuous piecewise linear fit over the full interior
+#   EVS-ranked series, excluding only small left/right edge zones.
 # =============================================================================
 
 suppressPackageStartupMessages({
@@ -35,6 +21,10 @@ suppressPackageStartupMessages({
   library(dplyr)
   library(gridExtra)
 })
+
+# =============================================================================
+# USER SETTINGS
+# =============================================================================
 
 repo_dir <- getwd()
 input_dir <- file.path(repo_dir, "data")
@@ -72,6 +62,10 @@ left_edge_exclusion_fraction <- 0.02
 right_edge_exclusion_fraction <- 0.05
 min_segment_size <- 200L
 
+# =============================================================================
+# HELPERS
+# =============================================================================
+
 resolve_counts_file <- function(path_hint) {
   candidates <- unique(c(
     path_hint,
@@ -92,7 +86,10 @@ resolve_counts_file <- function(path_hint) {
   found <- found[file.exists(found)]
   if (length(found) > 0L) return(found[[1]])
 
-  stop(paste0("Count file not found. Tried: ", paste(candidates, collapse = ", ")), call. = FALSE)
+  stop(
+    paste0("Count file not found. Tried: ", paste(candidates, collapse = ", ")),
+    call. = FALSE
+  )
 }
 
 detect_feature_id_column <- function(df) {
@@ -115,9 +112,14 @@ read_count_matrix <- function(path, meta_ids) {
   feature_col <- detect_feature_id_column(raw_df)
   symbol_col <- detect_gene_symbol_column(raw_df)
   sample_cols <- intersect(meta_ids, names(raw_df))
-  if (length(sample_cols) == 0L) stop("No count columns matched metadata sample IDs.", call. = FALSE)
+  if (length(sample_cols) == 0L) {
+    stop("No count columns matched metadata sample IDs.", call. = FALSE)
+  }
 
-  annot_df <- data.frame(feature_id = as.character(raw_df[[feature_col]]), stringsAsFactors = FALSE)
+  annot_df <- data.frame(
+    feature_id = as.character(raw_df[[feature_col]]),
+    stringsAsFactors = FALSE
+  )
   annot_df$gene_symbol <- if (!is.null(symbol_col)) as.character(raw_df[[symbol_col]]) else annot_df$feature_id
 
   keep <- !is.na(annot_df$feature_id) & nzchar(annot_df$feature_id)
@@ -148,10 +150,17 @@ subset_comparison <- function(count_matrix, comparison_row, meta_all) {
 
   missing_ids <- setdiff(keep_ids, colnames(count_matrix))
   if (length(missing_ids) > 0L) {
-    stop(paste0("Missing samples for comparison ", comparison_row$comparison_name, ": ", paste(missing_ids, collapse = ", ")), call. = FALSE)
+    stop(
+      paste0("Missing samples for comparison ", comparison_row$comparison_name, ": ", paste(missing_ids, collapse = ", ")),
+      call. = FALSE
+    )
   }
 
-  list(count_matrix = count_matrix[, keep_ids, drop = FALSE], trt_ids = trt_ids, ctrl_ids = ctrl_ids)
+  list(
+    count_matrix = count_matrix[, keep_ids, drop = FALSE],
+    trt_ids = trt_ids,
+    ctrl_ids = ctrl_ids
+  )
 }
 
 safe_mean <- function(x) {
@@ -175,6 +184,7 @@ roll_median <- function(x, k = 101L) {
   if (k %% 2L == 0L) k <- k + 1L
   h <- (k - 1L) / 2L
   out <- rep(NA_real_, n)
+
   for (i in seq_len(n)) {
     lo <- max(1L, i - h)
     hi <- min(n, i + h)
@@ -234,17 +244,32 @@ compute_feature_metrics_empirical <- function(count_mat, ctrl_cols, trt_cols, fe
 
 build_rank_series <- function(full_tbl, arm = c("control", "treatment")) {
   arm <- match.arg(arm)
+
   if (arm == "control") {
     out <- full_tbl %>%
-      transmute(feature_id, gene_symbol, rank = rank_ctrl, abs_loading = ctrl_abs_loading,
-                mu = mu_ctrl, variance = var_ctrl, alpha = alpha_emp_ctrl,
-                alpha_mu = alpha_mu_ctrl, log_alpha_mu = log_alpha_mu_ctrl) %>%
+      transmute(
+        feature_id, gene_symbol,
+        rank = rank_ctrl,
+        abs_loading = ctrl_abs_loading,
+        mu = mu_ctrl,
+        variance = var_ctrl,
+        alpha = alpha_emp_ctrl,
+        alpha_mu = alpha_mu_ctrl,
+        log_alpha_mu = log_alpha_mu_ctrl
+      ) %>%
       arrange(rank)
   } else {
     out <- full_tbl %>%
-      transmute(feature_id, gene_symbol, rank = rank_trt, abs_loading = trt_abs_loading,
-                mu = mu_trt, variance = var_trt, alpha = alpha_emp_trt,
-                alpha_mu = alpha_mu_trt, log_alpha_mu = log_alpha_mu_trt) %>%
+      transmute(
+        feature_id, gene_symbol,
+        rank = rank_trt,
+        abs_loading = trt_abs_loading,
+        mu = mu_trt,
+        variance = var_trt,
+        alpha = alpha_emp_trt,
+        alpha_mu = alpha_mu_trt,
+        log_alpha_mu = log_alpha_mu_trt
+      ) %>%
       arrange(rank)
   }
 
@@ -255,26 +280,37 @@ build_rank_series <- function(full_tbl, arm = c("control", "treatment")) {
     )
 }
 
-fit_piecewise_breakpoint <- function(x, y, left_exclusion_fraction = 0.02,
+fit_piecewise_breakpoint <- function(x, y,
+                                     left_exclusion_fraction = 0.02,
                                      right_exclusion_fraction = 0.05,
                                      min_segment_size = 200L) {
   x <- as.numeric(x)
   y <- as.numeric(y)
   ok <- is.finite(x) & is.finite(y)
   n <- length(y)
+
   fitted_full <- rep(NA_real_, n)
   score <- rep(NA_real_, n)
 
   if (sum(ok) < (2L * min_segment_size + 5L)) {
     idx <- max(1L, min(n, floor(n * 0.10)))
     return(list(
-      breakpoint_index = idx, breakpoint_rank = x[idx], mode = "fallback insufficient data",
-      fitted = fitted_full, rss = NA_real_, search_start = NA_integer_, search_end = NA_integer_, score = score
+      breakpoint_index = idx,
+      breakpoint_rank = x[idx],
+      mode = "fallback insufficient data",
+      fitted = fitted_full,
+      rss = NA_real_,
+      search_start = NA_integer_,
+      search_end = NA_integer_,
+      score = score
     ))
   }
 
-  search_start <- max(which(ok)[1], floor(n * left_exclusion_fraction), min_segment_size)
-  search_end <- min(tail(which(ok), 1), floor(n * (1 - right_exclusion_fraction)), n - min_segment_size)
+  first_ok <- which(ok)[1]
+  last_ok <- tail(which(ok), 1)
+
+  search_start <- max(first_ok, floor(n * left_exclusion_fraction), min_segment_size)
+  search_end <- min(last_ok, floor(n * (1 - right_exclusion_fraction)), n - min_segment_size)
 
   candidates <- seq.int(search_start, search_end)
   candidates <- candidates[candidates > min_segment_size & candidates < (n - min_segment_size)]
@@ -282,8 +318,14 @@ fit_piecewise_breakpoint <- function(x, y, left_exclusion_fraction = 0.02,
   if (length(candidates) < 5L) {
     idx <- max(1L, min(n, floor(n * 0.10)))
     return(list(
-      breakpoint_index = idx, breakpoint_rank = x[idx], mode = "fallback narrow interior",
-      fitted = fitted_full, rss = NA_real_, search_start = search_start, search_end = search_end, score = score
+      breakpoint_index = idx,
+      breakpoint_rank = x[idx],
+      mode = "fallback narrow interior",
+      fitted = fitted_full,
+      rss = NA_real_,
+      search_start = search_start,
+      search_end = search_end,
+      score = score
     ))
   }
 
@@ -294,13 +336,24 @@ fit_piecewise_breakpoint <- function(x, y, left_exclusion_fraction = 0.02,
     z <- pmax(0, x - x[c])
     fit_df <- data.frame(y = y, x = x, z = z)
     fit_df <- fit_df[is.finite(fit_df$y) & is.finite(fit_df$x) & is.finite(fit_df$z), , drop = FALSE]
+
+    if (nrow(fit_df) < (2L * min_segment_size + 5L)) next
+
     fit <- lm(y ~ x + z, data = fit_df)
     rss <- sum(resid(fit)^2)
+
     score[c] <- rss
+
     if (is.finite(rss) && rss < best_rss) {
       best_rss <- rss
       best_c <- c
-      fitted_full[ok] <- predict(fit, newdata = data.frame(x = x[ok], z = pmax(0, x[ok] - x[c])))
+      fitted_full[ok] <- predict(
+        fit,
+        newdata = data.frame(
+          x = x[ok],
+          z = pmax(0, x[ok] - x[c])
+        )
+      )
     }
   }
 
@@ -319,9 +372,9 @@ fit_piecewise_breakpoint <- function(x, y, left_exclusion_fraction = 0.02,
 build_dataset_panel <- function(rank_df, breakpoint_info, title_prefix, out_file) {
   df <- rank_df %>%
     mutate(
-      log_alpha_mu_sm = roll_median(log_alpha_mu, 101L),
-      log_mu_sm = roll_median(log_mu, 101L),
-      log_alpha_sm = roll_median(log_alpha, 101L),
+      log_alpha_mu_sm = roll_median(log_alpha_mu, smoother_k),
+      log_mu_sm = roll_median(log_mu, smoother_k),
+      log_alpha_sm = roll_median(log_alpha, smoother_k),
       fitted_piecewise = breakpoint_info$fitted
     )
 
@@ -334,18 +387,40 @@ build_dataset_panel <- function(rank_df, breakpoint_info, title_prefix, out_file
 
   p1 <- ggplot(df, aes(rank, abs_loading)) +
     geom_line(linewidth = 0.8) +
-    annotate("rect", xmin = breakpoint_info$search_start, xmax = breakpoint_info$search_end, ymin = -Inf, ymax = Inf, alpha = 0.06) +
+    annotate("rect",
+      xmin = breakpoint_info$search_start,
+      xmax = breakpoint_info$search_end,
+      ymin = -Inf, ymax = Inf, alpha = 0.06
+    ) +
     geom_vline(xintercept = cutoff_x, linetype = 2, linewidth = 0.8) +
-    annotate("label", x = cutoff_x, y = max(df$abs_loading, na.rm = TRUE), label = label_text, hjust = 0, vjust = 1, size = 3) +
-    labs(title = paste0(title_prefix, ": absolute PC1 loading series"), x = "EVS rank", y = "|PC1 loading|") +
+    annotate(
+      "label",
+      x = cutoff_x,
+      y = max(df$abs_loading, na.rm = TRUE),
+      label = label_text,
+      hjust = 0, vjust = 1, size = 3
+    ) +
+    labs(
+      title = paste0(title_prefix, ": absolute PC1 loading series"),
+      x = "EVS rank",
+      y = "|PC1 loading|"
+    ) +
     theme_bw(base_size = 10)
 
   p2 <- ggplot(df, aes(rank)) +
     geom_line(aes(y = log_mu_sm, color = "Smoothed log(raw-count mean)"), linewidth = 1.0) +
     geom_line(aes(y = log_alpha_sm, color = "Smoothed log(empirical dispersion)"), linewidth = 1.0) +
-    annotate("rect", xmin = breakpoint_info$search_start, xmax = breakpoint_info$search_end, ymin = -Inf, ymax = Inf, alpha = 0.06) +
+    annotate("rect",
+      xmin = breakpoint_info$search_start,
+      xmax = breakpoint_info$search_end,
+      ymin = -Inf, ymax = Inf, alpha = 0.06
+    ) +
     geom_vline(xintercept = cutoff_x, linetype = 2, linewidth = 0.8) +
-    labs(title = paste0(title_prefix, ": raw-count mean and empirical dispersion"), x = "EVS rank", y = "Log value") +
+    labs(
+      title = paste0(title_prefix, ": raw-count mean and empirical dispersion"),
+      x = "EVS rank",
+      y = "Log value"
+    ) +
     theme_bw(base_size = 10) +
     theme(legend.position = "bottom")
 
@@ -353,20 +428,48 @@ build_dataset_panel <- function(rank_df, breakpoint_info, title_prefix, out_file
     geom_line(aes(y = log_alpha_mu, color = "Raw log(empirical alpha*mu)"), linewidth = 0.4, alpha = 0.18) +
     geom_line(aes(y = log_alpha_mu_sm, color = "Smoothed log(empirical alpha*mu)"), linewidth = 1.0) +
     geom_line(aes(y = fitted_piecewise, color = "Piecewise fit"), linewidth = 1.0, linetype = 2) +
-    annotate("rect", xmin = breakpoint_info$search_start, xmax = breakpoint_info$search_end, ymin = -Inf, ymax = Inf, alpha = 0.06) +
-    geom_point(data = df[df$rank == cutoff_x, , drop = FALSE], aes(x = rank, y = log_alpha_mu_sm), size = 2.5) +
+    annotate("rect",
+      xmin = breakpoint_info$search_start,
+      xmax = breakpoint_info$search_end,
+      ymin = -Inf, ymax = Inf, alpha = 0.06
+    ) +
+    geom_point(
+      data = df[df$rank == cutoff_x, , drop = FALSE],
+      aes(x = rank, y = log_alpha_mu_sm),
+      size = 2.5
+    ) +
     geom_vline(xintercept = cutoff_x, linetype = 2, linewidth = 0.8) +
-    labs(title = paste0(title_prefix, ": empirical regime curve and piecewise breakpoint"), x = "EVS rank", y = "log(empirical alpha*mu)") +
+    labs(
+      title = paste0(title_prefix, ": empirical regime curve and piecewise breakpoint"),
+      x = "EVS rank",
+      y = "log(empirical alpha*mu)"
+    ) +
     theme_bw(base_size = 10) +
     theme(legend.position = "bottom")
 
-  score_df <- data.frame(rank = seq_along(breakpoint_info$score), score = breakpoint_info$score)
+  score_df <- data.frame(
+    rank = seq_along(breakpoint_info$score),
+    score = breakpoint_info$score
+  )
+
   p4 <- ggplot(score_df, aes(rank, score)) +
     geom_line(linewidth = 1.0) +
-    annotate("rect", xmin = breakpoint_info$search_start, xmax = breakpoint_info$search_end, ymin = -Inf, ymax = Inf, alpha = 0.06) +
-    geom_point(aes(x = breakpoint_info$breakpoint_rank, y = breakpoint_info$rss), size = 2.5) +
+    annotate("rect",
+      xmin = breakpoint_info$search_start,
+      xmax = breakpoint_info$search_end,
+      ymin = -Inf, ymax = Inf, alpha = 0.06
+    ) +
+    geom_point(
+      data = data.frame(rank = breakpoint_info$breakpoint_rank, score = breakpoint_info$rss),
+      aes(x = rank, y = score),
+      size = 2.5
+    ) +
     geom_vline(xintercept = cutoff_x, linetype = 2, linewidth = 0.8) +
-    labs(title = paste0(title_prefix, ": breakpoint fit score (RSS)"), x = "Candidate breakpoint rank", y = "Residual sum of squares") +
+    labs(
+      title = paste0(title_prefix, ": breakpoint fit score (RSS)"),
+      x = "Candidate breakpoint rank",
+      y = "Residual sum of squares"
+    ) +
     theme_bw(base_size = 10)
 
   png(out_file, width = 2200, height = 2400, res = 200)
@@ -375,21 +478,29 @@ build_dataset_panel <- function(rank_df, breakpoint_info, title_prefix, out_file
 }
 
 build_range_panel <- function(ctrl_bp, trt_bp, ctrl_df, trt_df, title_prefix, out_file) {
-  ctrl_plot_df <- ctrl_df %>% mutate(log_alpha_mu_sm = roll_median(log_alpha_mu, 101L))
-  trt_plot_df  <- trt_df  %>% mutate(log_alpha_mu_sm = roll_median(log_alpha_mu, 101L))
+  ctrl_plot_df <- ctrl_df %>% mutate(log_alpha_mu_sm = roll_median(log_alpha_mu, smoother_k))
+  trt_plot_df  <- trt_df  %>% mutate(log_alpha_mu_sm = roll_median(log_alpha_mu, smoother_k))
 
   p <- ggplot() +
     geom_line(data = ctrl_plot_df, aes(rank, log_alpha_mu_sm, color = "Control smoothed log(empirical alpha*mu)"), linewidth = 1.0) +
     geom_line(data = trt_plot_df, aes(rank, log_alpha_mu_sm, color = "Treatment smoothed log(empirical alpha*mu)"), linewidth = 1.0) +
-    annotate("rect",
-             xmin = min(ctrl_bp$breakpoint_rank, trt_bp$breakpoint_rank),
-             xmax = max(ctrl_bp$breakpoint_rank, trt_bp$breakpoint_rank),
-             ymin = -Inf, ymax = Inf, alpha = 0.08) +
+    annotate(
+      "rect",
+      xmin = min(ctrl_bp$breakpoint_rank, trt_bp$breakpoint_rank),
+      xmax = max(ctrl_bp$breakpoint_rank, trt_bp$breakpoint_rank),
+      ymin = -Inf, ymax = Inf, alpha = 0.08
+    ) +
     geom_vline(xintercept = ctrl_bp$breakpoint_rank, linetype = 2, linewidth = 0.8) +
     geom_vline(xintercept = trt_bp$breakpoint_rank, linetype = 3, linewidth = 0.8) +
-    labs(title = paste0(title_prefix, ": treatment/control regime-change range"),
-         subtitle = paste0("Control rank = ", ctrl_bp$breakpoint_rank, " | Treatment rank = ", trt_bp$breakpoint_rank),
-         x = "EVS rank", y = "Smoothed log(empirical alpha*mu)") +
+    labs(
+      title = paste0(title_prefix, ": treatment/control regime-change range"),
+      subtitle = paste0(
+        "Control rank = ", ctrl_bp$breakpoint_rank,
+        " | Treatment rank = ", trt_bp$breakpoint_rank
+      ),
+      x = "EVS rank",
+      y = "Smoothed log(empirical alpha*mu)"
+    ) +
     theme_bw(base_size = 10) +
     theme(legend.position = "bottom")
 
@@ -398,16 +509,26 @@ build_range_panel <- function(ctrl_bp, trt_bp, ctrl_df, trt_df, title_prefix, ou
   dev.off()
 }
 
+# =============================================================================
+# MAIN
+# =============================================================================
+
+message("Resolving count file...")
 count_file <- resolve_counts_file(count_file)
+message("Using count file: ", count_file)
+
+message("Reading count matrix...")
 loaded <- read_count_matrix(count_file, meta_all$id)
 count_mat <- loaded$count_matrix
 annot_df <- loaded$annot_df
+message("Count matrix dimensions: ", nrow(count_mat), " features x ", ncol(count_mat), " samples")
 
 overall_rows <- list()
 
 for (i in seq_len(nrow(comparison_table))) {
   comparison_row <- comparison_table[i, , drop = FALSE]
   cmp_name <- comparison_row$comparison_name[[1]]
+  message("Processing comparison: ", cmp_name)
 
   cmp_dir <- file.path(out_root, paste0(cmp_name, "_cutoff_folder"))
   dir.create(cmp_dir, recursive = TRUE, showWarnings = FALSE)
@@ -423,14 +544,27 @@ for (i in seq_len(nrow(comparison_table))) {
     left_join(metrics_tbl, by = "feature_id") %>%
     left_join(annot_df, by = "feature_id")
 
-  utils::write.csv(full_tbl, file.path(cmp_dir, paste0(cmp_name, "_feature_level_metrics.csv")), row.names = FALSE)
+  utils::write.csv(
+    full_tbl,
+    file.path(cmp_dir, paste0(cmp_name, "_feature_level_metrics.csv")),
+    row.names = FALSE
+  )
 
   ctrl_rank_df <- build_rank_series(full_tbl, "control")
   trt_rank_df  <- build_rank_series(full_tbl, "treatment")
 
-  utils::write.csv(ctrl_rank_df, file.path(cmp_dir, paste0(cmp_name, "_control_rank_series.csv")), row.names = FALSE)
-  utils::write.csv(trt_rank_df, file.path(cmp_dir, paste0(cmp_name, "_treatment_rank_series.csv")), row.names = FALSE)
+  utils::write.csv(
+    ctrl_rank_df,
+    file.path(cmp_dir, paste0(cmp_name, "_control_rank_series.csv")),
+    row.names = FALSE
+  )
+  utils::write.csv(
+    trt_rank_df,
+    file.path(cmp_dir, paste0(cmp_name, "_treatment_rank_series.csv")),
+    row.names = FALSE
+  )
 
+  message("Fitting control breakpoint for ", cmp_name)
   ctrl_bp <- fit_piecewise_breakpoint(
     x = ctrl_rank_df$rank,
     y = roll_median(ctrl_rank_df$log_alpha_mu, smoother_k),
@@ -439,6 +573,7 @@ for (i in seq_len(nrow(comparison_table))) {
     min_segment_size = min_segment_size
   )
 
+  message("Fitting treatment breakpoint for ", cmp_name)
   trt_bp <- fit_piecewise_breakpoint(
     x = trt_rank_df$rank,
     y = roll_median(trt_rank_df$log_alpha_mu, smoother_k),
@@ -447,13 +582,21 @@ for (i in seq_len(nrow(comparison_table))) {
     min_segment_size = min_segment_size
   )
 
-  build_dataset_panel(ctrl_rank_df, ctrl_bp, paste0(cmp_name, " control"),
-                      file.path(cmp_dir, paste0(cmp_name, "_control_rank_panel.png")))
-  build_dataset_panel(trt_rank_df, trt_bp, paste0(cmp_name, " treatment"),
-                      file.path(cmp_dir, paste0(cmp_name, "_treatment_rank_panel.png")))
+  message("Control breakpoint rank: ", ctrl_bp$breakpoint_rank)
+  message("Treatment breakpoint rank: ", trt_bp$breakpoint_rank)
 
-  build_range_panel(ctrl_bp, trt_bp, ctrl_rank_df, trt_rank_df, cmp_name,
-                    file.path(cmp_dir, paste0(cmp_name, "_cutoff_range_panel.png")))
+  build_dataset_panel(
+    ctrl_rank_df, ctrl_bp, paste0(cmp_name, " control"),
+    file.path(cmp_dir, paste0(cmp_name, "_control_rank_panel.png"))
+  )
+  build_dataset_panel(
+    trt_rank_df, trt_bp, paste0(cmp_name, " treatment"),
+    file.path(cmp_dir, paste0(cmp_name, "_treatment_rank_panel.png"))
+  )
+  build_range_panel(
+    ctrl_bp, trt_bp, ctrl_rank_df, trt_rank_df, cmp_name,
+    file.path(cmp_dir, paste0(cmp_name, "_cutoff_range_panel.png"))
+  )
 
   cutoff_summary <- tibble(
     comparison = cmp_name,
@@ -469,10 +612,19 @@ for (i in seq_len(nrow(comparison_table))) {
     cutoff_range_fraction_max = max(ctrl_bp$breakpoint_rank / nrow(ctrl_rank_df), trt_bp$breakpoint_rank / nrow(trt_rank_df))
   )
 
-  utils::write.csv(cutoff_summary, file.path(cmp_dir, paste0(cmp_name, "_cutoff_summary.csv")), row.names = FALSE)
+  utils::write.csv(
+    cutoff_summary,
+    file.path(cmp_dir, paste0(cmp_name, "_cutoff_summary.csv")),
+    row.names = FALSE
+  )
   overall_rows[[cmp_name]] <- cutoff_summary
 }
 
 overall_summary <- bind_rows(overall_rows)
-utils::write.csv(overall_summary, file.path(out_root, "overall_cutoff_summary.csv"), row.names = FALSE)
+utils::write.csv(
+  overall_summary,
+  file.path(out_root, "overall_cutoff_summary.csv"),
+  row.names = FALSE
+)
+
 message("Done. Outputs written to: ", out_root)
