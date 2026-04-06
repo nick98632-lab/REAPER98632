@@ -1,6 +1,6 @@
 # =============================================================================
 # SEQUENCE STAGE 1: EMPIRICAL VARIANCE + NB1/NB2 REGIME SPLIT
-# RIGHT-SIDE LEADING EDGE, PERSISTENT EMPIRICAL REGIME-ONSET SELECTOR
+# RIGHT-SIDE LEADING EDGE, LEFT-BASELINE SUSTAINED-UPWARD ONSET SELECTOR
 # -----------------------------------------------------------------------------
 # Orientation
 #   - lowest absolute loading on the LEFT
@@ -16,22 +16,18 @@
 #   alpha_mu  = alpha_emp * mu = (Var - mu) / mu
 #
 # Primary cutoff logic
-#   The cutoff is NOT chosen by a bounded breakpoint optimizer.
-#   Instead, it is defined as the first sustained onset of the RIGHT-SIDE
-#   leading-edge regime on the FULL ranked series.
+#   The cutoff is defined from the FULL ranked series as the first sustained
+#   upward departure from the LOW-LOADING LEFT-SIDE remainder baseline into the
+#   RIGHT-SIDE leading-edge regime.
 #
-#   The right-side leading-edge regime is defined empirically from the
-#   right-tail behavior itself:
-#     1. high empirical variance
-#     2. NB2 dominance over NB1
-#     3. elevated empirical alpha*mu support
-#
-#   For each smoothed series, the right-tail lower-quartile is used as the
-#   empirical threshold. The cutoff is the first rank where all three
-#   conditions are sustained for a minimum run length.
+#   Baseline is estimated from the LEFT side of the ranked series.
+#   The onset is the first rank where all three empirical conditions persist:
+#     1. smoothed variance is sufficiently above its left-baseline
+#     2. smoothed NB2 - NB1 gap is sufficiently above its left-baseline
+#     3. smoothed alpha*mu support is sufficiently above its left-baseline
 #
 # Output
-#   exports/variance_nb1_nb2_right_regime_onset/<comparison>_cutoff_folder/
+#   exports/variance_nb1_nb2_right_left_baseline_onset/<comparison>_cutoff_folder/
 # =============================================================================
 
 suppressPackageStartupMessages({
@@ -47,7 +43,7 @@ suppressPackageStartupMessages({
 repo_dir <- getwd()
 input_dir <- file.path(repo_dir, "data")
 count_file <- file.path(input_dir, "WTTS-Seq_2022.2_DE_raw_read_numbers.csv")
-out_root <- file.path(repo_dir, "exports", "variance_nb1_nb2_right_regime_onset")
+out_root <- file.path(repo_dir, "exports", "variance_nb1_nb2_right_left_baseline_onset")
 dir.create(out_root, recursive = TRUE, showWarnings = FALSE)
 
 comparison_table <- data.frame(
@@ -76,10 +72,15 @@ rownames(meta_all) <- meta_all$id
 meta_all$condition <- factor(meta_all$condition, levels = c("untrt", "trt"))
 
 smoother_k <- 101L
-right_tail_fraction <- 0.10
+left_baseline_fraction <- 0.15
 min_run_length <- 250L
-right_edge_buffer <- 50L
 left_edge_buffer <- 50L
+right_edge_buffer <- 50L
+
+# sensitivity of upward departure from left baseline
+z_threshold_variance <- 1.25
+z_threshold_gap <- 0.75
+z_threshold_alpha_mu <- 0.75
 
 # =============================================================================
 # HELPERS
@@ -223,6 +224,22 @@ scale01 <- function(x) {
   out
 }
 
+robust_center_scale <- function(x) {
+  x <- as.numeric(x)
+  ok <- is.finite(x)
+  out <- rep(NA_real_, length(x))
+  if (!any(ok)) return(list(z = out, center = NA_real_, scale = NA_real_))
+  med <- stats::median(x[ok], na.rm = TRUE)
+  madv <- stats::mad(x[ok], center = med, constant = 1, na.rm = TRUE)
+  if (!is.finite(madv) || madv <= 0) {
+    sdv <- stats::sd(x[ok], na.rm = TRUE)
+    if (!is.finite(sdv) || sdv <= 0) sdv <- 1
+    madv <- sdv
+  }
+  out[ok] <- (x[ok] - med) / madv
+  list(z = out, center = med, scale = madv)
+}
+
 compute_group_pc1_loadings <- function(count_mat, group_cols) {
   mat <- count_mat[, group_cols, drop = FALSE]
   mat <- log2(mat + 1)
@@ -242,7 +259,6 @@ build_evs_table <- function(count_mat, ctrl_cols, trt_cols, feature_ids) {
     trt_abs_loading  = trt_load
   ) %>%
     mutate(
-      # RIGHT-SIDE LEADING EDGE
       rank_ctrl = rank(ctrl_abs_loading, ties.method = "first"),
       rank_trt  = rank(trt_abs_loading, ties.method = "first")
     )
@@ -337,10 +353,13 @@ find_first_sustained_run <- function(cond, min_run = 250L, start_idx = 1L, end_i
 
 select_right_regime_onset <- function(rank_df,
                                       smoother_k = 101L,
-                                      right_tail_fraction = 0.10,
+                                      left_baseline_fraction = 0.15,
                                       min_run_length = 250L,
                                       left_edge_buffer = 50L,
-                                      right_edge_buffer = 50L) {
+                                      right_edge_buffer = 50L,
+                                      z_threshold_variance = 1.25,
+                                      z_threshold_gap = 0.75,
+                                      z_threshold_alpha_mu = 0.75) {
   df <- rank_df %>%
     mutate(
       log_variance_sm = roll_median(log_variance, smoother_k),
@@ -351,87 +370,86 @@ select_right_regime_onset <- function(rank_df,
     )
 
   n <- nrow(df)
-  tail_start <- max(1L, floor((1 - right_tail_fraction) * n))
-  tail_idx <- tail_start:n
-  tail_idx <- tail_idx[tail_idx <= (n - right_edge_buffer)]
+  base_end <- min(max(floor(left_baseline_fraction * n), left_edge_buffer + 100L), n - right_edge_buffer)
+  base_idx <- seq.int(1L + left_edge_buffer, base_end)
 
-  var_tail <- df$log_variance_sm[tail_idx]
-  gap_tail <- df$nb_gap_sm[tail_idx]
-  amu_tail <- df$log_alpha_mu_sm[tail_idx]
+  var_z_obj <- robust_center_scale(df$log_variance_sm[base_idx])
+  gap_z_obj <- robust_center_scale(df$nb_gap_sm[base_idx])
+  amu_z_obj <- robust_center_scale(df$log_alpha_mu_sm[base_idx])
 
-  var_lb <- as.numeric(stats::quantile(var_tail[is.finite(var_tail)], probs = 0.25, na.rm = TRUE, names = FALSE))
-  gap_lb <- as.numeric(stats::quantile(gap_tail[is.finite(gap_tail)], probs = 0.25, na.rm = TRUE, names = FALSE))
-  amu_lb <- as.numeric(stats::quantile(amu_tail[is.finite(amu_tail)], probs = 0.25, na.rm = TRUE, names = FALSE))
+  var_z <- rep(NA_real_, n)
+  gap_z <- rep(NA_real_, n)
+  amu_z <- rep(NA_real_, n)
 
-  cond_var <- is.finite(df$log_variance_sm) & (df$log_variance_sm >= var_lb)
-  cond_gap <- is.finite(df$nb_gap_sm) & (df$nb_gap_sm >= gap_lb)
-  cond_amu <- is.finite(df$log_alpha_mu_sm) & (df$log_alpha_mu_sm >= amu_lb)
+  var_ok <- is.finite(df$log_variance_sm)
+  gap_ok <- is.finite(df$nb_gap_sm)
+  amu_ok <- is.finite(df$log_alpha_mu_sm)
+
+  var_z[var_ok] <- (df$log_variance_sm[var_ok] - var_z_obj$center) / var_z_obj$scale
+  gap_z[gap_ok] <- (df$nb_gap_sm[gap_ok] - gap_z_obj$center) / gap_z_obj$scale
+  amu_z[amu_ok] <- (df$log_alpha_mu_sm[amu_ok] - amu_z_obj$center) / amu_z_obj$scale
+
+  cond_var <- is.finite(var_z) & (var_z >= z_threshold_variance)
+  cond_gap <- is.finite(gap_z) & (gap_z >= z_threshold_gap)
+  cond_amu <- is.finite(amu_z) & (amu_z >= z_threshold_alpha_mu)
 
   cond_all <- cond_var & cond_gap & cond_amu
 
   onset_idx <- find_first_sustained_run(
     cond = cond_all,
     min_run = min_run_length,
-    start_idx = 1L + left_edge_buffer,
+    start_idx = base_end + 1L,
     end_idx = n - right_edge_buffer
   )
 
-  # Fallback 1: first sustained run on majority support
   support_count <- cond_var + cond_gap + cond_amu
   cond_majority <- support_count >= 2L
   if (is.na(onset_idx)) {
     onset_idx <- find_first_sustained_run(
       cond = cond_majority,
       min_run = min_run_length,
-      start_idx = 1L + left_edge_buffer,
+      start_idx = base_end + 1L,
       end_idx = n - right_edge_buffer
     )
   }
 
-  # Fallback 2: first sustained high support score
-  var_sc <- scale01(df$log_variance_sm)
-  gap_sc <- scale01(df$nb_gap_sm)
-  amu_sc <- scale01(df$log_alpha_mu_sm)
+  var_sc <- scale01(var_z)
+  gap_sc <- scale01(gap_z)
+  amu_sc <- scale01(amu_z)
   support_score <- rowMeans(cbind(var_sc, gap_sc, amu_sc), na.rm = TRUE)
 
   if (is.na(onset_idx)) {
-    score_tail <- support_score[tail_idx]
-    score_lb <- as.numeric(stats::quantile(score_tail[is.finite(score_tail)], probs = 0.25, na.rm = TRUE, names = FALSE))
-    cond_score <- is.finite(support_score) & (support_score >= score_lb)
-    onset_idx <- find_first_sustained_run(
-      cond = cond_score,
-      min_run = min_run_length,
-      start_idx = 1L + left_edge_buffer,
-      end_idx = n - right_edge_buffer
-    )
-  }
-
-  # Final fallback: earliest index with maximal rolling support score
-  if (is.na(onset_idx)) {
-    win <- max(25L, min_run_length)
     rolling_support <- rep(NA_real_, n)
+    win <- max(25L, min_run_length)
     for (i in seq_len(n)) {
       hi <- min(n, i + win - 1L)
       rolling_support[i] <- mean(support_score[i:hi], na.rm = TRUE)
     }
-    search_idx <- seq.int(1L + left_edge_buffer, n - right_edge_buffer)
+    search_idx <- seq.int(base_end + 1L, n - right_edge_buffer)
     onset_idx <- search_idx[which.max(rolling_support[search_idx])]
   }
 
+  df$var_z <- var_z
+  df$gap_z <- gap_z
+  df$amu_z <- amu_z
   df$cond_var <- cond_var
   df$cond_gap <- cond_gap
   df$cond_amu <- cond_amu
   df$cond_all <- cond_all
   df$support_score <- support_score
+  df$baseline_end <- base_end
 
   list(
     onset_index = onset_idx,
     onset_rank = df$rank[onset_idx],
-    mode = "first sustained empirical right-side regime onset",
-    tail_start = tail_start,
-    var_lb = var_lb,
-    gap_lb = gap_lb,
-    amu_lb = amu_lb,
+    mode = "first sustained upward departure from left-side baseline",
+    baseline_end = base_end,
+    var_center = var_z_obj$center,
+    var_scale = var_z_obj$scale,
+    gap_center = gap_z_obj$center,
+    gap_scale = gap_z_obj$scale,
+    amu_center = amu_z_obj$center,
+    amu_scale = amu_z_obj$scale,
     curve_df = df
   )
 }
@@ -442,14 +460,14 @@ build_dataset_panel <- function(rank_df, onset_info, title_prefix, out_file) {
   label_text <- paste0(
     onset_info$mode,
     "\nRank = ", cutoff_x,
-    "\nRight-tail reference starts at rank ", onset_info$tail_start
+    "\nLeft baseline ends at rank ", onset_info$baseline_end
   )
 
   p1 <- ggplot(df, aes(rank, abs_loading)) +
     geom_line(linewidth = 0.8) +
     annotate("rect",
-      xmin = onset_info$tail_start,
-      xmax = max(df$rank),
+      xmin = 1,
+      xmax = onset_info$baseline_end,
       ymin = -Inf, ymax = Inf, alpha = 0.05
     ) +
     geom_vline(xintercept = cutoff_x, linetype = 2, linewidth = 0.8) +
@@ -470,9 +488,9 @@ build_dataset_panel <- function(rank_df, onset_info, title_prefix, out_file) {
   p2 <- ggplot(df, aes(rank)) +
     geom_line(aes(y = log_variance_sm, color = "Smoothed log(1 + variance)"), linewidth = 1.0) +
     annotate("rect",
-      xmin = onset_info$tail_start,
-      xmax = max(df$rank),
-      ymin = onset_info$var_lb, ymax = Inf, alpha = 0.06
+      xmin = 1,
+      xmax = onset_info$baseline_end,
+      ymin = -Inf, ymax = Inf, alpha = 0.05
     ) +
     geom_point(
       data = df[df$rank == cutoff_x, , drop = FALSE],
@@ -501,15 +519,17 @@ build_dataset_panel <- function(rank_df, onset_info, title_prefix, out_file) {
     theme(legend.position = "bottom")
 
   p4 <- ggplot(df, aes(rank)) +
-    geom_line(aes(y = nb_gap_sm, color = "Smoothed NB2 - NB1 log-gap"), linewidth = 1.0) +
-    geom_line(aes(y = log_alpha_mu_sm, color = "Smoothed log(alpha*mu)"), linewidth = 1.0) +
-    geom_hline(yintercept = onset_info$gap_lb, linetype = 3) +
-    geom_hline(yintercept = onset_info$amu_lb, linetype = 3) +
+    geom_line(aes(y = var_z, color = "Variance z from left baseline"), linewidth = 1.0) +
+    geom_line(aes(y = gap_z, color = "NB2-NB1 gap z from left baseline"), linewidth = 1.0) +
+    geom_line(aes(y = amu_z, color = "alpha*mu z from left baseline"), linewidth = 1.0) +
+    geom_hline(yintercept = z_threshold_variance, linetype = 3) +
+    geom_hline(yintercept = z_threshold_gap, linetype = 3) +
+    geom_hline(yintercept = z_threshold_alpha_mu, linetype = 3) +
     geom_vline(xintercept = cutoff_x, linetype = 2, linewidth = 0.8) +
     labs(
-      title = paste0(title_prefix, ": empirical NB support"),
+      title = paste0(title_prefix, ": empirical upward-departure support"),
       x = "EVS rank",
-      y = "Support value"
+      y = "Z score from left baseline"
     ) +
     theme_bw(base_size = 10) +
     theme(legend.position = "bottom")
@@ -519,8 +539,8 @@ build_dataset_panel <- function(rank_df, onset_info, title_prefix, out_file) {
     geom_vline(xintercept = cutoff_x, linetype = 2, linewidth = 0.8) +
     geom_ribbon(aes(ymin = 0, ymax = ifelse(cond_all, support_score, 0)), alpha = 0.20) +
     labs(
-      title = paste0(title_prefix, ": empirical regime-onset support score"),
-      subtitle = "Shaded where variance, NB2>NB1, and alpha*mu support are all satisfied",
+      title = paste0(title_prefix, ": sustained regime-onset support score"),
+      subtitle = "Shaded where variance, NB2>NB1, and alpha*mu are all elevated above left baseline",
       x = "EVS rank",
       y = "Mean scaled support"
     ) +
@@ -611,10 +631,13 @@ for (i in seq_len(nrow(comparison_table))) {
   ctrl_onset <- select_right_regime_onset(
     ctrl_rank_df,
     smoother_k = smoother_k,
-    right_tail_fraction = right_tail_fraction,
+    left_baseline_fraction = left_baseline_fraction,
     min_run_length = min_run_length,
     left_edge_buffer = left_edge_buffer,
-    right_edge_buffer = right_edge_buffer
+    right_edge_buffer = right_edge_buffer,
+    z_threshold_variance = z_threshold_variance,
+    z_threshold_gap = z_threshold_gap,
+    z_threshold_alpha_mu = z_threshold_alpha_mu
   )
   message("Control onset rank: ", ctrl_onset$onset_rank); flush.console()
 
@@ -622,10 +645,13 @@ for (i in seq_len(nrow(comparison_table))) {
   trt_onset <- select_right_regime_onset(
     trt_rank_df,
     smoother_k = smoother_k,
-    right_tail_fraction = right_tail_fraction,
+    left_baseline_fraction = left_baseline_fraction,
     min_run_length = min_run_length,
     left_edge_buffer = left_edge_buffer,
-    right_edge_buffer = right_edge_buffer
+    right_edge_buffer = right_edge_buffer,
+    z_threshold_variance = z_threshold_variance,
+    z_threshold_gap = z_threshold_gap,
+    z_threshold_alpha_mu = z_threshold_alpha_mu
   )
   message("Treatment onset rank: ", trt_onset$onset_rank); flush.console()
 
@@ -653,13 +679,7 @@ for (i in seq_len(nrow(comparison_table))) {
     cutoff_range_rank_min = min(ctrl_onset$onset_rank, trt_onset$onset_rank),
     cutoff_range_rank_max = max(ctrl_onset$onset_rank, trt_onset$onset_rank),
     cutoff_range_fraction_min = min(ctrl_onset$onset_rank / nrow(ctrl_rank_df), trt_onset$onset_rank / nrow(trt_rank_df)),
-    cutoff_range_fraction_max = max(ctrl_onset$onset_rank / nrow(ctrl_rank_df), trt_onset$onset_rank / nrow(trt_rank_df)),
-    control_var_lb = ctrl_onset$var_lb,
-    control_gap_lb = ctrl_onset$gap_lb,
-    control_alpha_mu_lb = ctrl_onset$amu_lb,
-    treatment_var_lb = trt_onset$var_lb,
-    treatment_gap_lb = trt_onset$gap_lb,
-    treatment_alpha_mu_lb = trt_onset$amu_lb
+    cutoff_range_fraction_max = max(ctrl_onset$onset_rank / nrow(ctrl_rank_df), trt_onset$onset_rank / nrow(trt_rank_df))
   )
 
   utils::write.csv(
