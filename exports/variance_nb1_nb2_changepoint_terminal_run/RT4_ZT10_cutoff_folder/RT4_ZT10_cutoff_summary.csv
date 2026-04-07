@@ -1,2 +1,0 @@
-"comparison","control_cutoff_mode","control_cutoff_rank","control_cutoff_fraction","control_terminal_start_rank","treatment_cutoff_mode","treatment_cutoff_rank","treatment_cutoff_fraction","treatment_terminal_start_rank","cutoff_range_rank_min","cutoff_range_rank_max"
-"RT4_ZT10","last changepoint before terminal positive-slope run",23718,0.746858960229241,25885,"last changepoint before terminal positive-slope run",19023,0.599017539440123,26156,19023,23718

@@ -4,23 +4,23 @@ Using count file: /root/REAPER98632/data/WTTS-Seq_2022.2_DE_raw_read_numbers.csv
 Reading count matrix...
 Count matrix dimensions: 31757 features x 40 samples
 Processing comparison: RT0_ZT6
-Selecting control changepoint cutoff for RT0_ZT6
-Control onset rank: 16667
-Selecting treatment changepoint cutoff for RT0_ZT6
-Treatment onset rank: 24130
+Selecting control pre-terminal-trough cutoff for RT0_ZT6
+Control cutoff rank: 16667 | pre-EVS remainder: 16666 | pre-EVS leading edge: 15091
+Selecting treatment pre-terminal-trough cutoff for RT0_ZT6
+Treatment cutoff rank: 24130 | pre-EVS remainder: 24129 | pre-EVS leading edge: 7628
 Processing comparison: RT2_ZT8
-Selecting control changepoint cutoff for RT2_ZT8
-Control onset rank: 24876
-Selecting treatment changepoint cutoff for RT2_ZT8
-Treatment onset rank: 24712
+Selecting control pre-terminal-trough cutoff for RT2_ZT8
+Control cutoff rank: 24876 | pre-EVS remainder: 24875 | pre-EVS leading edge: 6882
+Selecting treatment pre-terminal-trough cutoff for RT2_ZT8
+Treatment cutoff rank: 24712 | pre-EVS remainder: 24711 | pre-EVS leading edge: 7046
 Processing comparison: RT4_ZT10
-Selecting control changepoint cutoff for RT4_ZT10
-Control onset rank: 23718
-Selecting treatment changepoint cutoff for RT4_ZT10
-Treatment onset rank: 19023
+Selecting control pre-terminal-trough cutoff for RT4_ZT10
+Control cutoff rank: 23718 | pre-EVS remainder: 23717 | pre-EVS leading edge: 8040
+Selecting treatment pre-terminal-trough cutoff for RT4_ZT10
+Treatment cutoff rank: 19023 | pre-EVS remainder: 19022 | pre-EVS leading edge: 12735
 Processing comparison: RT8_ZT14
-Selecting control changepoint cutoff for RT8_ZT14
-Control onset rank: 24605
-Selecting treatment changepoint cutoff for RT8_ZT14
-Treatment onset rank: 13938
-Done. Outputs written to: /root/REAPER98632/exports/variance_nb1_nb2_changepoint_terminal_run
+Selecting control pre-terminal-trough cutoff for RT8_ZT14
+Control cutoff rank: 24605 | pre-EVS remainder: 24604 | pre-EVS leading edge: 7153
+Selecting treatment pre-terminal-trough cutoff for RT8_ZT14
+Treatment cutoff rank: 13938 | pre-EVS remainder: 13937 | pre-EVS leading edge: 17820
+Done. Outputs written to: /root/REAPER98632/exports/variance_nb1_nb2_trough_selector
