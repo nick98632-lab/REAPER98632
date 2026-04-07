@@ -1,17 +1,13 @@
 # =============================================================================
-# SEQUENCE STAGE 1: EMPIRICAL VARIANCE + NB1/NB2 REGIME-SPLIT SELECTOR
+# SEQUENCE STAGE 1: DERIVATIVE-DEFINED PRE-TERMINAL CUTOFF WITH NB1/NB2 RANGE
 # -----------------------------------------------------------------------------
 # MANUSCRIPT-READY FINAL VERSION
 #
 # Purpose
-#   This script defines a pre-EVS split point along the EVS rank axis using:
-#
-#     1. Smoothed empirical variance curve
-#     2. First-derivative support
-#     3. Second-derivative support
-#     4. NB1 vs NB2 support
-#     5. alpha*mu support
-#     6. Mild proximity preference to terminal-start
+#   This script identifies a pre-EVS split point along the EVS rank axis using
+#   the smoothed empirical variance curve and its derivatives, then uses NB1,
+#   NB2, and alpha*mu support to define a cutoff range around that derivative-
+#   defined center.
 #
 # Orientation
 #   - Left  = lowest absolute loading
@@ -27,25 +23,26 @@
 #   alpha*mu  = (variance - mu) / mu
 #
 # Final selector
-#   1. Detect terminal_start_rank from the right-tail sustained positive slope
-#      of the smoothed empirical variance curve.
-#   2. Detect candidate changepoints strictly to the LEFT of terminal_start_rank.
-#   3. Score each candidate changepoint using:
-#        a. variance-curve landmark strength
-#        b. first-derivative support
-#        c. second-derivative support
-#        d. NB2-rightward gain
-#        e. alpha*mu-rightward gain
-#        f. mild closeness to terminal_start_rank
-#   4. Select the highest-scoring changepoint.
+#   1. Smooth the empirical variance curve along EVS rank.
+#   2. Compute first derivative d1 and second derivative d2.
+#   3. Define terminal_start as the d2 zero-crossing immediately preceding the
+#      terminal sustained positive-slope rise.
+#   4. Define cutoff_center as the nearest earlier d2 zero-crossing immediately
+#      preceding terminal_start and associated with decreasing-slope behavior.
+#   5. Define an NB-supported cutoff range around cutoff_center using:
+#        a. smoothed log(NB2 + 1) - log(NB1 + 1)
+#        b. smoothed log(alpha*mu)
+#      The range is the contiguous region around cutoff_center where the local
+#      NB support remains elevated relative to the center.
 #
 # Reporting
-#   cutoff rank = first feature of pre-EVS leading edge
-#   pre-EVS remainder size = cutoff_rank - 1
-#   pre-EVS leading-edge size = N - cutoff_rank + 1
+#   cutoff_center_rank = derivative-defined center
+#   cutoff_range_rank_min / cutoff_range_rank_max = NB-supported transition band
+#   pre_evs_remainder_size = cutoff_center_rank - 1
+#   pre_evs_leading_edge_size = N - cutoff_center_rank + 1
 #
 # Outputs
-#   exports/variance_nb1_nb2_full_selector/
+#   exports/variance_derivative_nb_range/
 #     <comparison>_cutoff_folder/
 #       <comparison>_control_rank_panel.png
 #       <comparison>_treatment_rank_panel.png
@@ -53,8 +50,8 @@
 #       <comparison>_feature_level_metrics.csv
 #       <comparison>_control_rank_series.csv
 #       <comparison>_treatment_rank_series.csv
-#       <comparison>_control_candidate_scores.csv
-#       <comparison>_treatment_candidate_scores.csv
+#       <comparison>_control_zero_crossings.csv
+#       <comparison>_treatment_zero_crossings.csv
 #       <comparison>_cutoff_summary.csv
 #     overall_cutoff_summary.csv
 # =============================================================================
@@ -73,7 +70,7 @@ options(warn = 1)
 
 repo_dir <- getwd()
 count_file <- file.path(repo_dir, "data", "WTTS-Seq_2022.2_DE_raw_read_numbers.csv")
-out_root <- file.path(repo_dir, "exports", "variance_nb1_nb2_full_selector")
+out_root <- file.path(repo_dir, "exports", "variance_derivative_nb_range")
 dir.create(out_root, recursive = TRUE, showWarnings = FALSE)
 
 comparison_table <- data.frame(
@@ -101,33 +98,22 @@ meta_all <- data.frame(
 rownames(meta_all) <- meta_all$id
 meta_all$condition <- factor(meta_all$condition, levels = c("untrt", "trt"))
 
-# Smoothing and search
+# smoothing / search
 spline_spar <- 0.60
 left_edge_buffer <- 50L
 right_edge_buffer <- 20L
 search_fraction_min <- 0.20
 search_fraction_max <- 0.985
 
-# Terminal-start detection
+# terminal-rise detection
 terminal_run_fraction <- 0.20
 terminal_run_min_length <- 250L
 terminal_positive_slope_quantile <- 0.70
 
-# Changepoint fallback
-fallback_window <- 250L
-
-# Scoring neighborhoods
-local_landmark_window <- 200L
-nb_gain_window <- 400L
-distance_scale_fraction <- 0.15
-
-# Final selector weights
-weight_variance_landmark <- 0.28
-weight_d1_support        <- 0.12
-weight_d2_support        <- 0.12
-weight_nb2_gain          <- 0.22
-weight_alpha_mu_gain     <- 0.14
-weight_proximity         <- 0.12
+# NB range around cutoff center
+nb_smooth_window <- 151L
+nb_range_drop_fraction <- 0.70
+nb_range_max_span_fraction <- 0.18
 
 # =============================================================================
 # HELPERS
@@ -405,219 +391,281 @@ build_rank_series <- function(full_tbl, arm = c("control", "treatment")) {
   out
 }
 
-detect_changepoints <- function(x, search_start, search_end, fallback_window = 250L) {
-  x_all <- as.numeric(x)
-  n_all <- length(x_all)
+find_d2_zero_crossings <- function(d2_vec) {
+  d2_vec <- as.numeric(d2_vec)
+  n <- length(d2_vec)
+  out <- integer(0)
 
-  search_start <- max(1L, search_start)
-  search_end <- min(n_all, search_end)
+  if (n < 2L) return(out)
 
-  if (search_end <= search_start + 5L) {
-    return(integer(0))
-  }
+  s <- sign(d2_vec)
+  s[!is.finite(s)] <- 0
 
-  x_use <- x_all[search_start:search_end]
-  finite_use <- is.finite(x_use)
+  for (i in 2:n) {
+    s0 <- s[i - 1L]
+    s1 <- s[i]
 
-  if (!any(finite_use)) {
-    return(integer(0))
-  }
+    if (!is.finite(d2_vec[i - 1L]) || !is.finite(d2_vec[i])) next
 
-  fill_value <- stats::median(x_use[finite_use], na.rm = TRUE)
-  x_use[!finite_use] <- fill_value
-
-  cps <- integer(0)
-
-  if (requireNamespace("changepoint", quietly = TRUE)) {
-    cp_obj <- tryCatch(
-      changepoint::cpt.meanvar(
-        x_use,
-        method = "PELT",
-        penalty = "MBIC",
-        class = TRUE
-      ),
-      error = function(e) NULL,
-      warning = function(w) NULL
-    )
-
-    if (!is.null(cp_obj)) {
-      cps <- changepoint::cpts(cp_obj)
-      cps <- cps[is.finite(cps)]
-      cps <- cps[cps > 1L & cps < length(x_use)]
-      cps <- search_start + cps - 1L
-      cps <- sort(unique(cps))
+    if (s0 == 0 && s1 != 0) {
+      out <- c(out, i - 1L)
+    } else if (s0 != 0 && s1 == 0) {
+      out <- c(out, i)
+    } else if (s0 != s1) {
+      out <- c(out, i)
     }
   }
 
-  if (length(cps) > 0L) {
-    return(cps)
-  }
-
-  n <- length(x_use)
-  w <- max(25L, min(fallback_window, floor(n / 6L)))
-  if (n < (2L * w + 3L)) {
-    return(integer(0))
-  }
-
-  score <- rep(NA_real_, n)
-
-  for (i in seq.int(w + 1L, n - w)) {
-    left_vals <- x_use[(i - w):(i - 1L)]
-    right_vals <- x_use[i:(i + w - 1L)]
-
-    left_vals <- left_vals[is.finite(left_vals)]
-    right_vals <- right_vals[is.finite(right_vals)]
-
-    if (!length(left_vals) || !length(right_vals)) {
-      next
-    }
-
-    score[i] <- abs(mean(right_vals) - mean(left_vals))
-  }
-
-  finite_score <- is.finite(score)
-  if (!any(finite_score)) {
-    return(integer(0))
-  }
-
-  score_cut <- stats::quantile(score[finite_score], probs = 0.90, na.rm = TRUE, names = FALSE)
-  if (!is.finite(score_cut)) {
-    return(integer(0))
-  }
-
-  locmax <- rep(FALSE, n)
-  for (i in 2:(n - 1L)) {
-    if (!is.finite(score[i]) || !is.finite(score[i - 1L]) || !is.finite(score[i + 1L])) {
-      next
-    }
-    if (score[i] >= score_cut && score[i] >= score[i - 1L] && score[i] >= score[i + 1L]) {
-      locmax[i] <- TRUE
-    }
-  }
-
-  cps <- which(locmax)
-  if (!length(cps)) {
-    return(integer(0))
-  }
-
-  cps <- search_start + cps - 1L
-  sort(unique(cps))
+  sort(unique(out))
 }
 
-safe_region_mean <- function(x, lo, hi) {
-  lo <- max(1L, lo)
-  hi <- min(length(x), hi)
-  if (lo > hi) return(NA_real_)
-
-  vals <- x[lo:hi]
-  vals <- vals[is.finite(vals)]
-  if (!length(vals)) return(NA_real_)
-  mean(vals, na.rm = TRUE)
-}
-
-compute_candidate_score_table <- function(df,
-                                          changepoints,
-                                          terminal_start,
-                                          local_landmark_window = 200L,
-                                          nb_gain_window = 400L,
-                                          distance_scale_fraction = 0.15,
-                                          weight_variance_landmark = 0.28,
-                                          weight_d1_support        = 0.12,
-                                          weight_d2_support        = 0.12,
-                                          weight_nb2_gain          = 0.22,
-                                          weight_alpha_mu_gain     = 0.14,
-                                          weight_proximity         = 0.12) {
-  n <- nrow(df)
-  if (!length(changepoints)) {
+summarize_zero_crossings <- function(df, zero_idx, terminal_start_idx, terminal_end_idx) {
+  if (!length(zero_idx)) {
     return(data.frame())
   }
 
-  dist_scale <- max(100L, floor(distance_scale_fraction * n))
-
-  score_tbl <- lapply(changepoints, function(k) {
-    lo_local <- max(1L, k - local_landmark_window)
-    hi_local <- min(n, k + local_landmark_window)
-
-    local_curve <- df$var_fit[lo_local:hi_local]
-    local_curve_finite <- local_curve[is.finite(local_curve)]
-
-    variance_landmark <- NA_real_
-    if (length(local_curve_finite) && is.finite(df$var_fit[k])) {
-      variance_landmark <- mean(local_curve_finite, na.rm = TRUE) - df$var_fit[k]
-    }
-
-    d1_support <- abs(df$d1_sm[k])
-    d2_support <- abs(df$d2_sm[k])
-
-    left_nb2  <- safe_region_mean(df$log_nb2, k - nb_gain_window, k - 1L)
-    right_nb2 <- safe_region_mean(df$log_nb2, k + 1L, k + nb_gain_window)
-    nb2_gain  <- right_nb2 - left_nb2
-
-    left_amu  <- safe_region_mean(df$amu_sm, k - nb_gain_window, k - 1L)
-    right_amu <- safe_region_mean(df$amu_sm, k + 1L, k + nb_gain_window)
-    amu_gain  <- right_amu - left_amu
-
-    proximity <- exp(-abs(terminal_start - k) / dist_scale)
+  tbl <- lapply(zero_idx, function(i) {
+    left_d1 <- if (i > 1L) df$d1_sm[i - 1L] else NA_real_
+    right_d1 <- if (i < nrow(df)) df$d1_sm[i + 1L] else NA_real_
+    left_d2 <- if (i > 1L) df$d2_sm[i - 1L] else NA_real_
+    right_d2 <- if (i < nrow(df)) df$d2_sm[i + 1L] else NA_real_
 
     data.frame(
-      index = k,
-      rank = df$rank[k],
-      variance_landmark = variance_landmark,
-      d1_support = d1_support,
-      d2_support = d2_support,
-      nb2_gain = nb2_gain,
-      amu_gain = amu_gain,
-      proximity = proximity,
+      index = i,
+      rank = df$rank[i],
+      d1 = df$d1_sm[i],
+      d2 = df$d2_sm[i],
+      left_d1 = left_d1,
+      right_d1 = right_d1,
+      left_d2 = left_d2,
+      right_d2 = right_d2,
+      before_terminal_start = i < terminal_start_idx,
+      inside_terminal_block = i >= terminal_start_idx && i <= terminal_end_idx,
       stringsAsFactors = FALSE
     )
   })
 
-  score_tbl <- bind_rows(score_tbl)
-
-  score_tbl$variance_landmark_s <- scale01(score_tbl$variance_landmark)
-  score_tbl$d1_support_s        <- scale01(score_tbl$d1_support)
-  score_tbl$d2_support_s        <- scale01(score_tbl$d2_support)
-  score_tbl$nb2_gain_s          <- scale01(score_tbl$nb2_gain)
-  score_tbl$amu_gain_s          <- scale01(score_tbl$amu_gain)
-  score_tbl$proximity_s         <- scale01(score_tbl$proximity)
-
-  score_tbl$variance_landmark_s[!is.finite(score_tbl$variance_landmark_s)] <- 0
-  score_tbl$d1_support_s[!is.finite(score_tbl$d1_support_s)] <- 0
-  score_tbl$d2_support_s[!is.finite(score_tbl$d2_support_s)] <- 0
-  score_tbl$nb2_gain_s[!is.finite(score_tbl$nb2_gain_s)] <- 0
-  score_tbl$amu_gain_s[!is.finite(score_tbl$amu_gain_s)] <- 0
-  score_tbl$proximity_s[!is.finite(score_tbl$proximity_s)] <- 0
-
-  score_tbl$final_score <-
-    weight_variance_landmark * score_tbl$variance_landmark_s +
-    weight_d1_support        * score_tbl$d1_support_s +
-    weight_d2_support        * score_tbl$d2_support_s +
-    weight_nb2_gain          * score_tbl$nb2_gain_s +
-    weight_alpha_mu_gain     * score_tbl$amu_gain_s +
-    weight_proximity         * score_tbl$proximity_s
-
-  score_tbl
+  bind_rows(tbl)
 }
 
-select_cutoff_full <- function(rank_df,
-                               spline_spar = 0.60,
-                               search_fraction_min = 0.20,
-                               search_fraction_max = 0.985,
-                               left_edge_buffer = 50L,
-                               right_edge_buffer = 20L,
-                               terminal_run_fraction = 0.20,
-                               terminal_run_min_length = 250L,
-                               terminal_positive_slope_quantile = 0.70,
-                               fallback_window = 250L,
-                               local_landmark_window = 200L,
-                               nb_gain_window = 400L,
-                               distance_scale_fraction = 0.15,
-                               weight_variance_landmark = 0.28,
-                               weight_d1_support        = 0.12,
-                               weight_d2_support        = 0.12,
-                               weight_nb2_gain          = 0.22,
-                               weight_alpha_mu_gain     = 0.14,
-                               weight_proximity         = 0.12) {
+find_terminal_block <- function(d1_sm, search_start, search_end,
+                                terminal_run_fraction = 0.20,
+                                terminal_run_min_length = 250L,
+                                terminal_positive_slope_quantile = 0.70) {
+  n <- length(d1_sm)
+  tail_start <- max(search_start, floor((1 - terminal_run_fraction) * n))
+  tail_idx <- seq.int(tail_start, search_end)
+  finite_tail <- is.finite(d1_sm[tail_idx])
+
+  if (!any(finite_tail)) {
+    return(list(start = tail_start, end = search_end))
+  }
+
+  pos_cut <- as.numeric(stats::quantile(
+    d1_sm[tail_idx][finite_tail],
+    probs = terminal_positive_slope_quantile,
+    na.rm = TRUE,
+    names = FALSE
+  ))
+
+  if (!is.finite(pos_cut)) {
+    pos_cut <- stats::median(d1_sm[tail_idx][finite_tail], na.rm = TRUE)
+  }
+
+  terminal_cond <- rep(FALSE, n)
+  terminal_cond[tail_idx] <- is.finite(d1_sm[tail_idx]) & (d1_sm[tail_idx] >= pos_cut)
+
+  run_tbl <- find_runs(terminal_cond[tail_idx])
+  good_runs <- run_tbl[run_tbl$value & run_tbl$length >= terminal_run_min_length, , drop = FALSE]
+
+  if (nrow(good_runs)) {
+    terminal_local_start <- good_runs$start[1]
+    terminal_local_end <- good_runs$end[1]
+    terminal_start <- tail_start + terminal_local_start - 1L
+    terminal_end <- tail_start + terminal_local_end - 1L
+  } else {
+    best_local <- which.max(replace(d1_sm[tail_idx], !is.finite(d1_sm[tail_idx]), -Inf))
+    if (!length(best_local) || !is.finite(best_local)) best_local <- 1L
+    terminal_start <- tail_idx[max(1L, best_local - terminal_run_min_length + 1L)]
+    terminal_end <- tail_idx[min(length(tail_idx), best_local + terminal_run_min_length - 1L)]
+  }
+
+  list(start = terminal_start, end = terminal_end)
+}
+
+choose_terminal_start_from_geometry <- function(df, search_start, search_end,
+                                                terminal_run_fraction = 0.20,
+                                                terminal_run_min_length = 250L,
+                                                terminal_positive_slope_quantile = 0.70) {
+  block <- find_terminal_block(
+    d1_sm = df$d1_sm,
+    search_start = search_start,
+    search_end = search_end,
+    terminal_run_fraction = terminal_run_fraction,
+    terminal_run_min_length = terminal_run_min_length,
+    terminal_positive_slope_quantile = terminal_positive_slope_quantile
+  )
+
+  zero_idx <- find_d2_zero_crossings(df$d2_sm)
+  ztbl <- summarize_zero_crossings(df, zero_idx, block$start, block$end)
+
+  if (nrow(ztbl)) {
+    candidates <- ztbl %>%
+      filter(index <= block$start) %>%
+      filter(is.finite(right_d1)) %>%
+      filter(right_d1 > 0)
+
+    if (nrow(candidates)) {
+      terminal_idx <- max(candidates$index)
+    } else {
+      terminal_idx <- block$start
+    }
+  } else {
+    terminal_idx <- block$start
+  }
+
+  list(
+    terminal_start_index = terminal_idx,
+    terminal_start_rank = df$rank[terminal_idx],
+    terminal_end_index = block$end,
+    terminal_end_rank = df$rank[block$end],
+    zero_crossings = ztbl
+  )
+}
+
+choose_cutoff_center_from_geometry <- function(df, terminal_start_idx, zero_tbl) {
+  if (nrow(zero_tbl) == 0L) {
+    idx <- max(1L, terminal_start_idx - 1L)
+    return(list(
+      cutoff_center_index = idx,
+      cutoff_center_rank = df$rank[idx],
+      mode = "fallback: terminal_start minus one"
+    ))
+  }
+
+  prior_tbl <- zero_tbl %>%
+    filter(index < terminal_start_idx)
+
+  if (!nrow(prior_tbl)) {
+    idx <- max(1L, terminal_start_idx - 1L)
+    return(list(
+      cutoff_center_index = idx,
+      cutoff_center_rank = df$rank[idx],
+      mode = "fallback: no earlier d2 zero-crossing"
+    ))
+  }
+
+  # Prior to terminal start, select the last d2 zero-crossing whose local slope
+  # behavior is consistent with a decreasing-slope turning point immediately
+  # before the terminal-start transition.
+  #
+  # Prefer crossings with right-side slope not strongly positive and with
+  # negative or weak local slope neighborhood, then choose the nearest one.
+  cand1 <- prior_tbl %>%
+    filter(is.finite(right_d1)) %>%
+    filter(right_d1 <= 0)
+
+  if (nrow(cand1)) {
+    idx <- max(cand1$index)
+    return(list(
+      cutoff_center_index = idx,
+      cutoff_center_rank = df$rank[idx],
+      mode = "last earlier d2 zero-crossing before terminal start with nonpositive right-side slope"
+    ))
+  }
+
+  cand2 <- prior_tbl %>%
+    filter(is.finite(d1)) %>%
+    filter(d1 <= 0)
+
+  if (nrow(cand2)) {
+    idx <- max(cand2$index)
+    return(list(
+      cutoff_center_index = idx,
+      cutoff_center_rank = df$rank[idx],
+      mode = "last earlier d2 zero-crossing before terminal start with nonpositive local slope"
+    ))
+  }
+
+  idx <- max(prior_tbl$index)
+  list(
+    cutoff_center_index = idx,
+    cutoff_center_rank = df$rank[idx],
+    mode = "last earlier d2 zero-crossing before terminal start"
+  )
+}
+
+compute_nb_support_score <- function(df) {
+  nb_gap_sm <- roll_median(df$nb_gap, nb_smooth_window)
+  amu_sm <- roll_median(df$log_alpha_mu, nb_smooth_window)
+
+  nb_gap_s <- scale01(nb_gap_sm)
+  amu_s <- scale01(amu_sm)
+
+  nb_gap_s[!is.finite(nb_gap_s)] <- 0
+  amu_s[!is.finite(amu_s)] <- 0
+
+  nb_support <- 0.5 * nb_gap_s + 0.5 * amu_s
+
+  list(
+    nb_gap_sm = nb_gap_sm,
+    amu_sm = amu_sm,
+    nb_support = nb_support
+  )
+}
+
+expand_nb_range_around_center <- function(df, center_idx, terminal_start_idx,
+                                          nb_support,
+                                          nb_range_drop_fraction = 0.70,
+                                          nb_range_max_span_fraction = 0.18) {
+  n <- nrow(df)
+  max_span <- max(100L, floor(nb_range_max_span_fraction * n))
+
+  center_score <- nb_support[center_idx]
+  if (!is.finite(center_score)) center_score <- 0
+
+  threshold <- nb_range_drop_fraction * center_score
+
+  left_limit <- max(1L, center_idx - max_span)
+  right_limit <- min(terminal_start_idx, center_idx + max_span)
+
+  left_idx <- center_idx
+  while (left_idx > left_limit) {
+    test_idx <- left_idx - 1L
+    if (!is.finite(nb_support[test_idx])) break
+    if (nb_support[test_idx] < threshold) break
+    left_idx <- test_idx
+  }
+
+  right_idx <- center_idx
+  while (right_idx < right_limit) {
+    test_idx <- right_idx + 1L
+    if (!is.finite(nb_support[test_idx])) break
+    if (nb_support[test_idx] < threshold) break
+    right_idx <- test_idx
+  }
+
+  list(
+    range_left_index = left_idx,
+    range_left_rank = df$rank[left_idx],
+    range_right_index = right_idx,
+    range_right_rank = df$rank[right_idx],
+    center_nb_support = center_score,
+    nb_support_threshold = threshold
+  )
+}
+
+select_cutoff_derivative_nb_range <- function(rank_df,
+                                              spline_spar = 0.60,
+                                              search_fraction_min = 0.20,
+                                              search_fraction_max = 0.985,
+                                              left_edge_buffer = 50L,
+                                              right_edge_buffer = 20L,
+                                              terminal_run_fraction = 0.20,
+                                              terminal_run_min_length = 250L,
+                                              terminal_positive_slope_quantile = 0.70,
+                                              nb_range_drop_fraction = 0.70,
+                                              nb_range_max_span_fraction = 0.18) {
   df <- rank_df
   n <- nrow(df)
   x <- df$rank
@@ -641,8 +689,9 @@ select_cutoff_full <- function(rank_df,
   d1_sm[ok] <- pred1$y
   d2_sm[ok] <- pred2$y
 
-  nb_gap_sm <- roll_median(df$nb_gap, 151L)
-  amu_sm <- roll_median(df$log_alpha_mu, 151L)
+  df$var_fit <- var_fit
+  df$d1_sm <- d1_sm
+  df$d2_sm <- d2_sm
 
   search_start <- max(left_edge_buffer + 1L, floor(search_fraction_min * n))
   search_end <- min(n - right_edge_buffer, floor(search_fraction_max * n))
@@ -651,179 +700,121 @@ select_cutoff_full <- function(rank_df,
     search_end <- min(n - right_edge_buffer, n - 1L)
   }
 
-  tail_start <- max(search_start, floor((1 - terminal_run_fraction) * n))
-  tail_idx <- seq.int(tail_start, search_end)
-  finite_tail <- is.finite(d1_sm[tail_idx])
-
-  if (!any(finite_tail)) {
-    terminal_start <- tail_start
-    terminal_end <- search_end
-  } else {
-    pos_cut <- as.numeric(stats::quantile(
-      d1_sm[tail_idx][finite_tail],
-      probs = terminal_positive_slope_quantile,
-      na.rm = TRUE,
-      names = FALSE
-    ))
-
-    if (!is.finite(pos_cut)) {
-      pos_cut <- stats::median(d1_sm[tail_idx][finite_tail], na.rm = TRUE)
-    }
-
-    terminal_cond <- rep(FALSE, n)
-    terminal_cond[tail_idx] <- is.finite(d1_sm[tail_idx]) & (d1_sm[tail_idx] >= pos_cut)
-
-    run_tbl <- find_runs(terminal_cond[tail_idx])
-    good_runs <- run_tbl[run_tbl$value & run_tbl$length >= terminal_run_min_length, , drop = FALSE]
-
-    if (nrow(good_runs)) {
-      terminal_local_start <- good_runs$start[1]
-      terminal_local_end <- good_runs$end[1]
-      terminal_start <- tail_start + terminal_local_start - 1L
-      terminal_end <- tail_start + terminal_local_end - 1L
-    } else {
-      best_local <- which.max(replace(d1_sm[tail_idx], !is.finite(d1_sm[tail_idx]), -Inf))
-      if (!length(best_local) || !is.finite(best_local)) {
-        best_local <- 1L
-      }
-      terminal_start <- tail_idx[max(1L, best_local - terminal_run_min_length + 1L)]
-      terminal_end <- tail_idx[min(length(tail_idx), best_local + terminal_run_min_length - 1L)]
-    }
-  }
-
-  cps <- detect_changepoints(
-    x = d1_sm,
+  term <- choose_terminal_start_from_geometry(
+    df = df,
     search_start = search_start,
-    search_end = terminal_start,
-    fallback_window = fallback_window
+    search_end = search_end,
+    terminal_run_fraction = terminal_run_fraction,
+    terminal_run_min_length = terminal_run_min_length,
+    terminal_positive_slope_quantile = terminal_positive_slope_quantile
   )
 
-  cps_before <- cps[cps < terminal_start]
-
-  score_tbl <- compute_candidate_score_table(
-    df = data.frame(
-      df,
-      var_fit = var_fit,
-      d1_sm = d1_sm,
-      d2_sm = d2_sm,
-      nb_gap_sm = nb_gap_sm,
-      amu_sm = amu_sm
-    ),
-    changepoints = cps_before,
-    terminal_start = terminal_start,
-    local_landmark_window = local_landmark_window,
-    nb_gain_window = nb_gain_window,
-    distance_scale_fraction = distance_scale_fraction,
-    weight_variance_landmark = weight_variance_landmark,
-    weight_d1_support = weight_d1_support,
-    weight_d2_support = weight_d2_support,
-    weight_nb2_gain = weight_nb2_gain,
-    weight_alpha_mu_gain = weight_alpha_mu_gain,
-    weight_proximity = weight_proximity
+  cut <- choose_cutoff_center_from_geometry(
+    df = df,
+    terminal_start_idx = term$terminal_start_index,
+    zero_tbl = term$zero_crossings
   )
 
-  if (nrow(score_tbl) > 0L) {
-    best_row <- score_tbl[which.max(score_tbl$final_score), , drop = FALSE]
-    cutoff_idx <- best_row$index[[1]]
-    mode <- "best changepoint left of terminal_start using variance + derivatives + NB2 + alpha*mu"
-  } else {
-    cutoff_idx <- max(search_start, terminal_start - 1L)
-    mode <- "terminal_start_rank minus one fallback"
-  }
+  nb_obj <- compute_nb_support_score(df)
+  df$nb_gap_sm <- nb_obj$nb_gap_sm
+  df$amu_sm <- nb_obj$amu_sm
+  df$nb_support <- nb_obj$nb_support
+
+  nb_rng <- expand_nb_range_around_center(
+    df = df,
+    center_idx = cut$cutoff_center_index,
+    terminal_start_idx = term$terminal_start_index,
+    nb_support = df$nb_support,
+    nb_range_drop_fraction = nb_range_drop_fraction,
+    nb_range_max_span_fraction = nb_range_max_span_fraction
+  )
 
   total_features <- n
-  pre_evs_remainder_size <- cutoff_idx - 1L
-  pre_evs_leading_edge_size <- total_features - cutoff_idx + 1L
-
-  df$var_fit <- var_fit
-  df$d1_sm <- d1_sm
-  df$d2_sm <- d2_sm
-  df$nb_gap_sm <- nb_gap_sm
-  df$amu_sm <- amu_sm
-  df$terminal_cond <- FALSE
-  df$terminal_cond[terminal_start:terminal_end] <- TRUE
+  pre_evs_remainder_size <- cut$cutoff_center_index - 1L
+  pre_evs_leading_edge_size <- total_features - cut$cutoff_center_index + 1L
 
   list(
-    onset_index = cutoff_idx,
-    onset_rank = df$rank[cutoff_idx],
-    terminal_start_index = terminal_start,
-    terminal_start_rank = df$rank[terminal_start],
-    terminal_end_index = terminal_end,
-    terminal_end_rank = df$rank[terminal_end],
-    changepoints = cps_before,
-    score_table = score_tbl,
-    mode = mode,
+    curve_df = df,
+    zero_crossings = term$zero_crossings,
+    mode = cut$mode,
+
+    terminal_start_index = term$terminal_start_index,
+    terminal_start_rank = term$terminal_start_rank,
+    terminal_end_index = term$terminal_end_index,
+    terminal_end_rank = term$terminal_end_rank,
+
+    cutoff_center_index = cut$cutoff_center_index,
+    cutoff_center_rank = cut$cutoff_center_rank,
+
+    cutoff_range_index_min = nb_rng$range_left_index,
+    cutoff_range_rank_min = nb_rng$range_left_rank,
+    cutoff_range_index_max = nb_rng$range_right_index,
+    cutoff_range_rank_max = nb_rng$range_right_rank,
+
+    center_nb_support = nb_rng$center_nb_support,
+    nb_support_threshold = nb_rng$nb_support_threshold,
+
     total_features = total_features,
     pre_evs_remainder_size = pre_evs_remainder_size,
-    pre_evs_leading_edge_size = pre_evs_leading_edge_size,
-    curve_df = df
+    pre_evs_leading_edge_size = pre_evs_leading_edge_size
   )
 }
 
 build_dataset_panel <- function(rank_df, onset_info, title_prefix, out_file) {
   df <- onset_info$curve_df
-  cutoff_x <- onset_info$onset_rank
-  term_start_x <- onset_info$terminal_start_rank
-  term_end_x <- onset_info$terminal_end_rank
+  center_x <- onset_info$cutoff_center_rank
+  range_min_x <- onset_info$cutoff_range_rank_min
+  range_max_x <- onset_info$cutoff_range_rank_max
+  terminal_x <- onset_info$terminal_start_rank
+  terminal_end_x <- onset_info$terminal_end_rank
 
-  cp_df <- data.frame(rank = onset_info$changepoints)
-  cp_df <- cp_df[is.finite(cp_df$rank), , drop = FALSE]
+  ztbl <- onset_info$zero_crossings
 
-  score_tbl <- onset_info$score_table
-  best_tbl <- score_tbl[score_tbl$rank == cutoff_x, , drop = FALSE]
-
-  if (nrow(best_tbl) == 0L) {
-    best_label <- paste0(
-      onset_info$mode,
-      "\nCutoff rank = ", cutoff_x,
-      "\nTerminal start = ", term_start_x,
-      "\nPre-EVS remainder = ", onset_info$pre_evs_remainder_size,
-      "\nPre-EVS leading edge = ", onset_info$pre_evs_leading_edge_size
-    )
-  } else {
-    best_label <- paste0(
-      onset_info$mode,
-      "\nCutoff rank = ", cutoff_x,
-      "\nTerminal start = ", term_start_x,
-      "\nPre-EVS remainder = ", onset_info$pre_evs_remainder_size,
-      "\nPre-EVS leading edge = ", onset_info$pre_evs_leading_edge_size,
-      "\nVariance landmark = ", round(best_tbl$variance_landmark[[1]], 3),
-      "\n|d1| = ", round(best_tbl$d1_support[[1]], 3),
-      "\n|d2| = ", round(best_tbl$d2_support[[1]], 3),
-      "\nNB2 gain = ", round(best_tbl$nb2_gain[[1]], 3),
-      "\nalpha*mu gain = ", round(best_tbl$amu_gain[[1]], 3),
-      "\nFinal score = ", round(best_tbl$final_score[[1]], 3)
-    )
-  }
+  label_text <- paste0(
+    "Derivative-defined pre-terminal selector",
+    "\nTerminal start = d2 zero-crossing before sustained increasing slope",
+    "\nCutoff center = earlier d2 zero-crossing before terminal start",
+    "\nNB range = region around cutoff center with elevated NB2 / alpha*mu support",
+    "\nCutoff center rank = ", center_x,
+    "\nCutoff range = [", range_min_x, ", ", range_max_x, "]",
+    "\nTerminal start rank = ", terminal_x,
+    "\nPre-EVS remainder = ", onset_info$pre_evs_remainder_size,
+    "\nPre-EVS leading edge = ", onset_info$pre_evs_leading_edge_size,
+    "\nCenter NB support = ", round(onset_info$center_nb_support, 3),
+    "\nNB threshold = ", round(onset_info$nb_support_threshold, 3)
+  )
 
   p1 <- ggplot(df, aes(rank, abs_loading)) +
     geom_line(linewidth = 0.8, na.rm = TRUE) +
     annotate(
       "rect",
-      xmin = cutoff_x,
+      xmin = center_x,
       xmax = max(df$rank, na.rm = TRUE),
-      ymin = -Inf,
-      ymax = Inf,
-      alpha = 0.05
+      ymin = -Inf, ymax = Inf,
+      alpha = 0.04
     ) +
     annotate(
       "rect",
-      xmin = term_start_x,
-      xmax = term_end_x,
-      ymin = -Inf,
-      ymax = Inf,
+      xmin = range_min_x,
+      xmax = range_max_x,
+      ymin = -Inf, ymax = Inf,
       alpha = 0.08
     ) +
-    geom_vline(xintercept = cutoff_x, linetype = 2, linewidth = 0.8) +
-    geom_vline(xintercept = term_start_x, linetype = 3, linewidth = 0.8) +
+    annotate(
+      "rect",
+      xmin = terminal_x,
+      xmax = terminal_end_x,
+      ymin = -Inf, ymax = Inf,
+      alpha = 0.08
+    ) +
+    geom_vline(xintercept = center_x, linetype = 2, linewidth = 0.8) +
+    geom_vline(xintercept = terminal_x, linetype = 3, linewidth = 0.8) +
     annotate(
       "label",
-      x = cutoff_x,
+      x = center_x,
       y = max(df$abs_loading, na.rm = TRUE),
-      label = best_label,
-      hjust = 0,
-      vjust = 1,
-      size = 3
+      label = label_text,
+      hjust = 0, vjust = 1, size = 2.9
     ) +
     labs(
       title = paste0(title_prefix, ": absolute PC1 loading series"),
@@ -837,70 +828,79 @@ build_dataset_panel <- function(rank_df, onset_info, title_prefix, out_file) {
     geom_line(linewidth = 1.0, na.rm = TRUE) +
     annotate(
       "rect",
-      xmin = cutoff_x,
-      xmax = max(df$rank, na.rm = TRUE),
-      ymin = -Inf,
-      ymax = Inf,
-      alpha = 0.05
+      xmin = range_min_x,
+      xmax = range_max_x,
+      ymin = -Inf, ymax = Inf,
+      alpha = 0.08
     ) +
     annotate(
       "rect",
-      xmin = term_start_x,
-      xmax = term_end_x,
-      ymin = -Inf,
-      ymax = Inf,
+      xmin = terminal_x,
+      xmax = terminal_end_x,
+      ymin = -Inf, ymax = Inf,
       alpha = 0.08
     ) +
+    geom_vline(xintercept = center_x, linetype = 2, linewidth = 0.8) +
+    geom_vline(xintercept = terminal_x, linetype = 3, linewidth = 0.8) +
     geom_point(
-      data = df[df$rank == cutoff_x & is.finite(df$var_fit), , drop = FALSE],
+      data = df[df$rank == center_x & is.finite(df$var_fit), , drop = FALSE],
       aes(x = rank, y = var_fit),
-      size = 2.5,
+      size = 2.4,
       inherit.aes = FALSE
     ) +
     geom_point(
-      data = df[df$rank == term_start_x & is.finite(df$var_fit), , drop = FALSE],
+      data = df[df$rank == terminal_x & is.finite(df$var_fit), , drop = FALSE],
       aes(x = rank, y = var_fit),
       size = 2.0,
       shape = 1,
       inherit.aes = FALSE
     ) +
-    geom_vline(xintercept = cutoff_x, linetype = 2, linewidth = 0.8) +
-    geom_vline(xintercept = term_start_x, linetype = 3, linewidth = 0.8) +
     labs(
       title = paste0(title_prefix, ": smoothed empirical variance curve"),
-      subtitle = paste0("Cutoff chosen from candidate changepoints left of terminal start (", term_start_x, ")"),
+      subtitle = paste0(
+        "Center = earlier d2 zero-crossing before terminal start | ",
+        "Terminal start = d2 zero-crossing before sustained positive slope"
+      ),
       x = "EVS rank",
       y = "Fitted log(1 + variance)"
     ) +
     theme_bw(base_size = 10)
 
-  if (nrow(cp_df) > 0L) {
-    p2 <- p2 + geom_vline(
-      data = cp_df,
-      aes(xintercept = rank),
-      linetype = 3,
-      linewidth = 0.35,
-      alpha = 0.5,
-      inherit.aes = FALSE
-    )
+  if (nrow(ztbl) > 0L) {
+    p2 <- p2 +
+      geom_vline(
+        data = ztbl,
+        aes(xintercept = rank),
+        linetype = 3,
+        linewidth = 0.35,
+        alpha = 0.45,
+        inherit.aes = FALSE
+      )
   }
 
   p3 <- ggplot(df, aes(rank)) +
-    geom_line(aes(y = d1_sm, color = "Smoothed slope"), linewidth = 1.0, na.rm = TRUE) +
-    geom_line(aes(y = d2_sm, color = "Smoothed curvature"), linewidth = 1.0, na.rm = TRUE) +
+    geom_line(aes(y = d1_sm, color = "Smoothed slope d1"), linewidth = 1.0, na.rm = TRUE) +
+    geom_line(aes(y = d2_sm, color = "Smoothed curvature d2"), linewidth = 1.0, na.rm = TRUE) +
     annotate(
       "rect",
-      xmin = term_start_x,
-      xmax = term_end_x,
-      ymin = -Inf,
-      ymax = Inf,
+      xmin = range_min_x,
+      xmax = range_max_x,
+      ymin = -Inf, ymax = Inf,
       alpha = 0.08
     ) +
-    geom_vline(xintercept = cutoff_x, linetype = 2, linewidth = 0.8) +
-    geom_vline(xintercept = term_start_x, linetype = 3, linewidth = 0.8) +
+    annotate(
+      "rect",
+      xmin = terminal_x,
+      xmax = terminal_end_x,
+      ymin = -Inf, ymax = Inf,
+      alpha = 0.08
+    ) +
+    geom_vline(xintercept = center_x, linetype = 2, linewidth = 0.8) +
+    geom_vline(xintercept = terminal_x, linetype = 3, linewidth = 0.8) +
+    geom_hline(yintercept = 0, linewidth = 0.5) +
     labs(
-      title = paste0(title_prefix, ": slope / curvature support"),
-      subtitle = "Derivative support contributes to cutoff scoring",
+      title = paste0(title_prefix, ": derivative support"),
+      subtitle = "Zero-crossings of d2 define terminal start and cutoff center",
       x = "EVS rank",
       y = "Derivative value"
     ) +
@@ -910,35 +910,45 @@ build_dataset_panel <- function(rank_df, onset_info, title_prefix, out_file) {
   p4 <- ggplot(df, aes(rank)) +
     geom_line(aes(y = log_nb1, color = "NB1 = mu"), linewidth = 0.5, alpha = 0.35, na.rm = TRUE) +
     geom_line(aes(y = log_nb2, color = "NB2 = variance - mu"), linewidth = 0.5, alpha = 0.35, na.rm = TRUE) +
-    geom_line(aes(y = nb_gap_sm, color = "Smoothed NB2 - NB1 gap"), linewidth = 1.0, na.rm = TRUE) +
+    geom_line(aes(y = nb_gap_sm, color = "Smoothed log(NB2+1) - log(NB1+1)"), linewidth = 1.0, na.rm = TRUE) +
     geom_line(aes(y = amu_sm, color = "Smoothed log(alpha*mu)"), linewidth = 1.0, na.rm = TRUE) +
-    geom_vline(xintercept = cutoff_x, linetype = 2, linewidth = 0.8) +
-    geom_vline(xintercept = term_start_x, linetype = 3, linewidth = 0.8) +
+    geom_line(aes(y = nb_support, color = "Combined NB support"), linewidth = 1.0, na.rm = TRUE) +
+    annotate(
+      "rect",
+      xmin = range_min_x,
+      xmax = range_max_x,
+      ymin = -Inf, ymax = Inf,
+      alpha = 0.08
+    ) +
+    geom_vline(xintercept = center_x, linetype = 2, linewidth = 0.8) +
+    geom_vline(xintercept = terminal_x, linetype = 3, linewidth = 0.8) +
+    geom_hline(yintercept = onset_info$nb_support_threshold, linetype = 3, linewidth = 0.5) +
     labs(
       title = paste0(title_prefix, ": NB1 / NB2 / alpha*mu support"),
-      subtitle = "NB2 gain and alpha*mu gain contribute to cutoff scoring",
+      subtitle = "NB-supported cutoff range is centered on derivative-defined cutoff center",
       x = "EVS rank",
       y = "Support value"
     ) +
     theme_bw(base_size = 10) +
     theme(legend.position = "bottom")
 
-  if (nrow(score_tbl) > 0L) {
-    score_df <- score_tbl %>%
-      transmute(rank = rank, final_score = final_score)
-  } else {
-    score_df <- data.frame(rank = numeric(0), final_score = numeric(0))
-  }
-
-  p5 <- ggplot(score_df, aes(rank, final_score)) +
+  p5 <- ggplot(df, aes(rank, nb_support)) +
     geom_line(linewidth = 1.0, na.rm = TRUE) +
-    geom_vline(xintercept = cutoff_x, linetype = 2, linewidth = 0.8) +
-    geom_vline(xintercept = term_start_x, linetype = 3, linewidth = 0.8) +
+    annotate(
+      "rect",
+      xmin = range_min_x,
+      xmax = range_max_x,
+      ymin = -Inf, ymax = Inf,
+      alpha = 0.08
+    ) +
+    geom_vline(xintercept = center_x, linetype = 2, linewidth = 0.8) +
+    geom_vline(xintercept = terminal_x, linetype = 3, linewidth = 0.8) +
+    geom_hline(yintercept = onset_info$nb_support_threshold, linetype = 3, linewidth = 0.5) +
     labs(
-      title = paste0(title_prefix, ": candidate changepoint score"),
-      subtitle = "Final selector combines variance curve, derivatives, NB2 gain, alpha*mu gain, and proximity",
+      title = paste0(title_prefix, ": NB-supported cutoff band"),
+      subtitle = "Range expands left and right from cutoff center while combined NB support stays elevated",
       x = "EVS rank",
-      y = "Final candidate score"
+      y = "Combined NB support"
     ) +
     theme_bw(base_size = 10)
 
@@ -948,27 +958,26 @@ build_dataset_panel <- function(rank_df, onset_info, title_prefix, out_file) {
 }
 
 build_range_panel <- function(ctrl_onset, trt_onset, title_prefix, out_file) {
-  ctrl_plot_df <- ctrl_onset$curve_df
-  trt_plot_df  <- trt_onset$curve_df
+  ctrl_df <- ctrl_onset$curve_df
+  trt_df <- trt_onset$curve_df
 
   p <- ggplot() +
-    geom_line(data = ctrl_plot_df, aes(rank, var_fit, color = "Control variance fit"), linewidth = 1.0, na.rm = TRUE) +
-    geom_line(data = trt_plot_df, aes(rank, var_fit, color = "Treatment variance fit"), linewidth = 1.0, na.rm = TRUE) +
+    geom_line(data = ctrl_df, aes(rank, var_fit, color = "Control variance fit"), linewidth = 1.0, na.rm = TRUE) +
+    geom_line(data = trt_df, aes(rank, var_fit, color = "Treatment variance fit"), linewidth = 1.0, na.rm = TRUE) +
     annotate(
       "rect",
-      xmin = min(ctrl_onset$onset_rank, trt_onset$onset_rank),
-      xmax = max(ctrl_onset$onset_rank, trt_onset$onset_rank),
-      ymin = -Inf,
-      ymax = Inf,
+      xmin = min(ctrl_onset$cutoff_range_rank_min, trt_onset$cutoff_range_rank_min),
+      xmax = max(ctrl_onset$cutoff_range_rank_max, trt_onset$cutoff_range_rank_max),
+      ymin = -Inf, ymax = Inf,
       alpha = 0.08
     ) +
-    geom_vline(xintercept = ctrl_onset$onset_rank, linetype = 2, linewidth = 0.8) +
-    geom_vline(xintercept = trt_onset$onset_rank, linetype = 3, linewidth = 0.8) +
+    geom_vline(xintercept = ctrl_onset$cutoff_center_rank, linetype = 2, linewidth = 0.8) +
+    geom_vline(xintercept = trt_onset$cutoff_center_rank, linetype = 3, linewidth = 0.8) +
     labs(
-      title = paste0(title_prefix, ": treatment/control pre-EVS cutoff range"),
+      title = paste0(title_prefix, ": treatment/control derivative-defined centers and NB-supported ranges"),
       subtitle = paste0(
-        "Control cutoff = ", ctrl_onset$onset_rank,
-        " | Treatment cutoff = ", trt_onset$onset_rank
+        "Control center = ", ctrl_onset$cutoff_center_rank,
+        " | Treatment center = ", trt_onset$cutoff_center_rank
       ),
       x = "EVS rank",
       y = "Fitted log(1 + variance)"
@@ -1038,7 +1047,7 @@ for (i in seq_len(nrow(comparison_table))) {
   )
 
   message("Selecting control cutoff for ", cmp_name); flush.console()
-  ctrl_onset <- select_cutoff_full(
+  ctrl_onset <- select_cutoff_derivative_nb_range(
     ctrl_rank_df,
     spline_spar = spline_spar,
     search_fraction_min = search_fraction_min,
@@ -1048,26 +1057,19 @@ for (i in seq_len(nrow(comparison_table))) {
     terminal_run_fraction = terminal_run_fraction,
     terminal_run_min_length = terminal_run_min_length,
     terminal_positive_slope_quantile = terminal_positive_slope_quantile,
-    fallback_window = fallback_window,
-    local_landmark_window = local_landmark_window,
-    nb_gain_window = nb_gain_window,
-    distance_scale_fraction = distance_scale_fraction,
-    weight_variance_landmark = weight_variance_landmark,
-    weight_d1_support = weight_d1_support,
-    weight_d2_support = weight_d2_support,
-    weight_nb2_gain = weight_nb2_gain,
-    weight_alpha_mu_gain = weight_alpha_mu_gain,
-    weight_proximity = weight_proximity
+    nb_range_drop_fraction = nb_range_drop_fraction,
+    nb_range_max_span_fraction = nb_range_max_span_fraction
   )
   message(
-    "Control cutoff rank: ", ctrl_onset$onset_rank,
+    "Control cutoff center rank: ", ctrl_onset$cutoff_center_rank,
     " | terminal start: ", ctrl_onset$terminal_start_rank,
+    " | cutoff range: [", ctrl_onset$cutoff_range_rank_min, ", ", ctrl_onset$cutoff_range_rank_max, "]",
     " | pre-EVS remainder: ", ctrl_onset$pre_evs_remainder_size,
     " | pre-EVS leading edge: ", ctrl_onset$pre_evs_leading_edge_size
   ); flush.console()
 
   message("Selecting treatment cutoff for ", cmp_name); flush.console()
-  trt_onset <- select_cutoff_full(
+  trt_onset <- select_cutoff_derivative_nb_range(
     trt_rank_df,
     spline_spar = spline_spar,
     search_fraction_min = search_fraction_min,
@@ -1077,20 +1079,13 @@ for (i in seq_len(nrow(comparison_table))) {
     terminal_run_fraction = terminal_run_fraction,
     terminal_run_min_length = terminal_run_min_length,
     terminal_positive_slope_quantile = terminal_positive_slope_quantile,
-    fallback_window = fallback_window,
-    local_landmark_window = local_landmark_window,
-    nb_gain_window = nb_gain_window,
-    distance_scale_fraction = distance_scale_fraction,
-    weight_variance_landmark = weight_variance_landmark,
-    weight_d1_support = weight_d1_support,
-    weight_d2_support = weight_d2_support,
-    weight_nb2_gain = weight_nb2_gain,
-    weight_alpha_mu_gain = weight_alpha_mu_gain,
-    weight_proximity = weight_proximity
+    nb_range_drop_fraction = nb_range_drop_fraction,
+    nb_range_max_span_fraction = nb_range_max_span_fraction
   )
   message(
-    "Treatment cutoff rank: ", trt_onset$onset_rank,
+    "Treatment cutoff center rank: ", trt_onset$cutoff_center_rank,
     " | terminal start: ", trt_onset$terminal_start_rank,
+    " | cutoff range: [", trt_onset$cutoff_range_rank_min, ", ", trt_onset$cutoff_range_rank_max, "]",
     " | pre-EVS remainder: ", trt_onset$pre_evs_remainder_size,
     " | pre-EVS leading edge: ", trt_onset$pre_evs_leading_edge_size
   ); flush.console()
@@ -1114,43 +1109,49 @@ for (i in seq_len(nrow(comparison_table))) {
     file.path(cmp_dir, paste0(cmp_name, "_cutoff_range_panel.png"))
   )
 
-  ctrl_best <- ctrl_onset$score_table[ctrl_onset$score_table$rank == ctrl_onset$onset_rank, , drop = FALSE]
-  trt_best  <- trt_onset$score_table[trt_onset$score_table$rank == trt_onset$onset_rank, , drop = FALSE]
+  if (nrow(ctrl_onset$zero_crossings) > 0L) {
+    utils::write.csv(
+      ctrl_onset$zero_crossings,
+      file.path(cmp_dir, paste0(cmp_name, "_control_zero_crossings.csv")),
+      row.names = FALSE
+    )
+  }
+
+  if (nrow(trt_onset$zero_crossings) > 0L) {
+    utils::write.csv(
+      trt_onset$zero_crossings,
+      file.path(cmp_dir, paste0(cmp_name, "_treatment_zero_crossings.csv")),
+      row.names = FALSE
+    )
+  }
 
   cutoff_summary <- tibble(
     comparison = cmp_name,
     total_features = nrow(ctrl_rank_df),
 
     control_cutoff_mode = ctrl_onset$mode,
-    control_cutoff_rank = ctrl_onset$onset_rank,
-    control_cutoff_fraction = ctrl_onset$onset_rank / nrow(ctrl_rank_df),
-    control_pre_evs_remainder_size = ctrl_onset$pre_evs_remainder_size,
-    control_pre_evs_leading_edge_size = ctrl_onset$pre_evs_leading_edge_size,
+    control_cutoff_center_rank = ctrl_onset$cutoff_center_rank,
+    control_cutoff_fraction = ctrl_onset$cutoff_center_rank / nrow(ctrl_rank_df),
+    control_cutoff_range_rank_min = ctrl_onset$cutoff_range_rank_min,
+    control_cutoff_range_rank_max = ctrl_onset$cutoff_range_rank_max,
     control_terminal_start_rank = ctrl_onset$terminal_start_rank,
     control_terminal_end_rank = ctrl_onset$terminal_end_rank,
-    control_var_score = if (nrow(ctrl_best)) ctrl_best$variance_landmark[[1]] else NA_real_,
-    control_d1_score = if (nrow(ctrl_best)) ctrl_best$d1_support[[1]] else NA_real_,
-    control_d2_score = if (nrow(ctrl_best)) ctrl_best$d2_support[[1]] else NA_real_,
-    control_nb2_gain = if (nrow(ctrl_best)) ctrl_best$nb2_gain[[1]] else NA_real_,
-    control_alpha_mu_gain = if (nrow(ctrl_best)) ctrl_best$amu_gain[[1]] else NA_real_,
-    control_final_score = if (nrow(ctrl_best)) ctrl_best$final_score[[1]] else NA_real_,
+    control_center_nb_support = ctrl_onset$center_nb_support,
+    control_nb_support_threshold = ctrl_onset$nb_support_threshold,
+    control_pre_evs_remainder_size = ctrl_onset$pre_evs_remainder_size,
+    control_pre_evs_leading_edge_size = ctrl_onset$pre_evs_leading_edge_size,
 
     treatment_cutoff_mode = trt_onset$mode,
-    treatment_cutoff_rank = trt_onset$onset_rank,
-    treatment_cutoff_fraction = trt_onset$onset_rank / nrow(trt_rank_df),
-    treatment_pre_evs_remainder_size = trt_onset$pre_evs_remainder_size,
-    treatment_pre_evs_leading_edge_size = trt_onset$pre_evs_leading_edge_size,
+    treatment_cutoff_center_rank = trt_onset$cutoff_center_rank,
+    treatment_cutoff_fraction = trt_onset$cutoff_center_rank / nrow(trt_rank_df),
+    treatment_cutoff_range_rank_min = trt_onset$cutoff_range_rank_min,
+    treatment_cutoff_range_rank_max = trt_onset$cutoff_range_rank_max,
     treatment_terminal_start_rank = trt_onset$terminal_start_rank,
     treatment_terminal_end_rank = trt_onset$terminal_end_rank,
-    treatment_var_score = if (nrow(trt_best)) trt_best$variance_landmark[[1]] else NA_real_,
-    treatment_d1_score = if (nrow(trt_best)) trt_best$d1_support[[1]] else NA_real_,
-    treatment_d2_score = if (nrow(trt_best)) trt_best$d2_support[[1]] else NA_real_,
-    treatment_nb2_gain = if (nrow(trt_best)) trt_best$nb2_gain[[1]] else NA_real_,
-    treatment_alpha_mu_gain = if (nrow(trt_best)) trt_best$amu_gain[[1]] else NA_real_,
-    treatment_final_score = if (nrow(trt_best)) trt_best$final_score[[1]] else NA_real_,
-
-    cutoff_range_rank_min = min(ctrl_onset$onset_rank, trt_onset$onset_rank),
-    cutoff_range_rank_max = max(ctrl_onset$onset_rank, trt_onset$onset_rank)
+    treatment_center_nb_support = trt_onset$center_nb_support,
+    treatment_nb_support_threshold = trt_onset$nb_support_threshold,
+    treatment_pre_evs_remainder_size = trt_onset$pre_evs_remainder_size,
+    treatment_pre_evs_leading_edge_size = trt_onset$pre_evs_leading_edge_size
   )
 
   utils::write.csv(
@@ -1158,22 +1159,6 @@ for (i in seq_len(nrow(comparison_table))) {
     file.path(cmp_dir, paste0(cmp_name, "_cutoff_summary.csv")),
     row.names = FALSE
   )
-
-  if (nrow(ctrl_onset$score_table) > 0L) {
-    utils::write.csv(
-      ctrl_onset$score_table,
-      file.path(cmp_dir, paste0(cmp_name, "_control_candidate_scores.csv")),
-      row.names = FALSE
-    )
-  }
-
-  if (nrow(trt_onset$score_table) > 0L) {
-    utils::write.csv(
-      trt_onset$score_table,
-      file.path(cmp_dir, paste0(cmp_name, "_treatment_candidate_scores.csv")),
-      row.names = FALSE
-    )
-  }
 
   overall_rows[[cmp_name]] <- cutoff_summary
 }
