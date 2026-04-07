@@ -1,24 +1,62 @@
 # =============================================================================
-# SEQUENCE STAGE 1: EMPIRICAL VARIANCE + NB1/NB2 ANCHORED TERMINAL-START SPLIT
+# SEQUENCE STAGE 1: EMPIRICAL VARIANCE + NB1/NB2 REGIME-SPLIT SELECTOR
 # -----------------------------------------------------------------------------
-# Final selector:
-#   cutoff = last changepoint before terminal_start_rank
+# MANUSCRIPT-READY FINAL VERSION
 #
-# Terminal start is detected from the smoothed empirical variance slope.
-# NB1/NB2/alpha*mu are used as support anchors around terminal start:
-#   - NB1 = mu
-#   - NB2 = variance - mu
-#   - alpha*mu = (variance - mu) / mu
+# Purpose
+#   This script defines a pre-EVS split point along the EVS rank axis using:
+#
+#     1. Smoothed empirical variance curve
+#     2. First-derivative support
+#     3. Second-derivative support
+#     4. NB1 vs NB2 support
+#     5. alpha*mu support
+#     6. Mild proximity preference to terminal-start
 #
 # Orientation
-#   - lowest absolute loading on LEFT
-#   - highest absolute loading on RIGHT
-#   - leading edge is on RIGHT
+#   - Left  = lowest absolute loading
+#   - Right = highest absolute loading
+#   - Leading edge is on the RIGHT
+#
+# Empirical quantities
+#   mu        = mean(raw counts)
+#   variance  = var(raw counts)
+#   NB1       = mu
+#   NB2       = variance - mu
+#   alpha     = (variance - mu) / mu^2
+#   alpha*mu  = (variance - mu) / mu
+#
+# Final selector
+#   1. Detect terminal_start_rank from the right-tail sustained positive slope
+#      of the smoothed empirical variance curve.
+#   2. Detect candidate changepoints strictly to the LEFT of terminal_start_rank.
+#   3. Score each candidate changepoint using:
+#        a. variance-curve landmark strength
+#        b. first-derivative support
+#        c. second-derivative support
+#        d. NB2-rightward gain
+#        e. alpha*mu-rightward gain
+#        f. mild closeness to terminal_start_rank
+#   4. Select the highest-scoring changepoint.
 #
 # Reporting
 #   cutoff rank = first feature of pre-EVS leading edge
 #   pre-EVS remainder size = cutoff_rank - 1
 #   pre-EVS leading-edge size = N - cutoff_rank + 1
+#
+# Outputs
+#   exports/variance_nb1_nb2_full_selector/
+#     <comparison>_cutoff_folder/
+#       <comparison>_control_rank_panel.png
+#       <comparison>_treatment_rank_panel.png
+#       <comparison>_cutoff_range_panel.png
+#       <comparison>_feature_level_metrics.csv
+#       <comparison>_control_rank_series.csv
+#       <comparison>_treatment_rank_series.csv
+#       <comparison>_control_candidate_scores.csv
+#       <comparison>_treatment_candidate_scores.csv
+#       <comparison>_cutoff_summary.csv
+#     overall_cutoff_summary.csv
 # =============================================================================
 
 suppressPackageStartupMessages({
@@ -35,7 +73,7 @@ options(warn = 1)
 
 repo_dir <- getwd()
 count_file <- file.path(repo_dir, "data", "WTTS-Seq_2022.2_DE_raw_read_numbers.csv")
-out_root <- file.path(repo_dir, "exports", "variance_nb1_nb2_terminal_start_changepoint")
+out_root <- file.path(repo_dir, "exports", "variance_nb1_nb2_full_selector")
 dir.create(out_root, recursive = TRUE, showWarnings = FALSE)
 
 comparison_table <- data.frame(
@@ -63,22 +101,33 @@ meta_all <- data.frame(
 rownames(meta_all) <- meta_all$id
 meta_all$condition <- factor(meta_all$condition, levels = c("untrt", "trt"))
 
+# Smoothing and search
+spline_spar <- 0.60
 left_edge_buffer <- 50L
 right_edge_buffer <- 20L
-
 search_fraction_min <- 0.20
 search_fraction_max <- 0.985
 
-spline_spar <- 0.60
-
+# Terminal-start detection
 terminal_run_fraction <- 0.20
 terminal_run_min_length <- 250L
 terminal_positive_slope_quantile <- 0.70
 
+# Changepoint fallback
 fallback_window <- 250L
 
-# NB anchor neighborhood around terminal start
-nb_anchor_window <- 300L
+# Scoring neighborhoods
+local_landmark_window <- 200L
+nb_gain_window <- 400L
+distance_scale_fraction <- 0.15
+
+# Final selector weights
+weight_variance_landmark <- 0.28
+weight_d1_support        <- 0.12
+weight_d2_support        <- 0.12
+weight_nb2_gain          <- 0.22
+weight_alpha_mu_gain     <- 0.14
+weight_proximity         <- 0.12
 
 # =============================================================================
 # HELPERS
@@ -104,7 +153,10 @@ resolve_counts_file <- function(path_hint) {
   found <- found[file.exists(found)]
   if (length(found) > 0L) return(found[[1]])
 
-  stop(paste0("Count file not found. Tried: ", paste(candidates, collapse = ", ")), call. = FALSE)
+  stop(
+    paste0("Count file not found. Tried: ", paste(candidates, collapse = ", ")),
+    call. = FALSE
+  )
 }
 
 detect_feature_id_column <- function(df) {
@@ -127,13 +179,20 @@ read_count_matrix <- function(path, meta_ids) {
   feature_col <- detect_feature_id_column(raw_df)
   symbol_col <- detect_gene_symbol_column(raw_df)
   sample_cols <- intersect(meta_ids, names(raw_df))
-  if (length(sample_cols) == 0L) stop("No count columns matched metadata sample IDs.", call. = FALSE)
+
+  if (length(sample_cols) == 0L) {
+    stop("No count columns matched metadata sample IDs.", call. = FALSE)
+  }
 
   annot_df <- data.frame(
     feature_id = as.character(raw_df[[feature_col]]),
     stringsAsFactors = FALSE
   )
-  annot_df$gene_symbol <- if (!is.null(symbol_col)) as.character(raw_df[[symbol_col]]) else annot_df$feature_id
+  annot_df$gene_symbol <- if (!is.null(symbol_col)) {
+    as.character(raw_df[[symbol_col]])
+  } else {
+    annot_df$feature_id
+  }
 
   keep <- !is.na(annot_df$feature_id) & nzchar(annot_df$feature_id)
   annot_df <- annot_df[keep, , drop = FALSE]
@@ -164,7 +223,12 @@ subset_comparison <- function(count_matrix, comparison_row, meta_all) {
   missing_ids <- setdiff(keep_ids, colnames(count_matrix))
   if (length(missing_ids) > 0L) {
     stop(
-      paste0("Missing samples for comparison ", comparison_row$comparison_name, ": ", paste(missing_ids, collapse = ", ")),
+      paste0(
+        "Missing samples for comparison ",
+        comparison_row$comparison_name,
+        ": ",
+        paste(missing_ids, collapse = ", ")
+      ),
       call. = FALSE
     )
   }
@@ -205,6 +269,7 @@ roll_median <- function(x, k = 101L) {
     vals <- vals[is.finite(vals)]
     out[i] <- if (length(vals)) median(vals) else NA_real_
   }
+
   out
 }
 
@@ -212,30 +277,17 @@ scale01 <- function(x) {
   x <- as.numeric(x)
   ok <- is.finite(x)
   out <- rep(NA_real_, length(x))
+
   if (!any(ok)) return(out)
+
   rng <- range(x[ok], na.rm = TRUE)
   if (!is.finite(rng[1]) || !is.finite(rng[2]) || abs(rng[2] - rng[1]) < .Machine$double.eps) {
     out[ok] <- 0
     return(out)
   }
+
   out[ok] <- (x[ok] - rng[1]) / (rng[2] - rng[1])
   out
-}
-
-robust_center_scale <- function(x) {
-  x <- as.numeric(x)
-  ok <- is.finite(x)
-  out <- rep(NA_real_, length(x))
-  if (!any(ok)) return(list(z = out, center = NA_real_, scale = NA_real_))
-  med <- stats::median(x[ok], na.rm = TRUE)
-  madv <- stats::mad(x[ok], center = med, constant = 1, na.rm = TRUE)
-  if (!is.finite(madv) || madv <= 0) {
-    sdv <- stats::sd(x[ok], na.rm = TRUE)
-    if (!is.finite(sdv) || sdv <= 0) sdv <- 1
-    madv <- sdv
-  }
-  out[ok] <- (x[ok] - med) / madv
-  list(z = out, center = med, scale = madv)
 }
 
 find_runs <- function(cond) {
@@ -250,7 +302,11 @@ compute_group_pc1_loadings <- function(count_mat, group_cols) {
   mat <- count_mat[, group_cols, drop = FALSE]
   mat <- log2(mat + 1)
   mat <- t(mat)
-  if (nrow(mat) < 2L) return(rep(NA_real_, ncol(mat)))
+
+  if (nrow(mat) < 2L) {
+    return(rep(NA_real_, ncol(mat)))
+  }
+
   pca <- prcomp(mat, center = TRUE, scale. = FALSE)
   abs(pca$rotation[, 1L])
 }
@@ -356,11 +412,16 @@ detect_changepoints <- function(x, search_start, search_end, fallback_window = 2
   search_start <- max(1L, search_start)
   search_end <- min(n_all, search_end)
 
-  if (search_end <= search_start + 5L) return(integer(0))
+  if (search_end <= search_start + 5L) {
+    return(integer(0))
+  }
 
   x_use <- x_all[search_start:search_end]
   finite_use <- is.finite(x_use)
-  if (!any(finite_use)) return(integer(0))
+
+  if (!any(finite_use)) {
+    return(integer(0))
+  }
 
   fill_value <- stats::median(x_use[finite_use], na.rm = TRUE)
   x_use[!finite_use] <- fill_value
@@ -388,11 +449,15 @@ detect_changepoints <- function(x, search_start, search_end, fallback_window = 2
     }
   }
 
-  if (length(cps) > 0L) return(cps)
+  if (length(cps) > 0L) {
+    return(cps)
+  }
 
   n <- length(x_use)
-  w <- max(25L, min(fallback_window, floor(n / 6)))
-  if (n < (2L * w + 3L)) return(integer(0))
+  w <- max(25L, min(fallback_window, floor(n / 6L)))
+  if (n < (2L * w + 3L)) {
+    return(integer(0))
+  }
 
   score <- rep(NA_real_, n)
 
@@ -403,68 +468,165 @@ detect_changepoints <- function(x, search_start, search_end, fallback_window = 2
     left_vals <- left_vals[is.finite(left_vals)]
     right_vals <- right_vals[is.finite(right_vals)]
 
-    if (!length(left_vals) || !length(right_vals)) next
+    if (!length(left_vals) || !length(right_vals)) {
+      next
+    }
+
     score[i] <- abs(mean(right_vals) - mean(left_vals))
   }
 
   finite_score <- is.finite(score)
-  if (!any(finite_score)) return(integer(0))
+  if (!any(finite_score)) {
+    return(integer(0))
+  }
 
   score_cut <- stats::quantile(score[finite_score], probs = 0.90, na.rm = TRUE, names = FALSE)
-  if (!is.finite(score_cut)) return(integer(0))
+  if (!is.finite(score_cut)) {
+    return(integer(0))
+  }
 
   locmax <- rep(FALSE, n)
   for (i in 2:(n - 1L)) {
-    if (!is.finite(score[i]) || !is.finite(score[i - 1L]) || !is.finite(score[i + 1L])) next
-    if (score[i] >= score_cut &&
-        score[i] >= score[i - 1L] &&
-        score[i] >= score[i + 1L]) {
+    if (!is.finite(score[i]) || !is.finite(score[i - 1L]) || !is.finite(score[i + 1L])) {
+      next
+    }
+    if (score[i] >= score_cut && score[i] >= score[i - 1L] && score[i] >= score[i + 1L]) {
       locmax[i] <- TRUE
     }
   }
 
   cps <- which(locmax)
-  if (!length(cps)) return(integer(0))
+  if (!length(cps)) {
+    return(integer(0))
+  }
 
   cps <- search_start + cps - 1L
   sort(unique(cps))
 }
 
-compute_nb_anchor_score <- function(nb_gap_sm, amu_sm, idx, window = 300L) {
-  n <- length(nb_gap_sm)
-  lo <- max(1L, idx - window)
-  hi <- min(n, idx + window)
+safe_region_mean <- function(x, lo, hi) {
+  lo <- max(1L, lo)
+  hi <- min(length(x), hi)
+  if (lo > hi) return(NA_real_)
 
-  nb_local <- nb_gap_sm[lo:hi]
-  amu_local <- amu_sm[lo:hi]
-
-  nb_local <- nb_local[is.finite(nb_local)]
-  amu_local <- amu_local[is.finite(amu_local)]
-
-  nb_score <- if (length(nb_local)) mean(nb_local, na.rm = TRUE) else NA_real_
-  amu_score <- if (length(amu_local)) mean(amu_local, na.rm = TRUE) else NA_real_
-
-  c(nb_score = nb_score, amu_score = amu_score)
+  vals <- x[lo:hi]
+  vals <- vals[is.finite(vals)]
+  if (!length(vals)) return(NA_real_)
+  mean(vals, na.rm = TRUE)
 }
 
-select_cutoff_from_terminal_start <- function(rank_df,
-                                              spline_spar = 0.60,
-                                              search_fraction_min = 0.20,
-                                              search_fraction_max = 0.985,
-                                              left_edge_buffer = 50L,
-                                              right_edge_buffer = 20L,
-                                              terminal_run_fraction = 0.20,
-                                              terminal_run_min_length = 250L,
-                                              terminal_positive_slope_quantile = 0.70,
-                                              fallback_window = 250L,
-                                              nb_anchor_window = 300L) {
+compute_candidate_score_table <- function(df,
+                                          changepoints,
+                                          terminal_start,
+                                          local_landmark_window = 200L,
+                                          nb_gain_window = 400L,
+                                          distance_scale_fraction = 0.15,
+                                          weight_variance_landmark = 0.28,
+                                          weight_d1_support        = 0.12,
+                                          weight_d2_support        = 0.12,
+                                          weight_nb2_gain          = 0.22,
+                                          weight_alpha_mu_gain     = 0.14,
+                                          weight_proximity         = 0.12) {
+  n <- nrow(df)
+  if (!length(changepoints)) {
+    return(data.frame())
+  }
+
+  dist_scale <- max(100L, floor(distance_scale_fraction * n))
+
+  score_tbl <- lapply(changepoints, function(k) {
+    lo_local <- max(1L, k - local_landmark_window)
+    hi_local <- min(n, k + local_landmark_window)
+
+    local_curve <- df$var_fit[lo_local:hi_local]
+    local_curve_finite <- local_curve[is.finite(local_curve)]
+
+    variance_landmark <- NA_real_
+    if (length(local_curve_finite) && is.finite(df$var_fit[k])) {
+      variance_landmark <- mean(local_curve_finite, na.rm = TRUE) - df$var_fit[k]
+    }
+
+    d1_support <- abs(df$d1_sm[k])
+    d2_support <- abs(df$d2_sm[k])
+
+    left_nb2  <- safe_region_mean(df$log_nb2, k - nb_gain_window, k - 1L)
+    right_nb2 <- safe_region_mean(df$log_nb2, k + 1L, k + nb_gain_window)
+    nb2_gain  <- right_nb2 - left_nb2
+
+    left_amu  <- safe_region_mean(df$amu_sm, k - nb_gain_window, k - 1L)
+    right_amu <- safe_region_mean(df$amu_sm, k + 1L, k + nb_gain_window)
+    amu_gain  <- right_amu - left_amu
+
+    proximity <- exp(-abs(terminal_start - k) / dist_scale)
+
+    data.frame(
+      index = k,
+      rank = df$rank[k],
+      variance_landmark = variance_landmark,
+      d1_support = d1_support,
+      d2_support = d2_support,
+      nb2_gain = nb2_gain,
+      amu_gain = amu_gain,
+      proximity = proximity,
+      stringsAsFactors = FALSE
+    )
+  })
+
+  score_tbl <- bind_rows(score_tbl)
+
+  score_tbl$variance_landmark_s <- scale01(score_tbl$variance_landmark)
+  score_tbl$d1_support_s        <- scale01(score_tbl$d1_support)
+  score_tbl$d2_support_s        <- scale01(score_tbl$d2_support)
+  score_tbl$nb2_gain_s          <- scale01(score_tbl$nb2_gain)
+  score_tbl$amu_gain_s          <- scale01(score_tbl$amu_gain)
+  score_tbl$proximity_s         <- scale01(score_tbl$proximity)
+
+  score_tbl$variance_landmark_s[!is.finite(score_tbl$variance_landmark_s)] <- 0
+  score_tbl$d1_support_s[!is.finite(score_tbl$d1_support_s)] <- 0
+  score_tbl$d2_support_s[!is.finite(score_tbl$d2_support_s)] <- 0
+  score_tbl$nb2_gain_s[!is.finite(score_tbl$nb2_gain_s)] <- 0
+  score_tbl$amu_gain_s[!is.finite(score_tbl$amu_gain_s)] <- 0
+  score_tbl$proximity_s[!is.finite(score_tbl$proximity_s)] <- 0
+
+  score_tbl$final_score <-
+    weight_variance_landmark * score_tbl$variance_landmark_s +
+    weight_d1_support        * score_tbl$d1_support_s +
+    weight_d2_support        * score_tbl$d2_support_s +
+    weight_nb2_gain          * score_tbl$nb2_gain_s +
+    weight_alpha_mu_gain     * score_tbl$amu_gain_s +
+    weight_proximity         * score_tbl$proximity_s
+
+  score_tbl
+}
+
+select_cutoff_full <- function(rank_df,
+                               spline_spar = 0.60,
+                               search_fraction_min = 0.20,
+                               search_fraction_max = 0.985,
+                               left_edge_buffer = 50L,
+                               right_edge_buffer = 20L,
+                               terminal_run_fraction = 0.20,
+                               terminal_run_min_length = 250L,
+                               terminal_positive_slope_quantile = 0.70,
+                               fallback_window = 250L,
+                               local_landmark_window = 200L,
+                               nb_gain_window = 400L,
+                               distance_scale_fraction = 0.15,
+                               weight_variance_landmark = 0.28,
+                               weight_d1_support        = 0.12,
+                               weight_d2_support        = 0.12,
+                               weight_nb2_gain          = 0.22,
+                               weight_alpha_mu_gain     = 0.14,
+                               weight_proximity         = 0.12) {
   df <- rank_df
   n <- nrow(df)
   x <- df$rank
   y <- df$log_variance
 
   ok <- is.finite(x) & is.finite(y)
-  if (sum(ok) < 10L) stop("Not enough finite variance points for smoothing.", call. = FALSE)
+  if (sum(ok) < 10L) {
+    stop("Not enough finite variance points for smoothing.", call. = FALSE)
+  }
 
   sp_fit <- smooth.spline(x = x[ok], y = y[ok], spar = spline_spar)
   pred0 <- predict(sp_fit, x = x[ok], deriv = 0)
@@ -521,19 +683,13 @@ select_cutoff_from_terminal_start <- function(rank_df,
       terminal_end <- tail_start + terminal_local_end - 1L
     } else {
       best_local <- which.max(replace(d1_sm[tail_idx], !is.finite(d1_sm[tail_idx]), -Inf))
-      if (!length(best_local) || !is.finite(best_local)) best_local <- 1L
+      if (!length(best_local) || !is.finite(best_local)) {
+        best_local <- 1L
+      }
       terminal_start <- tail_idx[max(1L, best_local - terminal_run_min_length + 1L)]
       terminal_end <- tail_idx[min(length(tail_idx), best_local + terminal_run_min_length - 1L)]
     }
   }
-
-  # NB1/NB2 anchor score around terminal start
-  nb_anchor <- compute_nb_anchor_score(
-    nb_gap_sm = nb_gap_sm,
-    amu_sm = amu_sm,
-    idx = terminal_start,
-    window = nb_anchor_window
-  )
 
   cps <- detect_changepoints(
     x = d1_sm,
@@ -543,36 +699,37 @@ select_cutoff_from_terminal_start <- function(rank_df,
   )
 
   cps_before <- cps[cps < terminal_start]
-  if (length(cps_before)) {
-    cutoff_idx <- max(cps_before)
-    mode <- "last changepoint before terminal_start_rank"
+
+  score_tbl <- compute_candidate_score_table(
+    df = data.frame(
+      df,
+      var_fit = var_fit,
+      d1_sm = d1_sm,
+      d2_sm = d2_sm,
+      nb_gap_sm = nb_gap_sm,
+      amu_sm = amu_sm
+    ),
+    changepoints = cps_before,
+    terminal_start = terminal_start,
+    local_landmark_window = local_landmark_window,
+    nb_gain_window = nb_gain_window,
+    distance_scale_fraction = distance_scale_fraction,
+    weight_variance_landmark = weight_variance_landmark,
+    weight_d1_support = weight_d1_support,
+    weight_d2_support = weight_d2_support,
+    weight_nb2_gain = weight_nb2_gain,
+    weight_alpha_mu_gain = weight_alpha_mu_gain,
+    weight_proximity = weight_proximity
+  )
+
+  if (nrow(score_tbl) > 0L) {
+    best_row <- score_tbl[which.max(score_tbl$final_score), , drop = FALSE]
+    cutoff_idx <- best_row$index[[1]]
+    mode <- "best changepoint left of terminal_start using variance + derivatives + NB2 + alpha*mu"
   } else {
     cutoff_idx <- max(search_start, terminal_start - 1L)
     mode <- "terminal_start_rank minus one fallback"
   }
-
-  d1_obj <- robust_center_scale(d1_sm[search_start:search_end])
-  d2_obj <- robust_center_scale(d2_sm[search_start:search_end])
-  gap_obj <- robust_center_scale(nb_gap_sm[search_start:search_end])
-  amu_obj <- robust_center_scale(amu_sm[search_start:search_end])
-
-  d1_z <- rep(NA_real_, n)
-  d2_z <- rep(NA_real_, n)
-  gap_z <- rep(NA_real_, n)
-  amu_z <- rep(NA_real_, n)
-
-  d1_ok <- is.finite(d1_sm)
-  d2_ok <- is.finite(d2_sm)
-  gap_ok <- is.finite(nb_gap_sm)
-  amu_ok <- is.finite(amu_sm)
-
-  d1_z[d1_ok] <- (d1_sm[d1_ok] - d1_obj$center) / d1_obj$scale
-  d2_z[d2_ok] <- (d2_sm[d2_ok] - d2_obj$center) / d2_obj$scale
-  gap_z[gap_ok] <- (nb_gap_sm[gap_ok] - gap_obj$center) / gap_obj$scale
-  amu_z[amu_ok] <- (amu_sm[amu_ok] - amu_obj$center) / amu_obj$scale
-
-  regime_score <- rowMeans(cbind(scale01(d1_z), scale01(gap_z), scale01(amu_z)), na.rm = TRUE)
-  regime_score_sm <- roll_median(regime_score, 151L)
 
   total_features <- n
   pre_evs_remainder_size <- cutoff_idx - 1L
@@ -583,7 +740,6 @@ select_cutoff_from_terminal_start <- function(rank_df,
   df$d2_sm <- d2_sm
   df$nb_gap_sm <- nb_gap_sm
   df$amu_sm <- amu_sm
-  df$regime_score_sm <- regime_score_sm
   df$terminal_cond <- FALSE
   df$terminal_cond[terminal_start:terminal_end] <- TRUE
 
@@ -594,13 +750,12 @@ select_cutoff_from_terminal_start <- function(rank_df,
     terminal_start_rank = df$rank[terminal_start],
     terminal_end_index = terminal_end,
     terminal_end_rank = df$rank[terminal_end],
-    changepoints = cps,
+    changepoints = cps_before,
+    score_table = score_tbl,
     mode = mode,
     total_features = total_features,
     pre_evs_remainder_size = pre_evs_remainder_size,
     pre_evs_leading_edge_size = pre_evs_leading_edge_size,
-    nb_anchor_nb_gap = nb_anchor["nb_score"],
-    nb_anchor_alpha_mu = nb_anchor["amu_score"],
     curve_df = df
   )
 }
@@ -610,36 +765,65 @@ build_dataset_panel <- function(rank_df, onset_info, title_prefix, out_file) {
   cutoff_x <- onset_info$onset_rank
   term_start_x <- onset_info$terminal_start_rank
   term_end_x <- onset_info$terminal_end_rank
+
   cp_df <- data.frame(rank = onset_info$changepoints)
   cp_df <- cp_df[is.finite(cp_df$rank), , drop = FALSE]
 
-  label_text <- paste0(
-    onset_info$mode,
-    "\nCutoff rank = ", cutoff_x,
-    "\nTerminal start = ", term_start_x,
-    "\nPre-EVS remainder = ", onset_info$pre_evs_remainder_size,
-    "\nPre-EVS leading edge = ", onset_info$pre_evs_leading_edge_size
-  )
+  score_tbl <- onset_info$score_table
+  best_tbl <- score_tbl[score_tbl$rank == cutoff_x, , drop = FALSE]
+
+  if (nrow(best_tbl) == 0L) {
+    best_label <- paste0(
+      onset_info$mode,
+      "\nCutoff rank = ", cutoff_x,
+      "\nTerminal start = ", term_start_x,
+      "\nPre-EVS remainder = ", onset_info$pre_evs_remainder_size,
+      "\nPre-EVS leading edge = ", onset_info$pre_evs_leading_edge_size
+    )
+  } else {
+    best_label <- paste0(
+      onset_info$mode,
+      "\nCutoff rank = ", cutoff_x,
+      "\nTerminal start = ", term_start_x,
+      "\nPre-EVS remainder = ", onset_info$pre_evs_remainder_size,
+      "\nPre-EVS leading edge = ", onset_info$pre_evs_leading_edge_size,
+      "\nVariance landmark = ", round(best_tbl$variance_landmark[[1]], 3),
+      "\n|d1| = ", round(best_tbl$d1_support[[1]], 3),
+      "\n|d2| = ", round(best_tbl$d2_support[[1]], 3),
+      "\nNB2 gain = ", round(best_tbl$nb2_gain[[1]], 3),
+      "\nalpha*mu gain = ", round(best_tbl$amu_gain[[1]], 3),
+      "\nFinal score = ", round(best_tbl$final_score[[1]], 3)
+    )
+  }
 
   p1 <- ggplot(df, aes(rank, abs_loading)) +
     geom_line(linewidth = 0.8, na.rm = TRUE) +
-    annotate("rect",
+    annotate(
+      "rect",
       xmin = cutoff_x,
       xmax = max(df$rank, na.rm = TRUE),
-      ymin = -Inf, ymax = Inf, alpha = 0.05
+      ymin = -Inf,
+      ymax = Inf,
+      alpha = 0.05
     ) +
-    annotate("rect",
+    annotate(
+      "rect",
       xmin = term_start_x,
       xmax = term_end_x,
-      ymin = -Inf, ymax = Inf, alpha = 0.08
+      ymin = -Inf,
+      ymax = Inf,
+      alpha = 0.08
     ) +
     geom_vline(xintercept = cutoff_x, linetype = 2, linewidth = 0.8) +
     geom_vline(xintercept = term_start_x, linetype = 3, linewidth = 0.8) +
-    annotate("label",
+    annotate(
+      "label",
       x = cutoff_x,
       y = max(df$abs_loading, na.rm = TRUE),
-      label = label_text,
-      hjust = 0, vjust = 1, size = 3
+      label = best_label,
+      hjust = 0,
+      vjust = 1,
+      size = 3
     ) +
     labs(
       title = paste0(title_prefix, ": absolute PC1 loading series"),
@@ -651,24 +835,30 @@ build_dataset_panel <- function(rank_df, onset_info, title_prefix, out_file) {
 
   p2 <- ggplot(df, aes(rank, var_fit)) +
     geom_line(linewidth = 1.0, na.rm = TRUE) +
-    annotate("rect",
+    annotate(
+      "rect",
       xmin = cutoff_x,
       xmax = max(df$rank, na.rm = TRUE),
-      ymin = -Inf, ymax = Inf, alpha = 0.05
+      ymin = -Inf,
+      ymax = Inf,
+      alpha = 0.05
     ) +
-    annotate("rect",
+    annotate(
+      "rect",
       xmin = term_start_x,
       xmax = term_end_x,
-      ymin = -Inf, ymax = Inf, alpha = 0.08
+      ymin = -Inf,
+      ymax = Inf,
+      alpha = 0.08
     ) +
     geom_point(
-      data = df[is.finite(df$rank) & df$rank == cutoff_x & is.finite(df$var_fit), , drop = FALSE],
+      data = df[df$rank == cutoff_x & is.finite(df$var_fit), , drop = FALSE],
       aes(x = rank, y = var_fit),
       size = 2.5,
       inherit.aes = FALSE
     ) +
     geom_point(
-      data = df[is.finite(df$rank) & df$rank == term_start_x & is.finite(df$var_fit), , drop = FALSE],
+      data = df[df$rank == term_start_x & is.finite(df$var_fit), , drop = FALSE],
       aes(x = rank, y = var_fit),
       size = 2.0,
       shape = 1,
@@ -678,7 +868,7 @@ build_dataset_panel <- function(rank_df, onset_info, title_prefix, out_file) {
     geom_vline(xintercept = term_start_x, linetype = 3, linewidth = 0.8) +
     labs(
       title = paste0(title_prefix, ": smoothed empirical variance curve"),
-      subtitle = paste0("Terminal start at rank ", term_start_x),
+      subtitle = paste0("Cutoff chosen from candidate changepoints left of terminal start (", term_start_x, ")"),
       x = "EVS rank",
       y = "Fitted log(1 + variance)"
     ) +
@@ -689,7 +879,7 @@ build_dataset_panel <- function(rank_df, onset_info, title_prefix, out_file) {
       data = cp_df,
       aes(xintercept = rank),
       linetype = 3,
-      linewidth = 0.4,
+      linewidth = 0.35,
       alpha = 0.5,
       inherit.aes = FALSE
     )
@@ -698,15 +888,19 @@ build_dataset_panel <- function(rank_df, onset_info, title_prefix, out_file) {
   p3 <- ggplot(df, aes(rank)) +
     geom_line(aes(y = d1_sm, color = "Smoothed slope"), linewidth = 1.0, na.rm = TRUE) +
     geom_line(aes(y = d2_sm, color = "Smoothed curvature"), linewidth = 1.0, na.rm = TRUE) +
-    annotate("rect",
+    annotate(
+      "rect",
       xmin = term_start_x,
       xmax = term_end_x,
-      ymin = -Inf, ymax = Inf, alpha = 0.08
+      ymin = -Inf,
+      ymax = Inf,
+      alpha = 0.08
     ) +
     geom_vline(xintercept = cutoff_x, linetype = 2, linewidth = 0.8) +
     geom_vline(xintercept = term_start_x, linetype = 3, linewidth = 0.8) +
     labs(
       title = paste0(title_prefix, ": slope / curvature support"),
+      subtitle = "Derivative support contributes to cutoff scoring",
       x = "EVS rank",
       y = "Derivative value"
     ) +
@@ -718,46 +912,33 @@ build_dataset_panel <- function(rank_df, onset_info, title_prefix, out_file) {
     geom_line(aes(y = log_nb2, color = "NB2 = variance - mu"), linewidth = 0.5, alpha = 0.35, na.rm = TRUE) +
     geom_line(aes(y = nb_gap_sm, color = "Smoothed NB2 - NB1 gap"), linewidth = 1.0, na.rm = TRUE) +
     geom_line(aes(y = amu_sm, color = "Smoothed log(alpha*mu)"), linewidth = 1.0, na.rm = TRUE) +
-    annotate("rect",
-      xmin = term_start_x - nb_anchor_window,
-      xmax = term_start_x + nb_anchor_window,
-      ymin = -Inf, ymax = Inf, alpha = 0.06
-    ) +
     geom_vline(xintercept = cutoff_x, linetype = 2, linewidth = 0.8) +
     geom_vline(xintercept = term_start_x, linetype = 3, linewidth = 0.8) +
     labs(
       title = paste0(title_prefix, ": NB1 / NB2 / alpha*mu support"),
-      subtitle = paste0(
-        "NB anchor around terminal start: nb_gap=",
-        round(as.numeric(onset_info$nb_anchor_nb_gap), 3),
-        " | alpha*mu=",
-        round(as.numeric(onset_info$nb_anchor_alpha_mu), 3)
-      ),
+      subtitle = "NB2 gain and alpha*mu gain contribute to cutoff scoring",
       x = "EVS rank",
       y = "Support value"
     ) +
     theme_bw(base_size = 10) +
     theme(legend.position = "bottom")
 
-  p5 <- ggplot(df, aes(rank, regime_score_sm)) +
+  if (nrow(score_tbl) > 0L) {
+    score_df <- score_tbl %>%
+      transmute(rank = rank, final_score = final_score)
+  } else {
+    score_df <- data.frame(rank = numeric(0), final_score = numeric(0))
+  }
+
+  p5 <- ggplot(score_df, aes(rank, final_score)) +
     geom_line(linewidth = 1.0, na.rm = TRUE) +
-    annotate("rect",
-      xmin = cutoff_x,
-      xmax = max(df$rank, na.rm = TRUE),
-      ymin = -Inf, ymax = Inf, alpha = 0.05
-    ) +
-    annotate("rect",
-      xmin = term_start_x,
-      xmax = term_end_x,
-      ymin = -Inf, ymax = Inf, alpha = 0.08
-    ) +
     geom_vline(xintercept = cutoff_x, linetype = 2, linewidth = 0.8) +
     geom_vline(xintercept = term_start_x, linetype = 3, linewidth = 0.8) +
     labs(
-      title = paste0(title_prefix, ": combined support score"),
-      subtitle = "Cutoff = last changepoint before terminal_start_rank",
+      title = paste0(title_prefix, ": candidate changepoint score"),
+      subtitle = "Final selector combines variance curve, derivatives, NB2 gain, alpha*mu gain, and proximity",
       x = "EVS rank",
-      y = "Smoothed support score"
+      y = "Final candidate score"
     ) +
     theme_bw(base_size = 10)
 
@@ -777,7 +958,9 @@ build_range_panel <- function(ctrl_onset, trt_onset, title_prefix, out_file) {
       "rect",
       xmin = min(ctrl_onset$onset_rank, trt_onset$onset_rank),
       xmax = max(ctrl_onset$onset_rank, trt_onset$onset_rank),
-      ymin = -Inf, ymax = Inf, alpha = 0.08
+      ymin = -Inf,
+      ymax = Inf,
+      alpha = 0.08
     ) +
     geom_vline(xintercept = ctrl_onset$onset_rank, linetype = 2, linewidth = 0.8) +
     geom_vline(xintercept = trt_onset$onset_rank, linetype = 3, linewidth = 0.8) +
@@ -834,16 +1017,28 @@ for (i in seq_len(nrow(comparison_table))) {
     left_join(metrics_tbl, by = "feature_id") %>%
     left_join(annot_df, by = "feature_id")
 
-  utils::write.csv(full_tbl, file.path(cmp_dir, paste0(cmp_name, "_feature_level_metrics.csv")), row.names = FALSE)
+  utils::write.csv(
+    full_tbl,
+    file.path(cmp_dir, paste0(cmp_name, "_feature_level_metrics.csv")),
+    row.names = FALSE
+  )
 
   ctrl_rank_df <- build_rank_series(full_tbl, "control")
   trt_rank_df  <- build_rank_series(full_tbl, "treatment")
 
-  utils::write.csv(ctrl_rank_df, file.path(cmp_dir, paste0(cmp_name, "_control_rank_series.csv")), row.names = FALSE)
-  utils::write.csv(trt_rank_df, file.path(cmp_dir, paste0(cmp_name, "_treatment_rank_series.csv")), row.names = FALSE)
+  utils::write.csv(
+    ctrl_rank_df,
+    file.path(cmp_dir, paste0(cmp_name, "_control_rank_series.csv")),
+    row.names = FALSE
+  )
+  utils::write.csv(
+    trt_rank_df,
+    file.path(cmp_dir, paste0(cmp_name, "_treatment_rank_series.csv")),
+    row.names = FALSE
+  )
 
   message("Selecting control cutoff for ", cmp_name); flush.console()
-  ctrl_onset <- select_cutoff_from_terminal_start(
+  ctrl_onset <- select_cutoff_full(
     ctrl_rank_df,
     spline_spar = spline_spar,
     search_fraction_min = search_fraction_min,
@@ -854,15 +1049,25 @@ for (i in seq_len(nrow(comparison_table))) {
     terminal_run_min_length = terminal_run_min_length,
     terminal_positive_slope_quantile = terminal_positive_slope_quantile,
     fallback_window = fallback_window,
-    nb_anchor_window = nb_anchor_window
+    local_landmark_window = local_landmark_window,
+    nb_gain_window = nb_gain_window,
+    distance_scale_fraction = distance_scale_fraction,
+    weight_variance_landmark = weight_variance_landmark,
+    weight_d1_support = weight_d1_support,
+    weight_d2_support = weight_d2_support,
+    weight_nb2_gain = weight_nb2_gain,
+    weight_alpha_mu_gain = weight_alpha_mu_gain,
+    weight_proximity = weight_proximity
   )
-  message("Control cutoff rank: ", ctrl_onset$onset_rank,
-          " | terminal start: ", ctrl_onset$terminal_start_rank,
-          " | pre-EVS remainder: ", ctrl_onset$pre_evs_remainder_size,
-          " | pre-EVS leading edge: ", ctrl_onset$pre_evs_leading_edge_size); flush.console()
+  message(
+    "Control cutoff rank: ", ctrl_onset$onset_rank,
+    " | terminal start: ", ctrl_onset$terminal_start_rank,
+    " | pre-EVS remainder: ", ctrl_onset$pre_evs_remainder_size,
+    " | pre-EVS leading edge: ", ctrl_onset$pre_evs_leading_edge_size
+  ); flush.console()
 
   message("Selecting treatment cutoff for ", cmp_name); flush.console()
-  trt_onset <- select_cutoff_from_terminal_start(
+  trt_onset <- select_cutoff_full(
     trt_rank_df,
     spline_spar = spline_spar,
     search_fraction_min = search_fraction_min,
@@ -873,25 +1078,44 @@ for (i in seq_len(nrow(comparison_table))) {
     terminal_run_min_length = terminal_run_min_length,
     terminal_positive_slope_quantile = terminal_positive_slope_quantile,
     fallback_window = fallback_window,
-    nb_anchor_window = nb_anchor_window
+    local_landmark_window = local_landmark_window,
+    nb_gain_window = nb_gain_window,
+    distance_scale_fraction = distance_scale_fraction,
+    weight_variance_landmark = weight_variance_landmark,
+    weight_d1_support = weight_d1_support,
+    weight_d2_support = weight_d2_support,
+    weight_nb2_gain = weight_nb2_gain,
+    weight_alpha_mu_gain = weight_alpha_mu_gain,
+    weight_proximity = weight_proximity
   )
-  message("Treatment cutoff rank: ", trt_onset$onset_rank,
-          " | terminal start: ", trt_onset$terminal_start_rank,
-          " | pre-EVS remainder: ", trt_onset$pre_evs_remainder_size,
-          " | pre-EVS leading edge: ", trt_onset$pre_evs_leading_edge_size); flush.console()
+  message(
+    "Treatment cutoff rank: ", trt_onset$onset_rank,
+    " | terminal start: ", trt_onset$terminal_start_rank,
+    " | pre-EVS remainder: ", trt_onset$pre_evs_remainder_size,
+    " | pre-EVS leading edge: ", trt_onset$pre_evs_leading_edge_size
+  ); flush.console()
 
   build_dataset_panel(
-    ctrl_rank_df, ctrl_onset, paste0(cmp_name, " control"),
+    ctrl_rank_df,
+    ctrl_onset,
+    paste0(cmp_name, " control"),
     file.path(cmp_dir, paste0(cmp_name, "_control_rank_panel.png"))
   )
   build_dataset_panel(
-    trt_rank_df, trt_onset, paste0(cmp_name, " treatment"),
+    trt_rank_df,
+    trt_onset,
+    paste0(cmp_name, " treatment"),
     file.path(cmp_dir, paste0(cmp_name, "_treatment_rank_panel.png"))
   )
   build_range_panel(
-    ctrl_onset, trt_onset, cmp_name,
+    ctrl_onset,
+    trt_onset,
+    cmp_name,
     file.path(cmp_dir, paste0(cmp_name, "_cutoff_range_panel.png"))
   )
+
+  ctrl_best <- ctrl_onset$score_table[ctrl_onset$score_table$rank == ctrl_onset$onset_rank, , drop = FALSE]
+  trt_best  <- trt_onset$score_table[trt_onset$score_table$rank == trt_onset$onset_rank, , drop = FALSE]
 
   cutoff_summary <- tibble(
     comparison = cmp_name,
@@ -904,8 +1128,12 @@ for (i in seq_len(nrow(comparison_table))) {
     control_pre_evs_leading_edge_size = ctrl_onset$pre_evs_leading_edge_size,
     control_terminal_start_rank = ctrl_onset$terminal_start_rank,
     control_terminal_end_rank = ctrl_onset$terminal_end_rank,
-    control_nb_anchor_nb_gap = ctrl_onset$nb_anchor_nb_gap,
-    control_nb_anchor_alpha_mu = ctrl_onset$nb_anchor_alpha_mu,
+    control_var_score = if (nrow(ctrl_best)) ctrl_best$variance_landmark[[1]] else NA_real_,
+    control_d1_score = if (nrow(ctrl_best)) ctrl_best$d1_support[[1]] else NA_real_,
+    control_d2_score = if (nrow(ctrl_best)) ctrl_best$d2_support[[1]] else NA_real_,
+    control_nb2_gain = if (nrow(ctrl_best)) ctrl_best$nb2_gain[[1]] else NA_real_,
+    control_alpha_mu_gain = if (nrow(ctrl_best)) ctrl_best$amu_gain[[1]] else NA_real_,
+    control_final_score = if (nrow(ctrl_best)) ctrl_best$final_score[[1]] else NA_real_,
 
     treatment_cutoff_mode = trt_onset$mode,
     treatment_cutoff_rank = trt_onset$onset_rank,
@@ -914,8 +1142,12 @@ for (i in seq_len(nrow(comparison_table))) {
     treatment_pre_evs_leading_edge_size = trt_onset$pre_evs_leading_edge_size,
     treatment_terminal_start_rank = trt_onset$terminal_start_rank,
     treatment_terminal_end_rank = trt_onset$terminal_end_rank,
-    treatment_nb_anchor_nb_gap = trt_onset$nb_anchor_nb_gap,
-    treatment_nb_anchor_alpha_mu = trt_onset$nb_anchor_alpha_mu,
+    treatment_var_score = if (nrow(trt_best)) trt_best$variance_landmark[[1]] else NA_real_,
+    treatment_d1_score = if (nrow(trt_best)) trt_best$d1_support[[1]] else NA_real_,
+    treatment_d2_score = if (nrow(trt_best)) trt_best$d2_support[[1]] else NA_real_,
+    treatment_nb2_gain = if (nrow(trt_best)) trt_best$nb2_gain[[1]] else NA_real_,
+    treatment_alpha_mu_gain = if (nrow(trt_best)) trt_best$amu_gain[[1]] else NA_real_,
+    treatment_final_score = if (nrow(trt_best)) trt_best$final_score[[1]] else NA_real_,
 
     cutoff_range_rank_min = min(ctrl_onset$onset_rank, trt_onset$onset_rank),
     cutoff_range_rank_max = max(ctrl_onset$onset_rank, trt_onset$onset_rank)
@@ -926,6 +1158,23 @@ for (i in seq_len(nrow(comparison_table))) {
     file.path(cmp_dir, paste0(cmp_name, "_cutoff_summary.csv")),
     row.names = FALSE
   )
+
+  if (nrow(ctrl_onset$score_table) > 0L) {
+    utils::write.csv(
+      ctrl_onset$score_table,
+      file.path(cmp_dir, paste0(cmp_name, "_control_candidate_scores.csv")),
+      row.names = FALSE
+    )
+  }
+
+  if (nrow(trt_onset$score_table) > 0L) {
+    utils::write.csv(
+      trt_onset$score_table,
+      file.path(cmp_dir, paste0(cmp_name, "_treatment_candidate_scores.csv")),
+      row.names = FALSE
+    )
+  }
+
   overall_rows[[cmp_name]] <- cutoff_summary
 }
 
