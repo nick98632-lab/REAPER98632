@@ -23,4 +23,4 @@ Selecting control cutoff for RT8_ZT14
 Control cutoff center rank: 26162 | terminal start: 26520 | cutoff range: [26091, 26327] | pre-EVS remainder: 26161 | pre-EVS leading edge: 5596
 Selecting treatment cutoff for RT8_ZT14
 Treatment cutoff center rank: 28103 | terminal start: 28646 | cutoff range: [26771, 28646] | pre-EVS remainder: 28102 | pre-EVS leading edge: 3655
-Done. Outputs written to: /root/REAPER98632/exports/variance_derivative_nb_range
+Done. Outputs written to: /root/REAPER98632/exports/variance_derivative_nb_range_final
