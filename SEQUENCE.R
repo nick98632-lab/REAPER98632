@@ -1,59 +1,17 @@
 # =============================================================================
 # SEQUENCE STAGE 1: DERIVATIVE-DEFINED PRE-TERMINAL CUTOFF WITH NB1/NB2 RANGE
 # -----------------------------------------------------------------------------
-# MANUSCRIPT-READY FINAL VERSION
+# FINAL INTEGRATED VERSION
 #
-# Purpose
-#   This script identifies a pre-EVS split point along the EVS rank axis using
-#   the smoothed empirical variance curve and its derivatives, then uses NB1,
-#   NB2, and alpha*mu support to define a cutoff range around that derivative-
-#   defined center.
-#
-# Orientation
-#   - Left  = lowest absolute loading
-#   - Right = highest absolute loading
-#   - Leading edge is on the RIGHT
-#
-# Empirical quantities
-#   mu        = mean(raw counts)
-#   variance  = var(raw counts)
-#   NB1       = mu
-#   NB2       = variance - mu
-#   alpha     = (variance - mu) / mu^2
-#   alpha*mu  = (variance - mu) / mu
-#
-# Final selector
-#   1. Smooth the empirical variance curve along EVS rank.
-#   2. Compute first derivative d1 and second derivative d2.
-#   3. Define terminal_start as the d2 zero-crossing immediately preceding the
-#      terminal sustained positive-slope rise.
-#   4. Define cutoff_center as the nearest earlier d2 zero-crossing immediately
-#      preceding terminal_start and associated with decreasing-slope behavior.
-#   5. Define an NB-supported cutoff range around cutoff_center using:
-#        a. smoothed log(NB2 + 1) - log(NB1 + 1)
-#        b. smoothed log(alpha*mu)
-#      The range is the contiguous region around cutoff_center where the local
-#      NB support remains elevated relative to the center.
-#
-# Reporting
-#   cutoff_center_rank = derivative-defined center
-#   cutoff_range_rank_min / cutoff_range_rank_max = NB-supported transition band
-#   pre_evs_remainder_size = cutoff_center_rank - 1
-#   pre_evs_leading_edge_size = N - cutoff_center_rank + 1
-#
-# Outputs
-#   exports/variance_derivative_nb_range/
-#     <comparison>_cutoff_folder/
-#       <comparison>_control_rank_panel.png
-#       <comparison>_treatment_rank_panel.png
-#       <comparison>_cutoff_range_panel.png
-#       <comparison>_feature_level_metrics.csv
-#       <comparison>_control_rank_series.csv
-#       <comparison>_treatment_rank_series.csv
-#       <comparison>_control_zero_crossings.csv
-#       <comparison>_treatment_zero_crossings.csv
-#       <comparison>_cutoff_summary.csv
-#     overall_cutoff_summary.csv
+# Integrated requirements in this version
+#   1. Full manuscript-ready script
+#   2. Terminal start is defined from the SECOND of the final two relevant
+#      d2 zero-crossings before the sustained terminal positive-slope rise
+#   3. Cutoff center is defined from the FIRST of those same two zero-crossings
+#   4. NB1 / NB2 / alpha*mu define a cutoff RANGE around the cutoff center
+#   5. Figure explanations are placed near the panel they describe
+#   6. Cutoff center, terminal start, and NB-supported range are all marked
+#   7. The selected two zero-crossings are explicitly exported
 # =============================================================================
 
 suppressPackageStartupMessages({
@@ -110,7 +68,7 @@ terminal_run_fraction <- 0.20
 terminal_run_min_length <- 250L
 terminal_positive_slope_quantile <- 0.70
 
-# NB range around cutoff center
+# NB range
 nb_smooth_window <- 151L
 nb_range_drop_fraction <- 0.70
 nb_range_max_span_fraction <- 0.18
@@ -289,9 +247,7 @@ compute_group_pc1_loadings <- function(count_mat, group_cols) {
   mat <- log2(mat + 1)
   mat <- t(mat)
 
-  if (nrow(mat) < 2L) {
-    return(rep(NA_real_, ncol(mat)))
-  }
+  if (nrow(mat) < 2L) return(rep(NA_real_, ncol(mat)))
 
   pca <- prcomp(mat, center = TRUE, scale. = FALSE)
   abs(pca$rotation[, 1L])
@@ -395,17 +351,16 @@ find_d2_zero_crossings <- function(d2_vec) {
   d2_vec <- as.numeric(d2_vec)
   n <- length(d2_vec)
   out <- integer(0)
-
   if (n < 2L) return(out)
 
   s <- sign(d2_vec)
   s[!is.finite(s)] <- 0
 
   for (i in 2:n) {
+    if (!is.finite(d2_vec[i - 1L]) || !is.finite(d2_vec[i])) next
+
     s0 <- s[i - 1L]
     s1 <- s[i]
-
-    if (!is.finite(d2_vec[i - 1L]) || !is.finite(d2_vec[i])) next
 
     if (s0 == 0 && s1 != 0) {
       out <- c(out, i - 1L)
@@ -419,40 +374,14 @@ find_d2_zero_crossings <- function(d2_vec) {
   sort(unique(out))
 }
 
-summarize_zero_crossings <- function(df, zero_idx, terminal_start_idx, terminal_end_idx) {
-  if (!length(zero_idx)) {
-    return(data.frame())
-  }
-
-  tbl <- lapply(zero_idx, function(i) {
-    left_d1 <- if (i > 1L) df$d1_sm[i - 1L] else NA_real_
-    right_d1 <- if (i < nrow(df)) df$d1_sm[i + 1L] else NA_real_
-    left_d2 <- if (i > 1L) df$d2_sm[i - 1L] else NA_real_
-    right_d2 <- if (i < nrow(df)) df$d2_sm[i + 1L] else NA_real_
-
-    data.frame(
-      index = i,
-      rank = df$rank[i],
-      d1 = df$d1_sm[i],
-      d2 = df$d2_sm[i],
-      left_d1 = left_d1,
-      right_d1 = right_d1,
-      left_d2 = left_d2,
-      right_d2 = right_d2,
-      before_terminal_start = i < terminal_start_idx,
-      inside_terminal_block = i >= terminal_start_idx && i <= terminal_end_idx,
-      stringsAsFactors = FALSE
-    )
-  })
-
-  bind_rows(tbl)
-}
-
-find_terminal_block <- function(d1_sm, search_start, search_end,
-                                terminal_run_fraction = 0.20,
-                                terminal_run_min_length = 250L,
-                                terminal_positive_slope_quantile = 0.70) {
+find_terminal_positive_slope_run <- function(d1_sm,
+                                             search_start,
+                                             search_end,
+                                             terminal_run_fraction = 0.20,
+                                             terminal_run_min_length = 250L,
+                                             terminal_positive_slope_quantile = 0.70) {
   n <- length(d1_sm)
+
   tail_start <- max(search_start, floor((1 - terminal_run_fraction) * n))
   tail_idx <- seq.int(tail_start, search_end)
   finite_tail <- is.finite(d1_sm[tail_idx])
@@ -467,7 +396,6 @@ find_terminal_block <- function(d1_sm, search_start, search_end,
     na.rm = TRUE,
     names = FALSE
   ))
-
   if (!is.finite(pos_cut)) {
     pos_cut <- stats::median(d1_sm[tail_idx][finite_tail], na.rm = TRUE)
   }
@@ -479,25 +407,48 @@ find_terminal_block <- function(d1_sm, search_start, search_end,
   good_runs <- run_tbl[run_tbl$value & run_tbl$length >= terminal_run_min_length, , drop = FALSE]
 
   if (nrow(good_runs)) {
-    terminal_local_start <- good_runs$start[1]
-    terminal_local_end <- good_runs$end[1]
-    terminal_start <- tail_start + terminal_local_start - 1L
-    terminal_end <- tail_start + terminal_local_end - 1L
-  } else {
-    best_local <- which.max(replace(d1_sm[tail_idx], !is.finite(d1_sm[tail_idx]), -Inf))
-    if (!length(best_local) || !is.finite(best_local)) best_local <- 1L
-    terminal_start <- tail_idx[max(1L, best_local - terminal_run_min_length + 1L)]
-    terminal_end <- tail_idx[min(length(tail_idx), best_local + terminal_run_min_length - 1L)]
+    s_local <- good_runs$start[1]
+    e_local <- good_runs$end[1]
+    return(list(
+      start = tail_start + s_local - 1L,
+      end   = tail_start + e_local - 1L
+    ))
   }
 
-  list(start = terminal_start, end = terminal_end)
+  best_local <- which.max(replace(d1_sm[tail_idx], !is.finite(d1_sm[tail_idx]), -Inf))
+  if (!length(best_local) || !is.finite(best_local)) best_local <- 1L
+
+  list(
+    start = tail_idx[max(1L, best_local - terminal_run_min_length + 1L)],
+    end   = tail_idx[min(length(tail_idx), best_local + terminal_run_min_length - 1L)]
+  )
 }
 
-choose_terminal_start_from_geometry <- function(df, search_start, search_end,
-                                                terminal_run_fraction = 0.20,
-                                                terminal_run_min_length = 250L,
-                                                terminal_positive_slope_quantile = 0.70) {
-  block <- find_terminal_block(
+summarize_zero_crossings <- function(df, zero_idx) {
+  if (!length(zero_idx)) return(data.frame())
+
+  out <- lapply(zero_idx, function(i) {
+    data.frame(
+      index = i,
+      rank = df$rank[i],
+      d1_here = df$d1_sm[i],
+      d2_here = df$d2_sm[i],
+      d1_left = if (i > 1L) df$d1_sm[i - 1L] else NA_real_,
+      d1_right = if (i < nrow(df)) df$d1_sm[i + 1L] else NA_real_,
+      stringsAsFactors = FALSE
+    )
+  })
+
+  bind_rows(out)
+}
+
+choose_terminal_and_cutoff_from_first_two_zeros <- function(df,
+                                                            search_start,
+                                                            search_end,
+                                                            terminal_run_fraction = 0.20,
+                                                            terminal_run_min_length = 250L,
+                                                            terminal_positive_slope_quantile = 0.70) {
+  run_obj <- find_terminal_positive_slope_run(
     d1_sm = df$d1_sm,
     search_start = search_start,
     search_end = search_end,
@@ -507,95 +458,69 @@ choose_terminal_start_from_geometry <- function(df, search_start, search_end,
   )
 
   zero_idx <- find_d2_zero_crossings(df$d2_sm)
-  ztbl <- summarize_zero_crossings(df, zero_idx, block$start, block$end)
+  zero_tbl <- summarize_zero_crossings(df, zero_idx)
 
-  if (nrow(ztbl)) {
-    candidates <- ztbl %>%
-      filter(index <= block$start) %>%
-      filter(is.finite(right_d1)) %>%
-      filter(right_d1 > 0)
+  if (!nrow(zero_tbl)) {
+    term_idx <- run_obj$start
+    cut_idx <- max(search_start, term_idx - 1L)
 
-    if (nrow(candidates)) {
-      terminal_idx <- max(candidates$index)
-    } else {
-      terminal_idx <- block$start
+    return(list(
+      terminal_start_index = term_idx,
+      terminal_start_rank = df$rank[term_idx],
+      terminal_end_index = run_obj$end,
+      terminal_end_rank = df$rank[run_obj$end],
+      cutoff_center_index = cut_idx,
+      cutoff_center_rank = df$rank[cut_idx],
+      zero_crossings = zero_tbl,
+      selected_zero_crossings = data.frame(),
+      mode = "fallback: no d2 zero-crossings found"
+    ))
+  }
+
+  pre_terminal_tbl <- zero_tbl %>%
+    filter(index <= run_obj$start)
+
+  if (nrow(pre_terminal_tbl) < 2L) {
+    term_idx <- run_obj$start
+    cut_idx <- if (nrow(pre_terminal_tbl) == 1L) pre_terminal_tbl$index[1] else max(search_start, term_idx - 1L)
+
+    sel_tbl <- pre_terminal_tbl
+    if (nrow(sel_tbl)) {
+      sel_tbl$role <- "cutoff_center"
     }
-  } else {
-    terminal_idx <- block$start
+
+    return(list(
+      terminal_start_index = term_idx,
+      terminal_start_rank = df$rank[term_idx],
+      terminal_end_index = run_obj$end,
+      terminal_end_rank = df$rank[run_obj$end],
+      cutoff_center_index = cut_idx,
+      cutoff_center_rank = df$rank[cut_idx],
+      zero_crossings = zero_tbl,
+      selected_zero_crossings = sel_tbl,
+      mode = "fallback: fewer than two pre-terminal d2 zero-crossings"
+    ))
   }
 
+  pair_tbl <- tail(pre_terminal_tbl, 2)
+  cut_idx <- pair_tbl$index[1]
+  term_idx <- pair_tbl$index[2]
+  pair_tbl$role <- c("cutoff_center", "terminal_start")
+
   list(
-    terminal_start_index = terminal_idx,
-    terminal_start_rank = df$rank[terminal_idx],
-    terminal_end_index = block$end,
-    terminal_end_rank = df$rank[block$end],
-    zero_crossings = ztbl
+    terminal_start_index = term_idx,
+    terminal_start_rank = df$rank[term_idx],
+    terminal_end_index = run_obj$end,
+    terminal_end_rank = df$rank[run_obj$end],
+    cutoff_center_index = cut_idx,
+    cutoff_center_rank = df$rank[cut_idx],
+    zero_crossings = zero_tbl,
+    selected_zero_crossings = pair_tbl,
+    mode = "terminal_start = second of final two d2 zero-crossings before sustained rise; cutoff_center = first of those two zeros"
   )
 }
 
-choose_cutoff_center_from_geometry <- function(df, terminal_start_idx, zero_tbl) {
-  if (nrow(zero_tbl) == 0L) {
-    idx <- max(1L, terminal_start_idx - 1L)
-    return(list(
-      cutoff_center_index = idx,
-      cutoff_center_rank = df$rank[idx],
-      mode = "fallback: terminal_start minus one"
-    ))
-  }
-
-  prior_tbl <- zero_tbl %>%
-    filter(index < terminal_start_idx)
-
-  if (!nrow(prior_tbl)) {
-    idx <- max(1L, terminal_start_idx - 1L)
-    return(list(
-      cutoff_center_index = idx,
-      cutoff_center_rank = df$rank[idx],
-      mode = "fallback: no earlier d2 zero-crossing"
-    ))
-  }
-
-  # Prior to terminal start, select the last d2 zero-crossing whose local slope
-  # behavior is consistent with a decreasing-slope turning point immediately
-  # before the terminal-start transition.
-  #
-  # Prefer crossings with right-side slope not strongly positive and with
-  # negative or weak local slope neighborhood, then choose the nearest one.
-  cand1 <- prior_tbl %>%
-    filter(is.finite(right_d1)) %>%
-    filter(right_d1 <= 0)
-
-  if (nrow(cand1)) {
-    idx <- max(cand1$index)
-    return(list(
-      cutoff_center_index = idx,
-      cutoff_center_rank = df$rank[idx],
-      mode = "last earlier d2 zero-crossing before terminal start with nonpositive right-side slope"
-    ))
-  }
-
-  cand2 <- prior_tbl %>%
-    filter(is.finite(d1)) %>%
-    filter(d1 <= 0)
-
-  if (nrow(cand2)) {
-    idx <- max(cand2$index)
-    return(list(
-      cutoff_center_index = idx,
-      cutoff_center_rank = df$rank[idx],
-      mode = "last earlier d2 zero-crossing before terminal start with nonpositive local slope"
-    ))
-  }
-
-  idx <- max(prior_tbl$index)
-  list(
-    cutoff_center_index = idx,
-    cutoff_center_rank = df$rank[idx],
-    mode = "last earlier d2 zero-crossing before terminal start"
-  )
-}
-
-compute_nb_support_score <- function(df) {
+compute_nb_support_score <- function(df, nb_smooth_window = 151L) {
   nb_gap_sm <- roll_median(df$nb_gap, nb_smooth_window)
   amu_sm <- roll_median(df$log_alpha_mu, nb_smooth_window)
 
@@ -665,7 +590,8 @@ select_cutoff_derivative_nb_range <- function(rank_df,
                                               terminal_run_min_length = 250L,
                                               terminal_positive_slope_quantile = 0.70,
                                               nb_range_drop_fraction = 0.70,
-                                              nb_range_max_span_fraction = 0.18) {
+                                              nb_range_max_span_fraction = 0.18,
+                                              nb_smooth_window = 151L) {
   df <- rank_df
   n <- nrow(df)
   x <- df$rank
@@ -681,17 +607,13 @@ select_cutoff_derivative_nb_range <- function(rank_df,
   pred1 <- predict(sp_fit, x = x[ok], deriv = 1)
   pred2 <- predict(sp_fit, x = x[ok], deriv = 2)
 
-  var_fit <- rep(NA_real_, n)
-  d1_sm <- rep(NA_real_, n)
-  d2_sm <- rep(NA_real_, n)
+  df$var_fit <- NA_real_
+  df$d1_sm <- NA_real_
+  df$d2_sm <- NA_real_
 
-  var_fit[ok] <- pred0$y
-  d1_sm[ok] <- pred1$y
-  d2_sm[ok] <- pred2$y
-
-  df$var_fit <- var_fit
-  df$d1_sm <- d1_sm
-  df$d2_sm <- d2_sm
+  df$var_fit[ok] <- pred0$y
+  df$d1_sm[ok] <- pred1$y
+  df$d2_sm[ok] <- pred2$y
 
   search_start <- max(left_edge_buffer + 1L, floor(search_fraction_min * n))
   search_end <- min(n - right_edge_buffer, floor(search_fraction_max * n))
@@ -700,7 +622,7 @@ select_cutoff_derivative_nb_range <- function(rank_df,
     search_end <- min(n - right_edge_buffer, n - 1L)
   }
 
-  term <- choose_terminal_start_from_geometry(
+  geom_obj <- choose_terminal_and_cutoff_from_first_two_zeros(
     df = df,
     search_start = search_start,
     search_end = search_end,
@@ -709,42 +631,37 @@ select_cutoff_derivative_nb_range <- function(rank_df,
     terminal_positive_slope_quantile = terminal_positive_slope_quantile
   )
 
-  cut <- choose_cutoff_center_from_geometry(
-    df = df,
-    terminal_start_idx = term$terminal_start_index,
-    zero_tbl = term$zero_crossings
-  )
-
-  nb_obj <- compute_nb_support_score(df)
+  nb_obj <- compute_nb_support_score(df, nb_smooth_window = nb_smooth_window)
   df$nb_gap_sm <- nb_obj$nb_gap_sm
   df$amu_sm <- nb_obj$amu_sm
   df$nb_support <- nb_obj$nb_support
 
   nb_rng <- expand_nb_range_around_center(
     df = df,
-    center_idx = cut$cutoff_center_index,
-    terminal_start_idx = term$terminal_start_index,
+    center_idx = geom_obj$cutoff_center_index,
+    terminal_start_idx = geom_obj$terminal_start_index,
     nb_support = df$nb_support,
     nb_range_drop_fraction = nb_range_drop_fraction,
     nb_range_max_span_fraction = nb_range_max_span_fraction
   )
 
   total_features <- n
-  pre_evs_remainder_size <- cut$cutoff_center_index - 1L
-  pre_evs_leading_edge_size <- total_features - cut$cutoff_center_index + 1L
+  pre_evs_remainder_size <- geom_obj$cutoff_center_index - 1L
+  pre_evs_leading_edge_size <- total_features - geom_obj$cutoff_center_index + 1L
 
   list(
     curve_df = df,
-    zero_crossings = term$zero_crossings,
-    mode = cut$mode,
+    zero_crossings = geom_obj$zero_crossings,
+    selected_zero_crossings = geom_obj$selected_zero_crossings,
+    mode = geom_obj$mode,
 
-    terminal_start_index = term$terminal_start_index,
-    terminal_start_rank = term$terminal_start_rank,
-    terminal_end_index = term$terminal_end_index,
-    terminal_end_rank = term$terminal_end_rank,
+    terminal_start_index = geom_obj$terminal_start_index,
+    terminal_start_rank = geom_obj$terminal_start_rank,
+    terminal_end_index = geom_obj$terminal_end_index,
+    terminal_end_rank = geom_obj$terminal_end_rank,
 
-    cutoff_center_index = cut$cutoff_center_index,
-    cutoff_center_rank = cut$cutoff_center_rank,
+    cutoff_center_index = geom_obj$cutoff_center_index,
+    cutoff_center_rank = geom_obj$cutoff_center_rank,
 
     cutoff_range_index_min = nb_rng$range_left_index,
     cutoff_range_rank_min = nb_rng$range_left_rank,
@@ -760,6 +677,10 @@ select_cutoff_derivative_nb_range <- function(rank_df,
   )
 }
 
+# =============================================================================
+# FIGURES
+# =============================================================================
+
 build_dataset_panel <- function(rank_df, onset_info, title_prefix, out_file) {
   df <- onset_info$curve_df
   center_x <- onset_info$cutoff_center_rank
@@ -768,57 +689,34 @@ build_dataset_panel <- function(rank_df, onset_info, title_prefix, out_file) {
   terminal_x <- onset_info$terminal_start_rank
   terminal_end_x <- onset_info$terminal_end_rank
 
-  ztbl <- onset_info$zero_crossings
-
-  label_text <- paste0(
-    "Derivative-defined pre-terminal selector",
-    "\nTerminal start = d2 zero-crossing before sustained increasing slope",
-    "\nCutoff center = earlier d2 zero-crossing before terminal start",
-    "\nNB range = region around cutoff center with elevated NB2 / alpha*mu support",
-    "\nCutoff center rank = ", center_x,
-    "\nCutoff range = [", range_min_x, ", ", range_max_x, "]",
-    "\nTerminal start rank = ", terminal_x,
-    "\nPre-EVS remainder = ", onset_info$pre_evs_remainder_size,
-    "\nPre-EVS leading edge = ", onset_info$pre_evs_leading_edge_size,
-    "\nCenter NB support = ", round(onset_info$center_nb_support, 3),
-    "\nNB threshold = ", round(onset_info$nb_support_threshold, 3)
-  )
+  x_rng <- range(df$rank, na.rm = TRUE)
+  x_lab <- x_rng[1] + 0.70 * diff(x_rng)
 
   p1 <- ggplot(df, aes(rank, abs_loading)) +
     geom_line(linewidth = 0.8, na.rm = TRUE) +
-    annotate(
-      "rect",
-      xmin = center_x,
-      xmax = max(df$rank, na.rm = TRUE),
-      ymin = -Inf, ymax = Inf,
-      alpha = 0.04
-    ) +
-    annotate(
-      "rect",
-      xmin = range_min_x,
-      xmax = range_max_x,
-      ymin = -Inf, ymax = Inf,
-      alpha = 0.08
-    ) +
-    annotate(
-      "rect",
-      xmin = terminal_x,
-      xmax = terminal_end_x,
-      ymin = -Inf, ymax = Inf,
-      alpha = 0.08
-    ) +
+    annotate("rect", xmin = range_min_x, xmax = range_max_x, ymin = -Inf, ymax = Inf, alpha = 0.08) +
+    annotate("rect", xmin = terminal_x, xmax = terminal_end_x, ymin = -Inf, ymax = Inf, alpha = 0.08) +
     geom_vline(xintercept = center_x, linetype = 2, linewidth = 0.8) +
     geom_vline(xintercept = terminal_x, linetype = 3, linewidth = 0.8) +
     annotate(
       "label",
-      x = center_x,
+      x = x_lab,
       y = max(df$abs_loading, na.rm = TRUE),
-      label = label_text,
-      hjust = 0, vjust = 1, size = 2.9
+      hjust = 0,
+      vjust = 1,
+      size = 2.8,
+      label = paste0(
+        "Absolute loading panel",
+        "\nCutoff center rank = ", center_x,
+        "\nCutoff range = [", range_min_x, ", ", range_max_x, "]",
+        "\nTerminal start rank = ", terminal_x,
+        "\nPre-EVS remainder = ", onset_info$pre_evs_remainder_size,
+        "\nPre-EVS leading edge = ", onset_info$pre_evs_leading_edge_size
+      )
     ) +
     labs(
       title = paste0(title_prefix, ": absolute PC1 loading series"),
-      subtitle = "Left = lowest loading | Right = highest loading (leading edge)",
+      subtitle = "Leading edge is on the RIGHT",
       x = "EVS rank",
       y = "|PC1 loading|"
     ) +
@@ -826,20 +724,8 @@ build_dataset_panel <- function(rank_df, onset_info, title_prefix, out_file) {
 
   p2 <- ggplot(df, aes(rank, var_fit)) +
     geom_line(linewidth = 1.0, na.rm = TRUE) +
-    annotate(
-      "rect",
-      xmin = range_min_x,
-      xmax = range_max_x,
-      ymin = -Inf, ymax = Inf,
-      alpha = 0.08
-    ) +
-    annotate(
-      "rect",
-      xmin = terminal_x,
-      xmax = terminal_end_x,
-      ymin = -Inf, ymax = Inf,
-      alpha = 0.08
-    ) +
+    annotate("rect", xmin = range_min_x, xmax = range_max_x, ymin = -Inf, ymax = Inf, alpha = 0.08) +
+    annotate("rect", xmin = terminal_x, xmax = terminal_end_x, ymin = -Inf, ymax = Inf, alpha = 0.08) +
     geom_vline(xintercept = center_x, linetype = 2, linewidth = 0.8) +
     geom_vline(xintercept = terminal_x, linetype = 3, linewidth = 0.8) +
     geom_point(
@@ -855,52 +741,53 @@ build_dataset_panel <- function(rank_df, onset_info, title_prefix, out_file) {
       shape = 1,
       inherit.aes = FALSE
     ) +
+    annotate(
+      "label",
+      x = x_lab,
+      y = max(df$var_fit, na.rm = TRUE),
+      hjust = 0,
+      vjust = 1,
+      size = 2.7,
+      label = paste0(
+        "Variance curve method",
+        "\nUse the FINAL TWO pre-terminal d2 zero-crossings",
+        "\nZero 1 = cutoff center",
+        "\nZero 2 = terminal start"
+      )
+    ) +
     labs(
       title = paste0(title_prefix, ": smoothed empirical variance curve"),
-      subtitle = paste0(
-        "Center = earlier d2 zero-crossing before terminal start | ",
-        "Terminal start = d2 zero-crossing before sustained positive slope"
-      ),
+      subtitle = "Selected geometric points are marked on the curve",
       x = "EVS rank",
       y = "Fitted log(1 + variance)"
     ) +
     theme_bw(base_size = 10)
 
-  if (nrow(ztbl) > 0L) {
-    p2 <- p2 +
-      geom_vline(
-        data = ztbl,
-        aes(xintercept = rank),
-        linetype = 3,
-        linewidth = 0.35,
-        alpha = 0.45,
-        inherit.aes = FALSE
-      )
-  }
-
   p3 <- ggplot(df, aes(rank)) +
     geom_line(aes(y = d1_sm, color = "Smoothed slope d1"), linewidth = 1.0, na.rm = TRUE) +
     geom_line(aes(y = d2_sm, color = "Smoothed curvature d2"), linewidth = 1.0, na.rm = TRUE) +
-    annotate(
-      "rect",
-      xmin = range_min_x,
-      xmax = range_max_x,
-      ymin = -Inf, ymax = Inf,
-      alpha = 0.08
-    ) +
-    annotate(
-      "rect",
-      xmin = terminal_x,
-      xmax = terminal_end_x,
-      ymin = -Inf, ymax = Inf,
-      alpha = 0.08
-    ) +
+    geom_hline(yintercept = 0, linewidth = 0.5) +
+    annotate("rect", xmin = range_min_x, xmax = range_max_x, ymin = -Inf, ymax = Inf, alpha = 0.08) +
+    annotate("rect", xmin = terminal_x, xmax = terminal_end_x, ymin = -Inf, ymax = Inf, alpha = 0.08) +
     geom_vline(xintercept = center_x, linetype = 2, linewidth = 0.8) +
     geom_vline(xintercept = terminal_x, linetype = 3, linewidth = 0.8) +
-    geom_hline(yintercept = 0, linewidth = 0.5) +
+    annotate(
+      "label",
+      x = x_lab,
+      y = max(c(df$d1_sm, df$d2_sm), na.rm = TRUE),
+      hjust = 0,
+      vjust = 1,
+      size = 2.7,
+      label = paste0(
+        "Derivative method",
+        "\nCutoff center = first of final two d2 zeros",
+        "\nTerminal start = second of final two d2 zeros",
+        "\nBoth occur before the sustained positive-slope rise"
+      )
+    ) +
     labs(
       title = paste0(title_prefix, ": derivative support"),
-      subtitle = "Zero-crossings of d2 define terminal start and cutoff center",
+      subtitle = "Center and terminal start come only from the selected two zero-crossings",
       x = "EVS rank",
       y = "Derivative value"
     ) +
@@ -908,24 +795,33 @@ build_dataset_panel <- function(rank_df, onset_info, title_prefix, out_file) {
     theme(legend.position = "bottom")
 
   p4 <- ggplot(df, aes(rank)) +
+    geom_line(aes(y = nb_support, color = "Combined NB support"), linewidth = 1.0, na.rm = TRUE) +
     geom_line(aes(y = log_nb1, color = "NB1 = mu"), linewidth = 0.5, alpha = 0.35, na.rm = TRUE) +
     geom_line(aes(y = log_nb2, color = "NB2 = variance - mu"), linewidth = 0.5, alpha = 0.35, na.rm = TRUE) +
-    geom_line(aes(y = nb_gap_sm, color = "Smoothed log(NB2+1) - log(NB1+1)"), linewidth = 1.0, na.rm = TRUE) +
     geom_line(aes(y = amu_sm, color = "Smoothed log(alpha*mu)"), linewidth = 1.0, na.rm = TRUE) +
-    geom_line(aes(y = nb_support, color = "Combined NB support"), linewidth = 1.0, na.rm = TRUE) +
-    annotate(
-      "rect",
-      xmin = range_min_x,
-      xmax = range_max_x,
-      ymin = -Inf, ymax = Inf,
-      alpha = 0.08
-    ) +
+    geom_line(aes(y = nb_gap_sm, color = "Smoothed log(NB2+1) - log(NB1+1)"), linewidth = 1.0, na.rm = TRUE) +
+    annotate("rect", xmin = range_min_x, xmax = range_max_x, ymin = -Inf, ymax = Inf, alpha = 0.08) +
     geom_vline(xintercept = center_x, linetype = 2, linewidth = 0.8) +
     geom_vline(xintercept = terminal_x, linetype = 3, linewidth = 0.8) +
     geom_hline(yintercept = onset_info$nb_support_threshold, linetype = 3, linewidth = 0.5) +
+    annotate(
+      "label",
+      x = x_lab,
+      y = max(c(df$nb_support, df$log_nb1, df$log_nb2, df$amu_sm, df$nb_gap_sm), na.rm = TRUE),
+      hjust = 0,
+      vjust = 1,
+      size = 2.7,
+      label = paste0(
+        "NB range method",
+        "\nNB quantities do NOT define the center",
+        "\nThey define the RANGE around the derivative-selected center",
+        "\nCenter NB support = ", round(onset_info$center_nb_support, 3),
+        "\nNB threshold = ", round(onset_info$nb_support_threshold, 3)
+      )
+    ) +
     labs(
       title = paste0(title_prefix, ": NB1 / NB2 / alpha*mu support"),
-      subtitle = "NB-supported cutoff range is centered on derivative-defined cutoff center",
+      subtitle = "NB-supported range is centered on the derivative-selected cutoff center",
       x = "EVS rank",
       y = "Support value"
     ) +
@@ -934,19 +830,27 @@ build_dataset_panel <- function(rank_df, onset_info, title_prefix, out_file) {
 
   p5 <- ggplot(df, aes(rank, nb_support)) +
     geom_line(linewidth = 1.0, na.rm = TRUE) +
-    annotate(
-      "rect",
-      xmin = range_min_x,
-      xmax = range_max_x,
-      ymin = -Inf, ymax = Inf,
-      alpha = 0.08
-    ) +
+    annotate("rect", xmin = range_min_x, xmax = range_max_x, ymin = -Inf, ymax = Inf, alpha = 0.08) +
     geom_vline(xintercept = center_x, linetype = 2, linewidth = 0.8) +
     geom_vline(xintercept = terminal_x, linetype = 3, linewidth = 0.8) +
     geom_hline(yintercept = onset_info$nb_support_threshold, linetype = 3, linewidth = 0.5) +
+    annotate(
+      "label",
+      x = x_lab,
+      y = max(df$nb_support, na.rm = TRUE),
+      hjust = 0,
+      vjust = 1,
+      size = 2.7,
+      label = paste0(
+        "Final NB-supported band",
+        "\nCenter = ", center_x,
+        "\nBand = [", range_min_x, ", ", range_max_x, "]",
+        "\nTerminal start = ", terminal_x
+      )
+    ) +
     labs(
       title = paste0(title_prefix, ": NB-supported cutoff band"),
-      subtitle = "Range expands left and right from cutoff center while combined NB support stays elevated",
+      subtitle = "Band expands from the center while combined NB support stays elevated",
       x = "EVS rank",
       y = "Combined NB support"
     ) +
@@ -973,12 +877,25 @@ build_range_panel <- function(ctrl_onset, trt_onset, title_prefix, out_file) {
     ) +
     geom_vline(xintercept = ctrl_onset$cutoff_center_rank, linetype = 2, linewidth = 0.8) +
     geom_vline(xintercept = trt_onset$cutoff_center_rank, linetype = 3, linewidth = 0.8) +
+    annotate(
+      "label",
+      x = min(c(ctrl_df$rank, trt_df$rank), na.rm = TRUE) +
+        0.62 * diff(range(c(ctrl_df$rank, trt_df$rank), na.rm = TRUE)),
+      y = max(c(ctrl_df$var_fit, trt_df$var_fit), na.rm = TRUE),
+      hjust = 0,
+      vjust = 1,
+      size = 2.8,
+      label = paste0(
+        "Treatment / control comparison",
+        "\nControl center = ", ctrl_onset$cutoff_center_rank,
+        "\nTreatment center = ", trt_onset$cutoff_center_rank,
+        "\nControl range = [", ctrl_onset$cutoff_range_rank_min, ", ", ctrl_onset$cutoff_range_rank_max, "]",
+        "\nTreatment range = [", trt_onset$cutoff_range_rank_min, ", ", trt_onset$cutoff_range_rank_max, "]"
+      )
+    ) +
     labs(
       title = paste0(title_prefix, ": treatment/control derivative-defined centers and NB-supported ranges"),
-      subtitle = paste0(
-        "Control center = ", ctrl_onset$cutoff_center_rank,
-        " | Treatment center = ", trt_onset$cutoff_center_rank
-      ),
+      subtitle = "Both arms use the same integrated method",
       x = "EVS rank",
       y = "Fitted log(1 + variance)"
     ) +
@@ -1058,7 +975,8 @@ for (i in seq_len(nrow(comparison_table))) {
     terminal_run_min_length = terminal_run_min_length,
     terminal_positive_slope_quantile = terminal_positive_slope_quantile,
     nb_range_drop_fraction = nb_range_drop_fraction,
-    nb_range_max_span_fraction = nb_range_max_span_fraction
+    nb_range_max_span_fraction = nb_range_max_span_fraction,
+    nb_smooth_window = nb_smooth_window
   )
   message(
     "Control cutoff center rank: ", ctrl_onset$cutoff_center_rank,
@@ -1080,7 +998,8 @@ for (i in seq_len(nrow(comparison_table))) {
     terminal_run_min_length = terminal_run_min_length,
     terminal_positive_slope_quantile = terminal_positive_slope_quantile,
     nb_range_drop_fraction = nb_range_drop_fraction,
-    nb_range_max_span_fraction = nb_range_max_span_fraction
+    nb_range_max_span_fraction = nb_range_max_span_fraction,
+    nb_smooth_window = nb_smooth_window
   )
   message(
     "Treatment cutoff center rank: ", trt_onset$cutoff_center_rank,
@@ -1112,7 +1031,7 @@ for (i in seq_len(nrow(comparison_table))) {
   if (nrow(ctrl_onset$zero_crossings) > 0L) {
     utils::write.csv(
       ctrl_onset$zero_crossings,
-      file.path(cmp_dir, paste0(cmp_name, "_control_zero_crossings.csv")),
+      file.path(cmp_dir, paste0(cmp_name, "_control_zero_crossings_all.csv")),
       row.names = FALSE
     )
   }
@@ -1120,7 +1039,23 @@ for (i in seq_len(nrow(comparison_table))) {
   if (nrow(trt_onset$zero_crossings) > 0L) {
     utils::write.csv(
       trt_onset$zero_crossings,
-      file.path(cmp_dir, paste0(cmp_name, "_treatment_zero_crossings.csv")),
+      file.path(cmp_dir, paste0(cmp_name, "_treatment_zero_crossings_all.csv")),
+      row.names = FALSE
+    )
+  }
+
+  if (nrow(ctrl_onset$selected_zero_crossings) > 0L) {
+    utils::write.csv(
+      ctrl_onset$selected_zero_crossings,
+      file.path(cmp_dir, paste0(cmp_name, "_control_selected_two_zero_crossings.csv")),
+      row.names = FALSE
+    )
+  }
+
+  if (nrow(trt_onset$selected_zero_crossings) > 0L) {
+    utils::write.csv(
+      trt_onset$selected_zero_crossings,
+      file.path(cmp_dir, paste0(cmp_name, "_treatment_selected_two_zero_crossings.csv")),
       row.names = FALSE
     )
   }
@@ -1129,25 +1064,21 @@ for (i in seq_len(nrow(comparison_table))) {
     comparison = cmp_name,
     total_features = nrow(ctrl_rank_df),
 
-    control_cutoff_mode = ctrl_onset$mode,
+    control_mode = ctrl_onset$mode,
     control_cutoff_center_rank = ctrl_onset$cutoff_center_rank,
-    control_cutoff_fraction = ctrl_onset$cutoff_center_rank / nrow(ctrl_rank_df),
+    control_terminal_start_rank = ctrl_onset$terminal_start_rank,
     control_cutoff_range_rank_min = ctrl_onset$cutoff_range_rank_min,
     control_cutoff_range_rank_max = ctrl_onset$cutoff_range_rank_max,
-    control_terminal_start_rank = ctrl_onset$terminal_start_rank,
-    control_terminal_end_rank = ctrl_onset$terminal_end_rank,
     control_center_nb_support = ctrl_onset$center_nb_support,
     control_nb_support_threshold = ctrl_onset$nb_support_threshold,
     control_pre_evs_remainder_size = ctrl_onset$pre_evs_remainder_size,
     control_pre_evs_leading_edge_size = ctrl_onset$pre_evs_leading_edge_size,
 
-    treatment_cutoff_mode = trt_onset$mode,
+    treatment_mode = trt_onset$mode,
     treatment_cutoff_center_rank = trt_onset$cutoff_center_rank,
-    treatment_cutoff_fraction = trt_onset$cutoff_center_rank / nrow(trt_rank_df),
+    treatment_terminal_start_rank = trt_onset$terminal_start_rank,
     treatment_cutoff_range_rank_min = trt_onset$cutoff_range_rank_min,
     treatment_cutoff_range_rank_max = trt_onset$cutoff_range_rank_max,
-    treatment_terminal_start_rank = trt_onset$terminal_start_rank,
-    treatment_terminal_end_rank = trt_onset$terminal_end_rank,
     treatment_center_nb_support = trt_onset$center_nb_support,
     treatment_nb_support_threshold = trt_onset$nb_support_threshold,
     treatment_pre_evs_remainder_size = trt_onset$pre_evs_remainder_size,
