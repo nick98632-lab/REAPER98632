@@ -1,8 +1,7 @@
 # =============================================================================
 # SEQUENCE STAGE 1: EMPIRICAL VARIANCE + NB1/NB2 REGIME SPLIT
 # RIGHT-SIDE LEADING EDGE
-# AUTOMATIC CHANGEPOINT ON SMOOTHED VARIANCE-SLOPE
-# FULL FIXED VERSION
+# AUTOMATIC CHANGEPOINT + PRE-TERMINAL TROUGH SELECTOR
 # -----------------------------------------------------------------------------
 # Orientation
 #   - lowest absolute loading on the LEFT
@@ -23,14 +22,21 @@
 #   3. Fit a smooth spline to log1p(variance) across the full ranked series.
 #   4. Compute first and second derivatives of that smooth curve.
 #   5. Detect the terminal sustained positive-slope run on the right.
-#   6. Detect changepoints on the derivative in the interior region.
+#   6. Find the LAST LOCAL TROUGH immediately before that terminal run.
+#   7. Detect changepoints on the derivative in the interior region.
 #      - If package "changepoint" is available, use PELT.
 #      - Otherwise use a base-R moving-window mean-shift fallback.
-#   7. Define the cutoff as the last changepoint before the terminal positive-
-#      slope run. If none is found, use the left edge of the terminal run.
+#   8. Define the cutoff as the last changepoint at or before that trough.
+#      If no changepoint exists, use the trough itself.
+#
+# Reporting
+#   With rank increasing left-to-right:
+#     cutoff rank = first feature of leading-edge pre-EVS split
+#     pre-EVS remainder size = cutoff_rank - 1
+#     pre-EVS leading-edge size = N - cutoff_rank + 1
 #
 # Output
-#   exports/variance_nb1_nb2_changepoint_terminal_run/<comparison>_cutoff_folder/
+#   exports/variance_nb1_nb2_trough_selector/<comparison>_cutoff_folder/
 # =============================================================================
 
 suppressPackageStartupMessages({
@@ -47,7 +53,7 @@ options(warn = 1)
 
 repo_dir <- getwd()
 count_file <- file.path(repo_dir, "data", "WTTS-Seq_2022.2_DE_raw_read_numbers.csv")
-out_root <- file.path(repo_dir, "exports", "variance_nb1_nb2_changepoint_terminal_run")
+out_root <- file.path(repo_dir, "exports", "variance_nb1_nb2_trough_selector")
 dir.create(out_root, recursive = TRUE, showWarnings = FALSE)
 
 comparison_table <- data.frame(
@@ -77,15 +83,18 @@ meta_all$condition <- factor(meta_all$condition, levels = c("untrt", "trt"))
 
 left_edge_buffer <- 50L
 right_edge_buffer <- 20L
+
 search_fraction_min <- 0.20
 search_fraction_max <- 0.985
 
 spline_spar <- 0.60
+
 terminal_run_fraction <- 0.20
 terminal_run_min_length <- 250L
 terminal_positive_slope_quantile <- 0.70
 
 fallback_window <- 250L
+trough_window <- 101L
 
 # =============================================================================
 # HELPERS
@@ -363,16 +372,11 @@ detect_changepoints <- function(x, search_start, search_end, fallback_window = 2
   search_start <- max(1L, search_start)
   search_end <- min(n_all, search_end)
 
-  if (search_end <= search_start + 5L) {
-    return(integer(0))
-  }
+  if (search_end <= search_start + 5L) return(integer(0))
 
   x_use <- x_all[search_start:search_end]
-
   finite_use <- is.finite(x_use)
-  if (!any(finite_use)) {
-    return(integer(0))
-  }
+  if (!any(finite_use)) return(integer(0))
 
   fill_value <- stats::median(x_use[finite_use], na.rm = TRUE)
   x_use[!finite_use] <- fill_value
@@ -400,16 +404,11 @@ detect_changepoints <- function(x, search_start, search_end, fallback_window = 2
     }
   }
 
-  if (length(cps) > 0L) {
-    return(cps)
-  }
+  if (length(cps) > 0L) return(cps)
 
   n <- length(x_use)
   w <- max(25L, min(fallback_window, floor(n / 6)))
-
-  if (n < (2L * w + 3L)) {
-    return(integer(0))
-  }
+  if (n < (2L * w + 3L)) return(integer(0))
 
   score <- rep(NA_real_, n)
 
@@ -422,34 +421,18 @@ detect_changepoints <- function(x, search_start, search_end, fallback_window = 2
 
     if (!length(left_vals) || !length(right_vals)) next
 
-    left_mean <- mean(left_vals)
-    right_mean <- mean(right_vals)
-    score[i] <- abs(right_mean - left_mean)
+    score[i] <- abs(mean(right_vals) - mean(left_vals))
   }
 
   finite_score <- is.finite(score)
-  if (!any(finite_score)) {
-    return(integer(0))
-  }
+  if (!any(finite_score)) return(integer(0))
 
-  score_cut <- stats::quantile(
-    score[finite_score],
-    probs = 0.90,
-    na.rm = TRUE,
-    names = FALSE
-  )
-
-  if (!is.finite(score_cut)) {
-    return(integer(0))
-  }
+  score_cut <- stats::quantile(score[finite_score], probs = 0.90, na.rm = TRUE, names = FALSE)
+  if (!is.finite(score_cut)) return(integer(0))
 
   locmax <- rep(FALSE, n)
-
   for (i in 2:(n - 1L)) {
-    if (!is.finite(score[i])) next
-    if (!is.finite(score[i - 1L])) next
-    if (!is.finite(score[i + 1L])) next
-
+    if (!is.finite(score[i]) || !is.finite(score[i - 1L]) || !is.finite(score[i + 1L])) next
     if (score[i] >= score_cut &&
         score[i] >= score[i - 1L] &&
         score[i] >= score[i + 1L]) {
@@ -458,24 +441,62 @@ detect_changepoints <- function(x, search_start, search_end, fallback_window = 2
   }
 
   cps <- which(locmax)
-  if (!length(cps)) {
-    return(integer(0))
-  }
+  if (!length(cps)) return(integer(0))
 
   cps <- search_start + cps - 1L
   sort(unique(cps))
 }
 
-select_cutoff_from_slope <- function(rank_df,
-                                     spline_spar = 0.60,
-                                     search_fraction_min = 0.20,
-                                     search_fraction_max = 0.985,
-                                     left_edge_buffer = 50L,
-                                     right_edge_buffer = 20L,
-                                     terminal_run_fraction = 0.20,
-                                     terminal_run_min_length = 250L,
-                                     terminal_positive_slope_quantile = 0.70,
-                                     fallback_window = 250L) {
+find_last_local_trough_before_terminal <- function(curve, left_bound, right_bound, trough_window = 101L) {
+  n <- length(curve)
+  left_bound <- max(1L, left_bound)
+  right_bound <- min(n, right_bound)
+
+  if (right_bound <= left_bound + 5L) {
+    return(left_bound)
+  }
+
+  curve_sm <- roll_median(curve, trough_window)
+  x <- curve_sm[left_bound:right_bound]
+  if (!any(is.finite(x))) {
+    return(left_bound)
+  }
+
+  # local minima
+  local_min_idx <- integer(0)
+  if (length(x) >= 3L) {
+    for (i in 2:(length(x) - 1L)) {
+      if (!is.finite(x[i - 1L]) || !is.finite(x[i]) || !is.finite(x[i + 1L])) next
+      if (x[i] <= x[i - 1L] && x[i] <= x[i + 1L]) {
+        local_min_idx <- c(local_min_idx, i)
+      }
+    }
+  }
+
+  if (!length(local_min_idx)) {
+    local_min_idx <- which.min(replace(x, !is.finite(x), Inf))
+    if (!length(local_min_idx) || !is.finite(local_min_idx)) {
+      return(left_bound)
+    }
+    return(left_bound + local_min_idx - 1L)
+  }
+
+  # choose the last local minimum before terminal rise
+  trough_local <- max(local_min_idx)
+  left_bound + trough_local - 1L
+}
+
+select_cutoff_from_trough <- function(rank_df,
+                                      spline_spar = 0.60,
+                                      search_fraction_min = 0.20,
+                                      search_fraction_max = 0.985,
+                                      left_edge_buffer = 50L,
+                                      right_edge_buffer = 20L,
+                                      terminal_run_fraction = 0.20,
+                                      terminal_run_min_length = 250L,
+                                      terminal_positive_slope_quantile = 0.70,
+                                      fallback_window = 250L,
+                                      trough_window = 101L) {
   df <- rank_df
   n <- nrow(df)
   x <- df$rank
@@ -545,7 +566,14 @@ select_cutoff_from_slope <- function(rank_df,
     }
   }
 
-  cp_search_end <- max(search_start + 5L, min(terminal_start, search_end))
+  trough_idx <- find_last_local_trough_before_terminal(
+    curve = var_fit,
+    left_bound = search_start,
+    right_bound = max(search_start, terminal_start - 1L),
+    trough_window = trough_window
+  )
+
+  cp_search_end <- max(search_start + 5L, min(trough_idx, search_end))
   cps <- detect_changepoints(
     x = d1_sm,
     search_start = search_start,
@@ -553,13 +581,13 @@ select_cutoff_from_slope <- function(rank_df,
     fallback_window = fallback_window
   )
 
-  cps_before <- cps[cps < terminal_start]
+  cps_before <- cps[cps <= trough_idx]
   if (length(cps_before)) {
     cutoff_idx <- max(cps_before)
-    mode <- "last changepoint before terminal positive-slope run"
+    mode <- "last changepoint at or before pre-terminal trough"
   } else {
-    cutoff_idx <- terminal_start
-    mode <- "left edge of terminal positive-slope run fallback"
+    cutoff_idx <- trough_idx
+    mode <- "pre-terminal trough fallback"
   }
 
   d1_obj <- robust_center_scale(d1_sm[search_start:search_end])
@@ -598,9 +626,15 @@ select_cutoff_from_slope <- function(rank_df,
   df$terminal_cond <- FALSE
   df$terminal_cond[terminal_start:terminal_end] <- TRUE
 
+  total_features <- n
+  pre_evs_remainder_size <- cutoff_idx - 1L
+  pre_evs_leading_edge_size <- total_features - cutoff_idx + 1L
+
   list(
     onset_index = cutoff_idx,
     onset_rank = df$rank[cutoff_idx],
+    trough_index = trough_idx,
+    trough_rank = df$rank[trough_idx],
     terminal_start_index = terminal_start,
     terminal_start_rank = df$rank[terminal_start],
     terminal_end_index = terminal_end,
@@ -609,6 +643,9 @@ select_cutoff_from_slope <- function(rank_df,
     mode = mode,
     search_start = search_start,
     search_end = search_end,
+    total_features = total_features,
+    pre_evs_remainder_size = pre_evs_remainder_size,
+    pre_evs_leading_edge_size = pre_evs_leading_edge_size,
     curve_df = df
   )
 }
@@ -616,6 +653,7 @@ select_cutoff_from_slope <- function(rank_df,
 build_dataset_panel <- function(rank_df, onset_info, title_prefix, out_file) {
   df <- onset_info$curve_df
   cutoff_x <- onset_info$onset_rank
+  trough_x <- onset_info$trough_rank
   term_start_x <- onset_info$terminal_start_rank
   term_end_x <- onset_info$terminal_end_rank
   cp_df <- data.frame(rank = onset_info$changepoints)
@@ -624,11 +662,17 @@ build_dataset_panel <- function(rank_df, onset_info, title_prefix, out_file) {
   label_text <- paste0(
     onset_info$mode,
     "\nCutoff rank = ", cutoff_x,
-    "\nTerminal run starts at ", term_start_x
+    "\nPre-EVS remainder = ", onset_info$pre_evs_remainder_size,
+    "\nPre-EVS leading edge = ", onset_info$pre_evs_leading_edge_size
   )
 
   p1 <- ggplot(df, aes(rank, abs_loading)) +
     geom_line(linewidth = 0.8, na.rm = TRUE) +
+    annotate("rect",
+      xmin = cutoff_x,
+      xmax = max(df$rank, na.rm = TRUE),
+      ymin = -Inf, ymax = Inf, alpha = 0.05
+    ) +
     annotate("rect",
       xmin = term_start_x,
       xmax = term_end_x,
@@ -639,7 +683,7 @@ build_dataset_panel <- function(rank_df, onset_info, title_prefix, out_file) {
       x = cutoff_x,
       y = max(df$abs_loading, na.rm = TRUE),
       label = label_text,
-      hjust = 1, vjust = 1, size = 3
+      hjust = 0, vjust = 1, size = 3
     ) +
     labs(
       title = paste0(title_prefix, ": absolute PC1 loading series"),
@@ -652,6 +696,11 @@ build_dataset_panel <- function(rank_df, onset_info, title_prefix, out_file) {
   p2 <- ggplot(df, aes(rank, var_fit)) +
     geom_line(linewidth = 1.0, na.rm = TRUE) +
     annotate("rect",
+      xmin = cutoff_x,
+      xmax = max(df$rank, na.rm = TRUE),
+      ymin = -Inf, ymax = Inf, alpha = 0.05
+    ) +
+    annotate("rect",
       xmin = term_start_x,
       xmax = term_end_x,
       ymin = -Inf, ymax = Inf, alpha = 0.08
@@ -662,9 +711,17 @@ build_dataset_panel <- function(rank_df, onset_info, title_prefix, out_file) {
       size = 2.5,
       inherit.aes = FALSE
     ) +
+    geom_point(
+      data = df[is.finite(df$rank) & df$rank == trough_x & is.finite(df$var_fit), , drop = FALSE],
+      aes(x = rank, y = var_fit),
+      size = 2.0,
+      shape = 1,
+      inherit.aes = FALSE
+    ) +
     geom_vline(xintercept = cutoff_x, linetype = 2, linewidth = 0.8) +
     labs(
       title = paste0(title_prefix, ": smoothed empirical variance curve"),
+      subtitle = paste0("Pre-terminal trough at rank ", trough_x),
       x = "EVS rank",
       y = "Fitted log(1 + variance)"
     ) +
@@ -684,6 +741,11 @@ build_dataset_panel <- function(rank_df, onset_info, title_prefix, out_file) {
   p3 <- ggplot(df, aes(rank)) +
     geom_line(aes(y = d1_sm, color = "Smoothed slope"), linewidth = 1.0, na.rm = TRUE) +
     geom_line(aes(y = d2_sm, color = "Smoothed curvature"), linewidth = 1.0, na.rm = TRUE) +
+    annotate("rect",
+      xmin = cutoff_x,
+      xmax = max(df$rank, na.rm = TRUE),
+      ymin = -Inf, ymax = Inf, alpha = 0.05
+    ) +
     annotate("rect",
       xmin = term_start_x,
       xmax = term_end_x,
@@ -715,9 +777,9 @@ build_dataset_panel <- function(rank_df, onset_info, title_prefix, out_file) {
     geom_line(aes(y = nb_gap_sm, color = "Smoothed NB2 - NB1 gap"), linewidth = 1.0, na.rm = TRUE) +
     geom_line(aes(y = amu_sm, color = "Smoothed log(alpha*mu)"), linewidth = 1.0, na.rm = TRUE) +
     annotate("rect",
-      xmin = term_start_x,
-      xmax = term_end_x,
-      ymin = -Inf, ymax = Inf, alpha = 0.08
+      xmin = cutoff_x,
+      xmax = max(df$rank, na.rm = TRUE),
+      ymin = -Inf, ymax = Inf, alpha = 0.05
     ) +
     geom_vline(xintercept = cutoff_x, linetype = 2, linewidth = 0.8) +
     labs(
@@ -731,6 +793,11 @@ build_dataset_panel <- function(rank_df, onset_info, title_prefix, out_file) {
   p5 <- ggplot(df, aes(rank, regime_score_sm)) +
     geom_line(linewidth = 1.0, na.rm = TRUE) +
     annotate("rect",
+      xmin = cutoff_x,
+      xmax = max(df$rank, na.rm = TRUE),
+      ymin = -Inf, ymax = Inf, alpha = 0.05
+    ) +
+    annotate("rect",
       xmin = term_start_x,
       xmax = term_end_x,
       ymin = -Inf, ymax = Inf, alpha = 0.08
@@ -738,7 +805,7 @@ build_dataset_panel <- function(rank_df, onset_info, title_prefix, out_file) {
     geom_vline(xintercept = cutoff_x, linetype = 2, linewidth = 0.8) +
     labs(
       title = paste0(title_prefix, ": combined support score"),
-      subtitle = "Cutoff = last changepoint before terminal positive-slope run",
+      subtitle = "Cutoff = last changepoint at or before pre-terminal trough",
       x = "EVS rank",
       y = "Smoothed support score"
     ) +
@@ -765,10 +832,10 @@ build_range_panel <- function(ctrl_onset, trt_onset, title_prefix, out_file) {
     geom_vline(xintercept = ctrl_onset$onset_rank, linetype = 2, linewidth = 0.8) +
     geom_vline(xintercept = trt_onset$onset_rank, linetype = 3, linewidth = 0.8) +
     labs(
-      title = paste0(title_prefix, ": treatment/control regime-change range"),
+      title = paste0(title_prefix, ": treatment/control pre-EVS cutoff range"),
       subtitle = paste0(
-        "Control rank = ", ctrl_onset$onset_rank,
-        " | Treatment rank = ", trt_onset$onset_rank
+        "Control cutoff = ", ctrl_onset$onset_rank,
+        " | Treatment cutoff = ", trt_onset$onset_rank
       ),
       x = "EVS rank",
       y = "Fitted log(1 + variance)"
@@ -825,8 +892,8 @@ for (i in seq_len(nrow(comparison_table))) {
   utils::write.csv(ctrl_rank_df, file.path(cmp_dir, paste0(cmp_name, "_control_rank_series.csv")), row.names = FALSE)
   utils::write.csv(trt_rank_df, file.path(cmp_dir, paste0(cmp_name, "_treatment_rank_series.csv")), row.names = FALSE)
 
-  message("Selecting control changepoint cutoff for ", cmp_name); flush.console()
-  ctrl_onset <- select_cutoff_from_slope(
+  message("Selecting control pre-terminal-trough cutoff for ", cmp_name); flush.console()
+  ctrl_onset <- select_cutoff_from_trough(
     ctrl_rank_df,
     spline_spar = spline_spar,
     search_fraction_min = search_fraction_min,
@@ -836,12 +903,15 @@ for (i in seq_len(nrow(comparison_table))) {
     terminal_run_fraction = terminal_run_fraction,
     terminal_run_min_length = terminal_run_min_length,
     terminal_positive_slope_quantile = terminal_positive_slope_quantile,
-    fallback_window = fallback_window
+    fallback_window = fallback_window,
+    trough_window = trough_window
   )
-  message("Control onset rank: ", ctrl_onset$onset_rank); flush.console()
+  message("Control cutoff rank: ", ctrl_onset$onset_rank,
+          " | pre-EVS remainder: ", ctrl_onset$pre_evs_remainder_size,
+          " | pre-EVS leading edge: ", ctrl_onset$pre_evs_leading_edge_size); flush.console()
 
-  message("Selecting treatment changepoint cutoff for ", cmp_name); flush.console()
-  trt_onset <- select_cutoff_from_slope(
+  message("Selecting treatment pre-terminal-trough cutoff for ", cmp_name); flush.console()
+  trt_onset <- select_cutoff_from_trough(
     trt_rank_df,
     spline_spar = spline_spar,
     search_fraction_min = search_fraction_min,
@@ -851,9 +921,12 @@ for (i in seq_len(nrow(comparison_table))) {
     terminal_run_fraction = terminal_run_fraction,
     terminal_run_min_length = terminal_run_min_length,
     terminal_positive_slope_quantile = terminal_positive_slope_quantile,
-    fallback_window = fallback_window
+    fallback_window = fallback_window,
+    trough_window = trough_window
   )
-  message("Treatment onset rank: ", trt_onset$onset_rank); flush.console()
+  message("Treatment cutoff rank: ", trt_onset$onset_rank,
+          " | pre-EVS remainder: ", trt_onset$pre_evs_remainder_size,
+          " | pre-EVS leading edge: ", trt_onset$pre_evs_leading_edge_size); flush.console()
 
   build_dataset_panel(
     ctrl_rank_df, ctrl_onset, paste0(cmp_name, " control"),
@@ -870,14 +943,25 @@ for (i in seq_len(nrow(comparison_table))) {
 
   cutoff_summary <- tibble(
     comparison = cmp_name,
+
+    total_features = nrow(ctrl_rank_df),
+
     control_cutoff_mode = ctrl_onset$mode,
     control_cutoff_rank = ctrl_onset$onset_rank,
     control_cutoff_fraction = ctrl_onset$onset_rank / nrow(ctrl_rank_df),
+    control_pre_evs_remainder_size = ctrl_onset$pre_evs_remainder_size,
+    control_pre_evs_leading_edge_size = ctrl_onset$pre_evs_leading_edge_size,
+    control_trough_rank = ctrl_onset$trough_rank,
     control_terminal_start_rank = ctrl_onset$terminal_start_rank,
+
     treatment_cutoff_mode = trt_onset$mode,
     treatment_cutoff_rank = trt_onset$onset_rank,
     treatment_cutoff_fraction = trt_onset$onset_rank / nrow(trt_rank_df),
+    treatment_pre_evs_remainder_size = trt_onset$pre_evs_remainder_size,
+    treatment_pre_evs_leading_edge_size = trt_onset$pre_evs_leading_edge_size,
+    treatment_trough_rank = trt_onset$trough_rank,
     treatment_terminal_start_rank = trt_onset$terminal_start_rank,
+
     cutoff_range_rank_min = min(ctrl_onset$onset_rank, trt_onset$onset_rank),
     cutoff_range_rank_max = max(ctrl_onset$onset_rank, trt_onset$onset_rank)
   )
