@@ -60,7 +60,7 @@ count_file <- file.path(repo_dir, "data", "WTTS-Seq_2022.2_DE_raw_read_numbers.c
 out_root <- file.path(repo_dir, "exports", "variance_derivative_nb_range_manual5000")
 dir.create(out_root, recursive = TRUE, showWarnings = FALSE)
 
-manual_leading_edge_n <- 5000L
+manual_leading_edge_n <- 26757L
 
 comparison_table <- data.frame(
   comparison_name  = c("RT0_ZT6", "RT2_ZT8", "RT4_ZT10", "RT8_ZT14"),
