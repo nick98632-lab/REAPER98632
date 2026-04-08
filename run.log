@@ -1,21 +1,6 @@
 Using count file: /root/REAPER98632/data/WTTS-Seq_2022.2_DE_raw_read_numbers.csv
-Processing RT0_ZT6
-Warning: Removed 1028 rows containing missing values or values outside the scale range
-(`geom_line()`).
-Warning: Removed 1473 rows containing missing values or values outside the scale range
-(`geom_line()`).
-Processing RT2_ZT8
-Warning: Removed 900 rows containing missing values or values outside the scale range
-(`geom_line()`).
-Warning: Removed 1149 rows containing missing values or values outside the scale range
-(`geom_line()`).
-Processing RT4_ZT10
-Warning: Removed 1773 rows containing missing values or values outside the scale range
-(`geom_line()`).
-Warning: Removed 276 rows containing missing values or values outside the scale range
-(`geom_line()`).
-Processing RT8_ZT14
-Warning: Removed 667 rows containing missing values or values outside the scale range
-(`geom_line()`).
-Warning: Removed 779 rows containing missing values or values outside the scale range
-(`geom_line()`).
+Processing comparison: RT0_ZT6
+Processing comparison: RT2_ZT8
+Processing comparison: RT4_ZT10
+Processing comparison: RT8_ZT14
+Done.
