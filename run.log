@@ -1,6 +1,274 @@
+SEQUENCE.R started
+Resolving count file...
 Using count file: /root/REAPER98632/data/WTTS-Seq_2022.2_DE_raw_read_numbers.csv
+Reading count matrix...
+Count matrix dimensions: 31757 features x 40 samples
 Processing comparison: RT0_ZT6
+Warning in log(out$alpha_mu) : NaNs produced
+Warning in log(out$alpha_mu) : NaNs produced
+Selecting control cutoff for RT0_ZT6
+Control cutoff anchor rank: 31741 | terminal anchor: 31743 | interval: [31741, 31743] | pre-EVS remainder: 31740 | pre-EVS leading edge: 17
+Selecting treatment cutoff for RT0_ZT6
+Treatment cutoff anchor rank: 31738 | terminal anchor: 31740 | interval: [31738, 31740] | pre-EVS remainder: 31737 | pre-EVS leading edge: 20
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("rect", xmin = interval_min_x, xmax = interval_max_x,  :
+  Ignoring unknown parameters: `inherit.aes`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("rect", xmin = interval_min_x, xmax = interval_max_x,  :
+  Ignoring unknown parameters: `inherit.aes`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("rect", xmin = interval_min_x, xmax = interval_max_x,  :
+  Ignoring unknown parameters: `inherit.aes`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("rect", xmin = interval_min_x, xmax = interval_max_x,  :
+  Ignoring unknown parameters: `inherit.aes`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
 Processing comparison: RT2_ZT8
+Warning in log(out$alpha_mu) : NaNs produced
+Warning in log(out$alpha_mu) : NaNs produced
+Selecting control cutoff for RT2_ZT8
+Control cutoff anchor rank: 31746 | terminal anchor: 31748 | interval: [31746, 31748] | pre-EVS remainder: 31745 | pre-EVS leading edge: 12
+Selecting treatment cutoff for RT2_ZT8
+Treatment cutoff anchor rank: 31738 | terminal anchor: 31739 | interval: [31738, 31739] | pre-EVS remainder: 31737 | pre-EVS leading edge: 20
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("rect", xmin = interval_min_x, xmax = interval_max_x,  :
+  Ignoring unknown parameters: `inherit.aes`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("rect", xmin = interval_min_x, xmax = interval_max_x,  :
+  Ignoring unknown parameters: `inherit.aes`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("rect", xmin = interval_min_x, xmax = interval_max_x,  :
+  Ignoring unknown parameters: `inherit.aes`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("rect", xmin = interval_min_x, xmax = interval_max_x,  :
+  Ignoring unknown parameters: `inherit.aes`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
 Processing comparison: RT4_ZT10
+Warning in log(out$alpha_mu) : NaNs produced
+Warning in log(out$alpha_mu) : NaNs produced
+Selecting control cutoff for RT4_ZT10
+Control cutoff anchor rank: 31739 | terminal anchor: 31740 | interval: [31739, 31740] | pre-EVS remainder: 31738 | pre-EVS leading edge: 19
+Selecting treatment cutoff for RT4_ZT10
+Treatment cutoff anchor rank: 31740 | terminal anchor: 31744 | interval: [31740, 31744] | pre-EVS remainder: 31739 | pre-EVS leading edge: 18
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("rect", xmin = interval_min_x, xmax = interval_max_x,  :
+  Ignoring unknown parameters: `inherit.aes`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("rect", xmin = interval_min_x, xmax = interval_max_x,  :
+  Ignoring unknown parameters: `inherit.aes`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("rect", xmin = interval_min_x, xmax = interval_max_x,  :
+  Ignoring unknown parameters: `inherit.aes`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("rect", xmin = interval_min_x, xmax = interval_max_x,  :
+  Ignoring unknown parameters: `inherit.aes`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
 Processing comparison: RT8_ZT14
-Done.
+Warning in log(out$alpha_mu) : NaNs produced
+Warning in log(out$alpha_mu) : NaNs produced
+Selecting control cutoff for RT8_ZT14
+Control cutoff anchor rank: 31737 | terminal anchor: 31740 | interval: [31737, 31740] | pre-EVS remainder: 31736 | pre-EVS leading edge: 21
+Selecting treatment cutoff for RT8_ZT14
+Treatment cutoff anchor rank: 31742 | terminal anchor: 31744 | interval: [31742, 31744] | pre-EVS remainder: 31741 | pre-EVS leading edge: 16
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("rect", xmin = interval_min_x, xmax = interval_max_x,  :
+  Ignoring unknown parameters: `inherit.aes`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("rect", xmin = interval_min_x, xmax = interval_max_x,  :
+  Ignoring unknown parameters: `inherit.aes`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("rect", xmin = interval_min_x, xmax = interval_max_x,  :
+  Ignoring unknown parameters: `inherit.aes`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("rect", xmin = interval_min_x, xmax = interval_max_x,  :
+  Ignoring unknown parameters: `inherit.aes`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Warning in annotate("label", x = label_x, y = label_y, hjust = 0, vjust = 1,  :
+  Ignoring unknown parameters: `label.size`
+Done. Outputs written to: /root/REAPER98632/exports/variance_derivative_nb_range_final_manuscript
