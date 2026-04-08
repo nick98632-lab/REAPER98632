@@ -1,40 +1,44 @@
 # =============================================================================
-# SEQUENCE STAGE 1: MANUAL-5000 CUTOFF WITH LOCAL RIGHT-ANCHORED CORROBORATION
+# SEQUENCE STAGE 1: MANUAL TOP-5000 PRE-EVS CUTOFF CORROBORATION
 # -----------------------------------------------------------------------------
-# FINAL DRAFT
+# FINAL MANUSCRIPT VERSION
 #
 # What this script does
 #   1. Ranks features by absolute PC1 loading
 #      Left  = lowest loading
 #      Right = highest loading = leading edge
 #
-#   2. Defines the leading edge a priori as the top 5000 ranked features
+#   2. Builds an empirical variance curve along EVS rank
 #
-#   3. Builds an empirical variance curve along EVS rank
+#   3. Defines the leading edge a priori as the TOP 5000 ranked features
+#      and fixes that as the manuscript cutoff center
 #
-#   4. Uses the smoothed second derivative only to corroborate the manual
-#      5000-feature cutoff by selecting a compact local zero-crossing band in
-#      the neighborhood of the manual cutoff
+#   4. Uses the smoothed second derivative only to identify a compact local
+#      corroboration band around that manual cutoff
 #
-#   5. Summarizes NB-derived support numerically on both sides of the manual
-#      cutoff and retains a single Boolean criterion:
-#         - post_cutoff_more_nb2
+#   5. Uses NB-derived quantities only to define a cutoff range around the
+#      manual cutoff, not to define the cutoff itself
 #
-#   6. Writes per-comparison folders and an overall summary table using the
-#      same server/repo assumptions as the existing script
+#   6. Makes the leading-edge NB2 evidence explicit by calculating and plotting
+#      leading-edge-versus-remainder corroboration statistics:
+#         - median smoothed NB2 in leading edge and remainder
+#         - median smoothed NB2-NB1 contrast in leading edge and remainder
+#         - median smoothed log(alpha*mu) in leading edge and remainder
+#         - median combined NB support in leading edge and remainder
 #
 # Outputs
-#   exports/variance_derivative_nb_range_manual5000_option2/
+#   exports/variance_derivative_nb_range_manual5000/
 #     <comparison>_cutoff_folder/
 #       <comparison>_control_rank_panel.png
 #       <comparison>_treatment_rank_panel.png
+#       <comparison>_cutoff_range_panel.png
 #       <comparison>_feature_level_metrics.csv
 #       <comparison>_control_rank_series.csv
 #       <comparison>_treatment_rank_series.csv
 #       <comparison>_control_zero_crossings_all.csv
 #       <comparison>_treatment_zero_crossings_all.csv
-#       <comparison>_control_selected_zero_pair.csv
-#       <comparison>_treatment_selected_zero_pair.csv
+#       <comparison>_control_selected_zero_crossings.csv
+#       <comparison>_treatment_selected_zero_crossings.csv
 #       <comparison>_cutoff_summary.csv
 #     overall_cutoff_summary.csv
 # =============================================================================
@@ -53,8 +57,10 @@ options(warn = 1)
 
 repo_dir <- getwd()
 count_file <- file.path(repo_dir, "data", "WTTS-Seq_2022.2_DE_raw_read_numbers.csv")
-out_root <- file.path(repo_dir, "exports", "variance_derivative_nb_range_manual5000_option2")
+out_root <- file.path(repo_dir, "exports", "variance_derivative_nb_range_manual5000")
 dir.create(out_root, recursive = TRUE, showWarnings = FALSE)
+
+manual_leading_edge_n <- 5000L
 
 comparison_table <- data.frame(
   comparison_name  = c("RT0_ZT6", "RT2_ZT8", "RT4_ZT10", "RT8_ZT14"),
@@ -81,18 +87,15 @@ meta_all <- data.frame(
 rownames(meta_all) <- meta_all$id
 meta_all$condition <- factor(meta_all$condition, levels = c("untrt", "trt"))
 
-# Manual cutoff and local corroboration settings
-manual_leading_edge_n <- 5000L
 spline_spar <- 0.60
-left_edge_buffer <- 50L
-right_edge_buffer <- 20L
-search_fraction_min <- 0.20
-search_fraction_max <- 0.985
+nb_smooth_window <- 151L
+
 manual_cutoff_search_left_fraction <- 0.12
 manual_cutoff_search_right_fraction <- 0.12
 manual_cutoff_pair_max_width_fraction <- 0.06
-local_nb_support_quantile <- 0.30
-nb_smooth_window <- 151L
+
+nb_range_drop_fraction <- 0.70
+nb_range_max_span_fraction <- 0.18
 
 # =============================================================================
 # HELPERS
@@ -212,13 +215,6 @@ safe_mean <- function(x) {
   mean(x)
 }
 
-safe_median <- function(x) {
-  x <- as.numeric(x)
-  x <- x[is.finite(x)]
-  if (!length(x)) return(NA_real_)
-  median(x)
-}
-
 safe_var <- function(x) {
   x <- as.numeric(x)
   x <- x[is.finite(x)]
@@ -226,11 +222,16 @@ safe_var <- function(x) {
   stats::var(x)
 }
 
-safe_quantile <- function(x, probs) {
+safe_median <- function(x) {
   x <- as.numeric(x)
   x <- x[is.finite(x)]
   if (!length(x)) return(NA_real_)
-  as.numeric(stats::quantile(x, probs = probs, na.rm = TRUE, names = FALSE, type = 8))
+  stats::median(x)
+}
+
+safe_ratio <- function(num, den) {
+  if (!is.finite(num) || !is.finite(den) || den == 0) return(NA_real_)
+  num / den
 }
 
 roll_median <- function(x, k = 101L) {
@@ -256,7 +257,6 @@ scale01 <- function(x) {
   x <- as.numeric(x)
   ok <- is.finite(x)
   out <- rep(NA_real_, length(x))
-
   if (!any(ok)) return(out)
 
   rng <- range(x[ok], na.rm = TRUE)
@@ -267,11 +267,6 @@ scale01 <- function(x) {
 
   out[ok] <- (x[ok] - rng[1]) / (rng[2] - rng[1])
   out
-}
-
-safe_ratio <- function(num, den) {
-  if (!is.finite(num) || !is.finite(den) || den == 0) return(NA_real_)
-  num / den
 }
 
 compute_group_pc1_loadings <- function(count_mat, group_cols) {
@@ -379,453 +374,821 @@ build_rank_series <- function(full_tbl, arm = c("control", "treatment")) {
   out
 }
 
-smooth_rank_series <- function(df, spar = spline_spar, nb_window = nb_smooth_window) {
-  df <- df %>% arrange(rank)
-  fit_ok <- is.finite(df$rank) & is.finite(df$log_variance)
+find_d2_zero_crossings <- function(d2_vec) {
+  d2_vec <- as.numeric(d2_vec)
+  n <- length(d2_vec)
+  out <- integer(0)
+  if (n < 2L) return(out)
 
-  if (sum(fit_ok) < 10L) {
-    df$var_smooth <- df$log_variance
-    df$d1_sm <- NA_real_
-    df$d2_sm <- NA_real_
-  } else {
-    sp <- smooth.spline(x = df$rank[fit_ok], y = df$log_variance[fit_ok], spar = spar)
-    pred0 <- predict(sp, x = df$rank, deriv = 0)
-    pred1 <- predict(sp, x = df$rank, deriv = 1)
-    pred2 <- predict(sp, x = df$rank, deriv = 2)
-    df$var_smooth <- pred0$y
-    df$d1_sm <- pred1$y
-    df$d2_sm <- pred2$y
+  s <- sign(d2_vec)
+  s[!is.finite(s)] <- 0
+
+  for (i in 2:n) {
+    if (!is.finite(d2_vec[i - 1L]) || !is.finite(d2_vec[i])) next
+
+    s0 <- s[i - 1L]
+    s1 <- s[i]
+
+    if (s0 == 0 && s1 != 0) {
+      out <- c(out, i - 1L)
+    } else if (s0 != 0 && s1 == 0) {
+      out <- c(out, i)
+    } else if (s0 != s1) {
+      out <- c(out, i)
+    }
   }
 
-  df$nb2_smooth <- roll_median(df$log_nb2, nb_window)
-  df$nb_gap_smooth <- roll_median(df$nb_gap, nb_window)
-  df$alpha_mu_smooth <- roll_median(df$log_alpha_mu, nb_window)
-
-  df$combined_nb_support <- rowMeans(cbind(
-    scale01(df$nb2_smooth),
-    scale01(df$nb_gap_smooth),
-    scale01(df$alpha_mu_smooth)
-  ), na.rm = TRUE)
-
-  df
+  sort(unique(out))
 }
 
-find_zero_crossings <- function(d2_vec, rank_vec) {
-  d2_vec <- as.numeric(d2_vec)
-  rank_vec <- as.numeric(rank_vec)
-  n <- length(d2_vec)
-  if (n < 2L) return(data.frame())
+summarize_zero_crossings <- function(df, zero_idx) {
+  if (!length(zero_idx)) return(data.frame())
 
-  out <- list()
-  j <- 1L
-  for (i in 2:n) {
-    y0 <- d2_vec[i - 1L]
-    y1 <- d2_vec[i]
-    x0 <- rank_vec[i - 1L]
-    x1 <- rank_vec[i]
-    if (!is.finite(y0) || !is.finite(y1) || !is.finite(x0) || !is.finite(x1)) next
-
-    sign_change <- (sign(y0) != sign(y1)) || y0 == 0 || y1 == 0
-    if (!sign_change) next
-
-    rank_cross <- if ((y1 - y0) == 0) x1 else x0 - y0 * (x1 - x0) / (y1 - y0)
-    crossing_type <- if (y0 < 0 && y1 > 0) {
-      "neg_to_pos"
-    } else if (y0 > 0 && y1 < 0) {
-      "pos_to_neg"
-    } else {
-      "touch_or_flat"
-    }
-
-    out[[j]] <- data.frame(
-      index_left = i - 1L,
-      index_right = i,
-      rank = rank_cross,
-      d2_left = y0,
-      d2_right = y1,
-      crossing_type = crossing_type,
+  out <- lapply(zero_idx, function(i) {
+    data.frame(
+      index = i,
+      rank = df$rank[i],
+      d1_here = df$d1_sm[i],
+      d2_here = df$d2_sm[i],
+      d1_left = if (i > 1L) df$d1_sm[i - 1L] else NA_real_,
+      d1_right = if (i < nrow(df)) df$d1_sm[i + 1L] else NA_real_,
       stringsAsFactors = FALSE
     )
-    j <- j + 1L
-  }
+  })
 
-  if (!length(out)) return(data.frame())
   bind_rows(out)
 }
 
-select_zero_pair_supporting_manual_cutoff <- function(df,
-                                                      manual_cutoff_rank = manual_leading_edge_n,
-                                                      search_left_fraction = manual_cutoff_search_left_fraction,
-                                                      search_right_fraction = manual_cutoff_search_right_fraction,
-                                                      max_width_fraction = manual_cutoff_pair_max_width_fraction,
-                                                      support_quantile = local_nb_support_quantile) {
-  n <- nrow(df)
-  manual_cutoff_rank <- min(manual_cutoff_rank, n)
+compute_nb_support_score <- function(df, nb_smooth_window = 151L) {
+  nb_gap_sm <- roll_median(df$nb_gap, nb_smooth_window)
+  amu_sm <- roll_median(df$log_alpha_mu, nb_smooth_window)
 
-  zero_tbl <- find_zero_crossings(df$d2_sm, df$rank)
+  nb_gap_s <- scale01(nb_gap_sm)
+  amu_s <- scale01(amu_sm)
+
+  nb_gap_s[!is.finite(nb_gap_s)] <- 0
+  amu_s[!is.finite(amu_s)] <- 0
+
+  nb_support <- 0.5 * nb_gap_s + 0.5 * amu_s
+
+  list(
+    nb_gap_sm = nb_gap_sm,
+    amu_sm = amu_sm,
+    nb_support = nb_support
+  )
+}
+
+select_manual_cutoff_zero_pair <- function(df,
+                                           manual_cutoff_rank,
+                                           search_left_fraction = 0.12,
+                                           search_right_fraction = 0.12,
+                                           max_width_fraction = 0.06) {
+  n <- nrow(df)
+
+  zero_idx <- find_d2_zero_crossings(df$d2_sm)
+  zero_tbl <- summarize_zero_crossings(df, zero_idx)
+
   if (!nrow(zero_tbl)) {
     return(list(
-      manual_cutoff_rank = manual_cutoff_rank,
-      cutoff_center_rank = manual_cutoff_rank,
-      terminal_start_rank = manual_cutoff_rank,
-      cutoff_range_rank_min = manual_cutoff_rank,
-      cutoff_range_rank_max = manual_cutoff_rank,
-      selected_zero_pair = data.frame(),
+      cutoff_center_index = manual_cutoff_rank,
+      cutoff_center_rank = df$rank[manual_cutoff_rank],
+      terminal_start_index = manual_cutoff_rank,
+      terminal_start_rank = df$rank[manual_cutoff_rank],
       zero_crossings = zero_tbl,
-      mode = "fallback: no zero-crossings found"
+      selected_zero_crossings = data.frame(),
+      mode = "fallback: no d2 zero-crossings found near manual cutoff"
     ))
   }
 
-  zero_tbl$local_support <- vapply(zero_tbl$rank, function(rk) {
-    idx <- which.min(abs(df$rank - rk))
-    df$combined_nb_support[idx]
-  }, numeric(1))
-
-  support_threshold <- safe_quantile(df$combined_nb_support, support_quantile)
-  if (!is.finite(support_threshold)) support_threshold <- -Inf
-
-  left_bound <- max(1, floor(manual_cutoff_rank - n * search_left_fraction))
+  left_bound <- max(1L, floor(manual_cutoff_rank - n * search_left_fraction))
   right_bound <- min(n, ceiling(manual_cutoff_rank + n * search_right_fraction))
   max_width <- max(25L, floor(n * max_width_fraction))
 
   local_tbl <- zero_tbl %>%
-    filter(rank >= left_bound, rank <= right_bound)
+    filter(index >= left_bound, index <= right_bound)
 
-  if (!nrow(local_tbl)) local_tbl <- zero_tbl
-
-  local_tbl <- local_tbl %>%
-    mutate(
-      is_supported = is.finite(local_support) & local_support >= support_threshold,
-      is_neg_to_pos = crossing_type == "neg_to_pos"
-    )
+  if (!nrow(local_tbl)) {
+    local_tbl <- zero_tbl
+  }
 
   left_tbl <- local_tbl %>%
-    filter(rank <= manual_cutoff_rank, is_neg_to_pos) %>%
-    arrange(desc(rank))
-  right_tbl <- local_tbl %>%
-    filter(rank >= manual_cutoff_rank, is_neg_to_pos) %>%
-    arrange(rank)
+    filter(index <= manual_cutoff_rank) %>%
+    arrange(desc(index))
 
-  if (!nrow(left_tbl)) {
-    left_tbl <- local_tbl %>% filter(rank <= manual_cutoff_rank) %>% arrange(desc(rank))
+  right_tbl <- local_tbl %>%
+    filter(index >= manual_cutoff_rank) %>%
+    arrange(index)
+
+  if (!nrow(left_tbl) && nrow(zero_tbl)) {
+    left_tbl <- zero_tbl %>% filter(index < manual_cutoff_rank) %>% arrange(desc(index))
   }
-  if (!nrow(right_tbl)) {
-    right_tbl <- local_tbl %>% filter(rank >= manual_cutoff_rank) %>% arrange(rank)
-  }
-  if (!nrow(left_tbl)) {
-    left_tbl <- zero_tbl %>% filter(rank < manual_cutoff_rank) %>% arrange(desc(rank))
-  }
-  if (!nrow(right_tbl)) {
-    right_tbl <- zero_tbl %>% filter(rank > manual_cutoff_rank) %>% arrange(rank)
+  if (!nrow(right_tbl) && nrow(zero_tbl)) {
+    right_tbl <- zero_tbl %>% filter(index > manual_cutoff_rank) %>% arrange(index)
   }
 
   if (!nrow(left_tbl) || !nrow(right_tbl)) {
     return(list(
-      manual_cutoff_rank = manual_cutoff_rank,
-      cutoff_center_rank = manual_cutoff_rank,
-      terminal_start_rank = manual_cutoff_rank,
-      cutoff_range_rank_min = manual_cutoff_rank,
-      cutoff_range_rank_max = manual_cutoff_rank,
-      selected_zero_pair = data.frame(),
+      cutoff_center_index = manual_cutoff_rank,
+      cutoff_center_rank = df$rank[manual_cutoff_rank],
+      terminal_start_index = manual_cutoff_rank,
+      terminal_start_rank = df$rank[manual_cutoff_rank],
       zero_crossings = zero_tbl,
-      mode = "fallback: no flanking pair found"
+      selected_zero_crossings = data.frame(),
+      mode = "fallback: unable to flank manual cutoff with local zero-crossings"
     ))
   }
 
-  pair_tbl <- expand.grid(left_i = seq_len(nrow(left_tbl)), right_i = seq_len(nrow(right_tbl)))
-  pair_tbl$left_rank <- left_tbl$rank[pair_tbl$left_i]
-  pair_tbl$right_rank <- right_tbl$rank[pair_tbl$right_i]
-  pair_tbl$width <- pair_tbl$right_rank - pair_tbl$left_rank
-  pair_tbl$midpoint <- (pair_tbl$left_rank + pair_tbl$right_rank) / 2
-  pair_tbl$midpoint_distance_to_manual <- abs(pair_tbl$midpoint - manual_cutoff_rank)
-  pair_tbl$support_score <- left_tbl$local_support[pair_tbl$left_i] + right_tbl$local_support[pair_tbl$right_i]
-  pair_tbl$all_supported <- left_tbl$is_supported[pair_tbl$left_i] & right_tbl$is_supported[pair_tbl$right_i]
+  pair_tbl <- do.call(
+    rbind,
+    lapply(seq_len(nrow(left_tbl)), function(i) {
+      do.call(
+        rbind,
+        lapply(seq_len(nrow(right_tbl)), function(j) {
+          left_i <- left_tbl$index[i]
+          right_i <- right_tbl$index[j]
+          width <- right_i - left_i
+          if (width <= 0) return(NULL)
 
-  pair_tbl <- pair_tbl[pair_tbl$width > 0, , drop = FALSE]
-  narrow_tbl <- pair_tbl[pair_tbl$width <= max_width, , drop = FALSE]
-  if (nrow(narrow_tbl)) pair_tbl <- narrow_tbl
+          data.frame(
+            left_index = left_i,
+            right_index = right_i,
+            left_rank = df$rank[left_i],
+            right_rank = df$rank[right_i],
+            width = width,
+            midpoint = (df$rank[left_i] + df$rank[right_i]) / 2,
+            midpoint_distance_to_manual = abs(((df$rank[left_i] + df$rank[right_i]) / 2) - df$rank[manual_cutoff_rank]),
+            stringsAsFactors = FALSE
+          )
+        })
+      )
+    })
+  )
 
-  pair_tbl <- pair_tbl[order(
-    !pair_tbl$all_supported,
-    pair_tbl$midpoint_distance_to_manual,
-    pair_tbl$width,
-    -pair_tbl$support_score
-  ), , drop = FALSE]
+  if (is.null(pair_tbl) || !nrow(pair_tbl)) {
+    return(list(
+      cutoff_center_index = manual_cutoff_rank,
+      cutoff_center_rank = df$rank[manual_cutoff_rank],
+      terminal_start_index = manual_cutoff_rank,
+      terminal_start_rank = df$rank[manual_cutoff_rank],
+      zero_crossings = zero_tbl,
+      selected_zero_crossings = data.frame(),
+      mode = "fallback: zero-crossing pair table empty"
+    ))
+  }
 
-  best <- pair_tbl[1, , drop = FALSE]
+  pair_tbl_narrow <- pair_tbl %>% filter(width <= max_width)
+  if (!nrow(pair_tbl_narrow)) pair_tbl_narrow <- pair_tbl
+
+  best <- pair_tbl_narrow %>%
+    arrange(midpoint_distance_to_manual, width) %>%
+    slice(1)
 
   selected_tbl <- data.frame(
-    manual_cutoff_rank = manual_cutoff_rank,
-    cutoff_center_rank = manual_cutoff_rank,
-    terminal_start_rank = best$right_rank,
-    cutoff_range_rank_min = best$left_rank,
-    cutoff_range_rank_max = best$right_rank,
-    midpoint_rank = best$midpoint,
-    midpoint_distance_to_manual = best$midpoint_distance_to_manual,
-    pair_width = best$width,
-    support_score = best$support_score,
-    all_supported = best$all_supported,
+    index = c(best$left_index, best$right_index),
+    rank = c(best$left_rank, best$right_rank),
+    role = c("left_local_zero", "right_local_zero"),
     stringsAsFactors = FALSE
   )
 
   list(
-    manual_cutoff_rank = manual_cutoff_rank,
-    cutoff_center_rank = manual_cutoff_rank,
+    cutoff_center_index = manual_cutoff_rank,
+    cutoff_center_rank = df$rank[manual_cutoff_rank],
+    terminal_start_index = best$right_index,
     terminal_start_rank = best$right_rank,
-    cutoff_range_rank_min = best$left_rank,
-    cutoff_range_rank_max = best$right_rank,
-    selected_zero_pair = selected_tbl,
     zero_crossings = zero_tbl,
-    mode = "manual_5000_local_pair"
+    selected_zero_crossings = selected_tbl,
+    mode = "manual cutoff fixed at top 5000 ranks; local d2 zero-crossings used only to corroborate that boundary"
   )
 }
 
-summarize_manual_cutoff_support <- function(df, selected_obj, comparison_name, arm_label) {
-  cutoff_rank <- selected_obj$manual_cutoff_rank
-  pre_idx <- which(df$rank < cutoff_rank)
-  post_idx <- which(df$rank >= cutoff_rank)
+expand_nb_range_around_center <- function(df, center_idx, terminal_start_idx,
+                                          nb_support,
+                                          nb_range_drop_fraction = 0.70,
+                                          nb_range_max_span_fraction = 0.18) {
+  n <- nrow(df)
+  max_span <- max(100L, floor(nb_range_max_span_fraction * n))
 
-  if (!length(pre_idx)) pre_idx <- 1L
-  if (!length(post_idx)) post_idx <- nrow(df)
+  center_score <- nb_support[center_idx]
+  if (!is.finite(center_score)) center_score <- 0
 
-  pre_nb2 <- safe_median(df$nb2_smooth[pre_idx])
-  post_nb2 <- safe_median(df$nb2_smooth[post_idx])
-  pre_gap <- safe_median(df$nb_gap_smooth[pre_idx])
-  post_gap <- safe_median(df$nb_gap_smooth[post_idx])
-  pre_alpha_mu <- safe_median(df$alpha_mu_smooth[pre_idx])
-  post_alpha_mu <- safe_median(df$alpha_mu_smooth[post_idx])
+  threshold <- nb_range_drop_fraction * center_score
+
+  left_limit <- max(1L, center_idx - max_span)
+  right_limit <- min(terminal_start_idx, center_idx + max_span)
+
+  left_idx <- center_idx
+  while (left_idx > left_limit) {
+    test_idx <- left_idx - 1L
+    if (!is.finite(nb_support[test_idx])) break
+    if (nb_support[test_idx] < threshold) break
+    left_idx <- test_idx
+  }
+
+  right_idx <- center_idx
+  while (right_idx < right_limit) {
+    test_idx <- right_idx + 1L
+    if (!is.finite(nb_support[test_idx])) break
+    if (nb_support[test_idx] < threshold) break
+    right_idx <- test_idx
+  }
+
+  list(
+    range_left_index = left_idx,
+    range_left_rank = df$rank[left_idx],
+    range_right_index = right_idx,
+    range_right_rank = df$rank[right_idx],
+    center_nb_support = center_score,
+    nb_support_threshold = threshold
+  )
+}
+
+compute_leading_edge_corrob <- function(df, cutoff_center_index) {
+  leading_idx <- seq_len(cutoff_center_index)
+  remainder_idx <- seq.int(cutoff_center_index + 1L, nrow(df))
+  if (!length(remainder_idx)) remainder_idx <- nrow(df)
+
+  med_le_nb2 <- safe_median(df$log_nb2[leading_idx])
+  med_re_nb2 <- safe_median(df$log_nb2[remainder_idx])
+
+  med_le_gap <- safe_median(df$nb_gap_sm[leading_idx])
+  med_re_gap <- safe_median(df$nb_gap_sm[remainder_idx])
+
+  med_le_amu <- safe_median(df$amu_sm[leading_idx])
+  med_re_amu <- safe_median(df$amu_sm[remainder_idx])
+
+  med_le_support <- safe_median(df$nb_support[leading_idx])
+  med_re_support <- safe_median(df$nb_support[remainder_idx])
 
   data.frame(
-    comparison = comparison_name,
-    group = arm_label,
-    manual_leading_edge_n = cutoff_rank,
-    cutoff_center_rank = selected_obj$cutoff_center_rank,
-    terminal_start_rank = selected_obj$terminal_start_rank,
-    cutoff_range_rank_min = selected_obj$cutoff_range_rank_min,
-    cutoff_range_rank_max = selected_obj$cutoff_range_rank_max,
-    pre_cutoff_size = length(pre_idx),
-    post_cutoff_size = length(post_idx),
-    pre_cutoff_median_log_nb2 = pre_nb2,
-    post_cutoff_median_log_nb2 = post_nb2,
-    post_minus_pre_log_nb2 = post_nb2 - pre_nb2,
-    pre_cutoff_median_nb2_nb1_contrast = pre_gap,
-    post_cutoff_median_nb2_nb1_contrast = post_gap,
-    post_minus_pre_nb2_nb1_contrast = post_gap - pre_gap,
-    pre_cutoff_median_log_alpha_mu = pre_alpha_mu,
-    post_cutoff_median_log_alpha_mu = post_alpha_mu,
-    post_minus_pre_log_alpha_mu = post_alpha_mu - pre_alpha_mu,
-    pre_cutoff_mean_combined_nb_support = safe_mean(df$combined_nb_support[pre_idx]),
-    post_cutoff_mean_combined_nb_support = safe_mean(df$combined_nb_support[post_idx]),
-    post_minus_pre_mean_combined_nb_support =
-      safe_mean(df$combined_nb_support[post_idx]) - safe_mean(df$combined_nb_support[pre_idx]),
-    post_cutoff_more_nb2 = isTRUE(post_nb2 > pre_nb2),
-    selection_mode = selected_obj$mode,
+    leading_edge_median_log_nb2 = med_le_nb2,
+    remainder_median_log_nb2 = med_re_nb2,
+    leading_minus_remainder_log_nb2 = med_le_nb2 - med_re_nb2,
+    leading_remainder_log_nb2_ratio = safe_ratio(med_le_nb2, med_re_nb2),
+
+    leading_edge_median_nb_gap = med_le_gap,
+    remainder_median_nb_gap = med_re_gap,
+    leading_minus_remainder_nb_gap = med_le_gap - med_re_gap,
+    leading_remainder_nb_gap_ratio = safe_ratio(med_le_gap, med_re_gap),
+
+    leading_edge_median_log_alpha_mu = med_le_amu,
+    remainder_median_log_alpha_mu = med_re_amu,
+    leading_minus_remainder_log_alpha_mu = med_le_amu - med_re_amu,
+    leading_remainder_log_alpha_mu_ratio = safe_ratio(med_le_amu, med_re_amu),
+
+    leading_edge_median_nb_support = med_le_support,
+    remainder_median_nb_support = med_re_support,
+    leading_minus_remainder_nb_support = med_le_support - med_re_support,
+    leading_remainder_nb_support_ratio = safe_ratio(med_le_support, med_re_support),
+
+    leading_edge_more_nb2 = med_le_nb2 > med_re_nb2,
     stringsAsFactors = FALSE
   )
 }
 
-make_annotation_text <- function(summary_row) {
-  paste(
-    sprintf("Manual leading edge = %s", summary_row$manual_leading_edge_n),
-    sprintf("Cutoff center rank = %s", summary_row$cutoff_center_rank),
-    sprintf("Corroboration band = [%s, %s]",
-            summary_row$cutoff_range_rank_min,
-            summary_row$cutoff_range_rank_max),
-    sprintf("Terminal start rank = %s", summary_row$terminal_start_rank),
-    sprintf("Pre med log(NB2) = %.3f", summary_row$pre_cutoff_median_log_nb2),
-    sprintf("Post med log(NB2) = %.3f", summary_row$post_cutoff_median_log_nb2),
-    sprintf("Pre med NB2-NB1 = %.3f", summary_row$pre_cutoff_median_nb2_nb1_contrast),
-    sprintf("Post med NB2-NB1 = %.3f", summary_row$post_cutoff_median_nb2_nb1_contrast),
-    sprintf("Pre med log(alpha*mu) = %.3f", summary_row$pre_cutoff_median_log_alpha_mu),
-    sprintf("Post med log(alpha*mu) = %.3f", summary_row$post_cutoff_median_log_alpha_mu),
-    sprintf("Post-cutoff more NB2 = %s", ifelse(summary_row$post_cutoff_more_nb2, "TRUE", "FALSE")),
-    sep = "\n"
+select_cutoff_derivative_nb_range <- function(rank_df,
+                                              manual_leading_edge_n = 5000L,
+                                              spline_spar = 0.60,
+                                              nb_range_drop_fraction = 0.70,
+                                              nb_range_max_span_fraction = 0.18,
+                                              nb_smooth_window = 151L,
+                                              manual_cutoff_search_left_fraction = 0.12,
+                                              manual_cutoff_search_right_fraction = 0.12,
+                                              manual_cutoff_pair_max_width_fraction = 0.06) {
+  df <- rank_df
+  n <- nrow(df)
+  x <- df$rank
+  y <- df$log_variance
+
+  ok <- is.finite(x) & is.finite(y)
+  if (sum(ok) < 10L) {
+    stop("Not enough finite variance points for smoothing.", call. = FALSE)
+  }
+
+  sp_fit <- smooth.spline(x = x[ok], y = y[ok], spar = spline_spar)
+  pred0 <- predict(sp_fit, x = x[ok], deriv = 0)
+  pred1 <- predict(sp_fit, x = x[ok], deriv = 1)
+  pred2 <- predict(sp_fit, x = x[ok], deriv = 2)
+
+  df$var_fit <- NA_real_
+  df$d1_sm <- NA_real_
+  df$d2_sm <- NA_real_
+
+  df$var_fit[ok] <- pred0$y
+  df$d1_sm[ok] <- pred1$y
+  df$d2_sm[ok] <- pred2$y
+
+  manual_cutoff_index <- min(manual_leading_edge_n, n)
+
+  nb_obj <- compute_nb_support_score(df, nb_smooth_window = nb_smooth_window)
+  df$nb_gap_sm <- nb_obj$nb_gap_sm
+  df$amu_sm <- nb_obj$amu_sm
+  df$nb_support <- nb_obj$nb_support
+
+  geom_obj <- select_manual_cutoff_zero_pair(
+    df = df,
+    manual_cutoff_rank = manual_cutoff_index,
+    search_left_fraction = manual_cutoff_search_left_fraction,
+    search_right_fraction = manual_cutoff_search_right_fraction,
+    max_width_fraction = manual_cutoff_pair_max_width_fraction
+  )
+
+  nb_rng <- expand_nb_range_around_center(
+    df = df,
+    center_idx = geom_obj$cutoff_center_index,
+    terminal_start_idx = geom_obj$terminal_start_index,
+    nb_support = df$nb_support,
+    nb_range_drop_fraction = nb_range_drop_fraction,
+    nb_range_max_span_fraction = nb_range_max_span_fraction
+  )
+
+  corrob <- compute_leading_edge_corrob(df, geom_obj$cutoff_center_index)
+
+  total_features <- n
+  pre_evs_leading_edge_size <- geom_obj$cutoff_center_index
+  pre_evs_remainder_size <- total_features - geom_obj$cutoff_center_index
+
+  list(
+    curve_df = df,
+    zero_crossings = geom_obj$zero_crossings,
+    selected_zero_crossings = geom_obj$selected_zero_crossings,
+    mode = geom_obj$mode,
+
+    terminal_start_index = geom_obj$terminal_start_index,
+    terminal_start_rank = geom_obj$terminal_start_rank,
+    terminal_end_index = geom_obj$terminal_start_index,
+    terminal_end_rank = geom_obj$terminal_start_rank,
+
+    cutoff_center_index = geom_obj$cutoff_center_index,
+    cutoff_center_rank = geom_obj$cutoff_center_rank,
+
+    cutoff_range_index_min = nb_rng$range_left_index,
+    cutoff_range_rank_min = nb_rng$range_left_rank,
+    cutoff_range_index_max = nb_rng$range_right_index,
+    cutoff_range_rank_max = nb_rng$range_right_rank,
+
+    center_nb_support = nb_rng$center_nb_support,
+    nb_support_threshold = nb_rng$nb_support_threshold,
+
+    total_features = total_features,
+    pre_evs_remainder_size = pre_evs_remainder_size,
+    pre_evs_leading_edge_size = pre_evs_leading_edge_size,
+
+    corrob = corrob
   )
 }
 
-plot_rank_panel <- function(df, summary_row, zero_tbl, comparison_name, arm_label, out_file) {
-  note_text <- make_annotation_text(summary_row)
+# =============================================================================
+# FIGURES
+# =============================================================================
 
-  p1 <- ggplot(df, aes(x = rank, y = abs_loading)) +
-    annotate("rect",
-             xmin = summary_row$cutoff_range_rank_min,
-             xmax = summary_row$cutoff_range_rank_max,
-             ymin = -Inf, ymax = Inf, alpha = 0.12) +
-    geom_vline(xintercept = summary_row$manual_leading_edge_n, linetype = "dashed", linewidth = 0.5) +
-    geom_vline(xintercept = summary_row$terminal_start_rank, linetype = "dotted", linewidth = 0.5) +
-    geom_line(linewidth = 0.6) +
+build_dataset_panel <- function(rank_df, onset_info, title_prefix, out_file) {
+  df <- onset_info$curve_df
+  center_x <- onset_info$cutoff_center_rank
+  range_min_x <- onset_info$cutoff_range_rank_min
+  range_max_x <- onset_info$cutoff_range_rank_max
+  terminal_x <- onset_info$terminal_start_rank
+  corr <- onset_info$corrob
+
+  x_rng <- range(df$rank, na.rm = TRUE)
+  x_left <- x_rng[1] + 0.06 * diff(x_rng)
+  x_right <- x_rng[1] + 0.72 * diff(x_rng)
+
+  p1 <- ggplot(df, aes(rank, abs_loading)) +
+    geom_line(linewidth = 0.8, na.rm = TRUE) +
+    annotate("rect", xmin = range_min_x, xmax = range_max_x, ymin = -Inf, ymax = Inf, alpha = 0.08) +
+    geom_vline(xintercept = center_x, linetype = 2, linewidth = 0.8) +
+    geom_vline(xintercept = terminal_x, linetype = 3, linewidth = 0.8) +
+    annotate(
+      "label",
+      x = x_right,
+      y = max(df$abs_loading, na.rm = TRUE),
+      hjust = 0,
+      vjust = 1,
+      size = 2.8,
+      label = paste0(
+        "Absolute loading panel",
+        "\nManual leading edge = top ", onset_info$pre_evs_leading_edge_size,
+        " ranks",
+        "\nCutoff center rank = ", center_x,
+        "\nLocal corroboration band = [", range_min_x, ", ", range_max_x, "]",
+        "\nRight local zero = ", terminal_x,
+        "\nRemainder size = ", onset_info$pre_evs_remainder_size
+      )
+    ) +
     labs(
-      title = paste(comparison_name, arm_label, "absolute PC1 loading series"),
-      subtitle = "Leading edge is defined a priori as the top 5000 ranked features",
+      title = paste0(title_prefix, ": absolute PC1 loading series"),
+      subtitle = "Leading edge is on the RIGHT and is fixed a priori at the top 5000 ranks",
       x = "EVS rank",
       y = "|PC1 loading|"
     ) +
     theme_bw(base_size = 10)
 
-  p2 <- ggplot(df, aes(x = rank, y = var_smooth)) +
-    annotate("rect",
-             xmin = summary_row$cutoff_range_rank_min,
-             xmax = summary_row$cutoff_range_rank_max,
-             ymin = -Inf, ymax = Inf, alpha = 0.12) +
-    geom_vline(xintercept = summary_row$manual_leading_edge_n, linetype = "dashed", linewidth = 0.5) +
-    geom_vline(xintercept = summary_row$terminal_start_rank, linetype = "dotted", linewidth = 0.5) +
-    geom_line(linewidth = 0.6) +
-    annotate("text", x = min(df$rank, na.rm = TRUE) + 0.03 * diff(range(df$rank, na.rm = TRUE)),
-             y = max(df$var_smooth, na.rm = TRUE), label = note_text,
-             hjust = 0, vjust = 1, size = 3) +
+  p2 <- ggplot(df, aes(rank, var_fit)) +
+    geom_line(linewidth = 1.0, na.rm = TRUE) +
+    annotate("rect", xmin = range_min_x, xmax = range_max_x, ymin = -Inf, ymax = Inf, alpha = 0.08) +
+    geom_vline(xintercept = center_x, linetype = 2, linewidth = 0.8) +
+    geom_vline(xintercept = terminal_x, linetype = 3, linewidth = 0.8) +
+    geom_point(
+      data = df[df$rank == center_x & is.finite(df$var_fit), , drop = FALSE],
+      aes(x = rank, y = var_fit),
+      size = 2.4,
+      inherit.aes = FALSE
+    ) +
+    geom_point(
+      data = df[df$rank == terminal_x & is.finite(df$var_fit), , drop = FALSE],
+      aes(x = rank, y = var_fit),
+      size = 2.0,
+      shape = 1,
+      inherit.aes = FALSE
+    ) +
+    annotate(
+      "label",
+      x = x_left,
+      y = max(df$var_fit, na.rm = TRUE),
+      hjust = 0,
+      vjust = 1,
+      size = 2.7,
+      label = paste0(
+        "Variance curve method",
+        "\nThe cutoff itself is fixed manually at the top 5000 ranks",
+        "\nThe smoothed second derivative is used only to",
+        "\nfind a compact local corroboration band around that cutoff"
+      )
+    ) +
     labs(
-      title = paste(comparison_name, arm_label, "smoothed empirical variance curve"),
-      subtitle = "Local second-derivative band corroborates the manual 5000-feature boundary",
+      title = paste0(title_prefix, ": smoothed empirical variance curve"),
+      subtitle = "Selected local zero-crossings are shown only as corroboration around the manual cutoff",
       x = "EVS rank",
-      y = "Smoothed log(1 + variance)"
+      y = "Fitted log(1 + variance)"
     ) +
     theme_bw(base_size = 10)
 
-  p3 <- ggplot(df, aes(x = rank, y = d2_sm)) +
-    annotate("rect",
-             xmin = summary_row$cutoff_range_rank_min,
-             xmax = summary_row$cutoff_range_rank_max,
-             ymin = -Inf, ymax = Inf, alpha = 0.12) +
-    geom_hline(yintercept = 0, linewidth = 0.4) +
-    geom_vline(xintercept = summary_row$manual_leading_edge_n, linetype = "dashed", linewidth = 0.5) +
-    geom_vline(xintercept = summary_row$terminal_start_rank, linetype = "dotted", linewidth = 0.5) +
-    geom_line(linewidth = 0.6) +
-    geom_point(data = zero_tbl, aes(x = rank, y = 0), inherit.aes = FALSE, size = 1.2) +
-    labs(
-      title = paste(comparison_name, arm_label, "second derivative support"),
-      subtitle = "Eligible local zero-crossings around the manual cutoff",
-      x = "EVS rank",
-      y = "Smoothed second derivative"
+  p3 <- ggplot(df, aes(rank)) +
+    geom_line(aes(y = d1_sm, color = "Smoothed slope d1"), linewidth = 1.0, na.rm = TRUE) +
+    geom_line(aes(y = d2_sm, color = "Smoothed curvature d2"), linewidth = 1.0, na.rm = TRUE) +
+    geom_hline(yintercept = 0, linewidth = 0.5) +
+    annotate("rect", xmin = range_min_x, xmax = range_max_x, ymin = -Inf, ymax = Inf, alpha = 0.08) +
+    geom_vline(xintercept = center_x, linetype = 2, linewidth = 0.8) +
+    geom_vline(xintercept = terminal_x, linetype = 3, linewidth = 0.8) +
+    annotate(
+      "label",
+      x = x_left,
+      y = max(c(df$d1_sm, df$d2_sm), na.rm = TRUE),
+      hjust = 0,
+      vjust = 1,
+      size = 2.7,
+      label = paste0(
+        "Derivative method",
+        "\nCenter = fixed manual cutoff rank",
+        "\nRight local zero = nearest corroborating d2 zero to the right",
+        "\nThe zero pair supports the cutoff but does not redefine it"
+      )
     ) +
-    theme_bw(base_size = 10)
-
-  p4 <- ggplot(df, aes(x = rank)) +
-    geom_vline(xintercept = summary_row$manual_leading_edge_n, linetype = "dashed", linewidth = 0.5) +
-    geom_line(aes(y = nb2_smooth, colour = "log(NB2)"), linewidth = 0.6) +
-    geom_line(aes(y = nb_gap_smooth, colour = "NB2-NB1"), linewidth = 0.6) +
-    geom_line(aes(y = alpha_mu_smooth, colour = "log(alpha*mu)"), linewidth = 0.6) +
     labs(
-      title = paste(comparison_name, arm_label, "NB corroboration"),
-      subtitle = "Post-cutoff support is evaluated from rank 5000 to the end of the series",
+      title = paste0(title_prefix, ": derivative support"),
+      subtitle = "The local d2 zero-crossings are descriptive support for the manual cutoff",
       x = "EVS rank",
-      y = "Support value",
-      colour = NULL
+      y = "Derivative value"
     ) +
     theme_bw(base_size = 10) +
     theme(legend.position = "bottom")
 
-  grob <- gridExtra::arrangeGrob(p1, p2, p3, p4, ncol = 1)
-  ggsave(out_file, grob, width = 11, height = 15, dpi = 300)
+  p4 <- ggplot(df, aes(rank)) +
+    geom_line(aes(y = nb_support, color = "Combined NB support"), linewidth = 1.0, na.rm = TRUE) +
+    geom_line(aes(y = log_nb1, color = "NB1 = mu"), linewidth = 0.5, alpha = 0.35, na.rm = TRUE) +
+    geom_line(aes(y = log_nb2, color = "NB2 = variance - mu"), linewidth = 0.5, alpha = 0.35, na.rm = TRUE) +
+    geom_line(aes(y = amu_sm, color = "Smoothed log(alpha*mu)"), linewidth = 1.0, na.rm = TRUE) +
+    geom_line(aes(y = nb_gap_sm, color = "Smoothed log(NB2+1) - log(NB1+1)"), linewidth = 1.0, na.rm = TRUE) +
+    annotate("rect", xmin = range_min_x, xmax = range_max_x, ymin = -Inf, ymax = Inf, alpha = 0.08) +
+    geom_vline(xintercept = center_x, linetype = 2, linewidth = 0.8) +
+    geom_vline(xintercept = terminal_x, linetype = 3, linewidth = 0.8) +
+    geom_hline(yintercept = onset_info$nb_support_threshold, linetype = 3, linewidth = 0.5) +
+    annotate(
+      "label",
+      x = x_left,
+      y = max(c(df$nb_support, df$log_nb1, df$log_nb2, df$amu_sm, df$nb_gap_sm), na.rm = TRUE),
+      hjust = 0,
+      vjust = 1,
+      size = 2.55,
+      label = paste0(
+        "NB corroboration",
+        "\nThe top 5000 ranks define the manual leading edge",
+        "\nLeading-edge med log(NB2) = ", round(corr$leading_edge_median_log_nb2, 3),
+        "\nRemainder med log(NB2) = ", round(corr$remainder_median_log_nb2, 3),
+        "\nLeading-minus-remainder log(NB2) = ", round(corr$leading_minus_remainder_log_nb2, 3),
+        "\nLeading-edge med NB2-NB1 = ", round(corr$leading_edge_median_nb_gap, 3),
+        "\nRemainder med NB2-NB1 = ", round(corr$remainder_median_nb_gap, 3),
+        "\nLeading-minus-remainder NB2-NB1 = ", round(corr$leading_minus_remainder_nb_gap, 3),
+        "\nLeading-edge med log(alpha*mu) = ", round(corr$leading_edge_median_log_alpha_mu, 3),
+        "\nRemainder med log(alpha*mu) = ", round(corr$remainder_median_log_alpha_mu, 3),
+        "\nLeading-minus-remainder log(alpha*mu) = ", round(corr$leading_minus_remainder_log_alpha_mu, 3),
+        "\nLeading-edge more NB2 = ", corr$leading_edge_more_nb2,
+        "\nCenter NB support = ", round(onset_info$center_nb_support, 3),
+        "\nNB threshold = ", round(onset_info$nb_support_threshold, 3)
+      )
+    ) +
+    labs(
+      title = paste0(title_prefix, ": NB1 / NB2 / alpha*mu support"),
+      subtitle = "Leading-edge elevation in NB2 and alpha*mu supports the top-5000 interpretation",
+      x = "EVS rank",
+      y = "Support value"
+    ) +
+    theme_bw(base_size = 10) +
+    theme(legend.position = "bottom")
+
+  p5 <- ggplot(df, aes(rank, nb_support)) +
+    geom_line(linewidth = 1.0, na.rm = TRUE) +
+    annotate("rect", xmin = range_min_x, xmax = range_max_x, ymin = -Inf, ymax = Inf, alpha = 0.08) +
+    geom_vline(xintercept = center_x, linetype = 2, linewidth = 0.8) +
+    geom_vline(xintercept = terminal_x, linetype = 3, linewidth = 0.8) +
+    geom_hline(yintercept = onset_info$nb_support_threshold, linetype = 3, linewidth = 0.5) +
+    annotate(
+      "label",
+      x = x_right,
+      y = max(df$nb_support, na.rm = TRUE),
+      hjust = 0,
+      vjust = 1,
+      size = 2.7,
+      label = paste0(
+        "Final NB-supported band",
+        "\nManual cutoff = ", center_x,
+        "\nBand = [", range_min_x, ", ", range_max_x, "]",
+        "\nRight local zero = ", terminal_x
+      )
+    ) +
+    labs(
+      title = paste0(title_prefix, ": NB-supported cutoff band"),
+      subtitle = "The band expands around the manual cutoff while combined NB support stays elevated",
+      x = "EVS rank",
+      y = "Combined NB support"
+    ) +
+    theme_bw(base_size = 10)
+
+  png(out_file, width = 2200, height = 3000, res = 200)
+  gridExtra::grid.arrange(p1, p2, p3, p4, p5, ncol = 1)
+  dev.off()
+}
+
+build_range_panel <- function(ctrl_onset, trt_onset, title_prefix, out_file) {
+  ctrl_df <- ctrl_onset$curve_df
+  trt_df <- trt_onset$curve_df
+
+  x_all <- c(ctrl_df$rank, trt_df$rank)
+  x_left <- min(x_all, na.rm = TRUE) + 0.06 * diff(range(x_all, na.rm = TRUE))
+
+  p <- ggplot() +
+    geom_line(data = ctrl_df, aes(rank, var_fit, color = "Control variance fit"), linewidth = 1.0, na.rm = TRUE) +
+    geom_line(data = trt_df, aes(rank, var_fit, color = "Treatment variance fit"), linewidth = 1.0, na.rm = TRUE) +
+    geom_vline(xintercept = ctrl_onset$cutoff_center_rank, linetype = 2, linewidth = 0.8) +
+    geom_vline(xintercept = trt_onset$cutoff_center_rank, linetype = 3, linewidth = 0.8) +
+    annotate(
+      "rect",
+      xmin = min(ctrl_onset$cutoff_range_rank_min, trt_onset$cutoff_range_rank_min),
+      xmax = max(ctrl_onset$cutoff_range_rank_max, trt_onset$cutoff_range_rank_max),
+      ymin = -Inf, ymax = Inf,
+      alpha = 0.08
+    ) +
+    annotate(
+      "label",
+      x = x_left,
+      y = max(c(ctrl_df$var_fit, trt_df$var_fit), na.rm = TRUE),
+      hjust = 0,
+      vjust = 1,
+      size = 2.8,
+      label = paste0(
+        "Comparison-level view",
+        "\nBoth panels use the same fixed top-5000 manuscript cutoff",
+        "\nControl center = ", ctrl_onset$cutoff_center_rank,
+        "\nTreatment center = ", trt_onset$cutoff_center_rank,
+        "\nControl local band = [", ctrl_onset$cutoff_range_rank_min, ", ", ctrl_onset$cutoff_range_rank_max, "]",
+        "\nTreatment local band = [", trt_onset$cutoff_range_rank_min, ", ", trt_onset$cutoff_range_rank_max, "]"
+      )
+    ) +
+    labs(
+      title = paste0(title_prefix, ": control and treatment local corroboration bands"),
+      subtitle = "The manuscript cutoff is fixed; the local derivative geometry is shown only as support",
+      x = "EVS rank",
+      y = "Fitted log(1 + variance)",
+      color = NULL
+    ) +
+    theme_bw(base_size = 10) +
+    theme(legend.position = "bottom")
+
+  png(out_file, width = 2200, height = 1200, res = 200)
+  print(p)
+  dev.off()
 }
 
 # =============================================================================
-# INPUT DATA
+# MAIN
 # =============================================================================
 
-count_file <- resolve_counts_file(count_file)
-message("Using count file: ", count_file)
+count_file_resolved <- resolve_counts_file(count_file)
+message("Using count file: ", count_file_resolved)
 
-count_obj <- read_count_matrix(count_file, meta_all$id)
-count_matrix <- count_obj$count_matrix
-annot_df <- count_obj$annot_df
-feature_ids <- rownames(count_matrix)
-
-# =============================================================================
-# MAIN ANALYSIS
-# =============================================================================
+read_obj <- read_count_matrix(count_file_resolved, meta_all$id)
+count_matrix <- read_obj$count_matrix
+annot_df <- read_obj$annot_df
 
 overall_summary_list <- list()
 
 for (ii in seq_len(nrow(comparison_table))) {
-  comp_row <- comparison_table[ii, , drop = FALSE]
-  comparison_name <- comp_row$comparison_name
-  message("Processing ", comparison_name)
+  cmp <- comparison_table[ii, , drop = FALSE]
+  cmp_name <- cmp$comparison_name
 
-  sub_obj <- subset_comparison(count_matrix, comp_row, meta_all)
-  count_sub <- sub_obj$count_matrix
+  message("Processing comparison: ", cmp_name)
+
+  cmp_dir <- file.path(out_root, paste0(cmp_name, "_cutoff_folder"))
+  dir.create(cmp_dir, recursive = TRUE, showWarnings = FALSE)
+
+  sub_obj <- subset_comparison(count_matrix, cmp, meta_all)
+  cmp_counts <- sub_obj$count_matrix
 
   evs_tbl <- build_evs_table(
-    count_mat = count_sub,
+    count_mat = cmp_counts,
     ctrl_cols = sub_obj$ctrl_ids,
     trt_cols = sub_obj$trt_ids,
-    feature_ids = rownames(count_sub)
+    feature_ids = rownames(cmp_counts)
   )
 
-  feature_tbl <- compute_feature_metrics_empirical(
-    count_mat = count_sub,
+  feat_tbl <- compute_feature_metrics_empirical(
+    count_mat = cmp_counts,
     ctrl_cols = sub_obj$ctrl_ids,
     trt_cols = sub_obj$trt_ids,
-    feature_ids = rownames(count_sub)
+    feature_ids = rownames(cmp_counts)
   )
 
   full_tbl <- evs_tbl %>%
-    left_join(feature_tbl, by = "feature_id") %>%
-    left_join(annot_df, by = "feature_id")
-
-  comp_dir <- file.path(out_root, paste0(comparison_name, "_cutoff_folder"))
-  dir.create(comp_dir, recursive = TRUE, showWarnings = FALSE)
+    left_join(feat_tbl, by = "feature_id") %>%
+    left_join(annot_df, by = "feature_id") %>%
+    mutate(gene_symbol = ifelse(is.na(gene_symbol) | !nzchar(gene_symbol), feature_id, gene_symbol))
 
   utils::write.csv(
     full_tbl,
-    file = file.path(comp_dir, paste0(comparison_name, "_feature_level_metrics.csv")),
+    file = file.path(cmp_dir, paste0(cmp_name, "_feature_level_metrics.csv")),
     row.names = FALSE
   )
 
-  comp_summary_rows <- list()
+  ctrl_rank_df <- build_rank_series(full_tbl, "control")
+  trt_rank_df  <- build_rank_series(full_tbl, "treatment")
 
-  for (arm_label in c("control", "treatment")) {
-    rank_df <- build_rank_series(full_tbl, arm = arm_label)
-    rank_df <- smooth_rank_series(rank_df)
-
-    selected_obj <- select_zero_pair_supporting_manual_cutoff(
-      df = rank_df,
-      manual_cutoff_rank = manual_leading_edge_n
-    )
-
-    summary_row <- summarize_manual_cutoff_support(
-      df = rank_df,
-      selected_obj = selected_obj,
-      comparison_name = comparison_name,
-      arm_label = arm_label
-    )
-
-    comp_summary_rows[[arm_label]] <- summary_row
-    overall_summary_list[[paste(comparison_name, arm_label, sep = "__")]] <- summary_row
-
-    utils::write.csv(
-      rank_df,
-      file = file.path(comp_dir, paste0(comparison_name, "_", arm_label, "_rank_series.csv")),
-      row.names = FALSE
-    )
-
-    utils::write.csv(
-      selected_obj$zero_crossings,
-      file = file.path(comp_dir, paste0(comparison_name, "_", arm_label, "_zero_crossings_all.csv")),
-      row.names = FALSE
-    )
-
-    utils::write.csv(
-      selected_obj$selected_zero_pair,
-      file = file.path(comp_dir, paste0(comparison_name, "_", arm_label, "_selected_zero_pair.csv")),
-      row.names = FALSE
-    )
-
-    plot_rank_panel(
-      df = rank_df,
-      summary_row = summary_row,
-      zero_tbl = selected_obj$zero_crossings,
-      comparison_name = comparison_name,
-      arm_label = arm_label,
-      out_file = file.path(comp_dir, paste0(comparison_name, "_", arm_label, "_rank_panel.png"))
-    )
-  }
-
-  comp_summary_df <- bind_rows(comp_summary_rows)
   utils::write.csv(
-    comp_summary_df,
-    file = file.path(comp_dir, paste0(comparison_name, "_cutoff_summary.csv")),
+    ctrl_rank_df,
+    file = file.path(cmp_dir, paste0(cmp_name, "_control_rank_series.csv")),
     row.names = FALSE
   )
+  utils::write.csv(
+    trt_rank_df,
+    file = file.path(cmp_dir, paste0(cmp_name, "_treatment_rank_series.csv")),
+    row.names = FALSE
+  )
+
+  ctrl_onset <- select_cutoff_derivative_nb_range(
+    ctrl_rank_df,
+    manual_leading_edge_n = manual_leading_edge_n,
+    spline_spar = spline_spar,
+    nb_range_drop_fraction = nb_range_drop_fraction,
+    nb_range_max_span_fraction = nb_range_max_span_fraction,
+    nb_smooth_window = nb_smooth_window,
+    manual_cutoff_search_left_fraction = manual_cutoff_search_left_fraction,
+    manual_cutoff_search_right_fraction = manual_cutoff_search_right_fraction,
+    manual_cutoff_pair_max_width_fraction = manual_cutoff_pair_max_width_fraction
+  )
+
+  trt_onset <- select_cutoff_derivative_nb_range(
+    trt_rank_df,
+    manual_leading_edge_n = manual_leading_edge_n,
+    spline_spar = spline_spar,
+    nb_range_drop_fraction = nb_range_drop_fraction,
+    nb_range_max_span_fraction = nb_range_max_span_fraction,
+    nb_smooth_window = nb_smooth_window,
+    manual_cutoff_search_left_fraction = manual_cutoff_search_left_fraction,
+    manual_cutoff_search_right_fraction = manual_cutoff_search_right_fraction,
+    manual_cutoff_pair_max_width_fraction = manual_cutoff_pair_max_width_fraction
+  )
+
+  utils::write.csv(
+    ctrl_onset$zero_crossings,
+    file = file.path(cmp_dir, paste0(cmp_name, "_control_zero_crossings_all.csv")),
+    row.names = FALSE
+  )
+  utils::write.csv(
+    trt_onset$zero_crossings,
+    file = file.path(cmp_dir, paste0(cmp_name, "_treatment_zero_crossings_all.csv")),
+    row.names = FALSE
+  )
+  utils::write.csv(
+    ctrl_onset$selected_zero_crossings,
+    file = file.path(cmp_dir, paste0(cmp_name, "_control_selected_zero_crossings.csv")),
+    row.names = FALSE
+  )
+  utils::write.csv(
+    trt_onset$selected_zero_crossings,
+    file = file.path(cmp_dir, paste0(cmp_name, "_treatment_selected_zero_crossings.csv")),
+    row.names = FALSE
+  )
+
+  build_dataset_panel(
+    rank_df = ctrl_rank_df,
+    onset_info = ctrl_onset,
+    title_prefix = paste0(cmp_name, " control"),
+    out_file = file.path(cmp_dir, paste0(cmp_name, "_control_rank_panel.png"))
+  )
+
+  build_dataset_panel(
+    rank_df = trt_rank_df,
+    onset_info = trt_onset,
+    title_prefix = paste0(cmp_name, " treatment"),
+    out_file = file.path(cmp_dir, paste0(cmp_name, "_treatment_rank_panel.png"))
+  )
+
+  build_range_panel(
+    ctrl_onset = ctrl_onset,
+    trt_onset = trt_onset,
+    title_prefix = cmp_name,
+    out_file = file.path(cmp_dir, paste0(cmp_name, "_cutoff_range_panel.png"))
+  )
+
+  ctrl_corr <- ctrl_onset$corrob
+  trt_corr <- trt_onset$corrob
+
+  summary_df <- data.frame(
+    comparison = cmp_name,
+
+    control_mode = ctrl_onset$mode,
+    control_cutoff_center_rank = ctrl_onset$cutoff_center_rank,
+    control_terminal_start_rank = ctrl_onset$terminal_start_rank,
+    control_cutoff_range_rank_min = ctrl_onset$cutoff_range_rank_min,
+    control_cutoff_range_rank_max = ctrl_onset$cutoff_range_rank_max,
+    control_pre_evs_leading_edge_size = ctrl_onset$pre_evs_leading_edge_size,
+    control_pre_evs_remainder_size = ctrl_onset$pre_evs_remainder_size,
+    control_center_nb_support = ctrl_onset$center_nb_support,
+    control_nb_support_threshold = ctrl_onset$nb_support_threshold,
+
+    control_leading_edge_median_log_nb2 = ctrl_corr$leading_edge_median_log_nb2,
+    control_remainder_median_log_nb2 = ctrl_corr$remainder_median_log_nb2,
+    control_leading_minus_remainder_log_nb2 = ctrl_corr$leading_minus_remainder_log_nb2,
+    control_leading_remainder_log_nb2_ratio = ctrl_corr$leading_remainder_log_nb2_ratio,
+
+    control_leading_edge_median_nb_gap = ctrl_corr$leading_edge_median_nb_gap,
+    control_remainder_median_nb_gap = ctrl_corr$remainder_median_nb_gap,
+    control_leading_minus_remainder_nb_gap = ctrl_corr$leading_minus_remainder_nb_gap,
+    control_leading_remainder_nb_gap_ratio = ctrl_corr$leading_remainder_nb_gap_ratio,
+
+    control_leading_edge_median_log_alpha_mu = ctrl_corr$leading_edge_median_log_alpha_mu,
+    control_remainder_median_log_alpha_mu = ctrl_corr$remainder_median_log_alpha_mu,
+    control_leading_minus_remainder_log_alpha_mu = ctrl_corr$leading_minus_remainder_log_alpha_mu,
+    control_leading_remainder_log_alpha_mu_ratio = ctrl_corr$leading_remainder_log_alpha_mu_ratio,
+
+    control_leading_edge_median_nb_support = ctrl_corr$leading_edge_median_nb_support,
+    control_remainder_median_nb_support = ctrl_corr$remainder_median_nb_support,
+    control_leading_minus_remainder_nb_support = ctrl_corr$leading_minus_remainder_nb_support,
+    control_leading_remainder_nb_support_ratio = ctrl_corr$leading_remainder_nb_support_ratio,
+
+    control_leading_edge_more_nb2 = ctrl_corr$leading_edge_more_nb2,
+
+    treatment_mode = trt_onset$mode,
+    treatment_cutoff_center_rank = trt_onset$cutoff_center_rank,
+    treatment_terminal_start_rank = trt_onset$terminal_start_rank,
+    treatment_cutoff_range_rank_min = trt_onset$cutoff_range_rank_min,
+    treatment_cutoff_range_rank_max = trt_onset$cutoff_range_rank_max,
+    treatment_pre_evs_leading_edge_size = trt_onset$pre_evs_leading_edge_size,
+    treatment_pre_evs_remainder_size = trt_onset$pre_evs_remainder_size,
+    treatment_center_nb_support = trt_onset$center_nb_support,
+    treatment_nb_support_threshold = trt_onset$nb_support_threshold,
+
+    treatment_leading_edge_median_log_nb2 = trt_corr$leading_edge_median_log_nb2,
+    treatment_remainder_median_log_nb2 = trt_corr$remainder_median_log_nb2,
+    treatment_leading_minus_remainder_log_nb2 = trt_corr$leading_minus_remainder_log_nb2,
+    treatment_leading_remainder_log_nb2_ratio = trt_corr$leading_remainder_log_nb2_ratio,
+
+    treatment_leading_edge_median_nb_gap = trt_corr$leading_edge_median_nb_gap,
+    treatment_remainder_median_nb_gap = trt_corr$remainder_median_nb_gap,
+    treatment_leading_minus_remainder_nb_gap = trt_corr$leading_minus_remainder_nb_gap,
+    treatment_leading_remainder_nb_gap_ratio = trt_corr$leading_remainder_nb_gap_ratio,
+
+    treatment_leading_edge_median_log_alpha_mu = trt_corr$leading_edge_median_log_alpha_mu,
+    treatment_remainder_median_log_alpha_mu = trt_corr$remainder_median_log_alpha_mu,
+    treatment_leading_minus_remainder_log_alpha_mu = trt_corr$leading_minus_remainder_log_alpha_mu,
+    treatment_leading_remainder_log_alpha_mu_ratio = trt_corr$leading_remainder_log_alpha_mu_ratio,
+
+    treatment_leading_edge_median_nb_support = trt_corr$leading_edge_median_nb_support,
+    treatment_remainder_median_nb_support = trt_corr$remainder_median_nb_support,
+    treatment_leading_minus_remainder_nb_support = trt_corr$leading_minus_remainder_nb_support,
+    treatment_leading_remainder_nb_support_ratio = trt_corr$leading_remainder_nb_support_ratio,
+
+    treatment_leading_edge_more_nb2 = trt_corr$leading_edge_more_nb2,
+
+    stringsAsFactors = FALSE
+  )
+
+  utils::write.csv(
+    summary_df,
+    file = file.path(cmp_dir, paste0(cmp_name, "_cutoff_summary.csv")),
+    row.names = FALSE
+  )
+
+  overall_summary_list[[cmp_name]] <- summary_df
 }
 
 overall_cutoff_summary <- bind_rows(overall_summary_list)
@@ -835,22 +1198,4 @@ utils::write.csv(
   row.names = FALSE
 )
 
-# =============================================================================
-# MANUSCRIPT METHODS TEXT MIRROR
-# =============================================================================
-# Features were ranked separately within each comparison and group using the
-# absolute magnitude of the first principal-component loading derived from
-# log2(x + 1)-transformed counts. The leading edge was defined a priori as the
-# top 5000 ranked features. Smoothed variance geometry was then used only to
-# corroborate this manually specified boundary rather than to determine it.
-# Specifically, the smoothed second derivative of the ranked variance curve was
-# evaluated within a local neighborhood around the manual cutoff, and a compact
-# corroboration band was defined by an eligible pair of nearby zero-crossings
-# selected to flank or closely bracket that boundary while preserving local NB
-# support. Negative-binomial corroboration was summarized numerically on both
-# sides of the manual cutoff using median log(NB2), median NB2 minus NB1
-# contrast, median log(alpha·mu), and mean combined NB support. The principal
-# binary corroboration criterion was whether the post-cutoff region, defined
-# from rank 5000 to the end of the ranked series, showed greater median NB2
-# support than the pre-cutoff region.
-# =============================================================================
+message("Done.")
