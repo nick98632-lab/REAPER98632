@@ -1,40 +1,47 @@
 # =============================================================================
-# SEQUENCE STAGE 1 FINAL PRE EVS CUTOFF SELECTOR
+# SEQUENCE STAGE 1 FINAL PRE-EVS CUTOFF SELECTOR
 # =============================================================================
 #
 # MANUSCRIPT METHODS DESCRIPTION
-# Features are ranked by absolute PC1 loading from lowest loading on the left to
-# highest loading on the right. The empirical variance curve is smoothed along
-# this rank axis, and its second derivative is used to identify terminal
-# zero-crossings on the right-hand side of the ranked series. The cutoff
-# interval is defined by the last two terminal zero-crossings of the smoothed
-# second derivative. The earlier zero defines the cutoff anchor and the later
-# zero defines the terminal-start anchor. No minimum run-length rule, slope
-# quantile threshold, or directional sign constraint on the first derivative is
-# imposed. Negative-binomial support quantities are then used only to corroborate
-# the derivative-defined transition and to summarize whether the region to the
-# right of the cutoff behaves more like a higher-variance leading-edge regime.
+# Features are ranked by absolute PC1 loading, with lower loading on the left
+# and higher loading on the right. This ordered axis is treated as a geometric
+# transition axis before any downstream eigenvector splitting. A smoothed
+# empirical variance curve is fitted across the full ranked series, and its
+# first and second derivatives are computed from the same smooth.
 #
-# NB comparison rule
-# The right-hand region is defined as all genes from the cutoff anchor to the end
-# of the ranked series. Let that region contain m genes. The comparison left-hand
-# region is defined as the same number m of genes immediately to the left of the
-# cutoff anchor, truncated at the left boundary if needed. Smoothed NB2,
-# smoothed NB2 minus NB1 contrast, and smoothed log(alpha*mu) are compared
-# between these matched windows.
+# Final geometric rule used here
+# 1. Rank 5000 is retained as a fixed manuscript reference point.
+# 2. The study interval is defined by the first two terminal zero-crossings of
+#    the smoothed second derivative on the right side of the ranked series.
+# 3. The earlier of those two terminal zero-crossings is the cutoff anchor.
+# 4. The later of those two terminal zero-crossings is the terminal start.
 #
-# Figure design
-# Method descriptions are placed on the left side of panels. Cutoff markers and
-# numeric labels are placed on the right side. The earlier terminal zero is
-# marked by a filled circle, the later terminal zero by an open circle, and the
-# fixed rank 5000 reference is marked by a diamond. The interval between the two
-# anchors is shaded. All cutoffs are marked by vertical lines.
+# NB corroboration rule used here
+# 1. The NB2-like right-side reference region is defined as all genes from the
+#    cutoff anchor to the end of the ranked series.
+# 2. Let that right-side region contain m genes.
+# 3. The matched NB1-side reference region is defined as the same number m of
+#    genes immediately to the left of the cutoff anchor, truncated at rank 1
+#    if necessary.
+# 4. Right-versus-left summaries of NB2, NB2-NB1 contrast, and log(alpha*mu)
+#    are reported explicitly so the figure itself shows why the right side is
+#    being interpreted as more NB2-like.
+#
+# Figure design rule used here
+# 1. Method text is placed on the left side of panels.
+# 2. Numeric cutoff summaries are placed on the right side of panels.
+# 3. The cutoff anchor is shown with a filled circle and dashed vertical line.
+# 4. The terminal start is shown with an open circle and dotted vertical line.
+# 5. Rank 5000 is shown with a diamond and dot-dash vertical line.
+# 6. Colors in the legends are identical to the plotted series.
 # =============================================================================
 
 suppressPackageStartupMessages({
   library(ggplot2)
   library(dplyr)
   library(gridExtra)
+  library(scales)
+  library(tibble)
 })
 
 options(warn = 1)
@@ -42,18 +49,10 @@ options(warn = 1)
 # =============================================================================
 # USER SETTINGS
 # =============================================================================
-#
-# MANUSCRIPT METHODS DESCRIPTION
-# These settings control smoothing of the empirical variance curve, the right-side
-# terminal region in which the final two second-derivative zero-crossings are
-# sought, the smoothing of NB support quantities, and the formatting of exported
-# outputs. No threshold is used to determine whether a zero-crossing is valid
-# beyond a very small numeric tolerance for floating-point stability.
-# =============================================================================
 
 repo_dir <- getwd()
 count_file <- file.path(repo_dir, "data", "WTTS-Seq_2022.2_DE_raw_read_numbers.csv")
-out_root <- file.path(repo_dir, "exports", "variance_derivative_nb_range_final_clean")
+out_root <- file.path(repo_dir, "exports", "variance_derivative_nb_range_final_manuscript")
 dir.create(out_root, recursive = TRUE, showWarnings = FALSE)
 
 comparison_table <- data.frame(
@@ -81,32 +80,38 @@ meta_all <- data.frame(
 rownames(meta_all) <- meta_all$id
 meta_all$condition <- factor(meta_all$condition, levels = c("untrt", "trt"))
 
-# smoothing settings
 spline_spar <- 0.60
 nb_smooth_window <- 151L
-
-# terminal region definition
 terminal_fraction_start <- 0.70
-
-# numeric zero tolerance
-zero_tol <- 1e-6
-
-# NB band construction
-nb_range_drop_fraction <- 0.70
-nb_range_max_span_fraction <- 0.18
-
-# fixed reference marker
+zero_tol <- 1e-8
 fixed_rank_reference <- 5000L
 
 # =============================================================================
-# BASIC HELPERS
+# COLOR MAP
 # =============================================================================
 #
 # MANUSCRIPT METHODS DESCRIPTION
-# These helpers perform robust numeric summaries, file resolution, rescaling, and
-# rolling median smoothing. Rolling medians are used for support summaries to
-# reduce the influence of isolated spikes. Zero-crossings are detected from sign
-# changes after applying a minimal numeric tolerance around zero.
+# These colors are fixed so that each quantity is represented identically in
+# every panel and in every legend.
+# =============================================================================
+
+COLORS <- c(
+  variance_fit   = "#1b1b1b",
+  d1             = "#00a6d6",
+  d2             = "#d1495b",
+  nb_support     = "#111111",
+  nb1            = "#d9b44a",
+  nb2            = "#7fcdbb",
+  amu            = "#1f78ff",
+  nb_gap         = "#d65cff",
+  interval_fill  = "#bdbdbd",
+  cutoff_anchor  = "#111111",
+  terminal_anchor= "#111111",
+  ref5000        = "#8c510a"
+)
+
+# =============================================================================
+# BASIC HELPERS
 # =============================================================================
 
 resolve_counts_file <- function(path_hint) {
@@ -167,7 +172,7 @@ safe_median <- function(x) {
   x <- as.numeric(x)
   x <- x[is.finite(x)]
   if (!length(x)) return(NA_real_)
-  stats::median(x, na.rm = TRUE)
+  stats::median(x)
 }
 
 safe_ratio <- function(num, den) {
@@ -198,7 +203,6 @@ scale01 <- function(x) {
   x <- as.numeric(x)
   ok <- is.finite(x)
   out <- rep(NA_real_, length(x))
-
   if (!any(ok)) return(out)
 
   rng <- range(x[ok], na.rm = TRUE)
@@ -211,15 +215,18 @@ scale01 <- function(x) {
   out
 }
 
+fmt_num <- function(x, digits = 3) {
+  ifelse(is.finite(x), format(round(x, digits), nsmall = digits, trim = TRUE), "NA")
+}
+
 # =============================================================================
 # DATA INGESTION
 # =============================================================================
 #
 # MANUSCRIPT METHODS DESCRIPTION
-# The raw feature by sample count matrix is read from disk. Features with missing
-# identifiers or non-finite values are removed. Duplicate feature IDs are
-# collapsed by summation. For each comparison, treatment and control samples are
-# subset directly from the count matrix while preserving feature annotations.
+# The raw count file is read once. Feature identifiers and, if present, gene
+# symbols are retained. Only samples explicitly represented in the comparison
+# metadata are used. Duplicate feature identifiers are collapsed by summation.
 # =============================================================================
 
 read_count_matrix <- function(path, meta_ids) {
@@ -294,12 +301,10 @@ subset_comparison <- function(count_matrix, comparison_row, meta_all) {
 # =============================================================================
 #
 # MANUSCRIPT METHODS DESCRIPTION
-# Features are ranked separately within each arm by absolute PC1 loading computed
-# from log2(count+1) transformed counts. For each feature and arm, empirical mean
-# and variance are calculated, together with NB1 as the mean-like component, NB2
-# as the excess variance above the mean, and alpha times mu. These empirical
-# quantities provide interpretable support for whether the right-hand region of
-# the ranked series behaves more like a higher variance leading edge.
+# EVS ranking is derived from the absolute value of the first PC loading within
+# each arm after log2(count+1) transformation. Empirical mean, variance,
+# empirical alpha, NB1, NB2, and alpha*mu quantities are computed directly from
+# the observed counts for each arm.
 # =============================================================================
 
 compute_group_pc1_loadings <- function(count_mat, group_cols) {
@@ -386,23 +391,11 @@ build_rank_series <- function(full_tbl, arm = c("control", "treatment")) {
       arrange(rank)
   }
 
-  out$log_variance <- NA_real_
-  idx <- is.finite(out$variance) & out$variance >= 0
-  out$log_variance[idx] <- log1p(out$variance[idx])
-
-  out$log_nb1 <- NA_real_
-  idx <- is.finite(out$nb1) & out$nb1 >= 0
-  out$log_nb1[idx] <- log1p(out$nb1[idx])
-
-  out$log_nb2 <- NA_real_
-  idx <- is.finite(out$nb2) & out$nb2 >= 0
-  out$log_nb2[idx] <- log1p(out$nb2[idx])
-
+  out$log_variance <- ifelse(is.finite(out$variance) & out$variance >= 0, log1p(out$variance), NA_real_)
+  out$log_nb1 <- ifelse(is.finite(out$nb1) & out$nb1 >= 0, log1p(out$nb1), NA_real_)
+  out$log_nb2 <- ifelse(is.finite(out$nb2) & out$nb2 >= 0, log1p(out$nb2), NA_real_)
   out$nb_gap <- out$log_nb2 - out$log_nb1
-
-  out$log_alpha_mu <- NA_real_
-  idx <- is.finite(out$alpha_mu) & out$alpha_mu > 0
-  out$log_alpha_mu[idx] <- log(out$alpha_mu[idx])
+  out$log_alpha_mu <- ifelse(is.finite(out$alpha_mu) & out$alpha_mu > 0, log(out$alpha_mu), NA_real_)
 
   out
 }
@@ -412,33 +405,33 @@ build_rank_series <- function(full_tbl, arm = c("control", "treatment")) {
 # =============================================================================
 #
 # MANUSCRIPT METHODS DESCRIPTION
-# The empirical variance curve is smoothed by smoothing spline and differentiated
-# analytically to obtain first and second derivatives along the full rank axis.
-# Second-derivative zero-crossings are defined by sign changes after applying a
-# minimal numerical tolerance around zero. The cutoff interval is then defined by
-# the last two zero-crossings within the right-hand terminal portion of the rank
-# axis. No threshold on first-derivative magnitude, no minimum run length, and no
-# directional rule for whether the curve must cross upward or downward is used.
+# The variance curve is smoothed across EVS rank using a smoothing spline. The
+# first and second derivatives of that smooth are then evaluated on the same
+# EVS rank grid. Geometric anchors are defined only from second-derivative
+# zero-crossings. No directional sign constraint, no run-length threshold, and
+# no amplitude threshold are imposed. The manuscript anchor pair is the first
+# two terminal second-derivative zero-crossings on the right-hand side.
 # =============================================================================
 
-find_d2_zero_crossings <- function(d2_vec, zero_tol = 1e-6) {
-  d2_vec <- as.numeric(d2_vec)
-  n <- length(d2_vec)
-  out <- integer(0)
-  if (n < 2L) return(out)
+find_d2_zero_crossings <- function(d2_vec, zero_tol = 1e-8) {
+  x <- as.numeric(d2_vec)
+  n <- length(x)
+  if (n < 2L) return(integer(0))
 
-  x <- d2_vec
   x[!is.finite(x)] <- NA_real_
   x[is.finite(x) & abs(x) <= zero_tol] <- 0
-
   s <- sign(x)
   s[!is.finite(s)] <- 0
 
-  for (i in 2:n) {
-    if (!is.finite(x[i - 1L]) || !is.finite(x[i])) next
+  out <- integer(0)
 
+  for (i in 2:n) {
+    x0 <- x[i - 1L]
+    x1 <- x[i]
     s0 <- s[i - 1L]
     s1 <- s[i]
+
+    if (!is.finite(x0) || !is.finite(x1)) next
 
     if (s0 == 0 && s1 != 0) {
       out <- c(out, i - 1L)
@@ -455,7 +448,7 @@ find_d2_zero_crossings <- function(d2_vec, zero_tol = 1e-6) {
 summarize_zero_crossings <- function(df, zero_idx) {
   if (!length(zero_idx)) return(data.frame())
 
-  out <- lapply(zero_idx, function(i) {
+  bind_rows(lapply(zero_idx, function(i) {
     data.frame(
       index = i,
       rank = df$rank[i],
@@ -464,83 +457,71 @@ summarize_zero_crossings <- function(df, zero_idx) {
       var_fit_here = df$var_fit[i],
       stringsAsFactors = FALSE
     )
-  })
-
-  bind_rows(out)
+  }))
 }
 
-choose_last_two_terminal_zeros <- function(df,
-                                           terminal_fraction_start = 0.70,
-                                           zero_tol = 1e-6) {
-  n <- nrow(df)
-
+choose_terminal_two_zero_crossings <- function(df,
+                                               terminal_fraction_start = 0.70,
+                                               zero_tol = 1e-8) {
   zero_idx <- find_d2_zero_crossings(df$d2_sm, zero_tol = zero_tol)
   zero_tbl <- summarize_zero_crossings(df, zero_idx)
 
   if (!nrow(zero_tbl)) {
-    fallback2 <- n
-    fallback1 <- max(1L, n - 1L)
-    sel_tbl <- data.frame(
-      index = c(fallback1, fallback2),
-      rank = df$rank[c(fallback1, fallback2)],
-      role = c("cutoff_anchor", "terminal_anchor"),
-      stringsAsFactors = FALSE
-    )
-    return(list(
-      zero_crossings = zero_tbl,
-      selected_zero_crossings = sel_tbl,
-      cutoff_anchor_index = fallback1,
-      cutoff_anchor_rank = df$rank[fallback1],
-      terminal_anchor_index = fallback2,
-      terminal_anchor_rank = df$rank[fallback2],
-      mode = "fallback: no detected terminal zero-crossings"
-    ))
+    stop("No second-derivative zero-crossings were detected.", call. = FALSE)
   }
 
-  terminal_start_idx <- max(1L, floor(terminal_fraction_start * n))
-  terminal_tbl <- zero_tbl[zero_tbl$index >= terminal_start_idx, , drop = FALSE]
+  terminal_start_index_min <- max(1L, floor(terminal_fraction_start * nrow(df)))
+  terminal_tbl <- zero_tbl[zero_tbl$index >= terminal_start_index_min, , drop = FALSE]
 
   if (nrow(terminal_tbl) < 2L) {
-    terminal_tbl <- tail(zero_tbl, min(2L, nrow(zero_tbl)))
-  } else {
-    terminal_tbl <- tail(terminal_tbl, 2L)
+    terminal_tbl <- zero_tbl
+  }
+  if (nrow(terminal_tbl) < 2L) {
+    stop("Fewer than two second-derivative zero-crossings were detected.", call. = FALSE)
   }
 
-  if (nrow(terminal_tbl) == 1L) {
-    idx2 <- terminal_tbl$index[1]
-    idx1 <- max(1L, idx2 - 1L)
-    terminal_tbl <- data.frame(
-      index = c(idx1, idx2),
-      rank = df$rank[c(idx1, idx2)],
-      stringsAsFactors = FALSE
-    )
-  }
+  selected_tbl <- terminal_tbl[(nrow(terminal_tbl) - 1L):nrow(terminal_tbl), , drop = FALSE]
+  rownames(selected_tbl) <- NULL
 
-  terminal_tbl$role <- c("cutoff_anchor", "terminal_anchor")
+  cutoff_anchor <- selected_tbl[1, , drop = FALSE]
+  terminal_anchor <- selected_tbl[2, , drop = FALSE]
+
+  selected_roles <- data.frame(
+    role = c("cutoff_anchor", "terminal_anchor"),
+    index = c(cutoff_anchor$index, terminal_anchor$index),
+    rank = c(cutoff_anchor$rank, terminal_anchor$rank),
+    d1_here = c(cutoff_anchor$d1_here, terminal_anchor$d1_here),
+    d2_here = c(cutoff_anchor$d2_here, terminal_anchor$d2_here),
+    var_fit_here = c(cutoff_anchor$var_fit_here, terminal_anchor$var_fit_here),
+    stringsAsFactors = FALSE
+  )
 
   list(
     zero_crossings = zero_tbl,
-    selected_zero_crossings = terminal_tbl,
-    cutoff_anchor_index = terminal_tbl$index[1],
-    cutoff_anchor_rank = terminal_tbl$rank[1],
-    terminal_anchor_index = terminal_tbl$index[2],
-    terminal_anchor_rank = terminal_tbl$rank[2],
-    mode = "last two terminal d2 zero-crossings on the right-hand side"
+    selected_zero_crossings = selected_roles,
+    cutoff_anchor_index = cutoff_anchor$index,
+    cutoff_anchor_rank = cutoff_anchor$rank,
+    terminal_anchor_index = terminal_anchor$index,
+    terminal_anchor_rank = terminal_anchor$rank,
+    mode = paste(
+      "Study interval is defined by the first two terminal second-derivative",
+      "zero-crossings on the right; the earlier zero is the cutoff anchor and",
+      "the later zero is the terminal start."
+    )
   )
 }
 
 # =============================================================================
-# NB SUPPORT AND MATCHED LEFT RIGHT COMPARISON
+# NB SUPPORT AND RIGHT VERSUS MATCHED LEFT COMPARISON
 # =============================================================================
 #
 # MANUSCRIPT METHODS DESCRIPTION
-# NB support is constructed from smoothed log(NB2+1), smoothed NB2 minus NB1
-# contrast, and smoothed log(alpha*mu). The cutoff interval itself is defined by
-# the derivatives, not by these NB quantities. For corroboration, all genes from
-# the cutoff anchor to the end of the ranked series define the right-hand region.
-# If that right-hand region contains m genes, the left-hand comparison region is
-# defined as the same number m of genes immediately to the left of the cutoff.
-# Median smoothed NB quantities are then compared between these matched windows.
+# Smoothed NB corroboration is built from three quantities on the ranked axis:
+# smoothed NB2-NB1 contrast, smoothed log(alpha*mu), and smoothed log(NB2+1).
+# These are scaled to a common 0 to 1 range and averaged. This support score
+# does not define the cutoff anchor. Instead, it corroborates the geometric
+# split by showing whether the right side of the split is more NB2-like than a
+# matched left-side region of equal size.
 # =============================================================================
 
 compute_nb_support_score <- function(df, nb_smooth_window = 151L) {
@@ -563,47 +544,6 @@ compute_nb_support_score <- function(df, nb_smooth_window = 151L) {
     amu_sm = amu_sm,
     log_nb2_sm = log_nb2_sm,
     nb_support = nb_support
-  )
-}
-
-expand_nb_range_around_center <- function(df, center_idx, terminal_start_idx,
-                                          nb_support,
-                                          nb_range_drop_fraction = 0.70,
-                                          nb_range_max_span_fraction = 0.18) {
-  n <- nrow(df)
-  max_span <- max(100L, floor(nb_range_max_span_fraction * n))
-
-  center_score <- nb_support[center_idx]
-  if (!is.finite(center_score)) center_score <- 0
-
-  threshold <- nb_range_drop_fraction * center_score
-
-  left_limit <- max(1L, center_idx - max_span)
-  right_limit <- min(terminal_start_idx, center_idx + max_span)
-
-  left_idx <- center_idx
-  while (left_idx > left_limit) {
-    test_idx <- left_idx - 1L
-    if (!is.finite(nb_support[test_idx])) break
-    if (nb_support[test_idx] < threshold) break
-    left_idx <- test_idx
-  }
-
-  right_idx <- center_idx
-  while (right_idx < right_limit) {
-    test_idx <- right_idx + 1L
-    if (!is.finite(nb_support[test_idx])) break
-    if (nb_support[test_idx] < threshold) break
-    right_idx <- test_idx
-  }
-
-  list(
-    range_left_index = left_idx,
-    range_left_rank = df$rank[left_idx],
-    range_right_index = right_idx,
-    range_right_rank = df$rank[right_idx],
-    center_nb_support = center_score,
-    nb_support_threshold = threshold
   )
 }
 
@@ -666,27 +606,26 @@ compute_left_right_corrob <- function(df, cutoff_anchor_index) {
 # =============================================================================
 #
 # MANUSCRIPT METHODS DESCRIPTION
-# This function applies the full method to a single arm. It smooths the
-# empirical variance curve, computes derivatives, identifies the last two
-# terminal second-derivative zero-crossings on the right-hand side, constructs
-# an NB-supported local band around the cutoff anchor, and computes the matched
-# left-right corroboration summaries used in the figures and output tables.
+# This function combines the smoothed variance fit, derivative geometry, and
+# NB corroboration into one object for figure generation and summary export.
+# The geometric cutoff anchor and terminal start are defined only from the
+# selected terminal second-derivative zero-crossings.
 # =============================================================================
 
 select_cutoff_derivative_nb_range <- function(rank_df,
                                               spline_spar = 0.60,
                                               terminal_fraction_start = 0.70,
-                                              zero_tol = 1e-6,
-                                              nb_range_drop_fraction = 0.70,
-                                              nb_range_max_span_fraction = 0.18,
-                                              nb_smooth_window = 151L) {
+                                              zero_tol = 1e-8,
+                                              nb_smooth_window = 151L,
+                                              fixed_rank_reference = 5000L) {
   df <- rank_df
-  n <- nrow(df)
   x <- df$rank
   y <- df$log_variance
 
   ok <- is.finite(x) & is.finite(y)
-  if (sum(ok) < 10L) stop("Not enough finite variance points for smoothing.", call. = FALSE)
+  if (sum(ok) < 10L) {
+    stop("Not enough finite variance points for smoothing.", call. = FALSE)
+  }
 
   sp_fit <- smooth.spline(x = x[ok], y = y[ok], spar = spline_spar)
   pred0 <- predict(sp_fit, x = x[ok], deriv = 0)
@@ -706,24 +645,18 @@ select_cutoff_derivative_nb_range <- function(rank_df,
   df$log_nb2_sm <- nb_obj$log_nb2_sm
   df$nb_support <- nb_obj$nb_support
 
-  geom_obj <- choose_last_two_terminal_zeros(
+  geom_obj <- choose_terminal_two_zero_crossings(
     df = df,
     terminal_fraction_start = terminal_fraction_start,
     zero_tol = zero_tol
   )
 
-  nb_rng <- expand_nb_range_around_center(
-    df = df,
-    center_idx = geom_obj$cutoff_anchor_index,
-    terminal_start_idx = geom_obj$terminal_anchor_index,
-    nb_support = df$nb_support,
-    nb_range_drop_fraction = nb_range_drop_fraction,
-    nb_range_max_span_fraction = nb_range_max_span_fraction
-  )
-
   corrob <- compute_left_right_corrob(df, geom_obj$cutoff_anchor_index)
 
-  total_features <- n
+  fixed_ref_rank <- min(fixed_rank_reference, max(df$rank, na.rm = TRUE))
+  ref_index <- which.min(abs(df$rank - fixed_ref_rank))
+
+  total_features <- nrow(df)
   pre_evs_remainder_size <- geom_obj$cutoff_anchor_index - 1L
   pre_evs_leading_edge_size <- total_features - geom_obj$cutoff_anchor_index + 1L
 
@@ -744,13 +677,11 @@ select_cutoff_derivative_nb_range <- function(rank_df,
     cutoff_range_index_max = geom_obj$terminal_anchor_index,
     cutoff_range_rank_max = geom_obj$terminal_anchor_rank,
 
-    nb_band_index_min = nb_rng$range_left_index,
-    nb_band_rank_min = nb_rng$range_left_rank,
-    nb_band_index_max = nb_rng$range_right_index,
-    nb_band_rank_max = nb_rng$range_right_rank,
+    fixed_rank_reference = fixed_ref_rank,
+    fixed_rank_reference_index = ref_index,
 
-    center_nb_support = nb_rng$center_nb_support,
-    nb_support_threshold = nb_rng$nb_support_threshold,
+    center_nb_support = df$nb_support[geom_obj$cutoff_anchor_index],
+    nb_support_threshold = safe_median(df$nb_support[df$rank >= geom_obj$cutoff_anchor_rank]),
 
     total_features = total_features,
     pre_evs_remainder_size = pre_evs_remainder_size,
@@ -761,234 +692,330 @@ select_cutoff_derivative_nb_range <- function(rank_df,
 }
 
 # =============================================================================
-# FIGURES
+# FIGURE HELPERS
 # =============================================================================
 #
 # MANUSCRIPT METHODS DESCRIPTION
-# The figure builder places concise method notes on the left side of each panel
-# so that the cutoff markers remain visually clear on the right. The earlier
-# anchor is shown with a filled circle and the later terminal-side anchor with
-# an open circle. A fixed 5000-rank reference is displayed with a diamond and a
-# vertical line. The derivative-defined cutoff interval is shaded, and the
-# NB-supported local band around the cutoff anchor is also shown.
+# Left-side annotation boxes describe the method used in each panel. Right-side
+# annotation boxes report only the final numerical values relevant to the
+# selected anchors and interval.
 # =============================================================================
 
-build_dataset_panel <- function(rank_df, onset_info, title_prefix, out_file, fixed_rank_reference = 5000L) {
+make_left_method_box <- function(label_x, label_y, label_text, size = 2.7) {
+  annotate(
+    "label",
+    x = label_x,
+    y = label_y,
+    hjust = 0,
+    vjust = 1,
+    size = size,
+    label.size = 0.25,
+    fill = alpha("white", 0.96),
+    label = label_text
+  )
+}
+
+make_right_numeric_box <- function(label_x, label_y, label_text, size = 2.7) {
+  annotate(
+    "label",
+    x = label_x,
+    y = label_y,
+    hjust = 0,
+    vjust = 1,
+    size = size,
+    label.size = 0.25,
+    fill = alpha("white", 0.96),
+    label = label_text
+  )
+}
+
+# =============================================================================
+# DATASET PANEL GENERATION
+# =============================================================================
+#
+# MANUSCRIPT METHODS DESCRIPTION
+# Each dataset panel contains five stacked subplots:
+# 1. absolute loading
+# 2. smoothed empirical variance
+# 3. derivative support
+# 4. NB corroboration quantities
+# 5. combined NB support
+#
+# All anchors are displayed in every panel:
+# filled circle and dashed line for cutoff anchor
+# open circle and dotted line for terminal start
+# diamond and dot-dash line for rank 5000
+# =============================================================================
+
+build_dataset_panel <- function(rank_df, onset_info, title_prefix, out_file) {
   df <- onset_info$curve_df
   cutoff_x <- onset_info$cutoff_center_rank
   terminal_x <- onset_info$terminal_start_rank
   interval_min_x <- onset_info$cutoff_range_rank_min
   interval_max_x <- onset_info$cutoff_range_rank_max
-  nb_band_min_x <- onset_info$nb_band_rank_min
-  nb_band_max_x <- onset_info$nb_band_rank_max
+  ref_x <- onset_info$fixed_rank_reference
   corr <- onset_info$corrob
 
-  ref_x <- min(fixed_rank_reference, max(df$rank, na.rm = TRUE))
   x_rng <- range(df$rank, na.rm = TRUE)
-  x_left <- x_rng[1] + 0.06 * diff(x_rng)
+  x_left <- x_rng[1] + 0.04 * diff(x_rng)
   x_right <- x_rng[1] + 0.72 * diff(x_rng)
 
-  cutoff_pt <- df[df$rank == cutoff_x & is.finite(df$var_fit), , drop = FALSE]
-  terminal_pt <- df[df$rank == terminal_x & is.finite(df$var_fit), , drop = FALSE]
-  ref_pt <- df[df$rank == ref_x & is.finite(df$var_fit), , drop = FALSE]
+  cutoff_pt_abs <- df[df$rank == cutoff_x, , drop = FALSE]
+  terminal_pt_abs <- df[df$rank == terminal_x, , drop = FALSE]
+  ref_pt_abs <- df[df$rank == ref_x, , drop = FALSE]
+
+  cutoff_pt_var <- df[df$rank == cutoff_x & is.finite(df$var_fit), , drop = FALSE]
+  terminal_pt_var <- df[df$rank == terminal_x & is.finite(df$var_fit), , drop = FALSE]
+  ref_pt_var <- df[df$rank == ref_x & is.finite(df$var_fit), , drop = FALSE]
+
+  deriv_pt_cut <- data.frame(rank = cutoff_x, value = df$d2_sm[df$rank == cutoff_x])
+  deriv_pt_term <- data.frame(rank = terminal_x, value = df$d2_sm[df$rank == terminal_x])
+  deriv_pt_ref <- data.frame(rank = ref_x, value = df$d2_sm[df$rank == ref_x])
+
+  nb_pt_cut <- data.frame(rank = cutoff_x, value = df$nb_support[df$rank == cutoff_x])
+  nb_pt_term <- data.frame(rank = terminal_x, value = df$nb_support[df$rank == terminal_x])
+  nb_pt_ref <- data.frame(rank = ref_x, value = df$nb_support[df$rank == ref_x])
+
+  left_text_abs <- paste(
+    "Absolute loading panel",
+    "Filled circle = cutoff anchor",
+    "Open circle = terminal start",
+    "Diamond = fixed rank 5000",
+    sep = "\n"
+  )
+
+  right_text_abs <- paste0(
+    "Cutoff anchor rank = ", cutoff_x,
+    "\nTerminal start rank = ", terminal_x,
+    "\nStudy interval = [", interval_min_x, ", ", interval_max_x, "]",
+    "\nPre-EVS remainder = ", onset_info$pre_evs_remainder_size,
+    "\nPre-EVS leading edge = ", onset_info$pre_evs_leading_edge_size
+  )
+
+  left_text_var <- paste(
+    "Variance curve method",
+    "Smooth empirical log(1+variance) along EVS rank",
+    "The first two terminal d2 zero-crossings define the interval",
+    "Earlier terminal zero = cutoff anchor",
+    "Later terminal zero = terminal start",
+    sep = "\n"
+  )
+
+  left_text_deriv <- paste(
+    "Derivative method",
+    "Zero-crossings are sign changes in smoothed d2",
+    "No slope threshold is imposed",
+    "No run-length rule is imposed",
+    "Only the first two terminal d2 zeros are used",
+    sep = "\n"
+  )
+
+  left_text_nb <- paste(
+    "NB corroboration",
+    "NB2-like side = all genes from cutoff anchor to the end",
+    "Matched NB1 side = same number of genes immediately to the left",
+    "These summaries corroborate the derivative-defined split",
+    sep = "\n"
+  )
+
+  right_text_nb <- paste0(
+    "Left median log(NB2) = ", fmt_num(corr$left_median_log_nb2),
+    "\nRight median log(NB2) = ", fmt_num(corr$right_median_log_nb2),
+    "\nRight-left log(NB2) diff = ", fmt_num(corr$right_left_log_nb2_diff),
+    "\nLeft median NB2-NB1 = ", fmt_num(corr$left_median_nb_gap),
+    "\nRight median NB2-NB1 = ", fmt_num(corr$right_median_nb_gap),
+    "\nRight-left NB2-NB1 diff = ", fmt_num(corr$right_left_nb_gap_diff),
+    "\nLeft median log(alpha*mu) = ", fmt_num(corr$left_median_log_alpha_mu),
+    "\nRight median log(alpha*mu) = ", fmt_num(corr$right_median_log_alpha_mu),
+    "\nRight-left log(alpha*mu) diff = ", fmt_num(corr$right_left_log_alpha_mu_diff)
+  )
+
+  right_text_band <- paste0(
+    "Final NB-supported summary",
+    "\nCenter = ", cutoff_x,
+    "\nInterval = [", interval_min_x, ", ", interval_max_x, "]",
+    "\nTerminal start = ", terminal_x
+  )
 
   p1 <- ggplot(df, aes(rank, abs_loading)) +
-    annotate("rect", xmin = interval_min_x, xmax = interval_max_x, ymin = -Inf, ymax = Inf, alpha = 0.10) +
-    annotate("rect", xmin = nb_band_min_x, xmax = nb_band_max_x, ymin = -Inf, ymax = Inf, alpha = 0.05) +
-    geom_line(linewidth = 0.8, na.rm = TRUE) +
-    geom_vline(xintercept = cutoff_x, linetype = 2, linewidth = 0.8) +
-    geom_vline(xintercept = terminal_x, linetype = 3, linewidth = 0.8) +
-    geom_vline(xintercept = ref_x, linetype = 4, linewidth = 0.8) +
-    annotate(
-      "label",
-      x = x_left,
-      y = max(df$abs_loading, na.rm = TRUE),
-      hjust = 0,
-      vjust = 1,
-      size = 2.7,
-      label = paste0(
-        "Absolute loading panel",
-        "\nInterval = last two terminal d2 zeros on the right side",
-        "\nFilled marker = earlier cutoff anchor",
-        "\nOpen marker = later terminal anchor",
-        "\nDiamond = fixed rank 5000 reference"
-      )
-    ) +
-    annotate(
-      "label",
-      x = x_right,
-      y = max(df$abs_loading, na.rm = TRUE),
-      hjust = 0,
-      vjust = 1,
-      size = 2.7,
-      label = paste0(
-        "Cutoff anchor rank = ", cutoff_x,
-        "\nTerminal anchor rank = ", terminal_x,
-        "\nInterval = [", interval_min_x, ", ", interval_max_x, "]",
-        "\nNB band = [", nb_band_min_x, ", ", nb_band_max_x, "]"
-      )
-    ) +
+    annotate("rect", xmin = interval_min_x, xmax = interval_max_x, ymin = -Inf, ymax = Inf,
+             fill = COLORS["interval_fill"], alpha = 0.18) +
+    geom_line(color = COLORS["variance_fit"], linewidth = 0.95, na.rm = TRUE) +
+    geom_vline(xintercept = cutoff_x, linetype = 2, linewidth = 0.85, color = COLORS["cutoff_anchor"]) +
+    geom_vline(xintercept = terminal_x, linetype = 3, linewidth = 0.85, color = COLORS["terminal_anchor"]) +
+    geom_vline(xintercept = ref_x, linetype = 4, linewidth = 0.85, color = COLORS["ref5000"]) +
+    geom_point(data = cutoff_pt_abs, aes(x = rank, y = abs_loading), inherit.aes = FALSE,
+               shape = 16, size = 2.5, color = COLORS["cutoff_anchor"]) +
+    geom_point(data = terminal_pt_abs, aes(x = rank, y = abs_loading), inherit.aes = FALSE,
+               shape = 1, size = 2.8, stroke = 1.0, color = COLORS["terminal_anchor"]) +
+    geom_point(data = ref_pt_abs, aes(x = rank, y = abs_loading), inherit.aes = FALSE,
+               shape = 18, size = 2.8, color = COLORS["ref5000"]) +
+    make_left_method_box(x_left, max(df$abs_loading, na.rm = TRUE), left_text_abs, size = 2.6) +
+    make_right_numeric_box(x_right, max(df$abs_loading, na.rm = TRUE), right_text_abs, size = 2.55) +
     labs(
       title = paste0(title_prefix, ": absolute PC1 loading series"),
       subtitle = "Leading edge is on the RIGHT",
       x = "EVS rank",
       y = "|PC1 loading|"
     ) +
-    theme_bw(base_size = 10)
+    theme_bw(base_size = 10) +
+    theme(plot.margin = margin(8, 34, 8, 10))
 
   p2 <- ggplot(df, aes(rank, var_fit)) +
-    annotate("rect", xmin = interval_min_x, xmax = interval_max_x, ymin = -Inf, ymax = Inf, alpha = 0.10) +
-    annotate("rect", xmin = nb_band_min_x, xmax = nb_band_max_x, ymin = -Inf, ymax = Inf, alpha = 0.05) +
-    geom_line(linewidth = 1.0, na.rm = TRUE) +
-    geom_vline(xintercept = cutoff_x, linetype = 2, linewidth = 0.8) +
-    geom_vline(xintercept = terminal_x, linetype = 3, linewidth = 0.8) +
-    geom_vline(xintercept = ref_x, linetype = 4, linewidth = 0.8) +
-    geom_point(data = cutoff_pt, aes(x = rank, y = var_fit), shape = 16, size = 2.6, inherit.aes = FALSE) +
-    geom_point(data = terminal_pt, aes(x = rank, y = var_fit), shape = 1, size = 2.8, stroke = 1.0, inherit.aes = FALSE) +
-    geom_point(data = ref_pt, aes(x = rank, y = var_fit), shape = 18, size = 2.8, inherit.aes = FALSE) +
-    annotate(
-      "label",
-      x = x_left,
-      y = max(df$var_fit, na.rm = TRUE),
-      hjust = 0,
-      vjust = 1,
-      size = 2.6,
-      label = paste0(
-        "Variance curve method",
-        "\nSmooth empirical log(1+variance)",
-        "\nTake the last two terminal d2 zero-crossings",
-        "\nEarlier zero = cutoff anchor",
-        "\nLater zero = terminal anchor"
-      )
-    ) +
+    annotate("rect", xmin = interval_min_x, xmax = interval_max_x, ymin = -Inf, ymax = Inf,
+             fill = COLORS["interval_fill"], alpha = 0.18) +
+    geom_line(color = COLORS["variance_fit"], linewidth = 1.0, na.rm = TRUE) +
+    geom_vline(xintercept = cutoff_x, linetype = 2, linewidth = 0.85, color = COLORS["cutoff_anchor"]) +
+    geom_vline(xintercept = terminal_x, linetype = 3, linewidth = 0.85, color = COLORS["terminal_anchor"]) +
+    geom_vline(xintercept = ref_x, linetype = 4, linewidth = 0.85, color = COLORS["ref5000"]) +
+    geom_point(data = cutoff_pt_var, aes(x = rank, y = var_fit), shape = 16, size = 2.6,
+               inherit.aes = FALSE, color = COLORS["cutoff_anchor"]) +
+    geom_point(data = terminal_pt_var, aes(x = rank, y = var_fit), shape = 1, size = 2.9, stroke = 1.0,
+               inherit.aes = FALSE, color = COLORS["terminal_anchor"]) +
+    geom_point(data = ref_pt_var, aes(x = rank, y = var_fit), shape = 18, size = 2.9,
+               inherit.aes = FALSE, color = COLORS["ref5000"]) +
+    make_left_method_box(x_left, max(df$var_fit, na.rm = TRUE), left_text_var, size = 2.45) +
     labs(
       title = paste0(title_prefix, ": smoothed empirical variance curve"),
-      subtitle = "Derivative-defined interval and NB-supported band are shown",
+      subtitle = "Selected geometric points are marked on the curve",
       x = "EVS rank",
       y = "Fitted log(1 + variance)"
     ) +
-    theme_bw(base_size = 10)
+    theme_bw(base_size = 10) +
+    theme(plot.margin = margin(8, 34, 8, 10))
 
-  d2_zero_tbl <- onset_info$selected_zero_crossings
-  d2_zero_pts <- df[df$rank %in% d2_zero_tbl$rank, , drop = FALSE]
+  deriv_df <- bind_rows(
+    data.frame(rank = df$rank, value = df$d2_sm, series = "Smoothed curvature d2"),
+    data.frame(rank = df$rank, value = df$d1_sm, series = "Smoothed slope d1")
+  )
 
-  p3 <- ggplot(df, aes(rank)) +
-    annotate("rect", xmin = interval_min_x, xmax = interval_max_x, ymin = -Inf, ymax = Inf, alpha = 0.10) +
-    geom_line(aes(y = d2_sm, color = "Smoothed curvature d2"), linewidth = 1.0, na.rm = TRUE) +
-    geom_line(aes(y = d1_sm, color = "Smoothed slope d1"), linewidth = 1.0, na.rm = TRUE) +
-    geom_hline(yintercept = 0, linewidth = 0.5) +
-    geom_vline(xintercept = cutoff_x, linetype = 2, linewidth = 0.8) +
-    geom_vline(xintercept = terminal_x, linetype = 3, linewidth = 0.8) +
-    geom_vline(xintercept = ref_x, linetype = 4, linewidth = 0.8) +
-    geom_point(data = data.frame(rank = cutoff_x, d2_sm = df$d2_sm[df$rank == cutoff_x]), aes(x = rank, y = d2_sm), shape = 16, size = 2.6, inherit.aes = FALSE) +
-    geom_point(data = data.frame(rank = terminal_x, d2_sm = df$d2_sm[df$rank == terminal_x]), aes(x = rank, y = d2_sm), shape = 1, size = 2.8, stroke = 1.0, inherit.aes = FALSE) +
-    annotate(
-      "label",
-      x = x_left,
-      y = max(c(df$d1_sm, df$d2_sm), na.rm = TRUE),
-      hjust = 0,
-      vjust = 1,
-      size = 2.55,
-      label = paste0(
-        "Derivative method",
-        "\nZero-crossings are sign changes in smoothed d2",
-        "\nNo first-derivative threshold is imposed",
-        "\nNo minimum run-length rule is imposed",
-        "\nOnly the last two terminal zeros are used"
+  p3 <- ggplot(deriv_df, aes(rank, value, color = series)) +
+    annotate("rect", xmin = interval_min_x, xmax = interval_max_x, ymin = -Inf, ymax = Inf,
+             fill = COLORS["interval_fill"], alpha = 0.18, inherit.aes = FALSE) +
+    geom_line(linewidth = 0.95, na.rm = TRUE) +
+    scale_color_manual(
+      values = c(
+        "Smoothed curvature d2" = COLORS["d2"],
+        "Smoothed slope d1" = COLORS["d1"]
       )
     ) +
+    geom_hline(yintercept = 0, linewidth = 0.55, color = "black") +
+    geom_vline(xintercept = cutoff_x, linetype = 2, linewidth = 0.85, color = COLORS["cutoff_anchor"]) +
+    geom_vline(xintercept = terminal_x, linetype = 3, linewidth = 0.85, color = COLORS["terminal_anchor"]) +
+    geom_vline(xintercept = ref_x, linetype = 4, linewidth = 0.85, color = COLORS["ref5000"]) +
+    geom_point(data = deriv_pt_cut, aes(x = rank, y = value), shape = 16, size = 2.6,
+               inherit.aes = FALSE, color = COLORS["cutoff_anchor"]) +
+    geom_point(data = deriv_pt_term, aes(x = rank, y = value), shape = 1, size = 2.9, stroke = 1.0,
+               inherit.aes = FALSE, color = COLORS["terminal_anchor"]) +
+    geom_point(data = deriv_pt_ref, aes(x = rank, y = value), shape = 18, size = 2.9,
+               inherit.aes = FALSE, color = COLORS["ref5000"]) +
+    make_left_method_box(x_left, max(deriv_df$value, na.rm = TRUE), left_text_deriv, size = 2.35) +
     labs(
       title = paste0(title_prefix, ": derivative support"),
-      subtitle = "Filled circle = cutoff anchor, open circle = terminal anchor",
+      subtitle = "Cutoff anchor and terminal start come only from the selected terminal d2 zeros",
       x = "EVS rank",
-      y = "Derivative value"
+      y = "Derivative value",
+      color = NULL
     ) +
     theme_bw(base_size = 10) +
-    theme(legend.position = "bottom")
+    theme(legend.position = "bottom",
+          plot.margin = margin(8, 34, 8, 10))
 
-  p4 <- ggplot(df, aes(rank)) +
-    annotate("rect", xmin = interval_min_x, xmax = interval_max_x, ymin = -Inf, ymax = Inf, alpha = 0.10) +
-    annotate("rect", xmin = nb_band_min_x, xmax = nb_band_max_x, ymin = -Inf, ymax = Inf, alpha = 0.05) +
-    geom_line(aes(y = nb_support, color = "Combined NB support"), linewidth = 1.0, na.rm = TRUE) +
-    geom_line(aes(y = log_nb1, color = "NB1 = mu"), linewidth = 0.5, alpha = 0.35, na.rm = TRUE) +
-    geom_line(aes(y = log_nb2, color = "NB2 = variance - mu"), linewidth = 0.5, alpha = 0.35, na.rm = TRUE) +
-    geom_line(aes(y = amu_sm, color = "Smoothed log(alpha*mu)"), linewidth = 1.0, na.rm = TRUE) +
-    geom_line(aes(y = nb_gap_sm, color = "Smoothed log(NB2+1) - log(NB1+1)"), linewidth = 1.0, na.rm = TRUE) +
-    geom_hline(yintercept = onset_info$nb_support_threshold, linetype = 3, linewidth = 0.5) +
-    geom_vline(xintercept = cutoff_x, linetype = 2, linewidth = 0.8) +
-    geom_vline(xintercept = terminal_x, linetype = 3, linewidth = 0.8) +
-    geom_vline(xintercept = ref_x, linetype = 4, linewidth = 0.8) +
-    annotate(
-      "label",
-      x = x_left,
-      y = max(c(df$nb_support, df$log_nb1, df$log_nb2, df$amu_sm, df$nb_gap_sm), na.rm = TRUE),
-      hjust = 0,
-      vjust = 1,
-      size = 2.35,
-      label = paste0(
-        "NB corroboration",
-        "\nRight side = all genes from cutoff anchor to end",
-        "\nLeft side = same number of genes immediately left",
-        "\nLeft n = ", corr$left_n,
-        "\nRight n = ", corr$right_n,
-        "\nRight-left log(NB2) diff = ", round(corr$right_left_log_nb2_diff, 3),
-        "\nRight-left NB2-NB1 diff = ", round(corr$right_left_nb_gap_diff, 3),
-        "\nRight-left log(alpha*mu) diff = ", round(corr$right_left_log_alpha_mu_diff, 3)
+  nb_df <- bind_rows(
+    data.frame(rank = df$rank, value = df$nb_support, series = "Combined NB support"),
+    data.frame(rank = df$rank, value = df$log_nb1, series = "NB1 = mu"),
+    data.frame(rank = df$rank, value = df$log_nb2, series = "NB2 = variance - mu"),
+    data.frame(rank = df$rank, value = df$amu_sm, series = "Smoothed log(alpha*mu)"),
+    data.frame(rank = df$rank, value = df$nb_gap_sm, series = "Smoothed log(NB2+1) - log(NB1+1)")
+  )
+
+  p4 <- ggplot(nb_df, aes(rank, value, color = series)) +
+    annotate("rect", xmin = interval_min_x, xmax = interval_max_x, ymin = -Inf, ymax = Inf,
+             fill = COLORS["interval_fill"], alpha = 0.18, inherit.aes = FALSE) +
+    geom_line(linewidth = 0.9, na.rm = TRUE) +
+    geom_hline(yintercept = onset_info$nb_support_threshold, linetype = 3, linewidth = 0.55,
+               color = "grey40") +
+    geom_vline(xintercept = cutoff_x, linetype = 2, linewidth = 0.85, color = COLORS["cutoff_anchor"]) +
+    geom_vline(xintercept = terminal_x, linetype = 3, linewidth = 0.85, color = COLORS["terminal_anchor"]) +
+    geom_vline(xintercept = ref_x, linetype = 4, linewidth = 0.85, color = COLORS["ref5000"]) +
+    geom_point(data = nb_pt_cut, aes(x = rank, y = value), shape = 16, size = 2.6,
+               inherit.aes = FALSE, color = COLORS["cutoff_anchor"]) +
+    geom_point(data = nb_pt_term, aes(x = rank, y = value), shape = 1, size = 2.9, stroke = 1.0,
+               inherit.aes = FALSE, color = COLORS["terminal_anchor"]) +
+    geom_point(data = nb_pt_ref, aes(x = rank, y = value), shape = 18, size = 2.9,
+               inherit.aes = FALSE, color = COLORS["ref5000"]) +
+    scale_color_manual(
+      values = c(
+        "Combined NB support" = COLORS["nb_support"],
+        "NB1 = mu" = COLORS["nb1"],
+        "NB2 = variance - mu" = COLORS["nb2"],
+        "Smoothed log(alpha*mu)" = COLORS["amu"],
+        "Smoothed log(NB2+1) - log(NB1+1)" = COLORS["nb_gap"]
       )
     ) +
+    make_left_method_box(x_left, max(nb_df$value, na.rm = TRUE), left_text_nb, size = 2.2) +
+    make_right_numeric_box(x_right, max(nb_df$value, na.rm = TRUE), right_text_nb, size = 2.0) +
     labs(
       title = paste0(title_prefix, ": NB1 / NB2 / alpha*mu support"),
-      subtitle = "Matched left-right comparison around the derivative-defined cutoff",
+      subtitle = "Right-of-cutoff elevation in NB2 and alpha*mu supports the leading-edge interpretation",
       x = "EVS rank",
-      y = "Support value"
+      y = "Support value",
+      color = NULL
     ) +
     theme_bw(base_size = 10) +
-    theme(legend.position = "bottom")
+    theme(legend.position = "bottom",
+          plot.margin = margin(8, 34, 8, 10))
 
   p5 <- ggplot(df, aes(rank, nb_support)) +
-    annotate("rect", xmin = interval_min_x, xmax = interval_max_x, ymin = -Inf, ymax = Inf, alpha = 0.10) +
-    annotate("rect", xmin = nb_band_min_x, xmax = nb_band_max_x, ymin = -Inf, ymax = Inf, alpha = 0.05) +
-    geom_line(linewidth = 1.0, na.rm = TRUE) +
-    geom_hline(yintercept = onset_info$nb_support_threshold, linetype = 3, linewidth = 0.5) +
-    geom_vline(xintercept = cutoff_x, linetype = 2, linewidth = 0.8) +
-    geom_vline(xintercept = terminal_x, linetype = 3, linewidth = 0.8) +
-    geom_vline(xintercept = ref_x, linetype = 4, linewidth = 0.8) +
-    annotate(
-      "label",
-      x = x_right,
-      y = max(df$nb_support, na.rm = TRUE),
-      hjust = 0,
-      vjust = 1,
-      size = 2.65,
-      label = paste0(
-        "Final interval and local NB band",
-        "\nDerivative interval = [", interval_min_x, ", ", interval_max_x, "]",
-        "\nNB band = [", nb_band_min_x, ", ", nb_band_max_x, "]",
-        "\nCenter NB support = ", round(onset_info$center_nb_support, 3),
-        "\nNB threshold = ", round(onset_info$nb_support_threshold, 3)
-      )
+    annotate("rect", xmin = interval_min_x, xmax = interval_max_x, ymin = -Inf, ymax = Inf,
+             fill = COLORS["interval_fill"], alpha = 0.18) +
+    geom_line(color = COLORS["nb_support"], linewidth = 1.0, na.rm = TRUE) +
+    geom_hline(yintercept = onset_info$nb_support_threshold, linetype = 3, linewidth = 0.55,
+               color = "grey40") +
+    geom_vline(xintercept = cutoff_x, linetype = 2, linewidth = 0.85, color = COLORS["cutoff_anchor"]) +
+    geom_vline(xintercept = terminal_x, linetype = 3, linewidth = 0.85, color = COLORS["terminal_anchor"]) +
+    geom_vline(xintercept = ref_x, linetype = 4, linewidth = 0.85, color = COLORS["ref5000"]) +
+    geom_point(data = nb_pt_cut, aes(x = rank, y = value), shape = 16, size = 2.6,
+               inherit.aes = FALSE, color = COLORS["cutoff_anchor"]) +
+    geom_point(data = nb_pt_term, aes(x = rank, y = value), shape = 1, size = 2.9, stroke = 1.0,
+               inherit.aes = FALSE, color = COLORS["terminal_anchor"]) +
+    geom_point(data = nb_pt_ref, aes(x = rank, y = value), shape = 18, size = 2.9,
+               inherit.aes = FALSE, color = COLORS["ref5000"]) +
+    make_left_method_box(
+      x_left,
+      max(df$nb_support, na.rm = TRUE),
+      paste(
+        "Final NB support panel",
+        "The shaded interval is the final manuscript study interval",
+        "Combined NB support is shown for corroboration",
+        sep = "\n"
+      ),
+      size = 2.35
     ) +
+    make_right_numeric_box(x_right, max(df$nb_support, na.rm = TRUE), right_text_band, size = 2.35) +
     labs(
-      title = paste0(title_prefix, ": NB-supported cutoff band"),
-      subtitle = "The NB band is local support around the derivative-defined cutoff anchor",
+      title = paste0(title_prefix, ": combined NB support"),
+      subtitle = "The geometric interval remains primary and NB support is corroborative",
       x = "EVS rank",
       y = "Combined NB support"
     ) +
-    theme_bw(base_size = 10)
+    theme_bw(base_size = 10) +
+    theme(plot.margin = margin(8, 34, 8, 10))
 
-  png(out_file, width = 2400, height = 3200, res = 220)
+  png(out_file, width = 3000, height = 3900, res = 240)
   gridExtra::grid.arrange(p1, p2, p3, p4, p5, ncol = 1)
   dev.off()
 }
 
-build_range_panel <- function(ctrl_onset, trt_onset, title_prefix, out_file, fixed_rank_reference = 5000L) {
+build_range_panel <- function(ctrl_onset, trt_onset, title_prefix, out_file) {
   ctrl_df <- ctrl_onset$curve_df
   trt_df <- trt_onset$curve_df
 
   x_all <- c(ctrl_df$rank, trt_df$rank)
   y_all <- c(ctrl_df$var_fit, trt_df$var_fit)
-  x_left <- min(x_all, na.rm = TRUE) + 0.06 * diff(range(x_all, na.rm = TRUE))
-  ref_x <- min(fixed_rank_reference, max(x_all, na.rm = TRUE))
+
+  x_left <- min(x_all, na.rm = TRUE) + 0.05 * diff(range(x_all, na.rm = TRUE))
+  x_right <- min(x_all, na.rm = TRUE) + 0.68 * diff(range(x_all, na.rm = TRUE))
 
   p <- ggplot() +
     annotate(
@@ -996,38 +1023,55 @@ build_range_panel <- function(ctrl_onset, trt_onset, title_prefix, out_file, fix
       xmin = min(ctrl_onset$cutoff_range_rank_min, trt_onset$cutoff_range_rank_min),
       xmax = max(ctrl_onset$cutoff_range_rank_max, trt_onset$cutoff_range_rank_max),
       ymin = -Inf, ymax = Inf,
-      alpha = 0.08
+      fill = COLORS["interval_fill"], alpha = 0.12
     ) +
     geom_line(data = ctrl_df, aes(rank, var_fit, color = "Control variance fit"), linewidth = 1.0, na.rm = TRUE) +
     geom_line(data = trt_df, aes(rank, var_fit, color = "Treatment variance fit"), linewidth = 1.0, na.rm = TRUE) +
-    geom_vline(xintercept = ctrl_onset$cutoff_center_rank, linetype = 2, linewidth = 0.8) +
-    geom_vline(xintercept = trt_onset$cutoff_center_rank, linetype = 3, linewidth = 0.8) +
-    geom_vline(xintercept = ref_x, linetype = 4, linewidth = 0.8) +
-    annotate(
-      "label",
-      x = x_left,
-      y = max(y_all, na.rm = TRUE),
-      hjust = 0,
-      vjust = 1,
-      size = 2.8,
-      label = paste0(
-        "Treatment / control comparison",
-        "\nControl interval = [", ctrl_onset$cutoff_range_rank_min, ", ", ctrl_onset$cutoff_range_rank_max, "]",
-        "\nTreatment interval = [", trt_onset$cutoff_range_rank_min, ", ", trt_onset$cutoff_range_rank_max, "]",
-        "\nControl anchor = ", ctrl_onset$cutoff_center_rank,
-        "\nTreatment anchor = ", trt_onset$cutoff_center_rank
+    geom_vline(xintercept = ctrl_onset$cutoff_center_rank, linetype = 2, linewidth = 0.85, color = "#252525") +
+    geom_vline(xintercept = trt_onset$cutoff_center_rank, linetype = 3, linewidth = 0.85, color = "#636363") +
+    geom_vline(xintercept = ctrl_onset$terminal_start_rank, linetype = 2, linewidth = 0.55, color = "#252525") +
+    geom_vline(xintercept = trt_onset$terminal_start_rank, linetype = 3, linewidth = 0.55, color = "#636363") +
+    scale_color_manual(
+      values = c(
+        "Control variance fit" = "#1b9e77",
+        "Treatment variance fit" = "#7570b3"
       )
+    ) +
+    make_left_method_box(
+      x_left,
+      max(y_all, na.rm = TRUE),
+      paste(
+        "Treatment/control comparison",
+        "Both arms use the same manuscript rule",
+        "Earlier terminal d2 zero = cutoff anchor",
+        "Later terminal d2 zero = terminal start",
+        sep = "\n"
+      ),
+      size = 2.8
+    ) +
+    make_right_numeric_box(
+      x_right,
+      max(y_all, na.rm = TRUE),
+      paste0(
+        "Control interval = [", ctrl_onset$cutoff_range_rank_min, ", ", ctrl_onset$cutoff_range_rank_max, "]",
+        "\nTreatment interval = [", trt_onset$cutoff_range_rank_min, ", ", trt_onset$cutoff_range_rank_max, "]",
+        "\nControl cutoff = ", ctrl_onset$cutoff_center_rank,
+        "\nTreatment cutoff = ", trt_onset$cutoff_center_rank
+      ),
+      size = 2.7
     ) +
     labs(
       title = paste0(title_prefix, ": treatment/control derivative-defined intervals"),
-      subtitle = "Both arms use the same final method",
+      subtitle = "Both arms are shown on the same variance-fit axis",
       x = "EVS rank",
-      y = "Fitted log(1 + variance)"
+      y = "Fitted log(1 + variance)",
+      color = NULL
     ) +
     theme_bw(base_size = 10) +
-    theme(legend.position = "bottom")
+    theme(legend.position = "bottom",
+          plot.margin = margin(8, 34, 8, 10))
 
-  png(out_file, width = 2400, height = 1300, res = 220)
+  png(out_file, width = 3000, height = 1400, res = 240)
   print(p)
   dev.off()
 }
@@ -1037,11 +1081,11 @@ build_range_panel <- function(ctrl_onset, trt_onset, title_prefix, out_file, fix
 # =============================================================================
 #
 # MANUSCRIPT METHODS DESCRIPTION
-# Each comparison arm is processed independently. Ranked empirical series are
-# constructed, derivative-defined terminal anchors are identified, NB-supported
-# local bands are generated, and corroboration summaries are exported. All
-# zero-crossings, the selected terminal pair, feature-level tables, arm-level
-# figures, and global summary tables are written to disk for manuscript use.
+# Each comparison is processed independently. Control and treatment arms are
+# ranked separately, their own variance geometry is fitted separately, and
+# their own geometric anchors are selected separately. Per-comparison feature
+# tables, full zero-crossing tables, selected anchor tables, figure panels,
+# and manuscript summary tables are written to disk.
 # =============================================================================
 
 message("SEQUENCE.R started"); flush.console()
@@ -1102,9 +1146,8 @@ for (i in seq_len(nrow(comparison_table))) {
     spline_spar = spline_spar,
     terminal_fraction_start = terminal_fraction_start,
     zero_tol = zero_tol,
-    nb_range_drop_fraction = nb_range_drop_fraction,
-    nb_range_max_span_fraction = nb_range_max_span_fraction,
-    nb_smooth_window = nb_smooth_window
+    nb_smooth_window = nb_smooth_window,
+    fixed_rank_reference = fixed_rank_reference
   )
   message(
     "Control cutoff anchor rank: ", ctrl_onset$cutoff_center_rank,
@@ -1120,9 +1163,8 @@ for (i in seq_len(nrow(comparison_table))) {
     spline_spar = spline_spar,
     terminal_fraction_start = terminal_fraction_start,
     zero_tol = zero_tol,
-    nb_range_drop_fraction = nb_range_drop_fraction,
-    nb_range_max_span_fraction = nb_range_max_span_fraction,
-    nb_smooth_window = nb_smooth_window
+    nb_smooth_window = nb_smooth_window,
+    fixed_rank_reference = fixed_rank_reference
   )
   message(
     "Treatment cutoff anchor rank: ", trt_onset$cutoff_center_rank,
@@ -1136,22 +1178,19 @@ for (i in seq_len(nrow(comparison_table))) {
     ctrl_rank_df,
     ctrl_onset,
     paste0(cmp_name, " control"),
-    file.path(cmp_dir, paste0(cmp_name, "_control_rank_panel.png")),
-    fixed_rank_reference = fixed_rank_reference
+    file.path(cmp_dir, paste0(cmp_name, "_control_rank_panel.png"))
   )
   build_dataset_panel(
     trt_rank_df,
     trt_onset,
     paste0(cmp_name, " treatment"),
-    file.path(cmp_dir, paste0(cmp_name, "_treatment_rank_panel.png")),
-    fixed_rank_reference = fixed_rank_reference
+    file.path(cmp_dir, paste0(cmp_name, "_treatment_rank_panel.png"))
   )
   build_range_panel(
     ctrl_onset,
     trt_onset,
     cmp_name,
-    file.path(cmp_dir, paste0(cmp_name, "_cutoff_range_panel.png")),
-    fixed_rank_reference = fixed_rank_reference
+    file.path(cmp_dir, paste0(cmp_name, "_cutoff_range_panel.png"))
   )
 
   if (nrow(ctrl_onset$zero_crossings) > 0L) {
@@ -1199,8 +1238,6 @@ for (i in seq_len(nrow(comparison_table))) {
     control_terminal_anchor_rank = ctrl_onset$terminal_start_rank,
     control_interval_rank_min = ctrl_onset$cutoff_range_rank_min,
     control_interval_rank_max = ctrl_onset$cutoff_range_rank_max,
-    control_nb_band_rank_min = ctrl_onset$nb_band_rank_min,
-    control_nb_band_rank_max = ctrl_onset$nb_band_rank_max,
     control_center_nb_support = ctrl_onset$center_nb_support,
     control_nb_support_threshold = ctrl_onset$nb_support_threshold,
     control_pre_evs_remainder_size = ctrl_onset$pre_evs_remainder_size,
@@ -1225,8 +1262,6 @@ for (i in seq_len(nrow(comparison_table))) {
     treatment_terminal_anchor_rank = trt_onset$terminal_start_rank,
     treatment_interval_rank_min = trt_onset$cutoff_range_rank_min,
     treatment_interval_rank_max = trt_onset$cutoff_range_rank_max,
-    treatment_nb_band_rank_min = trt_onset$nb_band_rank_min,
-    treatment_nb_band_rank_max = trt_onset$nb_band_rank_max,
     treatment_center_nb_support = trt_onset$center_nb_support,
     treatment_nb_support_threshold = trt_onset$nb_support_threshold,
     treatment_pre_evs_remainder_size = trt_onset$pre_evs_remainder_size,
@@ -1257,9 +1292,10 @@ for (i in seq_len(nrow(comparison_table))) {
 }
 
 overall_summary <- bind_rows(overall_rows)
+
 utils::write.csv(
   overall_summary,
-  file.path(out_root, "overall_cutoff_summary.csv")),
+  file.path(out_root, "overall_cutoff_summary.csv"),
   row.names = FALSE
 )
 
