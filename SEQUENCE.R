@@ -73,7 +73,7 @@ comparison_pairs <- list(
   RT8_ZT14  = c("R8", "ZT14")
 )
 
-input_csv <- "WTTS-Seq_2022_DE_raw_read_numbers.csv"
+input_csv <- "WTTS-Seq_2022.2_DE_raw_read_numbers.csv"
 output_dir <- "exports/manual_5000_cutoff_version"
 
 dir.create(output_dir, showWarnings = FALSE, recursive = TRUE)
