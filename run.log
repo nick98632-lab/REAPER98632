@@ -5,22 +5,22 @@ Reading count matrix...
 Count matrix dimensions: 31757 features x 40 samples
 Processing comparison: RT0_ZT6
 Selecting control cutoff for RT0_ZT6
-Control cutoff center rank: 28251 | terminal start: 28493 | cutoff range: [28073, 28493] | pre-EVS remainder: 28250 | pre-EVS leading edge: 3507
+Control cutoff center rank: 28251 | terminal start: 28493 | cutoff range: [28075, 28493] | pre-EVS remainder: 28250 | pre-EVS leading edge: 3507
 Selecting treatment cutoff for RT0_ZT6
-Treatment cutoff center rank: 25574 | terminal start: 26034 | cutoff range: [24292, 26034] | pre-EVS remainder: 25573 | pre-EVS leading edge: 6184
+Treatment cutoff center rank: 25574 | terminal start: 26034 | cutoff range: [25509, 26034] | pre-EVS remainder: 25573 | pre-EVS leading edge: 6184
 Processing comparison: RT2_ZT8
 Selecting control cutoff for RT2_ZT8
-Control cutoff center rank: 23381 | terminal start: 24576 | cutoff range: [23291, 24576] | pre-EVS remainder: 23380 | pre-EVS leading edge: 8377
+Control cutoff center rank: 23381 | terminal start: 24576 | cutoff range: [23284, 24576] | pre-EVS remainder: 23380 | pre-EVS leading edge: 8377
 Selecting treatment cutoff for RT2_ZT8
-Treatment cutoff center rank: 25015 | terminal start: 25957 | cutoff range: [23714, 25957] | pre-EVS remainder: 25014 | pre-EVS leading edge: 6743
+Treatment cutoff center rank: 21205 | terminal start: 25957 | cutoff range: [21190, 22115] | pre-EVS remainder: 21204 | pre-EVS leading edge: 10553
 Processing comparison: RT4_ZT10
 Selecting control cutoff for RT4_ZT10
-Control cutoff center rank: 24046 | terminal start: 25090 | cutoff range: [23885, 25090] | pre-EVS remainder: 24045 | pre-EVS leading edge: 7712
+Control cutoff center rank: 21513 | terminal start: 25090 | cutoff range: [21301, 22821] | pre-EVS remainder: 21512 | pre-EVS leading edge: 10245
 Selecting treatment cutoff for RT4_ZT10
-Treatment cutoff center rank: 24655 | terminal start: 25231 | cutoff range: [18939, 25231] | pre-EVS remainder: 24654 | pre-EVS leading edge: 7103
+Treatment cutoff center rank: 22667 | terminal start: 25231 | cutoff range: [16951, 25231] | pre-EVS remainder: 22666 | pre-EVS leading edge: 9091
 Processing comparison: RT8_ZT14
 Selecting control cutoff for RT8_ZT14
-Control cutoff center rank: 26162 | terminal start: 26520 | cutoff range: [26091, 26327] | pre-EVS remainder: 26161 | pre-EVS leading edge: 5596
+Control cutoff center rank: 24891 | terminal start: 26520 | cutoff range: [24825, 25460] | pre-EVS remainder: 24890 | pre-EVS leading edge: 6867
 Selecting treatment cutoff for RT8_ZT14
-Treatment cutoff center rank: 28103 | terminal start: 28646 | cutoff range: [26771, 28646] | pre-EVS remainder: 28102 | pre-EVS leading edge: 3655
-Done. Outputs written to: /root/REAPER98632/exports/variance_derivative_nb_range_final
+Treatment cutoff center rank: 26885 | terminal start: 28646 | cutoff range: [26772, 28646] | pre-EVS remainder: 26884 | pre-EVS leading edge: 4873
+Done. Outputs written to: /root/REAPER98632/exports/variance_derivative_nb_range_final_v2
