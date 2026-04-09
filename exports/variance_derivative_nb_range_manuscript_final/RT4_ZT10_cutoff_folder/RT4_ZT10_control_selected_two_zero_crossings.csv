@@ -1,4 +1,2 @@
-"event","index","rank"
-"Cutoff anchor",26389,26389
-"Fixed leading-edge 5000",26758,26758
-"Terminal start",27050,27050
+"comparison_name","arm","cutoff_anchor_rank","fixed_leading_edge_5000_rank","terminal_start_rank","interval_min_rank","interval_max_rank"
+"RT4_ZT10","control",26757,26758,26759,26757,26759
