@@ -24,6 +24,42 @@ Warning: No shared levels found between `names(values)` of the manual scale and 
 data's colour values.
 Warning: No shared levels found between `names(values)` of the manual scale and the
 data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
 Processing comparison: RT2_ZT8
 Selecting control cutoff for RT2_ZT8
 Control cutoff anchor rank: 26591 | reference rank: 26758 | terminal anchor: 27009 | interval: [26591, 27009] | pre-EVS remainder: 26590 | pre-EVS leading edge: 5167
@@ -45,11 +81,83 @@ Warning: No shared levels found between `names(values)` of the manual scale and 
 data's colour values.
 Warning: No shared levels found between `names(values)` of the manual scale and the
 data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
 Processing comparison: RT4_ZT10
 Selecting control cutoff for RT4_ZT10
-Control cutoff anchor rank: 26389 | reference rank: 26758 | terminal anchor: 27049 | interval: [26389, 27049] | pre-EVS remainder: 26388 | pre-EVS leading edge: 5369
+Control cutoff anchor rank: 26389 | reference rank: 26758 | terminal anchor: 27050 | interval: [26389, 27050] | pre-EVS remainder: 26388 | pre-EVS leading edge: 5369
 Selecting treatment cutoff for RT4_ZT10
-Treatment cutoff anchor rank: 26380 | reference rank: 26758 | terminal anchor: 27553 | interval: [26380, 27553] | pre-EVS remainder: 26379 | pre-EVS leading edge: 5378
+Treatment cutoff anchor rank: 26381 | reference rank: 26758 | terminal anchor: 27553 | interval: [26381, 27553] | pre-EVS remainder: 26380 | pre-EVS leading edge: 5377
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
 Warning: No shared levels found between `names(values)` of the manual scale and the
 data's colour values.
 Warning: No shared levels found between `names(values)` of the manual scale and the
@@ -87,4 +195,40 @@ Warning: No shared levels found between `names(values)` of the manual scale and 
 data's colour values.
 Warning: No shared levels found between `names(values)` of the manual scale and the
 data's colour values.
-Done. Outputs written to: /root/REAPER98632/exports/variance_derivative_nb_range_leadingedge5000_final
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Warning: No shared levels found between `names(values)` of the manual scale and the
+data's colour values.
+Done. Outputs written to: /root/REAPER98632/exports/variance_derivative_nb_range_leadingedge5000_rewritten_final
