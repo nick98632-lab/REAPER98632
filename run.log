@@ -1,234 +1,39 @@
-SEQUENCE.R started
-Resolving count file...
 Using count file: /root/REAPER98632/data/WTTS-Seq_2022.2_DE_raw_read_numbers.csv
-Reading count matrix...
 Count matrix dimensions: 31757 features x 40 samples
 Processing comparison: RT0_ZT6
 Selecting control cutoff for RT0_ZT6
 Control cutoff anchor rank: 26543 | reference rank: 26758 | terminal anchor: 26972 | interval: [26543, 26972] | pre-EVS remainder: 26542 | pre-EVS leading edge: 5215
+Warning: Removed 1103 rows containing missing values or values outside the scale range
+(`geom_line()`).
 Selecting treatment cutoff for RT0_ZT6
 Treatment cutoff anchor rank: 26566 | reference rank: 26758 | terminal anchor: 27042 | interval: [26566, 27042] | pre-EVS remainder: 26565 | pre-EVS leading edge: 5192
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
+Warning: Removed 1548 rows containing missing values or values outside the scale range
+(`geom_line()`).
 Processing comparison: RT2_ZT8
 Selecting control cutoff for RT2_ZT8
 Control cutoff anchor rank: 26591 | reference rank: 26758 | terminal anchor: 27009 | interval: [26591, 27009] | pre-EVS remainder: 26590 | pre-EVS leading edge: 5167
+Warning: Removed 975 rows containing missing values or values outside the scale range
+(`geom_line()`).
 Selecting treatment cutoff for RT2_ZT8
 Treatment cutoff anchor rank: 26490 | reference rank: 26758 | terminal anchor: 27155 | interval: [26490, 27155] | pre-EVS remainder: 26489 | pre-EVS leading edge: 5268
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
+Warning: Removed 1224 rows containing missing values or values outside the scale range
+(`geom_line()`).
 Processing comparison: RT4_ZT10
 Selecting control cutoff for RT4_ZT10
 Control cutoff anchor rank: 26389 | reference rank: 26758 | terminal anchor: 27050 | interval: [26389, 27050] | pre-EVS remainder: 26388 | pre-EVS leading edge: 5369
+Warning: Removed 1848 rows containing missing values or values outside the scale range
+(`geom_line()`).
 Selecting treatment cutoff for RT4_ZT10
 Treatment cutoff anchor rank: 26381 | reference rank: 26758 | terminal anchor: 27553 | interval: [26381, 27553] | pre-EVS remainder: 26380 | pre-EVS leading edge: 5377
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
+Warning: Removed 351 rows containing missing values or values outside the scale range
+(`geom_line()`).
 Processing comparison: RT8_ZT14
 Selecting control cutoff for RT8_ZT14
 Control cutoff anchor rank: 26520 | reference rank: 26758 | terminal anchor: 26937 | interval: [26520, 26937] | pre-EVS remainder: 26519 | pre-EVS leading edge: 5238
+Warning: Removed 742 rows containing missing values or values outside the scale range
+(`geom_line()`).
 Selecting treatment cutoff for RT8_ZT14
 Treatment cutoff anchor rank: 26537 | reference rank: 26758 | terminal anchor: 26885 | interval: [26537, 26885] | pre-EVS remainder: 26536 | pre-EVS leading edge: 5221
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Warning: No shared levels found between `names(values)` of the manual scale and the
-data's colour values.
-Done. Outputs written to: /root/REAPER98632/exports/variance_derivative_nb_range_leadingedge5000_rewritten_final
+Warning: Removed 854 rows containing missing values or values outside the scale range
+(`geom_line()`).
+Done. Outputs written to: /root/REAPER98632/exports/variance_derivative_nb_range_manuscript_final
