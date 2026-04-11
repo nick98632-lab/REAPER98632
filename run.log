@@ -6,36 +6,37 @@ Processing comparison: RT0_ZT6
 Selecting control cutoff for RT0_ZT6
 [MAIN] Control cutoff anchor rank: 26714 | reference rank: 26758 | terminal start: 27348
 converting counts to integer mode
-[DESEQ2] Control cutoff anchor rank: 26703 | reference rank: 26758 | terminal start: 27067
+[DESEQ2 SUPPLEMENT] Control cutoff anchor rank: 26703 | reference rank: 26758 | terminal start: 27067
 Selecting treatment cutoff for RT0_ZT6
 [MAIN] Treatment cutoff anchor rank: 26611 | reference rank: 26758 | terminal start: 27119
 converting counts to integer mode
-[DESEQ2] Treatment cutoff anchor rank: 26632 | reference rank: 26758 | terminal start: 27315
+[DESEQ2 SUPPLEMENT] Treatment cutoff anchor rank: 26632 | reference rank: 26758 | terminal start: 27315
 Processing comparison: RT2_ZT8
 Selecting control cutoff for RT2_ZT8
 [MAIN] Control cutoff anchor rank: 26711 | reference rank: 26758 | terminal start: 27294
 converting counts to integer mode
-[DESEQ2] Control cutoff anchor rank: 26726 | reference rank: 26758 | terminal start: 27198
+[DESEQ2 SUPPLEMENT] Control cutoff anchor rank: 26726 | reference rank: 26758 | terminal start: 27198
 Selecting treatment cutoff for RT2_ZT8
 [MAIN] Treatment cutoff anchor rank: 26219 | reference rank: 26758 | terminal start: 26978
 converting counts to integer mode
-[DESEQ2] Treatment cutoff anchor rank: 26113 | reference rank: 26758 | terminal start: 27335
+[DESEQ2 SUPPLEMENT] Treatment cutoff anchor rank: 26113 | reference rank: 26758 | terminal start: 27335
 Processing comparison: RT4_ZT10
 Selecting control cutoff for RT4_ZT10
 [MAIN] Control cutoff anchor rank: 26590 | reference rank: 26758 | terminal start: 27222
 converting counts to integer mode
-[DESEQ2] Control cutoff anchor rank: 26528 | reference rank: 26758 | terminal start: 27201
+[DESEQ2 SUPPLEMENT] Control cutoff anchor rank: 26528 | reference rank: 26758 | terminal start: 27201
 Selecting treatment cutoff for RT4_ZT10
 [MAIN] Treatment cutoff anchor rank: 26396 | reference rank: 26758 | terminal start: 27034
 converting counts to integer mode
-[DESEQ2] Treatment cutoff anchor rank: 26402 | reference rank: 26758 | terminal start: 26939
+[DESEQ2 SUPPLEMENT] Treatment cutoff anchor rank: 26402 | reference rank: 26758 | terminal start: 26939
 Processing comparison: RT8_ZT14
 Selecting control cutoff for RT8_ZT14
 [MAIN] Control cutoff anchor rank: 25781 | reference rank: 26758 | terminal start: 26894
 converting counts to integer mode
-[DESEQ2] Control cutoff anchor rank: 26510 | reference rank: 26758 | terminal start: 27365
+[DESEQ2 SUPPLEMENT] Control cutoff anchor rank: 26510 | reference rank: 26758 | terminal start: 27365
 Selecting treatment cutoff for RT8_ZT14
 [MAIN] Treatment cutoff anchor rank: 26480 | reference rank: 26758 | terminal start: 27644
 converting counts to integer mode
-[DESEQ2] Treatment cutoff anchor rank: 26403 | reference rank: 26758 | terminal start: 27141
+[DESEQ2 SUPPLEMENT] Treatment cutoff anchor rank: 26403 | reference rank: 26758 | terminal start: 27141
+There were 50 or more warnings (use warnings() to see the first 50)
 Done. Outputs written to: /root/REAPER98632/exports/manuscript_custom_geometry_nb2_support_final
