@@ -1,33 +1,41 @@
 #!/usr/bin/env Rscript
 
 # =============================================================================
-# MANUSCRIPT FIGURE SCRIPT
+# MANUSCRIPT-READY EVS / VARIANCE / NB2 SUPPORT FIGURE SCRIPT
 # -----------------------------------------------------------------------------
-# Purpose:
-#   Build manuscript-ready EVS / variance / derivative / NB-support figures that
-#   emphasize the hypothesis clearly:
+# This version is intentionally simplified for manuscript use.
 #
-#   1. A geometric cutoff is chosen around the fixed leading-edge-5000 mark.
-#   2. The full RIGHT leading-edge region (from cutoff anchor to rank end) is
-#      compared against a matched LEFT region of equal size.
-#   3. The right region is evaluated for stronger NB2-like behavior than the
-#      matched left region.
+# Core argument implemented by this script:
 #
-# Key manuscript improvements in this version:
-#   - Much stronger shading of the matched LEFT region and RIGHT leading edge
-#   - The final geometric interval is shaded separately
-#   - Only useful panels are kept
-#   - The derivative panel is kept only as a compact geometric-support panel
-#   - NB panel emphasizes interpretable quantities:
-#         NB1 = log(1 + mu)
-#         NB2 = log(1 + variance - mu)
-#         alpha*mu = log(1 + alpha*mu)
-#         NB2 - NB1 contrast
-#   - Summary panel shows only corroborative support
-#   - Legends are explicit and color-matched
+# 1. A geometric transition is defined near the fixed leading-edge-5000 rank.
+# 2. The cutoff anchor is the nearest d2 zero immediately LEFT of that fixed
+#    leading-edge-5000 rank.
+# 3. The terminal start is the nearest d2 zero immediately RIGHT of that fixed
+#    leading-edge-5000 rank.
+# 4. The full RIGHT leading-edge region is the region from cutoff anchor to the
+#    rank end.
+# 5. A matched LEFT region of equal size is taken immediately left of the
+#    cutoff anchor.
+# 6. NB corroboration is then evaluated by comparing RIGHT vs LEFT medians for:
+#       NB1 = log(1 + mu)
+#       NB2 = log(1 + variance - mu)
+#       alpha*mu = log(1 + alpha*mu)
+#       NB2 - NB1 contrast
+#
+# Manuscript design principles used here:
+# - The figure is stripped of non-essential panels.
+# - Only panels that support the hypothesis are retained.
+# - Shading is stronger and cleaner:
+#       matched LEFT region = blue
+#       full RIGHT leading-edge region = green
+#       final geometric interval = darker gray
+# - Event markers are offset visually so they do not overlap.
+# - True event lines remain at their exact ranks.
+# - The derivative panel is compact and may be removed later if not useful.
+# - The NB corroboration panel is the main support panel.
 #
 # Required packages:
-#   ggplot2, dplyr, tidyr, grid
+#   ggplot2, dplyr, tidyr, grid, patchwork (optional; not required here)
 # =============================================================================
 
 suppressPackageStartupMessages({
@@ -44,15 +52,15 @@ options(stringsAsFactors = FALSE)
 # =============================================================================
 
 COUNT_FILE <- "/root/REAPER98632/data/WTTS-Seq_2022.2_DE_raw_read_numbers.csv"
-OUT_ROOT   <- "/root/REAPER98632/exports/variance_derivative_nb_range_manuscript_shaded"
+OUT_ROOT   <- "/root/REAPER98632/exports/variance_derivative_nb_range_manuscript_final"
 
 FIXED_LEADING_EDGE_SIZE <- 5000L
 VARIANCE_SMOOTH_K       <- 101L
 DERIVATIVE_SMOOTH_K     <- 51L
 
 PNG_WIDTH_IN  <- 14
-PNG_HEIGHT_IN <- 20
-PNG_DPI       <- 240
+PNG_HEIGHT_IN <- 16
+PNG_DPI       <- 260
 
 COMPARISONS <- list(
   RT0_ZT6  = list(control = "^R0_", treatment = "^ZT6_"),
@@ -70,8 +78,8 @@ dir.create(OUT_ROOT, recursive = TRUE, showWarnings = FALSE)
 COL <- list(
   loading_line    = "#2C7FB8",
   variance_line   = "#117A65",
-  derivative_line = "#2C7FB8",
-  zero_line       = "#E67E22",
+  derivative_line = "#386CB0",
+  zero_line       = "#D95F02",
 
   nb1             = "#C99700",
   nb2             = "#1B9E77",
@@ -79,9 +87,9 @@ COL <- list(
   nb_gap          = "#CC1E8C",
   summary         = "#202020",
 
-  left_fill       = "#CFE8FF",
-  right_fill      = "#DFF3D8",
-  interval_fill   = "#D9D9D9",
+  left_fill       = "#BFDDF6",
+  right_fill      = "#D9F0D3",
+  interval_fill   = "#9E9E9E",
 
   cutoff_anchor   = "#000000",
   fixed_5000      = "#E69F00",
@@ -112,6 +120,14 @@ EVENT_SHAPES <- c(
   "Terminal start"          = 1,
   "Left d2 zero"            = 15,
   "Right d2 zero"           = 17
+)
+
+EVENT_LINE_TYPES <- c(
+  "Cutoff anchor"           = "solid",
+  "Fixed leading-edge 5000" = "dashed",
+  "Terminal start"          = "dotted",
+  "Left d2 zero"            = "dashed",
+  "Right d2 zero"           = "dashed"
 )
 
 NB_LEVELS <- c(
@@ -150,15 +166,16 @@ safe_runmed <- function(x, k) {
 rescale01 <- function(x) {
   x <- as.numeric(x)
   ok <- is.finite(x)
-  if (!any(ok)) return(rep(0, length(x)))
+  out <- rep(NA_real_, length(x))
+  if (!any(ok)) return(replace(out, is.na(out), 0))
   r <- range(x[ok], na.rm = TRUE)
   if (!is.finite(r[1]) || !is.finite(r[2]) || r[1] == r[2]) {
-    out <- rep(0.5, length(x))
-    out[!ok] <- NA_real_
+    out[ok] <- 0.5
+    out[!ok] <- 0
     return(out)
   }
-  out <- (x - r[1]) / (r[2] - r[1])
-  out[!ok] <- NA_real_
+  out[ok] <- (x[ok] - r[1]) / (r[2] - r[1])
+  out[!ok] <- 0
   out
 }
 
@@ -203,7 +220,7 @@ compute_abs_pc1_loadings <- function(norm_mat_arm) {
   out
 }
 
-compute_empirical_variance_curve <- function(count_mat_arm, rank_order, smooth_k) {
+compute_variance_curve <- function(count_mat_arm, rank_order, smooth_k) {
   empirical_var <- apply(count_mat_arm, 1L, stats::var, na.rm = TRUE)
   empirical_var[!is.finite(empirical_var)] <- 0
   empirical_var <- pmax(empirical_var, 0)
@@ -288,8 +305,9 @@ select_interval_from_reference <- function(zero_df, reference_rank, total_n) {
   terminal_start_rank <- as.integer(round(min(right_candidates)))
   reference_rank <- as.integer(round(reference_rank))
 
-  if (cutoff_anchor_rank < 1L) cutoff_anchor_rank <- 1L
-  if (terminal_start_rank > total_n) terminal_start_rank <- total_n
+  cutoff_anchor_rank <- max(1L, cutoff_anchor_rank)
+  terminal_start_rank <- min(total_n, terminal_start_rank)
+
   if (cutoff_anchor_rank >= terminal_start_rank) {
     stop("Invalid interval: cutoff anchor must be left of terminal start.")
   }
@@ -338,11 +356,11 @@ compute_feature_level_metrics <- function(count_mat_arm, rank_order) {
     stringsAsFactors = FALSE
   )
 
-  # Manuscript definition:
-  # NB2-like increases from left to right when these increase:
-  #   log_nb2, nb_gap, log_alpha_mu
-  # NB1-like increases from left to right when log_nb1 increases.
-  # Combined support is therefore constructed so that HIGHER means more NB2-like.
+  # Manuscript directional definition:
+  # Moving LEFT -> RIGHT:
+  #   NB2-like behavior increases when log_nb2, nb_gap, and log_alpha_mu increase.
+  #   NB1-like behavior decreases when log_nb1 decreases.
+  # Combined support is therefore high when the series is more NB2-like.
   df$combined_nb_support <- rowMeans(
     cbind(
       rescale01(df$log_nb2),
@@ -396,8 +414,43 @@ summarize_directional_regions <- function(feature_df, cutoff_anchor_rank, total_
 }
 
 # =============================================================================
-# PLOTTING
+# PLOT HELPERS
 # =============================================================================
+
+event_legend_plot <- function() {
+  df <- data.frame(
+    x = seq_along(EVENT_LEVELS),
+    y = 1,
+    event = factor(EVENT_LEVELS, levels = EVENT_LEVELS)
+  )
+
+  ggplot(df, aes(x, y, color = event, shape = event)) +
+    geom_point(size = 3) +
+    geom_text(aes(label = event), nudge_y = -0.16, size = 3, show.legend = FALSE) +
+    scale_color_manual(values = EVENT_COLORS, drop = FALSE) +
+    scale_shape_manual(values = EVENT_SHAPES, drop = FALSE) +
+    xlim(0.5, length(EVENT_LEVELS) + 0.5) +
+    ylim(0.7, 1.15) +
+    theme_void() +
+    theme(legend.position = "none")
+}
+
+nb_legend_plot <- function() {
+  df <- data.frame(
+    x = seq_along(NB_LEVELS),
+    y = 1,
+    metric = factor(NB_LEVELS, levels = NB_LEVELS)
+  )
+
+  ggplot(df, aes(x, y, color = metric)) +
+    geom_point(size = 3) +
+    geom_text(aes(label = metric), nudge_y = -0.16, size = 3, show.legend = FALSE) +
+    scale_color_manual(values = NB_COLORS, drop = FALSE) +
+    xlim(0.5, length(NB_LEVELS) + 0.5) +
+    ylim(0.7, 1.15) +
+    theme_void() +
+    theme(legend.position = "none")
+}
 
 make_event_df <- function(feature_df, variance_df, deriv_df, interval_info) {
   data.frame(
@@ -451,43 +504,22 @@ make_event_df <- function(feature_df, variance_df, deriv_df, interval_info) {
   )
 }
 
+make_offset_event_df <- function(event_df) {
+  event_df %>%
+    mutate(
+      rank_plot = case_when(
+        event == "Cutoff anchor" ~ rank - 18,
+        event == "Fixed leading-edge 5000" ~ rank,
+        event == "Terminal start" ~ rank + 18,
+        event == "Left d2 zero" ~ rank - 9,
+        event == "Right d2 zero" ~ rank + 9,
+        TRUE ~ rank
+      )
+    )
+}
+
 label_box <- function(x, y, txt) {
   data.frame(x = x, y = y, label = txt, stringsAsFactors = FALSE)
-}
-
-event_legend_plot <- function() {
-  df <- data.frame(
-    x = seq_along(EVENT_LEVELS),
-    y = 1,
-    event = factor(EVENT_LEVELS, levels = EVENT_LEVELS)
-  )
-
-  ggplot(df, aes(x, y, color = event, shape = event)) +
-    geom_point(size = 3) +
-    geom_text(aes(label = event), nudge_y = -0.16, size = 3, show.legend = FALSE) +
-    scale_color_manual(values = EVENT_COLORS, drop = FALSE) +
-    scale_shape_manual(values = EVENT_SHAPES, drop = FALSE) +
-    xlim(0.5, length(EVENT_LEVELS) + 0.5) +
-    ylim(0.7, 1.15) +
-    theme_void() +
-    theme(legend.position = "none")
-}
-
-nb_legend_plot <- function() {
-  df <- data.frame(
-    x = seq_along(NB_LEVELS),
-    y = 1,
-    metric = factor(NB_LEVELS, levels = NB_LEVELS)
-  )
-
-  ggplot(df, aes(x, y, color = metric)) +
-    geom_point(size = 3) +
-    geom_text(aes(label = metric), nudge_y = -0.16, size = 3, show.legend = FALSE) +
-    scale_color_manual(values = NB_COLORS, drop = FALSE) +
-    xlim(0.5, length(NB_LEVELS) + 0.5) +
-    ylim(0.7, 1.15) +
-    theme_void() +
-    theme(legend.position = "none")
 }
 
 save_stacked_plot <- function(plot_list, filename) {
@@ -496,13 +528,17 @@ save_stacked_plot <- function(plot_list, filename) {
   pushViewport(viewport(layout = grid.layout(
     nrow = length(plot_list),
     ncol = 1,
-    heights = unit(c(1, 0.22, 1, 0.22, 1, 0.22, 1.2, 0.22, 1.05), "null")
+    heights = unit(c(1, 0.22, 1, 0.22, 0.85, 0.22, 1.2, 0.22, 0.95), "null")
   )))
   for (i in seq_along(plot_list)) {
     print(plot_list[[i]], vp = viewport(layout.pos.row = i, layout.pos.col = 1))
   }
   dev.off()
 }
+
+# =============================================================================
+# MAIN PANEL BUILDER
+# =============================================================================
 
 plot_rank_panel <- function(comparison_name, arm_name, feature_df, variance_df, deriv_df,
                             interval_info, region_summary, out_png) {
@@ -519,20 +555,18 @@ plot_rank_panel <- function(comparison_name, arm_name, feature_df, variance_df, 
   right_max <- total_n
 
   event_df <- make_event_df(feature_df, variance_df, deriv_df, interval_info)
+  event_plot_df <- make_offset_event_df(event_df)
 
-  common_bands <- list(
-    annotate("rect", xmin = left_min, xmax = left_max, ymin = -Inf, ymax = Inf, fill = COL$left_fill, alpha = 0.55),
-    annotate("rect", xmin = right_min, xmax = right_max, ymin = -Inf, ymax = Inf, fill = COL$right_fill, alpha = 0.55),
-    annotate("rect", xmin = anchor, xmax = term, ymin = -Inf, ymax = Inf, fill = COL$interval_fill, alpha = 0.55)
+  vline_df <- data.frame(
+    event = factor(
+      c("Cutoff anchor", "Fixed leading-edge 5000", "Terminal start"),
+      levels = EVENT_LEVELS
+    ),
+    xint = c(anchor, ref, term),
+    stringsAsFactors = FALSE
   )
 
-  common_lines <- list(
-    geom_vline(xintercept = anchor, color = COL$cutoff_anchor, linewidth = 0.7),
-    geom_vline(xintercept = ref, color = COL$fixed_5000, linewidth = 0.8, linetype = "dashed"),
-    geom_vline(xintercept = term, color = COL$terminal_start, linewidth = 0.8, linetype = "dotted")
-  )
-
-  loading_left_text <- paste(
+  left_text <- paste(
     "Absolute loading panel",
     "Leading edge is on the RIGHT",
     "Blue shaded region = matched LEFT comparator",
@@ -541,7 +575,7 @@ plot_rank_panel <- function(comparison_name, arm_name, feature_df, variance_df, 
     sep = "\n"
   )
 
-  geom_text_box <- paste(
+  geom_text <- paste(
     "Variance / d2 method",
     "Variance is empirical log(1 + variance)",
     "d2 zeros come from sign changes or exact zeros only",
@@ -550,7 +584,14 @@ plot_rank_panel <- function(comparison_name, arm_name, feature_df, variance_df, 
     sep = "\n"
   )
 
-  nb_text_box <- paste(
+  deriv_text <- paste(
+    "Derivative support",
+    "This panel is kept only to show where the geometric d2 points occur",
+    "If this signal is visually uninformative in a final manuscript figure, remove it",
+    sep = "\n"
+  )
+
+  nb_text <- paste(
     "NB corroboration",
     "RIGHT region = cutoff anchor to rank end",
     "LEFT region = equal-sized matched block immediately left of cutoff anchor",
@@ -589,23 +630,34 @@ plot_rank_panel <- function(comparison_name, arm_name, feature_df, variance_df, 
     "RIGHT_n = ", region_summary$right_n
   )
 
+  base_bands <- list(
+    annotate("rect", xmin = left_min, xmax = left_max, ymin = -Inf, ymax = Inf, fill = COL$left_fill, alpha = 0.72),
+    annotate("rect", xmin = right_min, xmax = right_max, ymin = -Inf, ymax = Inf, fill = COL$right_fill, alpha = 0.72),
+    annotate("rect", xmin = anchor, xmax = term, ymin = -Inf, ymax = Inf, fill = COL$interval_fill, alpha = 0.42)
+  )
+
+  base_lines <- list(
+    geom_vline(data = vline_df, aes(xintercept = xint, color = event, linetype = event), linewidth = 0.9, show.legend = FALSE)
+  )
+
   p1 <- ggplot(feature_df, aes(rank, abs_pc1_loading)) +
-    common_bands +
-    geom_line(color = COL$loading_line, linewidth = 0.95) +
-    common_lines +
-    geom_point(data = event_df, aes(rank, loading_y, color = event, shape = event), size = 2.8, stroke = 0.9) +
+    base_bands +
+    geom_line(color = COL$loading_line, linewidth = 1.0) +
+    base_lines +
+    geom_point(data = event_plot_df, aes(rank_plot, loading_y, color = event, shape = event), size = 3.0, stroke = 0.9, show.legend = FALSE) +
     geom_label(
-      data = label_box(total_n * 0.06, max(feature_df$abs_pc1_loading) * 0.96, loading_left_text),
+      data = label_box(total_n * 0.05, max(feature_df$abs_pc1_loading) * 0.96, left_text),
       aes(x, y, label = label),
-      inherit.aes = FALSE, hjust = 0, vjust = 1, size = 3, label.size = 0.25, fill = alpha("white", 0.95)
+      inherit.aes = FALSE, hjust = 0, vjust = 1, size = 3, linewidth = 0.25, fill = alpha("white", 0.95)
     ) +
     geom_label(
       data = label_box(total_n * 0.72, max(feature_df$abs_pc1_loading) * 0.96, right_summary_box),
       aes(x, y, label = label),
-      inherit.aes = FALSE, hjust = 0, vjust = 1, size = 3, label.size = 0.25, fill = alpha("white", 0.95)
+      inherit.aes = FALSE, hjust = 0, vjust = 1, size = 3, linewidth = 0.25, fill = alpha("white", 0.95)
     ) +
     scale_color_manual(values = EVENT_COLORS, drop = FALSE) +
     scale_shape_manual(values = EVENT_SHAPES, drop = FALSE) +
+    scale_linetype_manual(values = EVENT_LINE_TYPES, drop = FALSE) +
     labs(
       title = paste0(comparison_name, " ", arm_name, ": absolute PC1 loading series"),
       subtitle = "Leading edge is on the RIGHT",
@@ -616,17 +668,18 @@ plot_rank_panel <- function(comparison_name, arm_name, feature_df, variance_df, 
     theme(legend.position = "none", panel.grid.minor = element_blank())
 
   p2 <- ggplot(variance_df, aes(rank, smooth_log1p_empirical_variance)) +
-    common_bands +
-    geom_line(color = COL$variance_line, linewidth = 0.95) +
-    common_lines +
-    geom_point(data = event_df, aes(rank, variance_y, color = event, shape = event), size = 2.8, stroke = 0.9) +
+    base_bands +
+    geom_line(color = COL$variance_line, linewidth = 1.0) +
+    base_lines +
+    geom_point(data = event_plot_df, aes(rank_plot, variance_y, color = event, shape = event), size = 3.0, stroke = 0.9, show.legend = FALSE) +
     geom_label(
-      data = label_box(total_n * 0.06, max(variance_df$smooth_log1p_empirical_variance) * 0.96, geom_text_box),
+      data = label_box(total_n * 0.05, max(variance_df$smooth_log1p_empirical_variance) * 0.96, geom_text),
       aes(x, y, label = label),
-      inherit.aes = FALSE, hjust = 0, vjust = 1, size = 3, label.size = 0.25, fill = alpha("white", 0.95)
+      inherit.aes = FALSE, hjust = 0, vjust = 1, size = 3, linewidth = 0.25, fill = alpha("white", 0.95)
     ) +
     scale_color_manual(values = EVENT_COLORS, drop = FALSE) +
     scale_shape_manual(values = EVENT_SHAPES, drop = FALSE) +
+    scale_linetype_manual(values = EVENT_LINE_TYPES, drop = FALSE) +
     labs(
       title = paste0(comparison_name, " ", arm_name, ": smoothed empirical variance curve"),
       subtitle = "The geometric points are marked directly on the fitted curve",
@@ -636,24 +689,21 @@ plot_rank_panel <- function(comparison_name, arm_name, feature_df, variance_df, 
     theme_bw(base_size = 11) +
     theme(legend.position = "none", panel.grid.minor = element_blank())
 
+  # Compact derivative support only
   p3 <- ggplot(deriv_df, aes(rank, d2)) +
-    common_bands +
-    geom_hline(yintercept = 0, color = COL$zero_line, linewidth = 0.75) +
-    geom_line(color = COL$derivative_line, linewidth = 0.9) +
-    common_lines +
-    geom_point(data = event_df, aes(rank, derivative_y, color = event, shape = event), size = 2.8, stroke = 0.9) +
+    base_bands +
+    geom_hline(yintercept = 0, color = COL$zero_line, linewidth = 0.8) +
+    geom_line(color = COL$derivative_line, linewidth = 0.95) +
+    base_lines +
+    geom_point(data = event_plot_df, aes(rank_plot, derivative_y, color = event, shape = event), size = 3.0, stroke = 0.9, show.legend = FALSE) +
     geom_label(
-      data = label_box(total_n * 0.06, max(deriv_df$d2, na.rm = TRUE) * 0.92, paste(
-        "Derivative support",
-        "This panel is kept only to show where the geometric d2 points occur",
-        "If this signal is visually uninformative in a final manuscript figure, remove it",
-        sep = "\n"
-      )),
+      data = label_box(total_n * 0.06, max(deriv_df$d2, na.rm = TRUE) * 0.88, deriv_text),
       aes(x, y, label = label),
-      inherit.aes = FALSE, hjust = 0, vjust = 1, size = 3, label.size = 0.25, fill = alpha("white", 0.95)
+      inherit.aes = FALSE, hjust = 0, vjust = 1, size = 3, linewidth = 0.25, fill = alpha("white", 0.95)
     ) +
     scale_color_manual(values = EVENT_COLORS, drop = FALSE) +
     scale_shape_manual(values = EVENT_SHAPES, drop = FALSE) +
+    scale_linetype_manual(values = EVENT_LINE_TYPES, drop = FALSE) +
     labs(
       title = paste0(comparison_name, " ", arm_name, ": derivative support"),
       subtitle = "The selected d2 zero-crossings around the fixed leading-edge 5000 mark define the geometric interval",
@@ -684,21 +734,21 @@ plot_rank_panel <- function(comparison_name, arm_name, feature_df, variance_df, 
     )
 
   p4 <- ggplot() +
-    annotate("rect", xmin = left_min, xmax = left_max, ymin = -Inf, ymax = Inf, fill = COL$left_fill, alpha = 0.65) +
-    annotate("rect", xmin = right_min, xmax = right_max, ymin = -Inf, ymax = Inf, fill = COL$right_fill, alpha = 0.65) +
-    annotate("rect", xmin = anchor, xmax = term, ymin = -Inf, ymax = Inf, fill = COL$interval_fill, alpha = 0.55) +
-    geom_line(data = nb_long, aes(rank, value, color = metric), linewidth = 0.7) +
-    common_lines +
-    geom_point(data = event_df, aes(rank, support_y, color = event, shape = event), size = 2.8, stroke = 0.9) +
+    annotate("rect", xmin = left_min, xmax = left_max, ymin = -Inf, ymax = Inf, fill = COL$left_fill, alpha = 0.72) +
+    annotate("rect", xmin = right_min, xmax = right_max, ymin = -Inf, ymax = Inf, fill = COL$right_fill, alpha = 0.72) +
+    annotate("rect", xmin = anchor, xmax = term, ymin = -Inf, ymax = Inf, fill = COL$interval_fill, alpha = 0.42) +
+    geom_line(data = nb_long, aes(rank, value, color = metric), linewidth = 0.72) +
+    base_lines +
+    geom_point(data = event_plot_df, aes(rank_plot, support_y, color = event, shape = event), size = 3.0, stroke = 0.9, show.legend = FALSE) +
     geom_label(
-      data = label_box(total_n * 0.05, max(nb_long$value, na.rm = TRUE) * 0.95, nb_text_box),
+      data = label_box(total_n * 0.05, max(nb_long$value, na.rm = TRUE) * 0.95, nb_text),
       aes(x, y, label = label),
-      inherit.aes = FALSE, hjust = 0, vjust = 1, size = 3, label.size = 0.25, fill = alpha("white", 0.95)
+      inherit.aes = FALSE, hjust = 0, vjust = 1, size = 3, linewidth = 0.25, fill = alpha("white", 0.95)
     ) +
     geom_label(
       data = label_box(total_n * 0.72, max(nb_long$value, na.rm = TRUE) * 0.95, nb_summary_box),
       aes(x, y, label = label),
-      inherit.aes = FALSE, hjust = 0, vjust = 1, size = 2.9, label.size = 0.25, fill = alpha("white", 0.95)
+      inherit.aes = FALSE, hjust = 0, vjust = 1, size = 2.9, linewidth = 0.25, fill = alpha("white", 0.95)
     ) +
     scale_color_manual(
       values = c(
@@ -711,6 +761,7 @@ plot_rank_panel <- function(comparison_name, arm_name, feature_df, variance_df, 
       drop = FALSE
     ) +
     scale_shape_manual(values = EVENT_SHAPES, drop = FALSE) +
+    scale_linetype_manual(values = EVENT_LINE_TYPES, drop = FALSE) +
     labs(
       title = paste0(comparison_name, " ", arm_name, ": NB1 / NB2 / alpha*mu support"),
       subtitle = "The full RIGHT leading-edge region is compared against a matched LEFT region of equal size",
@@ -721,20 +772,21 @@ plot_rank_panel <- function(comparison_name, arm_name, feature_df, variance_df, 
     theme(legend.position = "none", panel.grid.minor = element_blank())
 
   p5 <- ggplot(feature_df, aes(rank, combined_nb_support)) +
-    annotate("rect", xmin = left_min, xmax = left_max, ymin = -Inf, ymax = Inf, fill = COL$left_fill, alpha = 0.65) +
-    annotate("rect", xmin = right_min, xmax = right_max, ymin = -Inf, ymax = Inf, fill = COL$right_fill, alpha = 0.65) +
-    annotate("rect", xmin = anchor, xmax = term, ymin = -Inf, ymax = Inf, fill = COL$interval_fill, alpha = 0.55) +
+    annotate("rect", xmin = left_min, xmax = left_max, ymin = -Inf, ymax = Inf, fill = COL$left_fill, alpha = 0.72) +
+    annotate("rect", xmin = right_min, xmax = right_max, ymin = -Inf, ymax = Inf, fill = COL$right_fill, alpha = 0.72) +
+    annotate("rect", xmin = anchor, xmax = term, ymin = -Inf, ymax = Inf, fill = COL$interval_fill, alpha = 0.42) +
     geom_hline(yintercept = region_summary$nb_support_threshold, color = "#8F8F8F", linetype = "dashed", linewidth = 0.8) +
     geom_line(color = COL$summary, linewidth = 0.9) +
-    common_lines +
-    geom_point(data = event_df, aes(rank, summary_y, color = event, shape = event), size = 2.8, stroke = 0.9) +
+    base_lines +
+    geom_point(data = event_plot_df, aes(rank_plot, summary_y, color = event, shape = event), size = 3.0, stroke = 0.9, show.legend = FALSE) +
     geom_label(
       data = label_box(total_n * 0.72, max(feature_df$combined_nb_support, na.rm = TRUE) * 0.95, support_summary_text),
       aes(x, y, label = label),
-      inherit.aes = FALSE, hjust = 0, vjust = 1, size = 3, label.size = 0.25, fill = alpha("white", 0.95)
+      inherit.aes = FALSE, hjust = 0, vjust = 1, size = 3, linewidth = 0.25, fill = alpha("white", 0.95)
     ) +
     scale_color_manual(values = EVENT_COLORS, drop = FALSE) +
     scale_shape_manual(values = EVENT_SHAPES, drop = FALSE) +
+    scale_linetype_manual(values = EVENT_LINE_TYPES, drop = FALSE) +
     labs(
       title = paste0(comparison_name, " ", arm_name, ": NB-supported summary"),
       subtitle = "The geometric interval remains primary; NB support remains corroborative",
@@ -798,7 +850,7 @@ for (comparison_name in names(COMPARISONS)) {
 
     reference_rank <- total_n - FIXED_LEADING_EDGE_SIZE + 1L
 
-    variance_df <- compute_empirical_variance_curve(count_mat_arm, rank_order, VARIANCE_SMOOTH_K)
+    variance_df <- compute_variance_curve(count_mat_arm, rank_order, VARIANCE_SMOOTH_K)
     deriv_df <- compute_derivatives(variance_df$smooth_log1p_empirical_variance, DERIVATIVE_SMOOTH_K) %>%
       mutate(rank = seq_len(n()))
 
