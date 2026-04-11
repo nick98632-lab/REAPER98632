@@ -4,25 +4,25 @@ Using count file: /root/REAPER98632/data/WTTS-Seq_2022.2_DE_raw_read_numbers.csv
 Count matrix dimensions: 31757 features x 52 samples
 Processing comparison: RT0_ZT6
 Selecting control cutoff for RT0_ZT6
-Control cutoff anchor rank: 26757 | reference rank: 26758 | terminal anchor: 26759 | interval: [26757, 26759] | pre-EVS remainder: 26756 | pre-EVS leading edge: 5001
+Control cutoff anchor rank: 26757 | reference rank: 26758 | terminal start: 26759 | interval: [26757, 26759] | pre-EVS remainder: 26756 | pre-EVS leading edge: 5001
 Selecting treatment cutoff for RT0_ZT6
-Treatment cutoff anchor rank: 26757 | reference rank: 26758 | terminal anchor: 26759 | interval: [26757, 26759] | pre-EVS remainder: 26756 | pre-EVS leading edge: 5001
+Treatment cutoff anchor rank: 26757 | reference rank: 26758 | terminal start: 26759 | interval: [26757, 26759] | pre-EVS remainder: 26756 | pre-EVS leading edge: 5001
 Processing comparison: RT2_ZT8
 Selecting control cutoff for RT2_ZT8
-Control cutoff anchor rank: 26757 | reference rank: 26758 | terminal anchor: 26759 | interval: [26757, 26759] | pre-EVS remainder: 26756 | pre-EVS leading edge: 5001
+Control cutoff anchor rank: 26757 | reference rank: 26758 | terminal start: 26759 | interval: [26757, 26759] | pre-EVS remainder: 26756 | pre-EVS leading edge: 5001
 Selecting treatment cutoff for RT2_ZT8
-Treatment cutoff anchor rank: 26757 | reference rank: 26758 | terminal anchor: 26759 | interval: [26757, 26759] | pre-EVS remainder: 26756 | pre-EVS leading edge: 5001
+Treatment cutoff anchor rank: 26757 | reference rank: 26758 | terminal start: 26759 | interval: [26757, 26759] | pre-EVS remainder: 26756 | pre-EVS leading edge: 5001
 Processing comparison: RT4_ZT10
 Selecting control cutoff for RT4_ZT10
-Control cutoff anchor rank: 26757 | reference rank: 26758 | terminal anchor: 26759 | interval: [26757, 26759] | pre-EVS remainder: 26756 | pre-EVS leading edge: 5001
+Control cutoff anchor rank: 26757 | reference rank: 26758 | terminal start: 26759 | interval: [26757, 26759] | pre-EVS remainder: 26756 | pre-EVS leading edge: 5001
 Selecting treatment cutoff for RT4_ZT10
-Treatment cutoff anchor rank: 26757 | reference rank: 26758 | terminal anchor: 26759 | interval: [26757, 26759] | pre-EVS remainder: 26756 | pre-EVS leading edge: 5001
+Treatment cutoff anchor rank: 26757 | reference rank: 26758 | terminal start: 26759 | interval: [26757, 26759] | pre-EVS remainder: 26756 | pre-EVS leading edge: 5001
 Processing comparison: RT8_ZT14
 Selecting control cutoff for RT8_ZT14
-Control cutoff anchor rank: 26757 | reference rank: 26758 | terminal anchor: 26759 | interval: [26757, 26759] | pre-EVS remainder: 26756 | pre-EVS leading edge: 5001
+Control cutoff anchor rank: 26757 | reference rank: 26758 | terminal start: 26759 | interval: [26757, 26759] | pre-EVS remainder: 26756 | pre-EVS leading edge: 5001
 Selecting treatment cutoff for RT8_ZT14
-Treatment cutoff anchor rank: 26757 | reference rank: 26758 | terminal anchor: 26759 | interval: [26757, 26759] | pre-EVS remainder: 26756 | pre-EVS leading edge: 5001
+Treatment cutoff anchor rank: 26757 | reference rank: 26758 | terminal start: 26759 | interval: [26757, 26759] | pre-EVS remainder: 26756 | pre-EVS leading edge: 5001
 Warning message:
 The `label.size` argument of `geom_label()` is deprecated as of ggplot2 3.5.0.
 ℹ Please use the `linewidth` argument instead. 
-Done. Outputs written to: /root/REAPER98632/exports/variance_derivative_nb_range_manuscript_final
+Done. Outputs written to: /root/REAPER98632/exports/variance_derivative_nb_range_manuscript_shaded
