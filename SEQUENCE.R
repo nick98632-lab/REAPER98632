@@ -10,89 +10,106 @@ suppressPackageStartupMessages({
 options(stringsAsFactors = FALSE)
 
 # =============================================================================
-# MANUSCRIPT-LEVEL SCRIPT
-# -----------------------------------------------------------------------------
-# MAIN CLAIM
+# MANUSCRIPT SCRIPT
+# =============================================================================
 #
-# A custom geometry-based cutoff near a fixed leading-edge reference defines a
-# right-hand leading-edge block whose matched comparison against the immediate
-# left block shows stronger NB2-like, overdispersion-consistent behavior.
+# WHAT THIS SCRIPT DOES
 #
-# TWO ANALYTIC TRACKS
+# This script produces:
 #
-# 1. Main manuscript figure
-#    - Ranking normalization: log-transformed CPM-style library-size normalization
-#    - Variance / corroboration metrics: computed on raw counts
+# 1. Main manuscript figures
+#    - ranking uses log-transformed CPM-style library-size normalization
+#    - corroboration metrics are computed from raw counts
 #
-# 2. DESeq2 sensitivity figure
-#    - Ranking normalization: DESeq2 normalized counts (or VST, optional)
-#    - Variance / corroboration metrics: computed on DESeq2 normalized counts
+# 2. DESeq2 normalization supplementary figures
+#    - ranking uses DESeq2-normalized counts, or optionally DESeq2 VST
+#    - corroboration metrics are computed on DESeq2-normalized counts
 #
-# LITERATURE-SAFE FRAMING
+# SCIENTIFIC LOGIC OF THE METHOD
 #
-# - The geometric cutoff rule is custom.
-# - The NB interpretation is used as corroborative diagnostics:
-#     NB2-like behavior is represented by higher-order variance-linked terms.
-# - We do not present the custom cutoff rule as a standard published NB method.
+# A. Geometry stage
+#    Features are ranked within each comparison arm by absolute PC1 loading.
+#    That rank axis is treated as the EVS-style ordered feature axis.
 #
-# METHODS SUMMARY
+#    Along that axis, empirical variance is computed feature-wise and
+#    transformed as log(1 + variance). A smoothing spline is fit to the ranked
+#    variance trajectory. The spline is used because a continuous smooth curve
+#    yields a stable second derivative, whereas discrete differentiation of a
+#    jagged empirical variance series is unstable and overly sensitive to
+#    local noise.
 #
-# Features are ranked by absolute PC1 loading within each comparison arm.
+#    A fixed leading-edge reference is defined as the rank leaving exactly
+#    FIXED_LEADING_EDGE_SIZE features on the right side, including that
+#    reference rank itself.
 #
-# Main analysis:
-#   Ranking uses log-transformed CPM-style library-size normalization.
+#    The final custom geometric interval is defined by the two nearest
+#    spline-based second-derivative zero-crossings flanking that fixed
+#    leading-edge reference:
+#      - cutoff anchor  = nearest d2 zero immediately LEFT of the reference
+#      - terminal start = nearest d2 zero immediately RIGHT of the reference
 #
-# DESeq2 sensitivity analysis:
-#   Ranking uses DESeq2 normalized counts, or optionally VST if requested and
-#   available.
+#    This interval is a custom geometric landmark interval. It is not presented
+#    as a standard published cutoff procedure.
 #
-# Along the resulting rank axis, empirical variance is computed feature-wise.
-# A smoothing spline is fit to the ranked log(1 + variance) trajectory.
-# The second derivative of that spline is evaluated on a dense rank grid.
+# B. Corroboration stage
+#    The full RIGHT leading-edge block is defined as all ranks from the cutoff
+#    anchor through the right edge of the ranked series.
 #
-# Let R_fixed denote the fixed leading-edge reference rank corresponding to
-# FIXED_LEADING_EDGE_SIZE features from the right edge of the ranked series.
+#    The matched LEFT comparator is defined as the equal-sized block
+#    immediately to the left of the cutoff anchor.
 #
-# The final custom geometric interval is defined by the two nearest spline-
-# based second-derivative zero-crossings that flank R_fixed:
-#   - cutoff anchor = nearest zero-crossing immediately LEFT of R_fixed
-#   - terminal start = nearest zero-crossing immediately RIGHT of R_fixed
+#    The hypothesis is that the right-hand leading-edge block shows stronger
+#    NB2-like, overdispersion-consistent behavior than the matched left block.
 #
-# The full right leading-edge block is then defined as all ranks from the
-# cutoff anchor through the right edge of the ranked series.
-# The matched left comparator block is the equal-sized block immediately to the
-# left of the cutoff anchor.
+# WHY THESE NB2-RELATED QUANTITIES WERE CHOSEN
 #
-# NB2-RELATED CORROBORATION METRICS
-#
-# Let mu denote the empirical mean and variance denote the empirical variance
-# across samples for each ranked feature.
-#
-# We use three corroborative quantities:
+# Let mu denote the empirical mean and variance denote the empirical variance.
 #
 # 1. log_nb2 = log(1 + variance - mu)
-#    This measures extra-Poisson variance, because a Poisson baseline satisfies
-#    variance = mu.
+#    This is the extra-Poisson variance signal. A Poisson baseline satisfies
+#    variance = mu. Therefore variance - mu is the first direct measure of
+#    overdispersion beyond the Poisson baseline.
 #
 # 2. nb_gap = log(1 + variance - mu) - log(1 + mu)
-#    This compares higher-order excess-variance signal against the lower-order
-#    mean-linked signal.
+#    This compares higher-order excess-variance signal against lower-order
+#    mean-linked signal. Larger values indicate that the excess variance term
+#    is more dominant relative to the mean-linked term.
 #
 # 3. log_alpha_mu = log(1 + alpha*mu), where
 #       alpha = max((variance - mu) / mu^2, 0)
-#    Under the NB2 variance identity variance = mu + alpha*mu^2, alpha*mu is a
-#    normalized overdispersion-linked signal.
+#    Under the NB2 variance identity variance = mu + alpha*mu^2,
+#    alpha*mu provides a normalized overdispersion-linked signal. Larger
+#    values are consistent with stronger NB2-like behavior.
 #
-# These are used as descriptive corroborative summaries, not as formal
-# likelihood-ratio test statistics.
+# These are descriptive corroborative diagnostics. They are not formal
+# likelihood-ratio statistics, and no NB1-vs-NB2 likelihood-ratio test is
+# required for the main manuscript argument.
+#
+# WHY THE DESeq2 SUPPLEMENT EXISTS
+#
+# The main manuscript figure uses log-transformed CPM-style library-size
+# normalization for ranking because that is the current main analysis shown in
+# the manuscript figure. To show that the qualitative behavior is not purely a
+# consequence of that normalization choice, a supplementary DESeq2
+# normalization figure is also generated.
 #
 # METHODS-LEVEL VALIDATION
 #
-# For each comparison and arm, we explicitly verify that:
+# For every comparison arm and every analysis track, this script verifies that:
 # - cutoff anchor < fixed leading-edge reference < terminal start
-# - the matched left block and full right block have equal size
-# - the reported left and right summary medians exactly match the underlying
-#   sliced feature sets used in the figure and output tables
+# - the matched left block and the full right block have equal size
+# - the reported left and right regional summary medians exactly match the
+#   sliced regions used for plotting
+#
+# FIGURE DESIGN RULES
+#
+# - no annotation box is allowed to overlap the cutoff lines
+# - explanatory text is placed on the far-left side of the figure
+# - numerical summary text is placed in the top-middle region, away from the
+#   cutoff geometry itself
+# - the cutoff region is intentionally kept visually clean
+# - the figure titles explicitly label DESeq2 supplementary figures as DESeq2
+#
 # =============================================================================
 
 # =============================================================================
@@ -109,11 +126,9 @@ PNG_WIDTH_IN  <- 14
 PNG_HEIGHT_IN <- 11.5
 PNG_DPI       <- 260
 
-# DESeq2 sensitivity analysis
-RUN_DESEQ2_SENSITIVITY <- TRUE
-DESEQ2_RANK_METHOD <- "normalized_log1p"   # options: "normalized_log1p", "vst"
+RUN_DESEQ2_SUPPLEMENT <- TRUE
+DESEQ2_RANK_METHOD <- "normalized_log1p"   # "normalized_log1p" or "vst"
 
-# Sample naming patterns
 COMPARISONS <- list(
   RT0_ZT6  = list(control = "^R0_", treatment = "^ZT6_"),
   RT2_ZT8  = list(control = "^R2_", treatment = "^ZT8_"),
@@ -129,21 +144,20 @@ dir.create(OUT_ROOT, recursive = TRUE, showWarnings = FALSE)
 
 COL <- list(
   variance_curve = "#117A65",
+  nb2            = "#1B9E77",
+  nb_gap         = "#CC1E8C",
+  alpha_mu       = "#386CB0",
 
-  nb2      = "#1B9E77",
-  nb_gap   = "#CC1E8C",
-  alpha_mu = "#386CB0",
-
-  left_fill     = "#CBE3F8",
-  right_fill    = "#DDF2D5",
-  interval_fill = "#AFAFAF",
+  left_fill      = "#CBE3F8",
+  right_fill     = "#DDF2D5",
+  interval_fill  = "#AFAFAF",
 
   cutoff_anchor  = "#000000",
   fixed_ref      = "#E69F00",
   terminal_start = "#D95F02",
 
-  left_point  = "#5B8FD1",
-  right_point = "#43A047"
+  left_point     = "#5B8FD1",
+  right_point    = "#43A047"
 )
 
 EVENT_LEVELS <- c(
@@ -224,12 +238,8 @@ normalize_cpm_log1p <- function(count_mat_arm) {
 }
 
 compute_deseq2_matrices <- function(count_mat_arm, rank_method = "normalized_log1p") {
-  if (!requireNamespace("DESeq2", quietly = TRUE)) {
-    return(NULL)
-  }
-  if (!requireNamespace("SummarizedExperiment", quietly = TRUE)) {
-    return(NULL)
-  }
+  if (!requireNamespace("DESeq2", quietly = TRUE)) return(NULL)
+  if (!requireNamespace("SummarizedExperiment", quietly = TRUE)) return(NULL)
 
   col_data <- data.frame(
     row.names = colnames(count_mat_arm),
@@ -536,7 +546,7 @@ validate_method_level <- function(feature_df, interval_info, region_summary, tot
 }
 
 make_offset_event_df <- function(event_df, total_n) {
-  offset_big <- max(8L, round(total_n * 0.0025))
+  offset_big <- max(10L, round(total_n * 0.004))
   event_df %>%
     mutate(
       rank_plot = case_when(
@@ -548,11 +558,42 @@ make_offset_event_df <- function(event_df, total_n) {
     )
 }
 
-label_box <- function(x, y, txt) {
-  data.frame(x = x, y = y, label = txt, stringsAsFactors = FALSE)
+event_legend_strip <- function() {
+  df <- data.frame(
+    x = seq_along(EVENT_LEVELS),
+    y = 1,
+    event = factor(EVENT_LEVELS, levels = EVENT_LEVELS)
+  )
+
+  ggplot(df, aes(x, y, color = event, shape = event)) +
+    geom_point(size = 3) +
+    geom_text(aes(label = event), nudge_y = -0.16, size = 3, show.legend = FALSE) +
+    scale_color_manual(values = EVENT_COLORS, drop = FALSE) +
+    scale_shape_manual(values = EVENT_SHAPES, drop = FALSE) +
+    xlim(0.5, length(EVENT_LEVELS) + 0.5) +
+    ylim(0.7, 1.15) +
+    theme_void() +
+    theme(legend.position = "none")
 }
 
-save_three_panel_plot <- function(plot_list, filename) {
+trace_legend_strip <- function() {
+  df <- data.frame(
+    x = seq_along(names(TRACE_COLORS)),
+    y = 1,
+    metric = factor(names(TRACE_COLORS), levels = names(TRACE_COLORS))
+  )
+
+  ggplot(df, aes(x, y, color = metric)) +
+    geom_point(size = 3) +
+    geom_text(aes(label = metric), nudge_y = -0.16, size = 3, show.legend = FALSE) +
+    scale_color_manual(values = TRACE_COLORS, drop = FALSE) +
+    xlim(0.5, length(names(TRACE_COLORS)) + 0.5) +
+    ylim(0.7, 1.15) +
+    theme_void() +
+    theme(legend.position = "none")
+}
+
+save_five_row_plot <- function(plot_list, filename) {
   png(
     filename,
     width = PNG_WIDTH_IN,
@@ -565,7 +606,7 @@ save_three_panel_plot <- function(plot_list, filename) {
   pushViewport(viewport(layout = grid.layout(
     nrow = length(plot_list),
     ncol = 1,
-    heights = unit(c(1.2, 0.18, 1.2, 0.18, 0.95), "null")
+    heights = unit(c(1.18, 0.16, 1.18, 0.16, 0.88), "null")
   )))
   for (i in seq_along(plot_list)) {
     print(plot_list[[i]], vp = viewport(layout.pos.row = i, layout.pos.col = 1))
@@ -577,10 +618,16 @@ save_three_panel_plot <- function(plot_list, filename) {
 # FIGURE BUILDER
 # =============================================================================
 
-build_main_figure <- function(comparison_name, arm_name, variance_df, feature_df,
-                              interval_info, region_summary, out_file,
-                              rank_label = "Main analysis: log-transformed CPM-style library-size normalization",
-                              metric_label = "Metrics computed on raw counts") {
+build_main_figure <- function(comparison_name,
+                              arm_name,
+                              variance_df,
+                              feature_df,
+                              interval_info,
+                              region_summary,
+                              out_file,
+                              figure_track_label,
+                              ranking_label,
+                              metrics_label) {
 
   total_n <- nrow(feature_df)
   anchor <- interval_info$cutoff_anchor_rank
@@ -611,100 +658,6 @@ build_main_figure <- function(comparison_name, arm_name, variance_df, feature_df
     stringsAsFactors = FALSE
   )
 
-  geom_text <- paste(
-    "Custom geometry panel",
-    rank_label,
-    metric_label,
-    "Blue region = matched LEFT comparator",
-    "Green region = full RIGHT leading-edge block",
-    "Grey band = final geometric interval",
-    "Cutoff anchor and terminal start are custom d2-zero landmarks around the fixed leading-edge reference",
-    sep = "\n"
-  )
-
-  geom_summary <- paste0(
-    "Cutoff anchor rank = ", anchor, "\n",
-    "Reference rank (", FIXED_LEADING_EDGE_SIZE, " from right) = ", ref, "\n",
-    "Terminal start rank = ", term, "\n",
-    "Final interval = [", anchor, ", ", term, "]\n",
-    "Pre-EVS remainder = ", anchor - 1L, "\n",
-    "Pre-EVS leading edge = ", total_n - anchor + 1L
-  )
-
-  p1 <- ggplot(variance_df, aes(rank, smooth_log1p_empirical_variance)) +
-    annotate("rect", xmin = left_min, xmax = left_max, ymin = -Inf, ymax = Inf,
-             fill = COL$left_fill, alpha = 0.72) +
-    annotate("rect", xmin = right_min, xmax = right_max, ymin = -Inf, ymax = Inf,
-             fill = COL$right_fill, alpha = 0.72) +
-    annotate("rect", xmin = anchor, xmax = term, ymin = -Inf, ymax = Inf,
-             fill = COL$interval_fill, alpha = 0.42) +
-    geom_line(color = COL$variance_curve, linewidth = 1.0) +
-    geom_vline(
-      data = vline_df,
-      aes(xintercept = xint, color = event, linetype = event),
-      linewidth = 0.9,
-      show.legend = FALSE
-    ) +
-    geom_point(
-      data = event_plot_df,
-      aes(rank_plot, variance_y, color = event, shape = event),
-      size = 3.2,
-      stroke = 1.0,
-      show.legend = FALSE
-    ) +
-    geom_label(
-      data = label_box(total_n * 0.03, max(variance_df$smooth_log1p_empirical_variance) * 0.97, geom_text),
-      aes(x, y, label = label),
-      inherit.aes = FALSE,
-      hjust = 0,
-      vjust = 1,
-      size = 2.8,
-      linewidth = 0.25,
-      fill = grDevices::adjustcolor("white", alpha.f = 0.95)
-    ) +
-    geom_label(
-      data = label_box(total_n * 0.76, max(variance_df$smooth_log1p_empirical_variance) * 0.82, geom_summary),
-      aes(x, y, label = label),
-      inherit.aes = FALSE,
-      hjust = 0,
-      vjust = 1,
-      size = 2.8,
-      linewidth = 0.25,
-      fill = grDevices::adjustcolor("white", alpha.f = 0.95)
-    ) +
-    scale_color_manual(values = EVENT_COLORS, drop = FALSE) +
-    scale_shape_manual(values = EVENT_SHAPES, drop = FALSE) +
-    scale_linetype_manual(values = EVENT_LTY, drop = FALSE) +
-    labs(
-      title = paste0(comparison_name, " ", arm_name, ": custom geometric transition"),
-      subtitle = "The final interval is defined around the fixed leading-edge reference on the smoothed empirical variance curve",
-      x = "EVS rank",
-      y = "Smoothed log(1 + empirical variance)"
-    ) +
-    theme_bw(base_size = 11) +
-    theme(
-      legend.position = "none",
-      panel.grid.minor = element_blank()
-    )
-
-  p_event_legend <- {
-    df <- data.frame(
-      x = seq_along(EVENT_LEVELS),
-      y = 1,
-      event = factor(EVENT_LEVELS, levels = EVENT_LEVELS)
-    )
-
-    ggplot(df, aes(x, y, color = event, shape = event)) +
-      geom_point(size = 3) +
-      geom_text(aes(label = event), nudge_y = -0.16, size = 3, show.legend = FALSE) +
-      scale_color_manual(values = EVENT_COLORS, drop = FALSE) +
-      scale_shape_manual(values = EVENT_SHAPES, drop = FALSE) +
-      xlim(0.5, length(EVENT_LEVELS) + 0.5) +
-      ylim(0.7, 1.15) +
-      theme_void() +
-      theme(legend.position = "none")
-  }
-
   nb_long <- feature_df %>%
     select(rank, log_nb2, nb_gap, log_alpha_mu) %>%
     pivot_longer(
@@ -724,15 +677,51 @@ build_main_figure <- function(comparison_name, arm_name, variance_df, feature_df
       )
     )
 
+  # ---------------------------------------------------------------------------
+  # Annotation placement:
+  # All explanatory text is forced to the far left.
+  # All numerical summaries are forced to the upper-middle region.
+  # Nothing is allowed to sit on top of the cutoff lines themselves.
+  # ---------------------------------------------------------------------------
+
+  left_text_x <- max(5, floor(total_n * 0.04))
+  summary_x   <- max(5, floor(total_n * 0.70))
+
+  top_y_max <- max(variance_df$smooth_log1p_empirical_variance, na.rm = TRUE)
+  mid_y_max <- max(nb_long$value, na.rm = TRUE)
+
+  geom_text <- paste(
+    "Custom geometry panel",
+    figure_track_label,
+    ranking_label,
+    metrics_label,
+    "Blue region = matched LEFT comparator",
+    "Green region = full RIGHT leading-edge block",
+    "Grey band = final geometric interval",
+    "Cutoff anchor = nearest custom d2 zero LEFT of fixed reference",
+    "Terminal start = nearest custom d2 zero RIGHT of fixed reference",
+    sep = "\n"
+  )
+
+  geom_summary <- paste0(
+    "Cutoff anchor rank = ", anchor, "\n",
+    "Reference rank (", FIXED_LEADING_EDGE_SIZE, " from right) = ", ref, "\n",
+    "Terminal start rank = ", term, "\n",
+    "Final interval = [", anchor, ", ", term, "]\n",
+    "Pre-EVS remainder = ", anchor - 1L, "\n",
+    "Pre-EVS leading edge = ", total_n - anchor + 1L
+  )
+
   nb_text <- paste(
     "NB corroboration panel",
     "RIGHT region = cutoff anchor to rank end",
     "LEFT region = equal-sized matched block immediately left of cutoff anchor",
-    "Higher right-side NB2, NB2-NB1 contrast, and alpha*mu support a more NB2-like leading edge",
+    "Higher right-side NB2, NB2-NB1 contrast, and alpha*mu support",
+    "a more NB2-like leading edge",
     sep = "\n"
   )
 
-  nb_summary_box <- paste0(
+  nb_summary <- paste0(
     "LEFT median log(NB2) = ", round(region_summary$left_median_log_nb2, 3), "\n",
     "RIGHT median log(NB2) = ", round(region_summary$right_median_log_nb2, 3), "\n",
     "RIGHT-LEFT log(NB2) diff = ", round(region_summary$right_left_log_nb2_diff, 3), "\n",
@@ -744,13 +733,71 @@ build_main_figure <- function(comparison_name, arm_name, variance_df, feature_df
     "RIGHT-LEFT log(alpha*mu) diff = ", round(region_summary$right_left_log_alpha_mu_diff, 3)
   )
 
+  p1 <- ggplot(variance_df, aes(rank, smooth_log1p_empirical_variance)) +
+    annotate("rect", xmin = left_min, xmax = left_max, ymin = -Inf, ymax = Inf,
+             fill = COL$left_fill, alpha = 0.72) +
+    annotate("rect", xmin = right_min, xmax = right_max, ymin = -Inf, ymax = Inf,
+             fill = COL$right_fill, alpha = 0.72) +
+    annotate("rect", xmin = anchor, xmax = term, ymin = -Inf, ymax = Inf,
+             fill = COL$interval_fill, alpha = 0.35) +
+    geom_line(color = COL$variance_curve, linewidth = 1.0) +
+    geom_vline(
+      data = vline_df,
+      aes(xintercept = xint, color = event, linetype = event),
+      linewidth = 0.9,
+      show.legend = FALSE
+    ) +
+    geom_point(
+      data = event_plot_df,
+      aes(rank_plot, variance_y, color = event, shape = event),
+      size = 3.2,
+      stroke = 1.0,
+      show.legend = FALSE
+    ) +
+    annotate(
+      "label",
+      x = left_text_x,
+      y = top_y_max * 0.97,
+      label = geom_text,
+      hjust = 0,
+      vjust = 1,
+      size = 2.7,
+      label.size = 0.25,
+      fill = grDevices::adjustcolor("white", alpha.f = 0.95)
+    ) +
+    annotate(
+      "label",
+      x = summary_x,
+      y = top_y_max * 0.97,
+      label = geom_summary,
+      hjust = 0,
+      vjust = 1,
+      size = 2.7,
+      label.size = 0.25,
+      fill = grDevices::adjustcolor("white", alpha.f = 0.95)
+    ) +
+    scale_color_manual(values = EVENT_COLORS, drop = FALSE) +
+    scale_shape_manual(values = EVENT_SHAPES, drop = FALSE) +
+    scale_linetype_manual(values = EVENT_LTY, drop = FALSE) +
+    labs(
+      title = paste0(comparison_name, " ", arm_name, ": custom geometric transition"),
+      subtitle = "The final interval is defined around the fixed leading-edge reference on the smoothed empirical variance curve",
+      x = "EVS rank",
+      y = "Smoothed log(1 + empirical variance)"
+    ) +
+    theme_bw(base_size = 11) +
+    theme(
+      legend.position = "none",
+      panel.grid.minor = element_blank()
+    )
+
   p2 <- ggplot() +
     annotate("rect", xmin = left_min, xmax = left_max, ymin = -Inf, ymax = Inf,
              fill = COL$left_fill, alpha = 0.72) +
     annotate("rect", xmin = right_min, xmax = right_max, ymin = -Inf, ymax = Inf,
              fill = COL$right_fill, alpha = 0.72) +
     annotate("rect", xmin = anchor, xmax = term, ymin = -Inf, ymax = Inf,
-             fill = COL$interval_fill, alpha = 0.42) +
+             fill = COL$interval_fill, alpha = 0.35) +
     geom_line(
       data = nb_long,
       aes(rank, value, color = metric),
@@ -762,24 +809,26 @@ build_main_figure <- function(comparison_name, arm_name, variance_df, feature_df
       linewidth = 0.9,
       show.legend = FALSE
     ) +
-    geom_label(
-      data = label_box(total_n * 0.03, max(nb_long$value, na.rm = TRUE) * 0.97, nb_text),
-      aes(x, y, label = label),
-      inherit.aes = FALSE,
+    annotate(
+      "label",
+      x = left_text_x,
+      y = mid_y_max * 0.97,
+      label = nb_text,
       hjust = 0,
       vjust = 1,
-      size = 2.8,
-      linewidth = 0.25,
+      size = 2.7,
+      label.size = 0.25,
       fill = grDevices::adjustcolor("white", alpha.f = 0.95)
     ) +
-    geom_label(
-      data = label_box(total_n * 0.76, max(nb_long$value, na.rm = TRUE) * 0.82, nb_summary_box),
-      aes(x, y, label = label),
-      inherit.aes = FALSE,
+    annotate(
+      "label",
+      x = summary_x,
+      y = mid_y_max * 0.97,
+      label = nb_summary,
       hjust = 0,
       vjust = 1,
-      size = 2.8,
-      linewidth = 0.25,
+      size = 2.7,
+      label.size = 0.25,
       fill = grDevices::adjustcolor("white", alpha.f = 0.95)
     ) +
     scale_color_manual(
@@ -803,23 +852,6 @@ build_main_figure <- function(comparison_name, arm_name, variance_df, feature_df
       legend.position = "none",
       panel.grid.minor = element_blank()
     )
-
-  p_nb_legend <- {
-    df <- data.frame(
-      x = seq_along(names(TRACE_COLORS)),
-      y = 1,
-      metric = factor(names(TRACE_COLORS), levels = names(TRACE_COLORS))
-    )
-
-    ggplot(df, aes(x, y, color = metric)) +
-      geom_point(size = 3) +
-      geom_text(aes(label = metric), nudge_y = -0.16, size = 3, show.legend = FALSE) +
-      scale_color_manual(values = TRACE_COLORS, drop = FALSE) +
-      xlim(0.5, length(names(TRACE_COLORS)) + 0.5) +
-      ylim(0.7, 1.15) +
-      theme_void() +
-      theme(legend.position = "none")
-  }
 
   summary_df <- data.frame(
     metric = factor(SUMMARY_LEVELS, levels = rev(SUMMARY_LEVELS)),
@@ -863,12 +895,12 @@ build_main_figure <- function(comparison_name, arm_name, variance_df, feature_df
       panel.grid.minor = element_blank()
     )
 
-  save_three_panel_plot(
+  save_five_row_plot(
     list(
       p1,
-      p_event_legend,
+      event_legend_strip(),
       p2,
-      p_nb_legend,
+      trace_legend_strip(),
       p3
     ),
     out_file
@@ -881,15 +913,14 @@ build_main_figure <- function(comparison_name, arm_name, variance_df, feature_df
 
 run_one_track <- function(comparison_name,
                           arm_name,
-                          count_mat_arm,
                           rank_matrix,
                           metric_matrix,
                           output_dir,
-                          figure_suffix,
-                          rank_label,
-                          metric_label,
-                          reference_label,
-                          use_metric_name) {
+                          file_tag,
+                          figure_track_label,
+                          ranking_label,
+                          metrics_label,
+                          metric_matrix_name) {
 
   abs_loadings <- compute_abs_pc1_loadings(rank_matrix)
   rank_order <- order(abs_loadings, decreasing = FALSE)
@@ -900,12 +931,7 @@ run_one_track <- function(comparison_name,
   }
 
   # The fixed leading-edge reference is defined as the rank that leaves exactly
-  # FIXED_LEADING_EDGE_SIZE features on the right side, including that reference
-  # rank itself.
-  #
-  # The final custom interval is then defined by the nearest spline-based
-  # second-derivative zero-crossing immediately left of this reference and the
-  # nearest spline-based second-derivative zero-crossing immediately right of it.
+  # FIXED_LEADING_EDGE_SIZE features on the right side, including that rank.
   reference_rank <- total_n - FIXED_LEADING_EDGE_SIZE + 1L
 
   variance_df <- compute_ranked_variance_curve(
@@ -919,13 +945,13 @@ run_one_track <- function(comparison_name,
 
   write.csv(
     zero_df,
-    file = file.path(output_dir, paste0(comparison_name, "_", arm_name, "_", figure_suffix, "_zero_crossings_all.csv")),
+    file = file.path(output_dir, paste0(comparison_name, "_", arm_name, "_", file_tag, "_zero_crossings_all.csv")),
     row.names = FALSE
   )
 
   write.csv(
     dense_curve_df,
-    file = file.path(output_dir, paste0(comparison_name, "_", arm_name, "_", figure_suffix, "_dense_spline_curve.csv")),
+    file = file.path(output_dir, paste0(comparison_name, "_", arm_name, "_", file_tag, "_dense_spline_curve.csv")),
     row.names = FALSE
   )
 
@@ -934,9 +960,9 @@ run_one_track <- function(comparison_name,
   selected_df <- data.frame(
     comparison_name = comparison_name,
     arm = arm_name,
-    analysis_track = figure_suffix,
-    ranking_method = rank_label,
-    metric_matrix_used = use_metric_name,
+    analysis_track = file_tag,
+    ranking_method = ranking_label,
+    metric_matrix_used = metric_matrix_name,
     cutoff_anchor_rank = interval_info$cutoff_anchor_rank,
     fixed_leading_edge_reference_rank = interval_info$reference_rank,
     terminal_start_rank = interval_info$terminal_start_rank,
@@ -947,7 +973,7 @@ run_one_track <- function(comparison_name,
 
   write.csv(
     selected_df,
-    file = file.path(output_dir, paste0(comparison_name, "_", arm_name, "_", figure_suffix, "_selected_two_zero_crossings.csv")),
+    file = file.path(output_dir, paste0(comparison_name, "_", arm_name, "_", file_tag, "_selected_two_zero_crossings.csv")),
     row.names = FALSE
   )
 
@@ -959,7 +985,7 @@ run_one_track <- function(comparison_name,
 
   write.csv(
     rank_series_df,
-    file = file.path(output_dir, paste0(comparison_name, "_", arm_name, "_", figure_suffix, "_rank_series.csv")),
+    file = file.path(output_dir, paste0(comparison_name, "_", arm_name, "_", file_tag, "_rank_series.csv")),
     row.names = FALSE
   )
 
@@ -975,7 +1001,7 @@ run_one_track <- function(comparison_name,
   validation_df <- data.frame(
     comparison_name = comparison_name,
     arm = arm_name,
-    analysis_track = figure_suffix,
+    analysis_track = file_tag,
     validation_status = "PASS",
     anchor_lt_reference = interval_info$cutoff_anchor_rank < interval_info$reference_rank,
     reference_lt_terminal = interval_info$reference_rank < interval_info$terminal_start_rank,
@@ -986,7 +1012,7 @@ run_one_track <- function(comparison_name,
 
   write.csv(
     validation_df,
-    file = file.path(output_dir, paste0(comparison_name, "_", arm_name, "_", figure_suffix, "_validation_report.csv")),
+    file = file.path(output_dir, paste0(comparison_name, "_", arm_name, "_", file_tag, "_validation_report.csv")),
     row.names = FALSE
   )
 
@@ -1001,7 +1027,7 @@ run_one_track <- function(comparison_name,
 
   write.csv(
     cutoff_summary,
-    file = file.path(output_dir, paste0(comparison_name, "_", arm_name, "_", figure_suffix, "_cutoffs_summary.csv")),
+    file = file.path(output_dir, paste0(comparison_name, "_", arm_name, "_", file_tag, "_cutoffs_summary.csv")),
     row.names = FALSE
   )
 
@@ -1012,9 +1038,10 @@ run_one_track <- function(comparison_name,
     feature_df = feature_df,
     interval_info = interval_info,
     region_summary = region_summary,
-    out_file = file.path(output_dir, paste0(comparison_name, "_", arm_name, "_", figure_suffix, "_main_figure.png")),
-    rank_label = rank_label,
-    metric_label = metric_label
+    out_file = file.path(output_dir, paste0(comparison_name, "_", arm_name, "_", file_tag, "_main_figure.png")),
+    figure_track_label = figure_track_label,
+    ranking_label = ranking_label,
+    metrics_label = metrics_label
   )
 
   list(
@@ -1050,25 +1077,20 @@ for (comparison_name in names(COMPARISONS)) {
 
     count_mat_arm <- count_mat[, sample_idx, drop = FALSE]
 
-    # -------------------------------------------------------------------------
-    # MAIN ANALYSIS TRACK
-    # Ranking: log-transformed CPM-style library-size normalization
-    # Metrics: raw counts
-    # -------------------------------------------------------------------------
+    # MAIN MANUSCRIPT TRACK
     main_rank_matrix <- normalize_cpm_log1p(count_mat_arm)
 
     main_res <- run_one_track(
       comparison_name = comparison_name,
       arm_name = arm_name,
-      count_mat_arm = count_mat_arm,
       rank_matrix = main_rank_matrix,
       metric_matrix = count_mat_arm,
       output_dir = comp_dir,
-      figure_suffix = "main_cpm",
-      rank_label = "Main analysis: log-transformed CPM-style library-size normalization",
-      metric_label = "Metrics computed on raw counts",
-      reference_label = "fixed leading-edge reference",
-      use_metric_name = "raw_counts"
+      file_tag = "main_cpm",
+      figure_track_label = "Main analysis panel",
+      ranking_label = "Main analysis: log-transformed CPM-style library-size normalization",
+      metrics_label = "Metrics computed on raw counts",
+      metric_matrix_name = "raw_counts"
     )
 
     overall_rows[[length(overall_rows) + 1L]] <- main_res$cutoff_summary
@@ -1080,36 +1102,33 @@ for (comparison_name in names(COMPARISONS)) {
       " | terminal start: ", main_res$selected_df$terminal_start_rank
     )
 
-    # -------------------------------------------------------------------------
-    # DESeq2 SENSITIVITY TRACK
-    # Ranking: DESeq2 normalized counts or VST
-    # Metrics: DESeq2 normalized counts
-    # -------------------------------------------------------------------------
-    if (RUN_DESEQ2_SENSITIVITY) {
+    # DESeq2 NORMALIZATION SUPPLEMENT
+    if (RUN_DESEQ2_SUPPLEMENT) {
       deseq2_obj <- compute_deseq2_matrices(
         count_mat_arm = count_mat_arm,
         rank_method = DESEQ2_RANK_METHOD
       )
 
       if (is.null(deseq2_obj)) {
-        message("[DESEQ2] Skipped for ", comparison_name, " ", arm_name, " because DESeq2 is not available.")
+        message("[DESEQ2 SUPPLEMENT] Skipped for ", comparison_name, " ", arm_name, " because DESeq2 is not available.")
       } else {
+        deseq2_rank_text <- if (DESEQ2_RANK_METHOD == "vst") {
+          "DESeq2 normalization supplement: VST-transformed DESeq2 normalized counts"
+        } else {
+          "DESeq2 normalization supplement: log-transformed DESeq2 normalized counts"
+        }
+
         deseq2_res <- run_one_track(
           comparison_name = comparison_name,
           arm_name = arm_name,
-          count_mat_arm = count_mat_arm,
           rank_matrix = deseq2_obj$ranking_matrix,
           metric_matrix = deseq2_obj$normalized_counts,
           output_dir = comp_dir,
-          figure_suffix = "deseq2_sensitivity",
-          rank_label = paste0(
-            "DESeq2 sensitivity: ",
-            if (DESEQ2_RANK_METHOD == "vst") "VST-transformed DESeq2 normalized counts"
-            else "log-transformed DESeq2 normalized counts"
-          ),
-          metric_label = "Metrics computed on DESeq2 normalized counts",
-          reference_label = "fixed leading-edge reference",
-          use_metric_name = "deseq2_normalized_counts"
+          file_tag = "deseq2_sensitivity",
+          figure_track_label = "DESeq2 normalization supplementary panel",
+          ranking_label = deseq2_rank_text,
+          metrics_label = "Metrics computed on DESeq2 normalized counts",
+          metric_matrix_name = "deseq2_normalized_counts"
         )
 
         write.csv(
@@ -1125,7 +1144,7 @@ for (comparison_name in names(COMPARISONS)) {
         overall_rows[[length(overall_rows) + 1L]] <- deseq2_res$cutoff_summary
 
         message(
-          "[DESEQ2] ", tools::toTitleCase(arm_name),
+          "[DESEQ2 SUPPLEMENT] ", tools::toTitleCase(arm_name),
           " cutoff anchor rank: ", deseq2_res$selected_df$cutoff_anchor_rank,
           " | reference rank: ", deseq2_res$selected_df$fixed_leading_edge_reference_rank,
           " | terminal start: ", deseq2_res$selected_df$terminal_start_rank
