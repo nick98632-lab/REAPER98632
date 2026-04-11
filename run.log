@@ -22,4 +22,4 @@ Selecting control cutoff for RT8_ZT14
 Control cutoff anchor rank: 26757 | reference rank: 26758 | terminal start: 26759 | interval: [26757, 26759] | pre-EVS remainder: 26756 | pre-EVS leading edge: 5001
 Selecting treatment cutoff for RT8_ZT14
 Treatment cutoff anchor rank: 26757 | reference rank: 26758 | terminal start: 26759 | interval: [26757, 26759] | pre-EVS remainder: 26756 | pre-EVS leading edge: 5001
-Done. Outputs written to: /root/REAPER98632/exports/variance_derivative_nb_range_manuscript_final
+Done. Outputs written to: /root/REAPER98632/exports/manuscript_custom_geometry_nb2_support
