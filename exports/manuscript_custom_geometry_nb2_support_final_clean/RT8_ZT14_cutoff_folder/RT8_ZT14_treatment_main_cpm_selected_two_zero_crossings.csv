@@ -1,2 +1,0 @@
-"comparison_name","arm","analysis_track","ranking_method","metric_matrix_used","cutoff_anchor_rank","fixed_leading_edge_reference_rank","terminal_start_rank","interval_min_rank","interval_max_rank"
-"RT8_ZT14","treatment","main_cpm","Main analysis: log-transformed CPM-style library-size normalization","raw_counts",26480,26758,27644,26480,27644

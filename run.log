@@ -2,41 +2,15 @@ Warning message:
 In storage.mode(count_mat) <- "numeric" : NAs introduced by coercion
 Using count file: /root/REAPER98632/data/WTTS-Seq_2022.2_DE_raw_read_numbers.csv
 Count matrix dimensions: 31757 features x 52 samples
-Processing comparison: RT0_ZT6
-Selecting control cutoff for RT0_ZT6
-[MAIN] Control cutoff anchor rank: 26714 | reference rank: 26758 | terminal start: 27348
+[Main] RT0_ZT6 control | Anchor=26714 Ref=26758 Terminal=27348
 converting counts to integer mode
-[DESEQ2 SUPPLEMENT] Control cutoff anchor rank: 26703 | reference rank: 26758 | terminal start: 27067
-Selecting treatment cutoff for RT0_ZT6
-[MAIN] Treatment cutoff anchor rank: 26611 | reference rank: 26758 | terminal start: 27119
+[DESeq2] RT0_ZT6 control | Anchor=26703 Ref=26758 Terminal=27067
+[Main] RT0_ZT6 treatment | Anchor=26611 Ref=26758 Terminal=27119
 converting counts to integer mode
-[DESEQ2 SUPPLEMENT] Treatment cutoff anchor rank: 26632 | reference rank: 26758 | terminal start: 27315
-Processing comparison: RT2_ZT8
-Selecting control cutoff for RT2_ZT8
-[MAIN] Control cutoff anchor rank: 26711 | reference rank: 26758 | terminal start: 27294
+[DESeq2] RT0_ZT6 treatment | Anchor=26632 Ref=26758 Terminal=27315
+[Main] RT2_ZT8 control | Anchor=26711 Ref=26758 Terminal=27294
 converting counts to integer mode
-[DESEQ2 SUPPLEMENT] Control cutoff anchor rank: 26726 | reference rank: 26758 | terminal start: 27198
-Selecting treatment cutoff for RT2_ZT8
-[MAIN] Treatment cutoff anchor rank: 26219 | reference rank: 26758 | terminal start: 26978
+[DESeq2] RT2_ZT8 control | Anchor=26726 Ref=26758 Terminal=27198
+[Main] RT2_ZT8 treatment | Anchor=26219 Ref=26758 Terminal=26978
 converting counts to integer mode
-[DESEQ2 SUPPLEMENT] Treatment cutoff anchor rank: 26113 | reference rank: 26758 | terminal start: 27335
-Processing comparison: RT4_ZT10
-Selecting control cutoff for RT4_ZT10
-[MAIN] Control cutoff anchor rank: 26590 | reference rank: 26758 | terminal start: 27222
-converting counts to integer mode
-[DESEQ2 SUPPLEMENT] Control cutoff anchor rank: 26528 | reference rank: 26758 | terminal start: 27201
-Selecting treatment cutoff for RT4_ZT10
-[MAIN] Treatment cutoff anchor rank: 26396 | reference rank: 26758 | terminal start: 27034
-converting counts to integer mode
-[DESEQ2 SUPPLEMENT] Treatment cutoff anchor rank: 26402 | reference rank: 26758 | terminal start: 26939
-Processing comparison: RT8_ZT14
-Selecting control cutoff for RT8_ZT14
-[MAIN] Control cutoff anchor rank: 25781 | reference rank: 26758 | terminal start: 26894
-converting counts to integer mode
-[DESEQ2 SUPPLEMENT] Control cutoff anchor rank: 26510 | reference rank: 26758 | terminal start: 27365
-Selecting treatment cutoff for RT8_ZT14
-[MAIN] Treatment cutoff anchor rank: 26480 | reference rank: 26758 | terminal start: 27644
-converting counts to integer mode
-[DESEQ2 SUPPLEMENT] Treatment cutoff anchor rank: 26403 | reference rank: 26758 | terminal start: 27141
-There were 50 or more warnings (use warnings() to see the first 50)
-Done. Outputs written to: /root/REAPER98632/exports/manuscript_custom_geometry_nb2_support_final_clean
+[DESeq2] RT2_ZT8 treatment | Anchor=26113 Ref=26758 Terminal=27335
