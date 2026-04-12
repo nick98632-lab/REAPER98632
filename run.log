@@ -39,4 +39,4 @@ Selecting treatment cutoff for RT8_ZT14
 converting counts to integer mode
 [DESEQ2 SUPPLEMENT] Treatment cutoff anchor rank: 26403 | reference rank: 26758 | terminal start: 27141
 There were 50 or more warnings (use warnings() to see the first 50)
-Done. Outputs written to: /root/REAPER98632/exports/manuscript_custom_geometry_nb2_support_final
+Done. Outputs written to: /root/REAPER98632/exports/manuscript_custom_geometry_nb2_support_final_clean
