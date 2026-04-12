@@ -1,5 +1,3 @@
-Here is the corrected full code.
-
 #!/usr/bin/env Rscript
 
 suppressPackageStartupMessages({
