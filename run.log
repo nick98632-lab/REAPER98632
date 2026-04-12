@@ -14,3 +14,17 @@ converting counts to integer mode
 [Main] RT2_ZT8 treatment | Anchor=26219 Ref=26758 Terminal=26978
 converting counts to integer mode
 [DESeq2] RT2_ZT8 treatment | Anchor=26113 Ref=26758 Terminal=27335
+[Main] RT4_ZT10 control | Anchor=26590 Ref=26758 Terminal=27222
+converting counts to integer mode
+[DESeq2] RT4_ZT10 control | Anchor=26528 Ref=26758 Terminal=27201
+[Main] RT4_ZT10 treatment | Anchor=26396 Ref=26758 Terminal=27034
+converting counts to integer mode
+[DESeq2] RT4_ZT10 treatment | Anchor=26402 Ref=26758 Terminal=26939
+[Main] RT8_ZT14 control | Anchor=25781 Ref=26758 Terminal=26894
+converting counts to integer mode
+[DESeq2] RT8_ZT14 control | Anchor=26510 Ref=26758 Terminal=27365
+[Main] RT8_ZT14 treatment | Anchor=26480 Ref=26758 Terminal=27644
+converting counts to integer mode
+[DESeq2] RT8_ZT14 treatment | Anchor=26403 Ref=26758 Terminal=27141
+There were 50 or more warnings (use warnings() to see the first 50)
+Done. Outputs written to: /root/REAPER98632/exports/manuscript_final_clean
