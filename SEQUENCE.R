@@ -1,3 +1,5 @@
+#!/usr/bin/env Rscript
+
 # =============================================================================
 # SECTION 1 OF 4
 # SETUP, MINIMAL EMBEDDED METADATA, AND HELPERS
@@ -24,8 +26,11 @@
 #
 # This final version also:
 # - shortens export names so files sort cleanly in GitHub
-# - guards all HC-threshold plotting steps to prevent warning-prone NA lines
+# - guards HC-threshold plotting against NA / invalid values
+# - resolves the WTTS count-file path robustly from repo root or data folder
 # - keeps volcano and comparison figure names short and searchable
+# - preserves methods explanation directly in the script for manuscript review
+# - keeps legends stable so marker coding is actually visible in exported plots
 # =============================================================================
 
 suppressPackageStartupMessages({
@@ -41,14 +46,77 @@ suppressPackageStartupMessages({
   library(grDevices)
 })
 
+options(stringsAsFactors = FALSE)
+
+# -----------------------------------------------------------------------------
+# PATH RESOLUTION
+#
+# This block makes the script robust to execution from:
+# - the repository root
+# - the script directory
+# - SSH / GitHub / server sessions where the working directory varies
+#
+# The primary WTTS file is expected in:
+#   data/WTTS-Seq_2022.2_DE_raw_read_numbers.csv
+#
+# but fallback locations are also checked.
+# -----------------------------------------------------------------------------
+get_script_dir <- function() {
+  args <- commandArgs(trailingOnly = FALSE)
+  file_arg <- "--file="
+  idx <- grep(file_arg, args)
+  if (length(idx) > 0L) {
+    script_path <- sub(file_arg, "", args[idx[1]])
+    return(dirname(normalizePath(script_path, mustWork = FALSE)))
+  }
+  normalizePath(getwd(), mustWork = FALSE)
+}
+
+SCRIPT_DIR <- get_script_dir()
+
+REPO_ROOT_CANDIDATES <- unique(c(
+  normalizePath(getwd(), mustWork = FALSE),
+  normalizePath(SCRIPT_DIR, mustWork = FALSE),
+  normalizePath(file.path(SCRIPT_DIR, ".."), mustWork = FALSE),
+  "/root/REAPER98632"
+))
+
+resolve_existing_path <- function(candidates, label) {
+  candidates <- unique(candidates[nzchar(candidates)])
+  hits <- candidates[file.exists(candidates)]
+  if (length(hits) == 0L) {
+    stop(
+      paste0(
+        "Could not find ", label, ". Checked:\n",
+        paste(candidates, collapse = "\n")
+      )
+    )
+  }
+  normalizePath(hits[1], mustWork = TRUE)
+}
+
 # -----------------------------------------------------------------------------
 # USER INPUT
 # -----------------------------------------------------------------------------
-count_file <- "WTTS-Seq_2022.2_DE_raw_read_numbers.csv"
+count_file_candidates <- unique(c(
+  file.path(REPO_ROOT_CANDIDATES, "data", "WTTS-Seq_2022.2_DE_raw_read_numbers.csv"),
+  file.path(REPO_ROOT_CANDIDATES, "WTTS-Seq_2022.2_DE_raw_read_numbers.csv"),
+  "data/WTTS-Seq_2022.2_DE_raw_read_numbers.csv",
+  "WTTS-Seq_2022.2_DE_raw_read_numbers.csv"
+))
+count_file <- resolve_existing_path(count_file_candidates, "WTTS count file")
+message("Using count file: ", count_file)
 
 # Optional TWAS overlap
 run_twas_overlap <- FALSE
-twas_file        <- "3aTWAS_genes_of_11_brain_disorders.csv"
+
+twas_file_candidates <- unique(c(
+  file.path(REPO_ROOT_CANDIDATES, "data", "3aTWAS_genes_of_11_brain_disorders.csv"),
+  file.path(REPO_ROOT_CANDIDATES, "3aTWAS_genes_of_11_brain_disorders.csv"),
+  "data/3aTWAS_genes_of_11_brain_disorders.csv",
+  "3aTWAS_genes_of_11_brain_disorders.csv"
+))
+twas_file <- twas_file_candidates[1]
 
 # Significance threshold used throughout DESeq2 and effect classification
 alpha_level <- 0.10
@@ -289,6 +357,10 @@ plot_expand_xy <- function() {
   )
 }
 
+# NOTE:
+# Both color and shape guides are kept explicit in the legend so the plotted
+# marker coding is actually visible to reviewers. Earlier versions that hid
+# shape caused legend ambiguity.
 volcano_guides <- function() {
   guides(
     fill = "none",
@@ -298,7 +370,12 @@ volcano_guides <- function() {
       byrow = TRUE,
       override.aes = list(size = 3.2, alpha = 1, stroke = 0.65)
     ),
-    shape = "none"
+    shape = guide_legend(
+      order = 1,
+      nrow = 2,
+      byrow = TRUE,
+      override.aes = list(size = 3.2, alpha = 1, stroke = 0.65)
+    )
   )
 }
 
@@ -455,6 +532,10 @@ classify_effect_strength <- function(res_strong_padj, res_weak_padj, alpha = alp
 
 # -----------------------------------------------------------------------------
 # IMPORT WTTS MASTER COUNT FILE
+#
+# The resolved count_file now points to the actual repository location.
+# This fixes the earlier failure caused by looking only in the repo root when
+# the file was actually stored in data/.
 # -----------------------------------------------------------------------------
 WTTS_Seq <- read.csv(count_file, header = TRUE, stringsAsFactors = FALSE, check.names = FALSE)
 WTTS_Seq <- as.data.frame(WTTS_Seq, stringsAsFactors = FALSE)
@@ -489,6 +570,8 @@ OrigID_Symbol <- OrigID_Symbol %>%
   dplyr::mutate(gene_symbol = dplyr::na_if(gene_symbol, ""))
 
 if (run_twas_overlap) {
+  twas_file <- resolve_existing_path(twas_file_candidates, "TWAS file")
+  message("Using TWAS file: ", twas_file)
   TWAS_Seq <- read.csv(twas_file, header = TRUE, stringsAsFactors = FALSE)
   TWAS_Seq <- as.data.frame(TWAS_Seq)
   if (ncol(TWAS_Seq) < 4) stop("TWAS file must contain at least 4 columns.")
@@ -499,6 +582,20 @@ if (run_twas_overlap) {
 # =============================================================================
 # SECTION 2 OF 4
 # COMPARISON PREPARATION, EIGENVECTOR SPLITTING, AND EVS FIGURES
+#
+# Purpose:
+# This section builds each pairwise comparison, performs EVS (Eigenvector
+# Split), and generates the key support plots for the leading-edge partition.
+#
+# EVS rationale:
+# Rather than running DESeq2 on all PAS features simultaneously, EVS first
+# partitions features into a leading-edge set and a remainder set based on
+# absolute PC1 loadings computed separately within each condition.
+#
+# A feature qualifies for the leading edge if it is high-loading in either
+# condition. This union-based rule retains condition-specific structured
+# variation, including biologically meaningful sites that are highly variable
+# in one arm but not the other.
 # =============================================================================
 prepare_comparison_data <- function(comparison_name, group1_prefix, group2_prefix,
                                     WTTS_Seq, meta_all) {
@@ -620,9 +717,6 @@ build_eigenvector_split <- function(count_matrix, coldata) {
   )
 }
 
-# -----------------------------------------------------------------------------
-# EVS SUPPORT PLOTS
-# -----------------------------------------------------------------------------
 condition_shapes <- c("untrt" = 21, "trt" = 24)
 condition_fills  <- c("untrt" = plot_palette$control, "trt" = plot_palette$treatment)
 condition_labels <- c("untrt" = "Control", "trt" = "Treatment")
@@ -783,6 +877,11 @@ plot_mean_histogram_panel <- function(df_means, base_mean_vec, dataset_name) {
 # =============================================================================
 # SECTION 3 OF 4
 # DESEQ2, HBFSS, VOLCANOES, DISPERSION, AND SUMMARY PLOTS
+#
+# Purpose:
+# This section runs the inferential core. It computes conventional DESeq2
+# results, empirical-null recalibration via fdrtool, higher-criticism
+# thresholds, HBFSS, composite effect classes, and dispersion outputs.
 # =============================================================================
 run_core_analysis <- function(count_mat, coldata, dataset_name, annot_df) {
   design_formula <- make_design_formula(coldata)
@@ -864,6 +963,35 @@ run_core_analysis <- function(count_mat, coldata, dataset_name, annot_df) {
   )
   colnames(res_df)[colnames(res_df) == "log2FoldChange_shrunk"] <- "lfc_shrunk"
 
+  # --------------------------------------------------------------------------
+  # HBFSS METHODS EXPLANATION
+  #
+  # HBFSS is constructed to combine:
+  # - a shrunken effect-size estimate from apeglm
+  # - a dataset-adaptive empirical-null p-value from fdrtool
+  #
+  # Dataset-specific threshold:
+  #   hc_p_threshold_dataset = hc.thresh(sort(empirical_p))
+  #   hbfss_threshold_dataset = abs(log10(hc_p_threshold_dataset)) * lfc_boundary
+  #
+  # Gene-specific score:
+  #   HBFSS_gene = abs(lfc_shrunk_gene * log10(empirical_p_gene))
+  #
+  # Decision logic:
+  #   The dataset-specific HC threshold sets the empirical-null tail anchor.
+  #   That anchor is projected onto the lfc_boundary to define the final
+  #   dataset-specific HBFSS cutoff.
+  #
+  # Interpretation:
+  # - larger HBFSS means stronger joint support from effect magnitude and
+  #   empirical-null rarity
+  # - the score is unsigned; regulation direction is tracked separately by the
+  #   sign of lfc_shrunk
+  #
+  # The final manuscript plots also require a raw log2FC floor so that the
+  # standard DESeq2 layer and the HBFSS layer operate on a comparable raw
+  # effect-size domain.
+  # --------------------------------------------------------------------------
   hc_p_threshold_dataset <- safe_hc_thresh(res_df$empirical_p, dataset_name = dataset_name)
   res_df$gene_empirical_pvalue <- res_df$empirical_p
   res_df$HBFSS <- abs(res_df$lfc_shrunk * log10(pmax(res_df$gene_empirical_pvalue, 1e-300)))
@@ -902,9 +1030,9 @@ run_core_analysis <- function(count_mat, coldata, dataset_name, annot_df) {
   res_weak_df$feature_id <- as.character(rownames(res_weak_df))
 
   res_df <- dplyr::left_join(res_df, res_strong_df[, c("feature_id", "padj")],
-                              by = "feature_id", suffix = c("", "_strong"))
+                             by = "feature_id", suffix = c("", "_strong"))
   res_df <- dplyr::left_join(res_df, res_weak_df[, c("feature_id", "padj")],
-                              by = "feature_id", suffix = c("", "_weak"))
+                             by = "feature_id", suffix = c("", "_weak"))
 
   colnames(res_df)[colnames(res_df) == "padj_strong"] <- "padj_strong_effect"
   colnames(res_df)[colnames(res_df) == "padj_weak"]   <- "padj_weak_effect"
@@ -1003,9 +1131,6 @@ run_core_analysis <- function(count_mat, coldata, dataset_name, annot_df) {
   )
 }
 
-# -----------------------------------------------------------------------------
-# PLOT FUNCTIONS
-# -----------------------------------------------------------------------------
 plot_empirical_p_histogram <- function(df, dataset_name, hc_p_threshold) {
   subtitle_text <- if (is.na(hc_p_threshold) || hc_p_threshold <= 0 || hc_p_threshold >= 1) {
     "Empirical-null p-values; HC threshold unavailable"
@@ -1037,12 +1162,9 @@ plot_empirical_p_histogram <- function(df, dataset_name, hc_p_threshold) {
         x     = hc_p_threshold,
         y     = Inf,
         label = paste0("HC threshold = ", signif(hc_p_threshold, 4)),
-        vjust = 1.8,
-        hjust = -0.02,
-        fill  = "white",
-        label.size = 0.15,
-        color = plot_palette$hbfss,
-        size = 3.6
+        vjust = 1.8, hjust = -0.02,
+        fill  = "white", label.size = 0.15,
+        color = plot_palette$hbfss, size = 3.6
       )
   }
 
@@ -1060,7 +1182,7 @@ plot_hc_profile <- function(df, dataset_name, hc_p_threshold) {
   hc_score <- abs((i / n) - pvals) / sqrt(v)
   hc_df <- data.frame(rank = i, empirical_p = pvals, hc_score = hc_score)
   idx_peak <- which.max(hc_df$hc_score)
-  peak_df  <- hc_df[idx_peak, , drop = FALSE]
+  peak_df  <- hc_df[idx_peak, , drop = FALSE)
 
   p <- ggplot(hc_df, aes(empirical_p, hc_score)) +
     geom_line(linewidth = 0.5, colour = "grey30") +
@@ -1096,8 +1218,7 @@ build_reviewer_volcano_classes <- function(df) {
   )
 
   df$method_call_class <- dplyr::case_when(
-    !is.na(df$standard_significant) & df$standard_significant &
-      !is.na(df$HBFSS_significant) & df$HBFSS_significant ~ "Strong effect + HBFSS",
+    !is.na(df$standard_significant) & df$standard_significant & !is.na(df$HBFSS_significant) & df$HBFSS_significant ~ "Strong effect + HBFSS",
     !is.na(df$standard_significant) & df$standard_significant ~ "Strong-effect only",
     !is.na(df$HBFSS_significant) & df$HBFSS_significant ~ "HBFSS candidate only",
     TRUE ~ "Empirical-null / neither"
@@ -1172,16 +1293,6 @@ add_hbfss_inter_highlight <- function(plot_obj, df, x_col, y_col) {
   plot_obj
 }
 
-reviewer_volcano_subtitle <- function(y_label_text) {
-  paste0(
-    "Color + shape = interpretive tier. ",
-    "Strong-effect only = classical DESeq2 significance; ",
-    "HBFSS candidate only = intermediate alternative-hypothesis region; ",
-    "Strong effect + HBFSS = agreement between both layers. ",
-    y_label_text
-  )
-}
-
 volcano_count_caption <- function(df) {
   method_counts <- table(factor(df$method_call_class, levels = levels(df$method_call_class)))
   effect_counts <- table(factor(df$effect_color_class, levels = levels(df$effect_color_class)))
@@ -1203,7 +1314,12 @@ plot_standard_volcano <- function(df, dataset_name) {
 
   p <- ggplot(
     df,
-    aes(lfc_shrunk, neglog10_padj, color = method_call_class, shape = method_call_class)
+    aes(
+      lfc_shrunk,
+      neglog10_padj,
+      color = method_call_class,
+      shape = method_call_class
+    )
   ) +
     geom_point(alpha = 0.84, size = 1.6, stroke = 0.45) +
     geom_vline(xintercept = c(-lfc_boundary, lfc_boundary), linetype = "dashed", linewidth = 0.6, colour = plot_palette$threshold) +
@@ -1247,7 +1363,12 @@ plot_hbfss_volcano <- function(df, dataset_name) {
 
   p <- ggplot(
     df,
-    aes(lfc_shrunk, neglog10_empirical_p, color = method_call_class, shape = method_call_class)
+    aes(
+      lfc_shrunk,
+      neglog10_empirical_p,
+      color = method_call_class,
+      shape = method_call_class
+    )
   ) +
     geom_point(alpha = 0.84, size = 1.6, stroke = 0.45) +
     scale_color_manual(values = method_call_colors, drop = FALSE, name = "Interpretive tier") +
@@ -1315,7 +1436,12 @@ plot_composite_volcano <- function(df, dataset_name) {
 
   p <- ggplot(
     df,
-    aes(lfc_shrunk, neglog10_padjc, color = method_call_class, shape = method_call_class)
+    aes(
+      lfc_shrunk,
+      neglog10_padjc,
+      color = method_call_class,
+      shape = method_call_class
+    )
   ) +
     geom_point(alpha = 0.84, size = 1.55, stroke = 0.45) +
     scale_color_manual(values = method_call_colors, drop = FALSE, name = "Interpretive tier") +
@@ -1356,7 +1482,12 @@ plot_dispersion_panel_for_dataset <- function(df, dataset_name) {
   df <- build_reviewer_volcano_classes(df)
   ggplot(
     df,
-    aes(baseMean, dispersion, color = method_call_class, shape = method_call_class)
+    aes(
+      baseMean,
+      dispersion,
+      color = method_call_class,
+      shape = method_call_class
+    )
   ) +
     geom_point(alpha = 0.55, size = 1.3, stroke = 0.35) +
     scale_x_log10(labels = label_number(accuracy = 0.1)) +
@@ -1387,7 +1518,12 @@ plot_publication_volcano_panel <- function(df, dataset_name) {
 
   p <- ggplot(
     build,
-    aes(lfc_shrunk, neglog10_empirical_p, color = method_call_class, shape = method_call_class)
+    aes(
+      lfc_shrunk,
+      neglog10_empirical_p,
+      color = method_call_class,
+      shape = method_call_class
+    )
   ) +
     geom_vline(xintercept = c(-lfc_boundary, lfc_boundary), linewidth = 0.35, linetype = "dashed", color = "grey50") +
     geom_vline(xintercept = 0, linewidth = 0.30, linetype = "solid", color = "grey55") +
@@ -1416,6 +1552,8 @@ plot_publication_volcano_panel <- function(df, dataset_name) {
       plot.margin = margin(18, 26, 22, 18)
     )
 
+  # Guard the HC line so invalid thresholds do not generate warning-prone
+  # horizontal lines or misleading figure artifacts.
   if (is.finite(hc_line) && !is.na(hc_line)) {
     p <- p + geom_hline(
       yintercept = hc_line,
@@ -1555,9 +1693,6 @@ dispersion_residual_section <- function(df, dataset_name, fig_subdir, tab_dir, c
   out
 }
 
-# -----------------------------------------------------------------------------
-# MANUSCRIPT COMPARISON PANELS
-# -----------------------------------------------------------------------------
 plot_empirical_histogram_for_panel <- function(df, dataset_name, hc_p_threshold) {
   p <- ggplot(df, aes(empirical_p)) +
     geom_histogram(bins = 60, fill = plot_palette$histogram, color = "white") +
@@ -1792,6 +1927,11 @@ save_cross_dataset_comparison_panels <- function(comparison_name, analysis_resul
 # =============================================================================
 # SECTION 4 OF 4
 # BATCH EXECUTION, EXPORTS, AND FINAL SUMMARIES
+#
+# Purpose:
+# This section runs all four comparisons, applies EVS and HBFSS to original,
+# leading-edge, and remainder datasets, and exports organized figures and
+# tables with short manuscript-friendly names.
 # =============================================================================
 run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata, annot_df) {
   cmp_dir     <- file.path(output_dir, comparison_name)
@@ -1804,9 +1944,6 @@ run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata,
     dir.create(d, showWarnings = FALSE, recursive = TRUE)
   }
 
-  # -------------------------------------------------------------------
-  # EVS
-  # -------------------------------------------------------------------
   evs <- build_eigenvector_split(count_matrix, coldata)
 
   save_plot(
@@ -1831,7 +1968,6 @@ run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata,
     file.path(cmp_dir, paste0("Figure_", comparison_name, "_EVS_Trt_Rank.png")),
     width = 10, height = 7
   )
-
   save_plot(
     plot_pc1_loading_rank(
       evs$fit_untrt$loading_table, evs$fit_untrt$cutoff,
@@ -1884,7 +2020,6 @@ run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata,
     file.path(cmp_dir, paste0("Figure_", comparison_name, "_EVS_Trt_Rank_Raw.png")),
     width = 10, height = 7
   )
-
   save_plot(
     plot_pc1_loading_rank(
       evs$fit_untrt_raw$loading_table, evs$fit_untrt_raw$cutoff,
@@ -1897,9 +2032,6 @@ run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata,
     width = 10, height = 7
   )
 
-  # -------------------------------------------------------------------
-  # Per-dataset analysis
-  # -------------------------------------------------------------------
   dataset_list <- list(
     raw_dataset          = evs$raw_dataset,
     leading_edge_dataset = evs$leading_edge_dataset,
@@ -1916,7 +2048,6 @@ run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata,
 
   for (nm in names(dataset_list)) {
     full_dataset_name <- paste(comparison_name, nm, sep = "_")
-    ds_short <- unname(dataset_short[nm])
     fig_subdir <- dataset_fig_dirs[[nm]]
 
     fit <- run_core_analysis(
@@ -1928,7 +2059,6 @@ run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata,
 
     df <- fit$results
 
-    # --- Tables ---
     save_csv(df, tab_file(tab_dir, comparison_name, nm, "Results"))
     save_csv(subset(df, standard_significant), tab_file(tab_dir, comparison_name, nm, "StdSig"))
     save_csv(subset(df, HBFSS_significant), tab_file(tab_dir, comparison_name, nm, "HBFSSSig"))
@@ -1953,12 +2083,10 @@ run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata,
     )
     save_csv(summary_row, tab_file(tab_dir, comparison_name, nm, "Summary"))
 
-    # --- Mean expression panel ---
     mean_df <- compute_mean_expression_table(dataset_list[[nm]], coldata)
     mean_panel <- plot_mean_histogram_panel(mean_df, fit$base_mean_vec, full_dataset_name)
     save_grob(mean_panel, fig_file(fig_subdir, comparison_name, nm, "MeanHist"), width = 14, height = 10)
 
-    # --- Core inference plots ---
     p_hist <- plot_empirical_p_histogram(df, full_dataset_name, fit$hc_p_threshold)
     p_std  <- plot_standard_volcano(df, full_dataset_name)
     p_hbf  <- plot_hbfss_volcano(df, full_dataset_name)
@@ -1978,7 +2106,6 @@ run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata,
     save_publication_volcano(df, full_dataset_name, fig_file(fig_subdir, comparison_name, nm, "VolcanoPub"))
     save_plot(p_ma,   fig_file(fig_subdir, comparison_name, nm, "MA"))
 
-    # --- Dispersion ---
     plot_dispersion_cloud(fit$dds, full_dataset_name, fig_subdir, comparison_name, nm)
 
     disp_panel <- plot_dispersion_relationships(df, full_dataset_name)
@@ -1989,7 +2116,6 @@ run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata,
 
     dispersion_residual_section(df, full_dataset_name, fig_subdir, tab_dir, comparison_name, nm)
 
-    # --- Summary panel ---
     summary_plot_list <- list(p_hist, p_std, p_hbf, p_hbfd, p_comp, p_ma)
     if (!is.null(p_hc)) summary_plot_list <- c(summary_plot_list, list(p_hc))
 
@@ -2024,9 +2150,6 @@ run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata,
     warning(paste0(comparison_name, ": cross-dataset panel generation failed: ", conditionMessage(e)))
   })
 
-  # -------------------------------------------------------------------
-  # Optional TWAS overlap
-  # -------------------------------------------------------------------
   if (run_twas_overlap) {
     twas_genes <- clean_gene_set(TWAS_data$gene_symbol)
 
@@ -2144,6 +2267,8 @@ if (length(failed_comparisons) > 0) {
 
 cat("\n=====================================================\n")
 cat("Pipeline complete.\n")
+cat("Count file used:\n")
+cat(count_file, "\n")
 cat("Output directory:\n")
 cat(normalizePath(output_dir), "\n")
 cat("=====================================================\n\n")
