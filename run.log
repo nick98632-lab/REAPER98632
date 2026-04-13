@@ -1,30 +1,69 @@
-Warning message:
-In storage.mode(count_mat) <- "numeric" : NAs introduced by coercion
-Using count file: /root/REAPER98632/data/WTTS-Seq_2022.2_DE_raw_read_numbers.csv
-Count matrix dimensions: 31757 features x 52 samples
-[Main] RT0_ZT6 control | Anchor=26714 Ref=26758 Terminal=27348
-converting counts to integer mode
-[DESeq2] RT0_ZT6 control | Anchor=26703 Ref=26758 Terminal=27067
-[Main] RT0_ZT6 treatment | Anchor=26611 Ref=26758 Terminal=27119
-converting counts to integer mode
-[DESeq2] RT0_ZT6 treatment | Anchor=26632 Ref=26758 Terminal=27315
-[Main] RT2_ZT8 control | Anchor=26711 Ref=26758 Terminal=27294
-converting counts to integer mode
-[DESeq2] RT2_ZT8 control | Anchor=26726 Ref=26758 Terminal=27198
-[Main] RT2_ZT8 treatment | Anchor=26219 Ref=26758 Terminal=26978
-converting counts to integer mode
-[DESeq2] RT2_ZT8 treatment | Anchor=26113 Ref=26758 Terminal=27335
-[Main] RT4_ZT10 control | Anchor=26590 Ref=26758 Terminal=27222
-converting counts to integer mode
-[DESeq2] RT4_ZT10 control | Anchor=26528 Ref=26758 Terminal=27201
-[Main] RT4_ZT10 treatment | Anchor=26396 Ref=26758 Terminal=27034
-converting counts to integer mode
-[DESeq2] RT4_ZT10 treatment | Anchor=26402 Ref=26758 Terminal=26939
-[Main] RT8_ZT14 control | Anchor=25781 Ref=26758 Terminal=26894
-converting counts to integer mode
-[DESeq2] RT8_ZT14 control | Anchor=26510 Ref=26758 Terminal=27365
-[Main] RT8_ZT14 treatment | Anchor=26480 Ref=26758 Terminal=27644
-converting counts to integer mode
-[DESeq2] RT8_ZT14 treatment | Anchor=26403 Ref=26758 Terminal=27141
+
+=====================================================
+Running comparison: RT0_ZT6
+=====================================================
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+[RT0_ZT6_raw_dataset] Mean Wald stat sent to fdrtool: 0.0832
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+
+=====================================================
+Running comparison: RT2_ZT8
+=====================================================
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+[RT2_ZT8_raw_dataset] Mean Wald stat sent to fdrtool: -0.0180
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+
+=====================================================
+Running comparison: RT4_ZT10
+=====================================================
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+[RT4_ZT10_raw_dataset] Mean Wald stat sent to fdrtool: 0.0808
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+
+=====================================================
+Running comparison: RT8_ZT14
+=====================================================
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+[RT8_ZT14_raw_dataset] Mean Wald stat sent to fdrtool: -0.0282
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
 There were 50 or more warnings (use warnings() to see the first 50)
-Done. Outputs written to: /root/REAPER98632/exports/manuscript_final_clean
+
+=====================================================
+Pipeline complete.
+Output directory:
+/root/REAPER98632/exports/manuscript_final_clean 
+=====================================================
+
+No comparison summaries were written. Check Table_Failed.csv for the exact error message.

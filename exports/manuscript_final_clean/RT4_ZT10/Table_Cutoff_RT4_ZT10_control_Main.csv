@@ -1,2 +1,0 @@
-"comp","arm","track","rank_method","metric_matrix","Anchor","Ref","Terminal","IntMin","IntMax","left_n","right_n","left_NB2","right_NB2","diff_NB2","left_gap","right_gap","diff_gap","left_alpha","right_alpha","diff_alpha","LeftSize","RightSize","Call_NB2","Call_Gap","Call_Alpha"
-"RT4_ZT10","control","Main","Rank: CPM log1p","raw_counts",26590,26758,27222,26590,27222,5168,5168,4.28634138453947,4.72295322164447,0.436611837105001,1.89034669844074,2.10825421007376,0.217907511633017,2.11158966305531,2.28425180897047,0.172662145915156,5168,5168,"RIGHT","RIGHT","RIGHT"
