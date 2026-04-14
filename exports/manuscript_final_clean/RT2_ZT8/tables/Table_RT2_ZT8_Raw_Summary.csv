@@ -1,2 +1,0 @@
-"comparison_name","dataset_name","n_features","hc_p_threshold","hbfss_threshold","n_standard_significant","n_HBFSS_significant","n_overlap_significant","n_strong_effect","n_weak_effect","top_n_target","trt_cutoff_quantile","ctrl_cutoff_quantile"
-"RT2_ZT8","RT2_ZT8_raw_dataset",31534,0.0136775581992137,1.86399142858533,0,4,0,0,7704,5000,0.841440984334369,0.841440984334369
