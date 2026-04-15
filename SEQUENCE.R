@@ -53,6 +53,8 @@ suppressPackageStartupMessages({
 })
 
 options(stringsAsFactors = FALSE)
+# Avoid accidental default-device files such as Rplots.pdf during batch export.
+options(device = function(...) grDevices::png(filename = tempfile(fileext = ".png"), width = 960, height = 720, res = 120))
 
 # =============================================================================
 # SECTION 1
@@ -99,7 +101,7 @@ n_top_labels_integrated <- 18
 export_optional_diagnostics <- FALSE
 
 # Output root
-output_dir <- "EVS_HBFSS_Output"
+output_dir <- "exports/manuscript_final_clean"
 dir.create(output_dir, showWarnings = FALSE, recursive = TRUE)
 
 # -----------------------------------------------------------------------------
@@ -150,36 +152,24 @@ condition_fills  <- c("untrt" = plot_palette$control, "trt" = plot_palette$treat
 condition_labels <- c("untrt" = "Control", "trt" = "Treatment")
 
 integrated_class_levels <- c(
-  "Background",
-  "Standard",
   "Weak CNH",
   "Strong CNH",
-  "HBFSS-only",
-  "Std+HBFSS",
-  "Weak+HBFSS",
-  "Strong+HBFSS"
+  "Standard",
+  "HBFSS"
 )
 
 integrated_class_colors <- c(
-  "Background"   = "grey70",
-  "Standard"     = plot_palette$standard,
-  "Weak CNH"     = plot_palette$weak,
-  "Strong CNH"   = plot_palette$strong,
-  "HBFSS-only"   = plot_palette$hbfss,
-  "Std+HBFSS"    = plot_palette$std_hbfss,
-  "Weak+HBFSS"   = plot_palette$weak_hbfss,
-  "Strong+HBFSS" = plot_palette$strong_hbfss
+  "Weak CNH"   = plot_palette$weak,
+  "Strong CNH" = plot_palette$strong,
+  "Standard"   = plot_palette$standard,
+  "HBFSS"      = plot_palette$hbfss
 )
 
 integrated_class_shapes <- c(
-  "Background"   = 16,
-  "Standard"     = 17,
-  "Weak CNH"     = 15,
-  "Strong CNH"   = 18,
-  "HBFSS-only"   = 8,
-  "Std+HBFSS"    = 23,
-  "Weak+HBFSS"   = 22,
-  "Strong+HBFSS" = 24
+  "Weak CNH"   = 16,
+  "Strong CNH" = 17,
+  "Standard"   = 15,
+  "HBFSS"      = 18
 )
 
 # -----------------------------------------------------------------------------
@@ -882,18 +872,13 @@ run_core_analysis <- function(count_mat, coldata, dataset_name, annot_df) {
   final_df$Apeglm_L2FC <- final_df$lfc_shrunk
   final_df$pi_valueE <- final_df$HBFSS
 
-  # Final mutually exclusive integrated volcano class
-  final_df$plot_class <- case_when(
-    final_df$standard_significant & final_df$HBFSS_significant ~ "Std+HBFSS",
-    final_df$effect_class == "weak_effect" & final_df$HBFSS_significant ~ "Weak+HBFSS",
-    final_df$effect_class == "strong_effect" & final_df$HBFSS_significant ~ "Strong+HBFSS",
-    final_df$standard_significant ~ "Standard",
-    final_df$effect_class == "weak_effect" ~ "Weak CNH",
-    final_df$effect_class == "strong_effect" ~ "Strong CNH",
-    final_df$HBFSS_significant ~ "HBFSS-only",
-    TRUE ~ "Background"
-  )
-  final_df$plot_class <- factor(final_df$plot_class, levels = integrated_class_levels)
+  # Plotting booleans for the manuscript volcano panels.
+  # These are intentionally not collapsed into mutually-exclusive classes.
+  # Weak CNH, Strong CNH, Standard, and HBFSS are each plotted directly.
+  final_df$is_weak_cnh <- !is.na(final_df$effect_class) & final_df$effect_class == "weak_effect"
+  final_df$is_strong_cnh <- !is.na(final_df$effect_class) & final_df$effect_class == "strong_effect"
+  final_df$is_standard <- !is.na(final_df$standard_significant) & final_df$standard_significant
+  final_df$is_hbfss <- !is.na(final_df$HBFSS_significant) & final_df$HBFSS_significant
 
   final_df$has_valid_gene_symbol <- !is.na(final_df$gene_symbol) & grepl("[A-Za-z0-9]", trimws(final_df$gene_symbol))
   final_df$gene_symbol_plot <- ifelse(final_df$has_valid_gene_symbol, trimws(final_df$gene_symbol), NA_character_)
@@ -905,7 +890,7 @@ run_core_analysis <- function(count_mat, coldata, dataset_name, annot_df) {
     "pval", "qval", "padjc", "lfdr",
     "HBFSS", "pi_valueE", "hc_p_threshold_dataset", "hbfss_threshold_dataset",
     "resLA_padj", "resGA_padj", "standard_significant", "HBFSS_significant",
-    "effect_class", "plot_class",
+    "effect_class", "is_weak_cnh", "is_strong_cnh", "is_standard", "is_hbfss",
     "mu", "empirical_variance", "log_nb1", "log_nb2", "nb_gap", "log_alpha_mu"
   )
 
@@ -930,57 +915,105 @@ select_integrated_labels <- function(df, y_col = "neglog10_empirical_p", n_label
   df <- df[df$has_valid_gene_symbol, , drop = FALSE]
   if (!nrow(df)) return(df[0, , drop = FALSE])
 
-  priority_rank <- c(
-    "Strong+HBFSS" = 1,
-    "Weak+HBFSS"   = 2,
-    "Std+HBFSS"    = 3,
-    "Strong CNH"   = 4,
-    "Weak CNH"     = 5,
-    "Standard"     = 6,
-    "HBFSS-only"   = 7,
-    "Background"   = 8
+  df$label_priority <- dplyr::case_when(
+    df$is_hbfss & df$is_strong_cnh ~ 1,
+    df$is_hbfss & df$is_standard ~ 2,
+    df$is_hbfss & df$is_weak_cnh ~ 3,
+    df$is_strong_cnh ~ 4,
+    df$is_standard ~ 5,
+    df$is_weak_cnh ~ 6,
+    df$is_hbfss ~ 7,
+    TRUE ~ 8
   )
 
-  df$label_priority <- priority_rank[as.character(df$plot_class)]
   yv <- suppressWarnings(as.numeric(df[[y_col]]))
   yv[!is.finite(yv)] <- -Inf
-
   ord <- order(df$label_priority, -yv, -abs(df$lfc_shrunk), na.last = TRUE)
   df <- df[ord, , drop = FALSE]
   df <- df[!duplicated(df$gene_symbol_plot), , drop = FALSE]
-
   df[seq_len(min(n_labels, nrow(df))), , drop = FALSE]
+}
+
+make_hbfss_curve_df <- function(x_range, hbfss_threshold, n = 500) {
+  if (!is.finite(hbfss_threshold) || is.na(hbfss_threshold) || hbfss_threshold <= 0) {
+    return(data.frame(x = numeric(0), y = numeric(0)))
+  }
+  eps <- 0.05
+  left_x <- seq(x_range[1], min(-eps, x_range[2]), length.out = ceiling(n/2))
+  right_x <- seq(max(eps, x_range[1]), x_range[2], length.out = ceiling(n/2))
+  out <- rbind(
+    data.frame(x = left_x, y = hbfss_threshold / abs(left_x)),
+    data.frame(x = right_x, y = hbfss_threshold / abs(right_x))
+  )
+  out[is.finite(out$y), , drop = FALSE]
+}
+
+make_volcano_overlap_label <- function(df) {
+  paste0(
+    "Weak=", sum(df$is_weak_cnh, na.rm = TRUE),
+    "  Strong=", sum(df$is_strong_cnh, na.rm = TRUE),
+    "  Std=", sum(df$is_standard, na.rm = TRUE),
+    "  HBFSS=", sum(df$is_hbfss, na.rm = TRUE),
+    "\nW∩H=", sum(df$is_weak_cnh & df$is_hbfss, na.rm = TRUE),
+    "  S∩H=", sum(df$is_strong_cnh & df$is_hbfss, na.rm = TRUE),
+    "  Std∩H=", sum(df$is_standard & df$is_hbfss, na.rm = TRUE)
+  )
 }
 
 plot_integrated_volcano <- function(df, panel_title) {
   lab_df <- select_integrated_labels(df, y_col = "neglog10_empirical_p", n_labels = n_top_labels_integrated)
 
-  p <- ggplot(df, aes(lfc_shrunk, neglog10_empirical_p, color = plot_class, shape = plot_class)) +
+  x_ok <- is.finite(df$lfc_shrunk)
+  y_ok <- is.finite(df$neglog10_empirical_p)
+  x_range <- range(df$lfc_shrunk[x_ok], na.rm = TRUE)
+  y_range <- range(df$neglog10_empirical_p[y_ok], na.rm = TRUE)
+
+  hc_p <- suppressWarnings(as.numeric(df$hc_p_threshold_dataset[1]))
+  hc_y <- if (is.finite(hc_p) && !is.na(hc_p) && hc_p > 0 && hc_p < 1) safe_neglog10(hc_p) else NA_real_
+
+  hbfss_thr <- suppressWarnings(as.numeric(df$hbfss_threshold_dataset[1]))
+  hbfss_curve_df <- make_hbfss_curve_df(x_range, hbfss_thr)
+  if (nrow(hbfss_curve_df) > 0) {
+    hbfss_curve_df <- hbfss_curve_df[hbfss_curve_df$y <= (y_range[2] * 1.05), , drop = FALSE]
+  }
+
+  p <- ggplot() +
     geom_vline(
       xintercept = c(-lfc_boundary, lfc_boundary),
-      linetype = "dashed",
-      linewidth = 0.45,
-      colour = plot_palette$threshold
+      linetype = "dashed", linewidth = 0.45, colour = plot_palette$threshold
     ) +
     geom_vline(
       xintercept = 0,
-      linetype = "solid",
-      linewidth = 0.30,
-      colour = "grey50"
+      linetype = "solid", linewidth = 0.30, colour = "grey50"
     ) +
-    geom_point(alpha = 0.88, size = 1.7, stroke = 0.40) +
-    scale_color_manual(
-      values = integrated_class_colors,
-      breaks = integrated_class_levels,
-      drop = FALSE,
-      name = "Class"
+    geom_point(
+      data = df[!(df$is_weak_cnh | df$is_strong_cnh | df$is_standard | df$is_hbfss), , drop = FALSE],
+      aes(lfc_shrunk, neglog10_empirical_p),
+      inherit.aes = FALSE,
+      color = "grey75", shape = 16, size = 1.0, alpha = 0.55, stroke = 0
     ) +
-    scale_shape_manual(
-      values = integrated_class_shapes,
-      breaks = integrated_class_levels,
-      drop = FALSE,
-      name = "Class"
+    geom_point(
+      data = df[df$is_weak_cnh, , drop = FALSE],
+      aes(lfc_shrunk, neglog10_empirical_p, color = "Weak CNH", shape = "Weak CNH"),
+      inherit.aes = FALSE, alpha = 0.90, size = 1.35, stroke = 0.25
     ) +
+    geom_point(
+      data = df[df$is_strong_cnh, , drop = FALSE],
+      aes(lfc_shrunk, neglog10_empirical_p, color = "Strong CNH", shape = "Strong CNH"),
+      inherit.aes = FALSE, alpha = 0.90, size = 1.35, stroke = 0.25
+    ) +
+    geom_point(
+      data = df[df$is_standard, , drop = FALSE],
+      aes(lfc_shrunk, neglog10_empirical_p, color = "Standard", shape = "Standard"),
+      inherit.aes = FALSE, alpha = 0.92, size = 1.35, stroke = 0.25
+    ) +
+    geom_point(
+      data = df[df$is_hbfss, , drop = FALSE],
+      aes(lfc_shrunk, neglog10_empirical_p, color = "HBFSS", shape = "HBFSS"),
+      inherit.aes = FALSE, alpha = 0.95, size = 1.55, stroke = 0.30
+    ) +
+    scale_color_manual(values = integrated_class_colors, breaks = integrated_class_levels, drop = FALSE, name = "Class") +
+    scale_shape_manual(values = integrated_class_shapes, breaks = integrated_class_levels, drop = FALSE, name = "Class") +
     labs(
       title = panel_title,
       subtitle = "x = shrunken log2FC; y = -log10(empirical p)",
@@ -995,10 +1028,32 @@ plot_integrated_volcano <- function(df, panel_title) {
       legend.position = "bottom"
     )
 
+  if (is.finite(hc_y) && !is.na(hc_y)) {
+    p <- p +
+      geom_hline(yintercept = hc_y, linetype = "dotted", linewidth = 0.45, colour = plot_palette$threshold) +
+      annotate("text", x = x_range[1] + 0.04 * diff(x_range), y = hc_y, label = paste0("HC=", signif(hc_p, 3)), hjust = 0, vjust = -0.35, size = 2.4, colour = plot_palette$threshold)
+  }
+
+  if (nrow(hbfss_curve_df) > 0) {
+    p <- p +
+      geom_line(data = hbfss_curve_df, aes(x, y), inherit.aes = FALSE, colour = plot_palette$hbfss, linewidth = 0.45) +
+      annotate("text", x = x_range[2] - 0.22 * diff(x_range), y = max(hbfss_curve_df$y, na.rm = TRUE), label = paste0("HBFSS=", signif(hbfss_thr, 3)), hjust = 0, vjust = -0.3, size = 2.4, colour = plot_palette$hbfss)
+  }
+
+  p <- p + annotate(
+    "label",
+    x = x_range[1] + 0.04 * diff(x_range),
+    y = y_range[2] - 0.05 * diff(y_range),
+    label = make_volcano_overlap_label(df),
+    hjust = 0, vjust = 1, size = 2.2, label.size = 0.15,
+    fill = adjustcolor("white", alpha.f = 0.84)
+  )
+
   if (nrow(lab_df) > 0) {
     p <- p + ggrepel::geom_text_repel(
       data = lab_df,
-      aes(label = gene_symbol_plot),
+      aes(lfc_shrunk, neglog10_empirical_p, label = gene_symbol_plot),
+      inherit.aes = FALSE,
       size = 1.8,
       seed = 1,
       max.overlaps = 20,
