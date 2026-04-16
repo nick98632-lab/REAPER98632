@@ -1,0 +1,4 @@
+"comparison_name","dataset_key","dataset_label","dataset_name","n_features","n_standard","n_hbfss","n_overlap","n_weak_cnh","n_strong_cnh","hc_p_threshold","hbfss_threshold"
+"RT8_ZT14","raw_dataset","Raw","RT8_ZT14_raw_dataset",31580,4,50,4,8714,0,0.0186581006283235,1.72913256898303
+"RT8_ZT14","leading_edge_dataset","Lead","RT8_ZT14_leading_edge_dataset",6787,1,10,1,4954,0,0.00640454317939287,2.19351184199177
+"RT8_ZT14","remainder_dataset","Rem","RT8_ZT14_remainder_dataset",24793,28,100,28,4559,0,0.0181617074315576,1.74084332468905
