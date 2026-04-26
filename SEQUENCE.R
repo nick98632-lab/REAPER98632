@@ -153,7 +153,7 @@
 #
 # A PAS is plotted as Standard if all of the following hold:
 #
-#   padj < alpha_level
+#   padj < standard_alpha_level
 #   |raw log2FoldChange| >= c
 #   |lfc_shrunk| >= c
 #
@@ -236,6 +236,7 @@ twas_file_candidates <- c(
 )
 
 alpha_level <- 0.10
+standard_alpha_level <- 0.20
 
 lfc_boundary <- 1.0
 
@@ -245,7 +246,7 @@ figure_dpi <- 320
 
 base_theme_size <- 10
 
-n_top_labels_volcano <- 18
+n_top_labels_volcano <- 10
 
 # Manuscript export behavior. When TRUE, the script writes only the focused
 # paper-ready figure panels into exports/manuscript_final_clean/manuscript_figures.
@@ -1789,63 +1790,60 @@ run_core_analysis <- function(count_mat, coldata, dataset_name, annot_df) {
     is.finite(res_df$empirical_p) &
     res_df$empirical_p <= hc_p_threshold_dataset
 
-  # Displayed DESeq2 classes should reflect the full DESeq2 calls rather than
-  # only the HC-screened subset. This keeps all significant weak, strong, and
-  # standard DESeq2 features visibly colored on the manuscript volcano plots.
+  # Weak and strong CNH calls are DESeq2 composite-null discoveries gated by
+  # the empirical-null HC threshold. Standard DESeq2 calls use BH FDR 20% and
+  # are not gated by HC. HBFSS includes all standard DESeq2 discoveries and can
+  # add extra discoveries beyond the DESeq2-derived classes.
   res_df$weak_cnh_flag <- !is.na(res_df$resLA_padj) &
     res_df$resLA_padj < alpha_level &
     !is.na(res_df$lfc_shrunk) &
-    abs(res_df$lfc_shrunk) < lfc_boundary
+    abs(res_df$lfc_shrunk) < lfc_boundary &
+    res_df$hc_pass
 
   res_df$strong_cnh_flag <- !is.na(res_df$resGA_padj) &
     res_df$resGA_padj < alpha_level &
     !is.na(res_df$lfc_shrunk) &
-    abs(res_df$lfc_shrunk) >= lfc_boundary
+    abs(res_df$lfc_shrunk) >= lfc_boundary &
+    res_df$hc_pass
 
   res_df$standard_significant <- !is.na(res_df$padj) &
-    res_df$padj < alpha_level &
+    res_df$padj < standard_alpha_level &
     res_df$raw_lfc_pass &
     res_df$shrunk_lfc_pass
 
   res_df$standard_flag <- res_df$standard_significant
 
-  # HBFSS should not suppress the established DESeq2 standard calls. Standard
-  # DESeq2 discoveries are therefore carried forward as HBFSS-positive by
-  # definition, while HBFSS can also contribute additional discoveries beyond
-  # the DESeq2-derived classes.
   res_df$hbfss_flag <- (!is.na(res_df$HBFSS_core_pass) &
     res_df$HBFSS_core_pass) |
     res_df$standard_flag
 
   res_df$HBFSS_significant <- res_df$hbfss_flag
 
-  res_df$weak_hbfss_overlap <- res_df$weak_cnh_flag & res_df$hbfss_flag
-  res_df$strong_hbfss_overlap <- res_df$strong_cnh_flag & res_df$hbfss_flag
   res_df$standard_hbfss_overlap <- res_df$standard_flag & res_df$hbfss_flag
+  res_df$weak_hbfss_overlap <- rep(FALSE, nrow(res_df))
+  res_df$strong_hbfss_overlap <- rep(FALSE, nrow(res_df))
+  res_df$any_overlap <- res_df$standard_hbfss_overlap
 
-  res_df$any_overlap <- res_df$weak_hbfss_overlap |
-    res_df$strong_hbfss_overlap |
-    res_df$standard_hbfss_overlap
-
-  # Display classes are deliberately mutually exclusive. Standard DESeq2,
-  # Strong CNH, and Weak CNH remain visible as their own DESeq2-derived classes.
-  # The purple HBFSS class is reserved for additional HBFSS discoveries that
-  # are not already called by the DESeq2-derived classes.
+  # Display is mutually exclusive and prioritizes visible interpretation:
+  # Weak, Strong, and Standard remain their own DESeq2-derived colors; the
+  # purple HBFSS class shows additional HBFSS discoveries not already shown as
+  # Weak, Strong, or Standard.
   res_df$display_weak_flag <- res_df$weak_cnh_flag
-  res_df$display_standard_flag <- res_df$standard_flag
   res_df$display_strong_flag <- res_df$strong_cnh_flag &
-    !res_df$display_standard_flag &
     !res_df$display_weak_flag
+  res_df$display_standard_flag <- res_df$standard_flag &
+    !res_df$display_weak_flag &
+    !res_df$display_strong_flag
   res_df$display_hbfss_flag <- res_df$hbfss_flag &
     !res_df$display_weak_flag &
-    !res_df$display_standard_flag &
-    !res_df$display_strong_flag
+    !res_df$display_strong_flag &
+    !res_df$display_standard_flag
 
   res_df$final_class <- "BG"
   res_df$final_class[res_df$display_hbfss_flag] <- "HBFSS"
-  res_df$final_class[res_df$display_weak_flag] <- "Weak"
-  res_df$final_class[res_df$display_strong_flag] <- "Strong"
   res_df$final_class[res_df$display_standard_flag] <- "Std"
+  res_df$final_class[res_df$display_strong_flag] <- "Strong"
+  res_df$final_class[res_df$display_weak_flag] <- "Weak"
 
   res_df$final_class <- factor(
     res_df$final_class,
@@ -1992,7 +1990,7 @@ build_final_volcano_df <- function(df, y_col = "neglog10_empirical_p") {
     levels = final_class_levels
   )
 
-  draw_order <- c("BG" = 1, "HBFSS" = 2, "Weak" = 3, "Strong" = 4, "Std" = 5)
+  draw_order <- c("BG" = 1, "HBFSS" = 2, "Std" = 3, "Weak" = 4, "Strong" = 5)
 
   df$final_draw_order <- unname(draw_order[as.character(df$final_class)])
   df$final_draw_order[is.na(df$final_draw_order)] <- 1
@@ -2017,7 +2015,7 @@ select_final_volcano_labels <- function(df, y_col, n_labels = n_top_labels_volca
     return(df[0, , drop = FALSE])
   }
 
-  class_priority <- c("HBFSS" = 1, "Std" = 2, "Strong" = 3, "Weak" = 4, "BG" = 5)
+  class_priority <- c("HBFSS" = 1, "Strong" = 2, "Weak" = 3, "Std" = 4, "BG" = 5)
 
   df$label_priority <- class_priority[as.character(df$final_class)]
 
@@ -2124,12 +2122,26 @@ plot_final_volcano <- function(df, dataset_name, short_title = NULL, label_genes
   hbfss_n <- sum(df$display_hbfss_flag, na.rm = TRUE)
   overlap_n <- sum(df$any_overlap, na.rm = TRUE)
 
+  hc_label <- if (is.finite(hc_raw) && !is.na(hc_raw)) {
+    paste0("  HCp=", signif(hc_raw, 3))
+  } else {
+    ""
+  }
+
+  hbfss_label <- if (is.finite(hbfss_raw) && !is.na(hbfss_raw)) {
+    paste0("  Hτ=", signif(hbfss_raw, 3))
+  } else {
+    ""
+  }
+
   count_text <- paste0(
     "Weak=", weak_n,
     "  Strong=", strong_n,
     "  Std=", std_n,
     "  HBFSS=", hbfss_n,
-    "  Ovlp=", overlap_n
+    "  Ovlp=", overlap_n,
+    hc_label,
+    hbfss_label
   )
 
   plot_title <- if (is.null(short_title)) {
@@ -3100,14 +3112,16 @@ run_one_evs_track <- function(comparison_name, track_key, count_matrix, coldata,
       n_features = nrow(df),
       hc_p_threshold = fit$hc_p_threshold,
       hbfss_threshold = fit$hbfss_threshold,
+      standard_bh_fdr = standard_alpha_level,
+      cnh_bh_fdr = alpha_level,
       n_weak_cnh = sum(df$weak_cnh_flag, na.rm = TRUE),
       n_strong_cnh = sum(df$strong_cnh_flag, na.rm = TRUE),
       n_standard = sum(df$standard_flag, na.rm = TRUE),
       n_hbfss = sum(df$hbfss_flag, na.rm = TRUE),
+      n_hbfss_display = sum(df$final_class == "HBFSS", na.rm = TRUE),
       n_display_weak_cnh = sum(df$final_class == "Weak", na.rm = TRUE),
       n_display_strong_cnh = sum(df$final_class == "Strong", na.rm = TRUE),
       n_display_standard = sum(df$final_class == "Std", na.rm = TRUE),
-      n_display_hbfss = sum(df$final_class == "HBFSS", na.rm = TRUE),
       n_overlap = sum(df$any_overlap, na.rm = TRUE),
       n_weak_hbfss_overlap = sum(df$weak_hbfss_overlap, na.rm = TRUE),
       n_strong_hbfss_overlap = sum(df$strong_hbfss_overlap, na.rm = TRUE),
@@ -3334,18 +3348,47 @@ read_result_table_for_panel <- function(comparison_name, track_key, dataset_key)
 }
 
 save_paper_volcano_panels <- function() {
-  # Paper-ready output is intentionally restricted to shared-legend,
-  # multi-comparison volcano panels only. Single-dataset summary figures and
-  # auxiliary diagnostic plots are excluded from manuscript export.
+  # Original data are not affected by the EVS preprocessing path, so only one
+  # original-data volcano is exported per comparison. Leading-edge and remainder
+  # panels retain both NormEVS and RawEVS rows because the split membership can
+  # differ between those two EVS inputs.
   dir.create(paper_fig_dir, recursive = TRUE, showWarnings = FALSE)
 
+  old_panel_files <- list.files(
+    paper_fig_dir,
+    pattern = "^Figure_Manuscript_Volcano_.*\\.png$",
+    full.names = TRUE
+  )
+
+  if (length(old_panel_files) > 0L) {
+    unlink(old_panel_files)
+  }
+
   comparison_order <- as.character(comparison_table$comparison_name)
-  track_order <- c("normalized_evs", "raw_evs")
 
   for (dataset_key in dataset_key_order) {
     plots <- list()
 
-    for (track_key in track_order) {
+    if (identical(dataset_key, "raw_dataset")) {
+      track_order_use <- "normalized_evs"
+      panel_title <- "Original dataset volcanoes across all comparisons"
+      output_suffix <- "AllComparisons"
+      panel_ncol <- length(comparison_order)
+      panel_width <- 18.0
+      panel_height <- 5.6
+    } else {
+      track_order_use <- c("normalized_evs", "raw_evs")
+      panel_title <- paste(
+        pretty_dataset_type(dataset_key),
+        "volcano comparison: NormEVS vs RawEVS across all comparisons"
+      )
+      output_suffix <- "AllComparisons_NormEVS_vs_RawEVS"
+      panel_ncol <- length(comparison_order)
+      panel_width <- 18.0
+      panel_height <- 9.6
+    }
+
+    for (track_key in track_order_use) {
       for (comparison_name in comparison_order) {
         df <- read_result_table_for_panel(
           comparison_name = comparison_name,
@@ -3364,15 +3407,17 @@ save_paper_volcano_panels <- function() {
           sep = "_"
         )
 
+        short_title <- if (identical(dataset_key, "raw_dataset")) {
+          comparison_name
+        } else {
+          paste0(comparison_name, "\n", unname(track_short[track_key]))
+        }
+
         plots[[length(plots) + 1L]] <- plot_final_volcano(
           df = df,
           dataset_name = dataset_name,
-          short_title = paste0(
-            comparison_name,
-            "\n",
-            unname(track_short[track_key])
-          ),
-          label_genes = FALSE
+          short_title = short_title,
+          label_genes = TRUE
         ) +
           theme(
             plot.title = element_text(size = base_theme_size, face = "bold"),
@@ -3388,11 +3433,8 @@ save_paper_volcano_panels <- function() {
 
     panel <- assemble_one_legend_panel(
       plots,
-      panel_title = paste(
-        pretty_dataset_type(dataset_key),
-        "volcano comparison: NormEVS vs RawEVS across all comparisons"
-      ),
-      ncol = length(comparison_order)
+      panel_title = panel_title,
+      ncol = panel_ncol
     )
 
     save_grob(
@@ -3402,11 +3444,13 @@ save_paper_volcano_panels <- function() {
         paste0(
           "Figure_Manuscript_Volcano_",
           unname(dataset_short[dataset_key]),
-          "_AllComparisons_NormEVS_vs_RawEVS.png"
+          "_",
+          output_suffix,
+          ".png"
         )
       ),
-      width = 18.0,
-      height = 9.6
+      width = panel_width,
+      height = panel_height
     )
   }
 
