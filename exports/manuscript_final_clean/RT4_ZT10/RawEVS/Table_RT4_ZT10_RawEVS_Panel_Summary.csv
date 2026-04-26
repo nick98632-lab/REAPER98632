@@ -1,0 +1,4 @@
+"comparison_name","track_key","track_label","dataset_key","dataset_label","dataset_name","n_features","n_weak_cnh","n_strong_cnh","n_standard","n_hbfss","n_overlap","hc_p_threshold","hbfss_threshold"
+"RT4_ZT10","raw_evs","RawEVS","raw_dataset","Original dataset","RT4_ZT10_RawEVS_raw_dataset",31658,84,39,743,1100,752,0.0223630001696145,1.65046993290979
+"RT4_ZT10","raw_evs","RawEVS","leading_edge_dataset","Leading-edge dataset","RT4_ZT10_RawEVS_leading_edge_dataset",6741,40,15,243,302,248,0.0229484284932837,1.63924704956303
+"RT4_ZT10","raw_evs","RawEVS","remainder_dataset","Remainder dataset","RT4_ZT10_RawEVS_remainder_dataset",24917,6,43,639,1092,639,0.0475021845337043,1.3232864175516

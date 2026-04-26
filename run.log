@@ -1,30 +1,35 @@
 Using count file: /root/REAPER98632/data/WTTS-Seq_2022.2_DE_raw_read_numbers.csv
+Repository root: /root/REAPER98632
+Output directory: /root/REAPER98632/exports/manuscript_final_clean
 
 =====================================================
 Running comparison: RT0_ZT6
 =====================================================
+Running RT0_ZT6 NormEVS
+converting counts to integer mode
+converting counts to integer mode
 estimating size factors
 estimating dispersions
 gene-wise dispersion estimates
 mean-dispersion relationship
 final dispersion estimates
 fitting model and testing
-[RT0_ZT6_raw_dataset] Mean Wald stat sent to fdrtool: 0.0832
 using 'apeglm' for LFC shrinkage. If used in published research, please cite:
     Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
     sequence count data: removing the noise and preserving large differences.
     Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+converting counts to integer mode
 estimating size factors
 estimating dispersions
 gene-wise dispersion estimates
 mean-dispersion relationship
 final dispersion estimates
 fitting model and testing
-[RT0_ZT6_leading_edge_dataset] Mean Wald stat sent to fdrtool: 0.0857
 using 'apeglm' for LFC shrinkage. If used in published research, please cite:
     Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
     sequence count data: removing the noise and preserving large differences.
     Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+converting counts to integer mode
 estimating size factors
 estimating dispersions
 gene-wise dispersion estimates
@@ -34,37 +39,82 @@ mean-dispersion relationship
    specify fitType='local' or 'mean' to avoid this message next time.
 final dispersion estimates
 fitting model and testing
-[RT0_ZT6_remainder_dataset] Mean Wald stat sent to fdrtool: 0.0823
 using 'apeglm' for LFC shrinkage. If used in published research, please cite:
     Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
     sequence count data: removing the noise and preserving large differences.
     Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+converting counts to integer mode
+converting counts to integer mode
+converting counts to integer mode
+Running RT0_ZT6 RawEVS
+converting counts to integer mode
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+converting counts to integer mode
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+converting counts to integer mode
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+-- note: fitType='parametric', but the dispersion trend was not well captured by the
+   function: y = a/x + b, and a local regression fit was automatically substituted.
+   specify fitType='local' or 'mean' to avoid this message next time.
+final dispersion estimates
+fitting model and testing
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+converting counts to integer mode
+converting counts to integer mode
+converting counts to integer mode
 
 =====================================================
 Running comparison: RT2_ZT8
 =====================================================
+Running RT2_ZT8 NormEVS
+converting counts to integer mode
+converting counts to integer mode
 estimating size factors
 estimating dispersions
 gene-wise dispersion estimates
 mean-dispersion relationship
 final dispersion estimates
 fitting model and testing
-[RT2_ZT8_raw_dataset] Mean Wald stat sent to fdrtool: -0.0180
 using 'apeglm' for LFC shrinkage. If used in published research, please cite:
     Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
     sequence count data: removing the noise and preserving large differences.
     Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+converting counts to integer mode
 estimating size factors
 estimating dispersions
 gene-wise dispersion estimates
 mean-dispersion relationship
 final dispersion estimates
 fitting model and testing
-[RT2_ZT8_leading_edge_dataset] Mean Wald stat sent to fdrtool: 0.0133
 using 'apeglm' for LFC shrinkage. If used in published research, please cite:
     Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
     sequence count data: removing the noise and preserving large differences.
     Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+converting counts to integer mode
 estimating size factors
 estimating dispersions
 gene-wise dispersion estimates
@@ -74,37 +124,82 @@ mean-dispersion relationship
    specify fitType='local' or 'mean' to avoid this message next time.
 final dispersion estimates
 fitting model and testing
-[RT2_ZT8_remainder_dataset] Mean Wald stat sent to fdrtool: -0.0315
 using 'apeglm' for LFC shrinkage. If used in published research, please cite:
     Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
     sequence count data: removing the noise and preserving large differences.
     Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+converting counts to integer mode
+converting counts to integer mode
+converting counts to integer mode
+Running RT2_ZT8 RawEVS
+converting counts to integer mode
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+converting counts to integer mode
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+converting counts to integer mode
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+-- note: fitType='parametric', but the dispersion trend was not well captured by the
+   function: y = a/x + b, and a local regression fit was automatically substituted.
+   specify fitType='local' or 'mean' to avoid this message next time.
+final dispersion estimates
+fitting model and testing
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+converting counts to integer mode
+converting counts to integer mode
+converting counts to integer mode
 
 =====================================================
 Running comparison: RT4_ZT10
 =====================================================
+Running RT4_ZT10 NormEVS
+converting counts to integer mode
+converting counts to integer mode
 estimating size factors
 estimating dispersions
 gene-wise dispersion estimates
 mean-dispersion relationship
 final dispersion estimates
 fitting model and testing
-[RT4_ZT10_raw_dataset] Mean Wald stat sent to fdrtool: 0.0808
 using 'apeglm' for LFC shrinkage. If used in published research, please cite:
     Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
     sequence count data: removing the noise and preserving large differences.
     Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+converting counts to integer mode
 estimating size factors
 estimating dispersions
 gene-wise dispersion estimates
 mean-dispersion relationship
 final dispersion estimates
 fitting model and testing
-[RT4_ZT10_leading_edge_dataset] Mean Wald stat sent to fdrtool: -0.0849
 using 'apeglm' for LFC shrinkage. If used in published research, please cite:
     Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
     sequence count data: removing the noise and preserving large differences.
     Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+converting counts to integer mode
 estimating size factors
 estimating dispersions
 gene-wise dispersion estimates
@@ -114,37 +209,82 @@ mean-dispersion relationship
    specify fitType='local' or 'mean' to avoid this message next time.
 final dispersion estimates
 fitting model and testing
-[RT4_ZT10_remainder_dataset] Mean Wald stat sent to fdrtool: 0.1014
 using 'apeglm' for LFC shrinkage. If used in published research, please cite:
     Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
     sequence count data: removing the noise and preserving large differences.
     Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+converting counts to integer mode
+converting counts to integer mode
+converting counts to integer mode
+Running RT4_ZT10 RawEVS
+converting counts to integer mode
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+converting counts to integer mode
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+converting counts to integer mode
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+-- note: fitType='parametric', but the dispersion trend was not well captured by the
+   function: y = a/x + b, and a local regression fit was automatically substituted.
+   specify fitType='local' or 'mean' to avoid this message next time.
+final dispersion estimates
+fitting model and testing
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+converting counts to integer mode
+converting counts to integer mode
+converting counts to integer mode
 
 =====================================================
 Running comparison: RT8_ZT14
 =====================================================
+Running RT8_ZT14 NormEVS
+converting counts to integer mode
+converting counts to integer mode
 estimating size factors
 estimating dispersions
 gene-wise dispersion estimates
 mean-dispersion relationship
 final dispersion estimates
 fitting model and testing
-[RT8_ZT14_raw_dataset] Mean Wald stat sent to fdrtool: -0.0282
 using 'apeglm' for LFC shrinkage. If used in published research, please cite:
     Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
     sequence count data: removing the noise and preserving large differences.
     Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+converting counts to integer mode
 estimating size factors
 estimating dispersions
 gene-wise dispersion estimates
 mean-dispersion relationship
 final dispersion estimates
 fitting model and testing
-[RT8_ZT14_leading_edge_dataset] Mean Wald stat sent to fdrtool: 0.0097
 using 'apeglm' for LFC shrinkage. If used in published research, please cite:
     Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
     sequence count data: removing the noise and preserving large differences.
     Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+converting counts to integer mode
 estimating size factors
 estimating dispersions
 gene-wise dispersion estimates
@@ -154,68 +294,681 @@ mean-dispersion relationship
    specify fitType='local' or 'mean' to avoid this message next time.
 final dispersion estimates
 fitting model and testing
-[RT8_ZT14_remainder_dataset] Mean Wald stat sent to fdrtool: -0.0363
 using 'apeglm' for LFC shrinkage. If used in published research, please cite:
     Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
     sequence count data: removing the noise and preserving large differences.
     Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+converting counts to integer mode
+converting counts to integer mode
+converting counts to integer mode
+Running RT8_ZT14 RawEVS
+converting counts to integer mode
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+converting counts to integer mode
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+converting counts to integer mode
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+-- note: fitType='parametric', but the dispersion trend was not well captured by the
+   function: y = a/x + b, and a local regression fit was automatically substituted.
+   specify fitType='local' or 'mean' to avoid this message next time.
+final dispersion estimates
+fitting model and testing
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+converting counts to integer mode
+converting counts to integer mode
+converting counts to integer mode
 There were 50 or more warnings (use warnings() to see the first 50)
+Git status after staging exports:
+  [1] "A  exports/manuscript_final_clean/RT0_ZT6/NormEVS/Figure_RT0_ZT6_NormEVS_EVS_Ctrl_Hist.png"            
+  [2] "A  exports/manuscript_final_clean/RT0_ZT6/NormEVS/Figure_RT0_ZT6_NormEVS_EVS_Ctrl_PCA.png"             
+  [3] "A  exports/manuscript_final_clean/RT0_ZT6/NormEVS/Figure_RT0_ZT6_NormEVS_EVS_Ctrl_Rank.png"            
+  [4] "A  exports/manuscript_final_clean/RT0_ZT6/NormEVS/Figure_RT0_ZT6_NormEVS_EVS_Trt_Hist.png"             
+  [5] "A  exports/manuscript_final_clean/RT0_ZT6/NormEVS/Figure_RT0_ZT6_NormEVS_EVS_Trt_PCA.png"              
+  [6] "A  exports/manuscript_final_clean/RT0_ZT6/NormEVS/Figure_RT0_ZT6_NormEVS_EVS_Trt_Rank.png"             
+  [7] "A  exports/manuscript_final_clean/RT0_ZT6/NormEVS/Figure_RT0_ZT6_NormEVS_Panel_EmpHist.png"            
+  [8] "A  exports/manuscript_final_clean/RT0_ZT6/NormEVS/Figure_RT0_ZT6_NormEVS_Panel_PCA.png"                
+  [9] "A  exports/manuscript_final_clean/RT0_ZT6/NormEVS/Figure_RT0_ZT6_NormEVS_Panel_Volcano.png"            
+ [10] "A  exports/manuscript_final_clean/RT0_ZT6/NormEVS/Table_RT0_ZT6_NormEVS_Panel_Summary.csv"             
+ [11] "A  exports/manuscript_final_clean/RT0_ZT6/NormEVS/fig_lead/Figure_RT0_ZT6_NormEVS_Lead_DispEst.png"    
+ [12] "A  exports/manuscript_final_clean/RT0_ZT6/NormEVS/fig_lead/Figure_RT0_ZT6_NormEVS_Lead_DispResid.png"  
+ [13] "A  exports/manuscript_final_clean/RT0_ZT6/NormEVS/fig_lead/Figure_RT0_ZT6_NormEVS_Lead_EmpHist.png"    
+ [14] "A  exports/manuscript_final_clean/RT0_ZT6/NormEVS/fig_lead/Figure_RT0_ZT6_NormEVS_Lead_HBFSSDist.png"  
+ [15] "A  exports/manuscript_final_clean/RT0_ZT6/NormEVS/fig_lead/Figure_RT0_ZT6_NormEVS_Lead_HCProfile.png"  
+ [16] "A  exports/manuscript_final_clean/RT0_ZT6/NormEVS/fig_lead/Figure_RT0_ZT6_NormEVS_Lead_MeanHist.png"   
+ [17] "A  exports/manuscript_final_clean/RT0_ZT6/NormEVS/fig_lead/Figure_RT0_ZT6_NormEVS_Lead_Summary.png"    
+ [18] "A  exports/manuscript_final_clean/RT0_ZT6/NormEVS/fig_lead/Figure_RT0_ZT6_NormEVS_Lead_Volcano.png"    
+ [19] "A  exports/manuscript_final_clean/RT0_ZT6/NormEVS/fig_raw/Figure_RT0_ZT6_NormEVS_Raw_DispEst.png"      
+ [20] "A  exports/manuscript_final_clean/RT0_ZT6/NormEVS/fig_raw/Figure_RT0_ZT6_NormEVS_Raw_DispResid.png"    
+ [21] "A  exports/manuscript_final_clean/RT0_ZT6/NormEVS/fig_raw/Figure_RT0_ZT6_NormEVS_Raw_EmpHist.png"      
+ [22] "A  exports/manuscript_final_clean/RT0_ZT6/NormEVS/fig_raw/Figure_RT0_ZT6_NormEVS_Raw_HBFSSDist.png"    
+ [23] "A  exports/manuscript_final_clean/RT0_ZT6/NormEVS/fig_raw/Figure_RT0_ZT6_NormEVS_Raw_HCProfile.png"    
+ [24] "A  exports/manuscript_final_clean/RT0_ZT6/NormEVS/fig_raw/Figure_RT0_ZT6_NormEVS_Raw_MeanHist.png"     
+ [25] "A  exports/manuscript_final_clean/RT0_ZT6/NormEVS/fig_raw/Figure_RT0_ZT6_NormEVS_Raw_Summary.png"      
+ [26] "A  exports/manuscript_final_clean/RT0_ZT6/NormEVS/fig_raw/Figure_RT0_ZT6_NormEVS_Raw_Volcano.png"      
+ [27] "A  exports/manuscript_final_clean/RT0_ZT6/NormEVS/fig_rem/Figure_RT0_ZT6_NormEVS_Rem_DispEst.png"      
+ [28] "A  exports/manuscript_final_clean/RT0_ZT6/NormEVS/fig_rem/Figure_RT0_ZT6_NormEVS_Rem_DispResid.png"    
+ [29] "A  exports/manuscript_final_clean/RT0_ZT6/NormEVS/fig_rem/Figure_RT0_ZT6_NormEVS_Rem_EmpHist.png"      
+ [30] "A  exports/manuscript_final_clean/RT0_ZT6/NormEVS/fig_rem/Figure_RT0_ZT6_NormEVS_Rem_HBFSSDist.png"    
+ [31] "A  exports/manuscript_final_clean/RT0_ZT6/NormEVS/fig_rem/Figure_RT0_ZT6_NormEVS_Rem_HCProfile.png"    
+ [32] "A  exports/manuscript_final_clean/RT0_ZT6/NormEVS/fig_rem/Figure_RT0_ZT6_NormEVS_Rem_MeanHist.png"     
+ [33] "A  exports/manuscript_final_clean/RT0_ZT6/NormEVS/fig_rem/Figure_RT0_ZT6_NormEVS_Rem_Summary.png"      
+ [34] "A  exports/manuscript_final_clean/RT0_ZT6/NormEVS/fig_rem/Figure_RT0_ZT6_NormEVS_Rem_Volcano.png"      
+ [35] "A  exports/manuscript_final_clean/RT0_ZT6/NormEVS/tables/Table_RT0_ZT6_NormEVS_Lead_DispResid.csv"     
+ [36] "A  exports/manuscript_final_clean/RT0_ZT6/NormEVS/tables/Table_RT0_ZT6_NormEVS_Lead_HBFSS.csv"         
+ [37] "A  exports/manuscript_final_clean/RT0_ZT6/NormEVS/tables/Table_RT0_ZT6_NormEVS_Lead_Overlap.csv"       
+ [38] "A  exports/manuscript_final_clean/RT0_ZT6/NormEVS/tables/Table_RT0_ZT6_NormEVS_Lead_Results.csv"       
+ [39] "A  exports/manuscript_final_clean/RT0_ZT6/NormEVS/tables/Table_RT0_ZT6_NormEVS_Lead_Standard.csv"      
+ [40] "A  exports/manuscript_final_clean/RT0_ZT6/NormEVS/tables/Table_RT0_ZT6_NormEVS_Lead_StrongCNH.csv"     
+ [41] "A  exports/manuscript_final_clean/RT0_ZT6/NormEVS/tables/Table_RT0_ZT6_NormEVS_Lead_Summary.csv"       
+ [42] "A  exports/manuscript_final_clean/RT0_ZT6/NormEVS/tables/Table_RT0_ZT6_NormEVS_Lead_WeakCNH.csv"       
+ [43] "A  exports/manuscript_final_clean/RT0_ZT6/NormEVS/tables/Table_RT0_ZT6_NormEVS_Raw_DispResid.csv"      
+ [44] "A  exports/manuscript_final_clean/RT0_ZT6/NormEVS/tables/Table_RT0_ZT6_NormEVS_Raw_HBFSS.csv"          
+ [45] "A  exports/manuscript_final_clean/RT0_ZT6/NormEVS/tables/Table_RT0_ZT6_NormEVS_Raw_Overlap.csv"        
+ [46] "A  exports/manuscript_final_clean/RT0_ZT6/NormEVS/tables/Table_RT0_ZT6_NormEVS_Raw_Results.csv"        
+ [47] "A  exports/manuscript_final_clean/RT0_ZT6/NormEVS/tables/Table_RT0_ZT6_NormEVS_Raw_Standard.csv"       
+ [48] "A  exports/manuscript_final_clean/RT0_ZT6/NormEVS/tables/Table_RT0_ZT6_NormEVS_Raw_StrongCNH.csv"      
+ [49] "A  exports/manuscript_final_clean/RT0_ZT6/NormEVS/tables/Table_RT0_ZT6_NormEVS_Raw_Summary.csv"        
+ [50] "A  exports/manuscript_final_clean/RT0_ZT6/NormEVS/tables/Table_RT0_ZT6_NormEVS_Raw_WeakCNH.csv"        
+ [51] "A  exports/manuscript_final_clean/RT0_ZT6/NormEVS/tables/Table_RT0_ZT6_NormEVS_Rem_DispResid.csv"      
+ [52] "A  exports/manuscript_final_clean/RT0_ZT6/NormEVS/tables/Table_RT0_ZT6_NormEVS_Rem_HBFSS.csv"          
+ [53] "A  exports/manuscript_final_clean/RT0_ZT6/NormEVS/tables/Table_RT0_ZT6_NormEVS_Rem_Overlap.csv"        
+ [54] "A  exports/manuscript_final_clean/RT0_ZT6/NormEVS/tables/Table_RT0_ZT6_NormEVS_Rem_Results.csv"        
+ [55] "A  exports/manuscript_final_clean/RT0_ZT6/NormEVS/tables/Table_RT0_ZT6_NormEVS_Rem_Standard.csv"       
+ [56] "A  exports/manuscript_final_clean/RT0_ZT6/NormEVS/tables/Table_RT0_ZT6_NormEVS_Rem_StrongCNH.csv"      
+ [57] "A  exports/manuscript_final_clean/RT0_ZT6/NormEVS/tables/Table_RT0_ZT6_NormEVS_Rem_Summary.csv"        
+ [58] "A  exports/manuscript_final_clean/RT0_ZT6/NormEVS/tables/Table_RT0_ZT6_NormEVS_Rem_WeakCNH.csv"        
+ [59] "A  exports/manuscript_final_clean/RT0_ZT6/RawEVS/Figure_RT0_ZT6_RawEVS_EVS_Ctrl_Hist.png"              
+ [60] "A  exports/manuscript_final_clean/RT0_ZT6/RawEVS/Figure_RT0_ZT6_RawEVS_EVS_Ctrl_PCA.png"               
+ [61] "A  exports/manuscript_final_clean/RT0_ZT6/RawEVS/Figure_RT0_ZT6_RawEVS_EVS_Ctrl_Rank.png"              
+ [62] "A  exports/manuscript_final_clean/RT0_ZT6/RawEVS/Figure_RT0_ZT6_RawEVS_EVS_Trt_Hist.png"               
+ [63] "A  exports/manuscript_final_clean/RT0_ZT6/RawEVS/Figure_RT0_ZT6_RawEVS_EVS_Trt_PCA.png"                
+ [64] "A  exports/manuscript_final_clean/RT0_ZT6/RawEVS/Figure_RT0_ZT6_RawEVS_EVS_Trt_Rank.png"               
+ [65] "A  exports/manuscript_final_clean/RT0_ZT6/RawEVS/Figure_RT0_ZT6_RawEVS_Panel_EmpHist.png"              
+ [66] "A  exports/manuscript_final_clean/RT0_ZT6/RawEVS/Figure_RT0_ZT6_RawEVS_Panel_PCA.png"                  
+ [67] "A  exports/manuscript_final_clean/RT0_ZT6/RawEVS/Figure_RT0_ZT6_RawEVS_Panel_Volcano.png"              
+ [68] "A  exports/manuscript_final_clean/RT0_ZT6/RawEVS/Table_RT0_ZT6_RawEVS_Panel_Summary.csv"               
+ [69] "A  exports/manuscript_final_clean/RT0_ZT6/RawEVS/fig_lead/Figure_RT0_ZT6_RawEVS_Lead_DispEst.png"      
+ [70] "A  exports/manuscript_final_clean/RT0_ZT6/RawEVS/fig_lead/Figure_RT0_ZT6_RawEVS_Lead_DispResid.png"    
+ [71] "A  exports/manuscript_final_clean/RT0_ZT6/RawEVS/fig_lead/Figure_RT0_ZT6_RawEVS_Lead_EmpHist.png"      
+ [72] "A  exports/manuscript_final_clean/RT0_ZT6/RawEVS/fig_lead/Figure_RT0_ZT6_RawEVS_Lead_HBFSSDist.png"    
+ [73] "A  exports/manuscript_final_clean/RT0_ZT6/RawEVS/fig_lead/Figure_RT0_ZT6_RawEVS_Lead_HCProfile.png"    
+ [74] "A  exports/manuscript_final_clean/RT0_ZT6/RawEVS/fig_lead/Figure_RT0_ZT6_RawEVS_Lead_MeanHist.png"     
+ [75] "A  exports/manuscript_final_clean/RT0_ZT6/RawEVS/fig_lead/Figure_RT0_ZT6_RawEVS_Lead_Summary.png"      
+ [76] "A  exports/manuscript_final_clean/RT0_ZT6/RawEVS/fig_lead/Figure_RT0_ZT6_RawEVS_Lead_Volcano.png"      
+ [77] "A  exports/manuscript_final_clean/RT0_ZT6/RawEVS/fig_raw/Figure_RT0_ZT6_RawEVS_Raw_DispEst.png"        
+ [78] "A  exports/manuscript_final_clean/RT0_ZT6/RawEVS/fig_raw/Figure_RT0_ZT6_RawEVS_Raw_DispResid.png"      
+ [79] "A  exports/manuscript_final_clean/RT0_ZT6/RawEVS/fig_raw/Figure_RT0_ZT6_RawEVS_Raw_EmpHist.png"        
+ [80] "A  exports/manuscript_final_clean/RT0_ZT6/RawEVS/fig_raw/Figure_RT0_ZT6_RawEVS_Raw_HBFSSDist.png"      
+ [81] "A  exports/manuscript_final_clean/RT0_ZT6/RawEVS/fig_raw/Figure_RT0_ZT6_RawEVS_Raw_HCProfile.png"      
+ [82] "A  exports/manuscript_final_clean/RT0_ZT6/RawEVS/fig_raw/Figure_RT0_ZT6_RawEVS_Raw_MeanHist.png"       
+ [83] "A  exports/manuscript_final_clean/RT0_ZT6/RawEVS/fig_raw/Figure_RT0_ZT6_RawEVS_Raw_Summary.png"        
+ [84] "A  exports/manuscript_final_clean/RT0_ZT6/RawEVS/fig_raw/Figure_RT0_ZT6_RawEVS_Raw_Volcano.png"        
+ [85] "A  exports/manuscript_final_clean/RT0_ZT6/RawEVS/fig_rem/Figure_RT0_ZT6_RawEVS_Rem_DispEst.png"        
+ [86] "A  exports/manuscript_final_clean/RT0_ZT6/RawEVS/fig_rem/Figure_RT0_ZT6_RawEVS_Rem_DispResid.png"      
+ [87] "A  exports/manuscript_final_clean/RT0_ZT6/RawEVS/fig_rem/Figure_RT0_ZT6_RawEVS_Rem_EmpHist.png"        
+ [88] "A  exports/manuscript_final_clean/RT0_ZT6/RawEVS/fig_rem/Figure_RT0_ZT6_RawEVS_Rem_HBFSSDist.png"      
+ [89] "A  exports/manuscript_final_clean/RT0_ZT6/RawEVS/fig_rem/Figure_RT0_ZT6_RawEVS_Rem_HCProfile.png"      
+ [90] "A  exports/manuscript_final_clean/RT0_ZT6/RawEVS/fig_rem/Figure_RT0_ZT6_RawEVS_Rem_MeanHist.png"       
+ [91] "A  exports/manuscript_final_clean/RT0_ZT6/RawEVS/fig_rem/Figure_RT0_ZT6_RawEVS_Rem_Summary.png"        
+ [92] "A  exports/manuscript_final_clean/RT0_ZT6/RawEVS/fig_rem/Figure_RT0_ZT6_RawEVS_Rem_Volcano.png"        
+ [93] "A  exports/manuscript_final_clean/RT0_ZT6/RawEVS/tables/Table_RT0_ZT6_RawEVS_Lead_DispResid.csv"       
+ [94] "A  exports/manuscript_final_clean/RT0_ZT6/RawEVS/tables/Table_RT0_ZT6_RawEVS_Lead_HBFSS.csv"           
+ [95] "A  exports/manuscript_final_clean/RT0_ZT6/RawEVS/tables/Table_RT0_ZT6_RawEVS_Lead_Overlap.csv"         
+ [96] "A  exports/manuscript_final_clean/RT0_ZT6/RawEVS/tables/Table_RT0_ZT6_RawEVS_Lead_Results.csv"         
+ [97] "A  exports/manuscript_final_clean/RT0_ZT6/RawEVS/tables/Table_RT0_ZT6_RawEVS_Lead_Standard.csv"        
+ [98] "A  exports/manuscript_final_clean/RT0_ZT6/RawEVS/tables/Table_RT0_ZT6_RawEVS_Lead_StrongCNH.csv"       
+ [99] "A  exports/manuscript_final_clean/RT0_ZT6/RawEVS/tables/Table_RT0_ZT6_RawEVS_Lead_Summary.csv"         
+[100] "A  exports/manuscript_final_clean/RT0_ZT6/RawEVS/tables/Table_RT0_ZT6_RawEVS_Lead_WeakCNH.csv"         
+[101] "A  exports/manuscript_final_clean/RT0_ZT6/RawEVS/tables/Table_RT0_ZT6_RawEVS_Raw_DispResid.csv"        
+[102] "A  exports/manuscript_final_clean/RT0_ZT6/RawEVS/tables/Table_RT0_ZT6_RawEVS_Raw_HBFSS.csv"            
+[103] "A  exports/manuscript_final_clean/RT0_ZT6/RawEVS/tables/Table_RT0_ZT6_RawEVS_Raw_Overlap.csv"          
+[104] "A  exports/manuscript_final_clean/RT0_ZT6/RawEVS/tables/Table_RT0_ZT6_RawEVS_Raw_Results.csv"          
+[105] "A  exports/manuscript_final_clean/RT0_ZT6/RawEVS/tables/Table_RT0_ZT6_RawEVS_Raw_Standard.csv"         
+[106] "A  exports/manuscript_final_clean/RT0_ZT6/RawEVS/tables/Table_RT0_ZT6_RawEVS_Raw_StrongCNH.csv"        
+[107] "A  exports/manuscript_final_clean/RT0_ZT6/RawEVS/tables/Table_RT0_ZT6_RawEVS_Raw_Summary.csv"          
+[108] "A  exports/manuscript_final_clean/RT0_ZT6/RawEVS/tables/Table_RT0_ZT6_RawEVS_Raw_WeakCNH.csv"          
+[109] "A  exports/manuscript_final_clean/RT0_ZT6/RawEVS/tables/Table_RT0_ZT6_RawEVS_Rem_DispResid.csv"        
+[110] "A  exports/manuscript_final_clean/RT0_ZT6/RawEVS/tables/Table_RT0_ZT6_RawEVS_Rem_HBFSS.csv"            
+[111] "A  exports/manuscript_final_clean/RT0_ZT6/RawEVS/tables/Table_RT0_ZT6_RawEVS_Rem_Overlap.csv"          
+[112] "A  exports/manuscript_final_clean/RT0_ZT6/RawEVS/tables/Table_RT0_ZT6_RawEVS_Rem_Results.csv"          
+[113] "A  exports/manuscript_final_clean/RT0_ZT6/RawEVS/tables/Table_RT0_ZT6_RawEVS_Rem_Standard.csv"         
+[114] "A  exports/manuscript_final_clean/RT0_ZT6/RawEVS/tables/Table_RT0_ZT6_RawEVS_Rem_StrongCNH.csv"        
+[115] "A  exports/manuscript_final_clean/RT0_ZT6/RawEVS/tables/Table_RT0_ZT6_RawEVS_Rem_Summary.csv"          
+[116] "A  exports/manuscript_final_clean/RT0_ZT6/RawEVS/tables/Table_RT0_ZT6_RawEVS_Rem_WeakCNH.csv"          
+[117] "A  exports/manuscript_final_clean/RT2_ZT8/NormEVS/Figure_RT2_ZT8_NormEVS_EVS_Ctrl_Hist.png"            
+[118] "A  exports/manuscript_final_clean/RT2_ZT8/NormEVS/Figure_RT2_ZT8_NormEVS_EVS_Ctrl_PCA.png"             
+[119] "A  exports/manuscript_final_clean/RT2_ZT8/NormEVS/Figure_RT2_ZT8_NormEVS_EVS_Ctrl_Rank.png"            
+[120] "A  exports/manuscript_final_clean/RT2_ZT8/NormEVS/Figure_RT2_ZT8_NormEVS_EVS_Trt_Hist.png"             
+[121] "A  exports/manuscript_final_clean/RT2_ZT8/NormEVS/Figure_RT2_ZT8_NormEVS_EVS_Trt_PCA.png"              
+[122] "A  exports/manuscript_final_clean/RT2_ZT8/NormEVS/Figure_RT2_ZT8_NormEVS_EVS_Trt_Rank.png"             
+[123] "A  exports/manuscript_final_clean/RT2_ZT8/NormEVS/Figure_RT2_ZT8_NormEVS_Panel_EmpHist.png"            
+[124] "A  exports/manuscript_final_clean/RT2_ZT8/NormEVS/Figure_RT2_ZT8_NormEVS_Panel_PCA.png"                
+[125] "A  exports/manuscript_final_clean/RT2_ZT8/NormEVS/Figure_RT2_ZT8_NormEVS_Panel_Volcano.png"            
+[126] "A  exports/manuscript_final_clean/RT2_ZT8/NormEVS/Table_RT2_ZT8_NormEVS_Panel_Summary.csv"             
+[127] "A  exports/manuscript_final_clean/RT2_ZT8/NormEVS/fig_lead/Figure_RT2_ZT8_NormEVS_Lead_DispEst.png"    
+[128] "A  exports/manuscript_final_clean/RT2_ZT8/NormEVS/fig_lead/Figure_RT2_ZT8_NormEVS_Lead_DispResid.png"  
+[129] "A  exports/manuscript_final_clean/RT2_ZT8/NormEVS/fig_lead/Figure_RT2_ZT8_NormEVS_Lead_EmpHist.png"    
+[130] "A  exports/manuscript_final_clean/RT2_ZT8/NormEVS/fig_lead/Figure_RT2_ZT8_NormEVS_Lead_HBFSSDist.png"  
+[131] "A  exports/manuscript_final_clean/RT2_ZT8/NormEVS/fig_lead/Figure_RT2_ZT8_NormEVS_Lead_HCProfile.png"  
+[132] "A  exports/manuscript_final_clean/RT2_ZT8/NormEVS/fig_lead/Figure_RT2_ZT8_NormEVS_Lead_MeanHist.png"   
+[133] "A  exports/manuscript_final_clean/RT2_ZT8/NormEVS/fig_lead/Figure_RT2_ZT8_NormEVS_Lead_Summary.png"    
+[134] "A  exports/manuscript_final_clean/RT2_ZT8/NormEVS/fig_lead/Figure_RT2_ZT8_NormEVS_Lead_Volcano.png"    
+[135] "A  exports/manuscript_final_clean/RT2_ZT8/NormEVS/fig_raw/Figure_RT2_ZT8_NormEVS_Raw_DispEst.png"      
+[136] "A  exports/manuscript_final_clean/RT2_ZT8/NormEVS/fig_raw/Figure_RT2_ZT8_NormEVS_Raw_DispResid.png"    
+[137] "A  exports/manuscript_final_clean/RT2_ZT8/NormEVS/fig_raw/Figure_RT2_ZT8_NormEVS_Raw_EmpHist.png"      
+[138] "A  exports/manuscript_final_clean/RT2_ZT8/NormEVS/fig_raw/Figure_RT2_ZT8_NormEVS_Raw_HBFSSDist.png"    
+[139] "A  exports/manuscript_final_clean/RT2_ZT8/NormEVS/fig_raw/Figure_RT2_ZT8_NormEVS_Raw_HCProfile.png"    
+[140] "A  exports/manuscript_final_clean/RT2_ZT8/NormEVS/fig_raw/Figure_RT2_ZT8_NormEVS_Raw_MeanHist.png"     
+[141] "A  exports/manuscript_final_clean/RT2_ZT8/NormEVS/fig_raw/Figure_RT2_ZT8_NormEVS_Raw_Summary.png"      
+[142] "A  exports/manuscript_final_clean/RT2_ZT8/NormEVS/fig_raw/Figure_RT2_ZT8_NormEVS_Raw_Volcano.png"      
+[143] "A  exports/manuscript_final_clean/RT2_ZT8/NormEVS/fig_rem/Figure_RT2_ZT8_NormEVS_Rem_DispEst.png"      
+[144] "A  exports/manuscript_final_clean/RT2_ZT8/NormEVS/fig_rem/Figure_RT2_ZT8_NormEVS_Rem_DispResid.png"    
+[145] "A  exports/manuscript_final_clean/RT2_ZT8/NormEVS/fig_rem/Figure_RT2_ZT8_NormEVS_Rem_EmpHist.png"      
+[146] "A  exports/manuscript_final_clean/RT2_ZT8/NormEVS/fig_rem/Figure_RT2_ZT8_NormEVS_Rem_HBFSSDist.png"    
+[147] "A  exports/manuscript_final_clean/RT2_ZT8/NormEVS/fig_rem/Figure_RT2_ZT8_NormEVS_Rem_HCProfile.png"    
+[148] "A  exports/manuscript_final_clean/RT2_ZT8/NormEVS/fig_rem/Figure_RT2_ZT8_NormEVS_Rem_MeanHist.png"     
+[149] "A  exports/manuscript_final_clean/RT2_ZT8/NormEVS/fig_rem/Figure_RT2_ZT8_NormEVS_Rem_Summary.png"      
+[150] "A  exports/manuscript_final_clean/RT2_ZT8/NormEVS/fig_rem/Figure_RT2_ZT8_NormEVS_Rem_Volcano.png"      
+[151] "A  exports/manuscript_final_clean/RT2_ZT8/NormEVS/tables/Table_RT2_ZT8_NormEVS_Lead_DispResid.csv"     
+[152] "A  exports/manuscript_final_clean/RT2_ZT8/NormEVS/tables/Table_RT2_ZT8_NormEVS_Lead_HBFSS.csv"         
+[153] "A  exports/manuscript_final_clean/RT2_ZT8/NormEVS/tables/Table_RT2_ZT8_NormEVS_Lead_Overlap.csv"       
+[154] "A  exports/manuscript_final_clean/RT2_ZT8/NormEVS/tables/Table_RT2_ZT8_NormEVS_Lead_Results.csv"       
+[155] "A  exports/manuscript_final_clean/RT2_ZT8/NormEVS/tables/Table_RT2_ZT8_NormEVS_Lead_Standard.csv"      
+[156] "A  exports/manuscript_final_clean/RT2_ZT8/NormEVS/tables/Table_RT2_ZT8_NormEVS_Lead_StrongCNH.csv"     
+[157] "A  exports/manuscript_final_clean/RT2_ZT8/NormEVS/tables/Table_RT2_ZT8_NormEVS_Lead_Summary.csv"       
+[158] "A  exports/manuscript_final_clean/RT2_ZT8/NormEVS/tables/Table_RT2_ZT8_NormEVS_Lead_WeakCNH.csv"       
+[159] "A  exports/manuscript_final_clean/RT2_ZT8/NormEVS/tables/Table_RT2_ZT8_NormEVS_Raw_DispResid.csv"      
+[160] "A  exports/manuscript_final_clean/RT2_ZT8/NormEVS/tables/Table_RT2_ZT8_NormEVS_Raw_HBFSS.csv"          
+[161] "A  exports/manuscript_final_clean/RT2_ZT8/NormEVS/tables/Table_RT2_ZT8_NormEVS_Raw_Overlap.csv"        
+[162] "A  exports/manuscript_final_clean/RT2_ZT8/NormEVS/tables/Table_RT2_ZT8_NormEVS_Raw_Results.csv"        
+[163] "A  exports/manuscript_final_clean/RT2_ZT8/NormEVS/tables/Table_RT2_ZT8_NormEVS_Raw_Standard.csv"       
+[164] "A  exports/manuscript_final_clean/RT2_ZT8/NormEVS/tables/Table_RT2_ZT8_NormEVS_Raw_StrongCNH.csv"      
+[165] "A  exports/manuscript_final_clean/RT2_ZT8/NormEVS/tables/Table_RT2_ZT8_NormEVS_Raw_Summary.csv"        
+[166] "A  exports/manuscript_final_clean/RT2_ZT8/NormEVS/tables/Table_RT2_ZT8_NormEVS_Raw_WeakCNH.csv"        
+[167] "A  exports/manuscript_final_clean/RT2_ZT8/NormEVS/tables/Table_RT2_ZT8_NormEVS_Rem_DispResid.csv"      
+[168] "A  exports/manuscript_final_clean/RT2_ZT8/NormEVS/tables/Table_RT2_ZT8_NormEVS_Rem_HBFSS.csv"          
+[169] "A  exports/manuscript_final_clean/RT2_ZT8/NormEVS/tables/Table_RT2_ZT8_NormEVS_Rem_Overlap.csv"        
+[170] "A  exports/manuscript_final_clean/RT2_ZT8/NormEVS/tables/Table_RT2_ZT8_NormEVS_Rem_Results.csv"        
+[171] "A  exports/manuscript_final_clean/RT2_ZT8/NormEVS/tables/Table_RT2_ZT8_NormEVS_Rem_Standard.csv"       
+[172] "A  exports/manuscript_final_clean/RT2_ZT8/NormEVS/tables/Table_RT2_ZT8_NormEVS_Rem_StrongCNH.csv"      
+[173] "A  exports/manuscript_final_clean/RT2_ZT8/NormEVS/tables/Table_RT2_ZT8_NormEVS_Rem_Summary.csv"        
+[174] "A  exports/manuscript_final_clean/RT2_ZT8/NormEVS/tables/Table_RT2_ZT8_NormEVS_Rem_WeakCNH.csv"        
+[175] "A  exports/manuscript_final_clean/RT2_ZT8/RawEVS/Figure_RT2_ZT8_RawEVS_EVS_Ctrl_Hist.png"              
+[176] "A  exports/manuscript_final_clean/RT2_ZT8/RawEVS/Figure_RT2_ZT8_RawEVS_EVS_Ctrl_PCA.png"               
+[177] "A  exports/manuscript_final_clean/RT2_ZT8/RawEVS/Figure_RT2_ZT8_RawEVS_EVS_Ctrl_Rank.png"              
+[178] "A  exports/manuscript_final_clean/RT2_ZT8/RawEVS/Figure_RT2_ZT8_RawEVS_EVS_Trt_Hist.png"               
+[179] "A  exports/manuscript_final_clean/RT2_ZT8/RawEVS/Figure_RT2_ZT8_RawEVS_EVS_Trt_PCA.png"                
+[180] "A  exports/manuscript_final_clean/RT2_ZT8/RawEVS/Figure_RT2_ZT8_RawEVS_EVS_Trt_Rank.png"               
+[181] "A  exports/manuscript_final_clean/RT2_ZT8/RawEVS/Figure_RT2_ZT8_RawEVS_Panel_EmpHist.png"              
+[182] "A  exports/manuscript_final_clean/RT2_ZT8/RawEVS/Figure_RT2_ZT8_RawEVS_Panel_PCA.png"                  
+[183] "A  exports/manuscript_final_clean/RT2_ZT8/RawEVS/Figure_RT2_ZT8_RawEVS_Panel_Volcano.png"              
+[184] "A  exports/manuscript_final_clean/RT2_ZT8/RawEVS/Table_RT2_ZT8_RawEVS_Panel_Summary.csv"               
+[185] "A  exports/manuscript_final_clean/RT2_ZT8/RawEVS/fig_lead/Figure_RT2_ZT8_RawEVS_Lead_DispEst.png"      
+[186] "A  exports/manuscript_final_clean/RT2_ZT8/RawEVS/fig_lead/Figure_RT2_ZT8_RawEVS_Lead_DispResid.png"    
+[187] "A  exports/manuscript_final_clean/RT2_ZT8/RawEVS/fig_lead/Figure_RT2_ZT8_RawEVS_Lead_EmpHist.png"      
+[188] "A  exports/manuscript_final_clean/RT2_ZT8/RawEVS/fig_lead/Figure_RT2_ZT8_RawEVS_Lead_HBFSSDist.png"    
+[189] "A  exports/manuscript_final_clean/RT2_ZT8/RawEVS/fig_lead/Figure_RT2_ZT8_RawEVS_Lead_HCProfile.png"    
+[190] "A  exports/manuscript_final_clean/RT2_ZT8/RawEVS/fig_lead/Figure_RT2_ZT8_RawEVS_Lead_MeanHist.png"     
+[191] "A  exports/manuscript_final_clean/RT2_ZT8/RawEVS/fig_lead/Figure_RT2_ZT8_RawEVS_Lead_Summary.png"      
+[192] "A  exports/manuscript_final_clean/RT2_ZT8/RawEVS/fig_lead/Figure_RT2_ZT8_RawEVS_Lead_Volcano.png"      
+[193] "A  exports/manuscript_final_clean/RT2_ZT8/RawEVS/fig_raw/Figure_RT2_ZT8_RawEVS_Raw_DispEst.png"        
+[194] "A  exports/manuscript_final_clean/RT2_ZT8/RawEVS/fig_raw/Figure_RT2_ZT8_RawEVS_Raw_DispResid.png"      
+[195] "A  exports/manuscript_final_clean/RT2_ZT8/RawEVS/fig_raw/Figure_RT2_ZT8_RawEVS_Raw_EmpHist.png"        
+[196] "A  exports/manuscript_final_clean/RT2_ZT8/RawEVS/fig_raw/Figure_RT2_ZT8_RawEVS_Raw_HBFSSDist.png"      
+[197] "A  exports/manuscript_final_clean/RT2_ZT8/RawEVS/fig_raw/Figure_RT2_ZT8_RawEVS_Raw_HCProfile.png"      
+[198] "A  exports/manuscript_final_clean/RT2_ZT8/RawEVS/fig_raw/Figure_RT2_ZT8_RawEVS_Raw_MeanHist.png"       
+[199] "A  exports/manuscript_final_clean/RT2_ZT8/RawEVS/fig_raw/Figure_RT2_ZT8_RawEVS_Raw_Summary.png"        
+[200] "A  exports/manuscript_final_clean/RT2_ZT8/RawEVS/fig_raw/Figure_RT2_ZT8_RawEVS_Raw_Volcano.png"        
+[201] "A  exports/manuscript_final_clean/RT2_ZT8/RawEVS/fig_rem/Figure_RT2_ZT8_RawEVS_Rem_DispEst.png"        
+[202] "A  exports/manuscript_final_clean/RT2_ZT8/RawEVS/fig_rem/Figure_RT2_ZT8_RawEVS_Rem_DispResid.png"      
+[203] "A  exports/manuscript_final_clean/RT2_ZT8/RawEVS/fig_rem/Figure_RT2_ZT8_RawEVS_Rem_EmpHist.png"        
+[204] "A  exports/manuscript_final_clean/RT2_ZT8/RawEVS/fig_rem/Figure_RT2_ZT8_RawEVS_Rem_HBFSSDist.png"      
+[205] "A  exports/manuscript_final_clean/RT2_ZT8/RawEVS/fig_rem/Figure_RT2_ZT8_RawEVS_Rem_HCProfile.png"      
+[206] "A  exports/manuscript_final_clean/RT2_ZT8/RawEVS/fig_rem/Figure_RT2_ZT8_RawEVS_Rem_MeanHist.png"       
+[207] "A  exports/manuscript_final_clean/RT2_ZT8/RawEVS/fig_rem/Figure_RT2_ZT8_RawEVS_Rem_Summary.png"        
+[208] "A  exports/manuscript_final_clean/RT2_ZT8/RawEVS/fig_rem/Figure_RT2_ZT8_RawEVS_Rem_Volcano.png"        
+[209] "A  exports/manuscript_final_clean/RT2_ZT8/RawEVS/tables/Table_RT2_ZT8_RawEVS_Lead_DispResid.csv"       
+[210] "A  exports/manuscript_final_clean/RT2_ZT8/RawEVS/tables/Table_RT2_ZT8_RawEVS_Lead_HBFSS.csv"           
+[211] "A  exports/manuscript_final_clean/RT2_ZT8/RawEVS/tables/Table_RT2_ZT8_RawEVS_Lead_Overlap.csv"         
+[212] "A  exports/manuscript_final_clean/RT2_ZT8/RawEVS/tables/Table_RT2_ZT8_RawEVS_Lead_Results.csv"         
+[213] "A  exports/manuscript_final_clean/RT2_ZT8/RawEVS/tables/Table_RT2_ZT8_RawEVS_Lead_Standard.csv"        
+[214] "A  exports/manuscript_final_clean/RT2_ZT8/RawEVS/tables/Table_RT2_ZT8_RawEVS_Lead_StrongCNH.csv"       
+[215] "A  exports/manuscript_final_clean/RT2_ZT8/RawEVS/tables/Table_RT2_ZT8_RawEVS_Lead_Summary.csv"         
+[216] "A  exports/manuscript_final_clean/RT2_ZT8/RawEVS/tables/Table_RT2_ZT8_RawEVS_Lead_WeakCNH.csv"         
+[217] "A  exports/manuscript_final_clean/RT2_ZT8/RawEVS/tables/Table_RT2_ZT8_RawEVS_Raw_DispResid.csv"        
+[218] "A  exports/manuscript_final_clean/RT2_ZT8/RawEVS/tables/Table_RT2_ZT8_RawEVS_Raw_HBFSS.csv"            
+[219] "A  exports/manuscript_final_clean/RT2_ZT8/RawEVS/tables/Table_RT2_ZT8_RawEVS_Raw_Overlap.csv"          
+[220] "A  exports/manuscript_final_clean/RT2_ZT8/RawEVS/tables/Table_RT2_ZT8_RawEVS_Raw_Results.csv"          
+[221] "A  exports/manuscript_final_clean/RT2_ZT8/RawEVS/tables/Table_RT2_ZT8_RawEVS_Raw_Standard.csv"         
+[222] "A  exports/manuscript_final_clean/RT2_ZT8/RawEVS/tables/Table_RT2_ZT8_RawEVS_Raw_StrongCNH.csv"        
+[223] "A  exports/manuscript_final_clean/RT2_ZT8/RawEVS/tables/Table_RT2_ZT8_RawEVS_Raw_Summary.csv"          
+[224] "A  exports/manuscript_final_clean/RT2_ZT8/RawEVS/tables/Table_RT2_ZT8_RawEVS_Raw_WeakCNH.csv"          
+[225] "A  exports/manuscript_final_clean/RT2_ZT8/RawEVS/tables/Table_RT2_ZT8_RawEVS_Rem_DispResid.csv"        
+[226] "A  exports/manuscript_final_clean/RT2_ZT8/RawEVS/tables/Table_RT2_ZT8_RawEVS_Rem_HBFSS.csv"            
+[227] "A  exports/manuscript_final_clean/RT2_ZT8/RawEVS/tables/Table_RT2_ZT8_RawEVS_Rem_Overlap.csv"          
+[228] "A  exports/manuscript_final_clean/RT2_ZT8/RawEVS/tables/Table_RT2_ZT8_RawEVS_Rem_Results.csv"          
+[229] "A  exports/manuscript_final_clean/RT2_ZT8/RawEVS/tables/Table_RT2_ZT8_RawEVS_Rem_Standard.csv"         
+[230] "A  exports/manuscript_final_clean/RT2_ZT8/RawEVS/tables/Table_RT2_ZT8_RawEVS_Rem_StrongCNH.csv"        
+[231] "A  exports/manuscript_final_clean/RT2_ZT8/RawEVS/tables/Table_RT2_ZT8_RawEVS_Rem_Summary.csv"          
+[232] "A  exports/manuscript_final_clean/RT2_ZT8/RawEVS/tables/Table_RT2_ZT8_RawEVS_Rem_WeakCNH.csv"          
+[233] "A  exports/manuscript_final_clean/RT4_ZT10/NormEVS/Figure_RT4_ZT10_NormEVS_EVS_Ctrl_Hist.png"          
+[234] "A  exports/manuscript_final_clean/RT4_ZT10/NormEVS/Figure_RT4_ZT10_NormEVS_EVS_Ctrl_PCA.png"           
+[235] "A  exports/manuscript_final_clean/RT4_ZT10/NormEVS/Figure_RT4_ZT10_NormEVS_EVS_Ctrl_Rank.png"          
+[236] "A  exports/manuscript_final_clean/RT4_ZT10/NormEVS/Figure_RT4_ZT10_NormEVS_EVS_Trt_Hist.png"           
+[237] "A  exports/manuscript_final_clean/RT4_ZT10/NormEVS/Figure_RT4_ZT10_NormEVS_EVS_Trt_PCA.png"            
+[238] "A  exports/manuscript_final_clean/RT4_ZT10/NormEVS/Figure_RT4_ZT10_NormEVS_EVS_Trt_Rank.png"           
+[239] "A  exports/manuscript_final_clean/RT4_ZT10/NormEVS/Figure_RT4_ZT10_NormEVS_Panel_EmpHist.png"          
+[240] "A  exports/manuscript_final_clean/RT4_ZT10/NormEVS/Figure_RT4_ZT10_NormEVS_Panel_PCA.png"              
+[241] "A  exports/manuscript_final_clean/RT4_ZT10/NormEVS/Figure_RT4_ZT10_NormEVS_Panel_Volcano.png"          
+[242] "A  exports/manuscript_final_clean/RT4_ZT10/NormEVS/Table_RT4_ZT10_NormEVS_Panel_Summary.csv"           
+[243] "A  exports/manuscript_final_clean/RT4_ZT10/NormEVS/fig_lead/Figure_RT4_ZT10_NormEVS_Lead_DispEst.png"  
+[244] "A  exports/manuscript_final_clean/RT4_ZT10/NormEVS/fig_lead/Figure_RT4_ZT10_NormEVS_Lead_DispResid.png"
+[245] "A  exports/manuscript_final_clean/RT4_ZT10/NormEVS/fig_lead/Figure_RT4_ZT10_NormEVS_Lead_EmpHist.png"  
+[246] "A  exports/manuscript_final_clean/RT4_ZT10/NormEVS/fig_lead/Figure_RT4_ZT10_NormEVS_Lead_HBFSSDist.png"
+[247] "A  exports/manuscript_final_clean/RT4_ZT10/NormEVS/fig_lead/Figure_RT4_ZT10_NormEVS_Lead_HCProfile.png"
+[248] "A  exports/manuscript_final_clean/RT4_ZT10/NormEVS/fig_lead/Figure_RT4_ZT10_NormEVS_Lead_MeanHist.png" 
+[249] "A  exports/manuscript_final_clean/RT4_ZT10/NormEVS/fig_lead/Figure_RT4_ZT10_NormEVS_Lead_Summary.png"  
+[250] "A  exports/manuscript_final_clean/RT4_ZT10/NormEVS/fig_lead/Figure_RT4_ZT10_NormEVS_Lead_Volcano.png"  
+[251] "A  exports/manuscript_final_clean/RT4_ZT10/NormEVS/fig_raw/Figure_RT4_ZT10_NormEVS_Raw_DispEst.png"    
+[252] "A  exports/manuscript_final_clean/RT4_ZT10/NormEVS/fig_raw/Figure_RT4_ZT10_NormEVS_Raw_DispResid.png"  
+[253] "A  exports/manuscript_final_clean/RT4_ZT10/NormEVS/fig_raw/Figure_RT4_ZT10_NormEVS_Raw_EmpHist.png"    
+[254] "A  exports/manuscript_final_clean/RT4_ZT10/NormEVS/fig_raw/Figure_RT4_ZT10_NormEVS_Raw_HBFSSDist.png"  
+[255] "A  exports/manuscript_final_clean/RT4_ZT10/NormEVS/fig_raw/Figure_RT4_ZT10_NormEVS_Raw_HCProfile.png"  
+[256] "A  exports/manuscript_final_clean/RT4_ZT10/NormEVS/fig_raw/Figure_RT4_ZT10_NormEVS_Raw_MeanHist.png"   
+[257] "A  exports/manuscript_final_clean/RT4_ZT10/NormEVS/fig_raw/Figure_RT4_ZT10_NormEVS_Raw_Summary.png"    
+[258] "A  exports/manuscript_final_clean/RT4_ZT10/NormEVS/fig_raw/Figure_RT4_ZT10_NormEVS_Raw_Volcano.png"    
+[259] "A  exports/manuscript_final_clean/RT4_ZT10/NormEVS/fig_rem/Figure_RT4_ZT10_NormEVS_Rem_DispEst.png"    
+[260] "A  exports/manuscript_final_clean/RT4_ZT10/NormEVS/fig_rem/Figure_RT4_ZT10_NormEVS_Rem_DispResid.png"  
+[261] "A  exports/manuscript_final_clean/RT4_ZT10/NormEVS/fig_rem/Figure_RT4_ZT10_NormEVS_Rem_EmpHist.png"    
+[262] "A  exports/manuscript_final_clean/RT4_ZT10/NormEVS/fig_rem/Figure_RT4_ZT10_NormEVS_Rem_HBFSSDist.png"  
+[263] "A  exports/manuscript_final_clean/RT4_ZT10/NormEVS/fig_rem/Figure_RT4_ZT10_NormEVS_Rem_HCProfile.png"  
+[264] "A  exports/manuscript_final_clean/RT4_ZT10/NormEVS/fig_rem/Figure_RT4_ZT10_NormEVS_Rem_MeanHist.png"   
+[265] "A  exports/manuscript_final_clean/RT4_ZT10/NormEVS/fig_rem/Figure_RT4_ZT10_NormEVS_Rem_Summary.png"    
+[266] "A  exports/manuscript_final_clean/RT4_ZT10/NormEVS/fig_rem/Figure_RT4_ZT10_NormEVS_Rem_Volcano.png"    
+[267] "A  exports/manuscript_final_clean/RT4_ZT10/NormEVS/tables/Table_RT4_ZT10_NormEVS_Lead_DispResid.csv"   
+[268] "A  exports/manuscript_final_clean/RT4_ZT10/NormEVS/tables/Table_RT4_ZT10_NormEVS_Lead_HBFSS.csv"       
+[269] "A  exports/manuscript_final_clean/RT4_ZT10/NormEVS/tables/Table_RT4_ZT10_NormEVS_Lead_Overlap.csv"     
+[270] "A  exports/manuscript_final_clean/RT4_ZT10/NormEVS/tables/Table_RT4_ZT10_NormEVS_Lead_Results.csv"     
+[271] "A  exports/manuscript_final_clean/RT4_ZT10/NormEVS/tables/Table_RT4_ZT10_NormEVS_Lead_Standard.csv"    
+[272] "A  exports/manuscript_final_clean/RT4_ZT10/NormEVS/tables/Table_RT4_ZT10_NormEVS_Lead_StrongCNH.csv"   
+[273] "A  exports/manuscript_final_clean/RT4_ZT10/NormEVS/tables/Table_RT4_ZT10_NormEVS_Lead_Summary.csv"     
+[274] "A  exports/manuscript_final_clean/RT4_ZT10/NormEVS/tables/Table_RT4_ZT10_NormEVS_Lead_WeakCNH.csv"     
+[275] "A  exports/manuscript_final_clean/RT4_ZT10/NormEVS/tables/Table_RT4_ZT10_NormEVS_Raw_DispResid.csv"    
+[276] "A  exports/manuscript_final_clean/RT4_ZT10/NormEVS/tables/Table_RT4_ZT10_NormEVS_Raw_HBFSS.csv"        
+[277] "A  exports/manuscript_final_clean/RT4_ZT10/NormEVS/tables/Table_RT4_ZT10_NormEVS_Raw_Overlap.csv"      
+[278] "A  exports/manuscript_final_clean/RT4_ZT10/NormEVS/tables/Table_RT4_ZT10_NormEVS_Raw_Results.csv"      
+[279] "A  exports/manuscript_final_clean/RT4_ZT10/NormEVS/tables/Table_RT4_ZT10_NormEVS_Raw_Standard.csv"     
+[280] "A  exports/manuscript_final_clean/RT4_ZT10/NormEVS/tables/Table_RT4_ZT10_NormEVS_Raw_StrongCNH.csv"    
+[281] "A  exports/manuscript_final_clean/RT4_ZT10/NormEVS/tables/Table_RT4_ZT10_NormEVS_Raw_Summary.csv"      
+[282] "A  exports/manuscript_final_clean/RT4_ZT10/NormEVS/tables/Table_RT4_ZT10_NormEVS_Raw_WeakCNH.csv"      
+[283] "A  exports/manuscript_final_clean/RT4_ZT10/NormEVS/tables/Table_RT4_ZT10_NormEVS_Rem_DispResid.csv"    
+[284] "A  exports/manuscript_final_clean/RT4_ZT10/NormEVS/tables/Table_RT4_ZT10_NormEVS_Rem_HBFSS.csv"        
+[285] "A  exports/manuscript_final_clean/RT4_ZT10/NormEVS/tables/Table_RT4_ZT10_NormEVS_Rem_Overlap.csv"      
+[286] "A  exports/manuscript_final_clean/RT4_ZT10/NormEVS/tables/Table_RT4_ZT10_NormEVS_Rem_Results.csv"      
+[287] "A  exports/manuscript_final_clean/RT4_ZT10/NormEVS/tables/Table_RT4_ZT10_NormEVS_Rem_Standard.csv"     
+[288] "A  exports/manuscript_final_clean/RT4_ZT10/NormEVS/tables/Table_RT4_ZT10_NormEVS_Rem_StrongCNH.csv"    
+[289] "A  exports/manuscript_final_clean/RT4_ZT10/NormEVS/tables/Table_RT4_ZT10_NormEVS_Rem_Summary.csv"      
+[290] "A  exports/manuscript_final_clean/RT4_ZT10/NormEVS/tables/Table_RT4_ZT10_NormEVS_Rem_WeakCNH.csv"      
+[291] "A  exports/manuscript_final_clean/RT4_ZT10/RawEVS/Figure_RT4_ZT10_RawEVS_EVS_Ctrl_Hist.png"            
+[292] "A  exports/manuscript_final_clean/RT4_ZT10/RawEVS/Figure_RT4_ZT10_RawEVS_EVS_Ctrl_PCA.png"             
+[293] "A  exports/manuscript_final_clean/RT4_ZT10/RawEVS/Figure_RT4_ZT10_RawEVS_EVS_Ctrl_Rank.png"            
+[294] "A  exports/manuscript_final_clean/RT4_ZT10/RawEVS/Figure_RT4_ZT10_RawEVS_EVS_Trt_Hist.png"             
+[295] "A  exports/manuscript_final_clean/RT4_ZT10/RawEVS/Figure_RT4_ZT10_RawEVS_EVS_Trt_PCA.png"              
+[296] "A  exports/manuscript_final_clean/RT4_ZT10/RawEVS/Figure_RT4_ZT10_RawEVS_EVS_Trt_Rank.png"             
+[297] "A  exports/manuscript_final_clean/RT4_ZT10/RawEVS/Figure_RT4_ZT10_RawEVS_Panel_EmpHist.png"            
+[298] "A  exports/manuscript_final_clean/RT4_ZT10/RawEVS/Figure_RT4_ZT10_RawEVS_Panel_PCA.png"                
+[299] "A  exports/manuscript_final_clean/RT4_ZT10/RawEVS/Figure_RT4_ZT10_RawEVS_Panel_Volcano.png"            
+[300] "A  exports/manuscript_final_clean/RT4_ZT10/RawEVS/Table_RT4_ZT10_RawEVS_Panel_Summary.csv"             
+[301] "A  exports/manuscript_final_clean/RT4_ZT10/RawEVS/fig_lead/Figure_RT4_ZT10_RawEVS_Lead_DispEst.png"    
+[302] "A  exports/manuscript_final_clean/RT4_ZT10/RawEVS/fig_lead/Figure_RT4_ZT10_RawEVS_Lead_DispResid.png"  
+[303] "A  exports/manuscript_final_clean/RT4_ZT10/RawEVS/fig_lead/Figure_RT4_ZT10_RawEVS_Lead_EmpHist.png"    
+[304] "A  exports/manuscript_final_clean/RT4_ZT10/RawEVS/fig_lead/Figure_RT4_ZT10_RawEVS_Lead_HBFSSDist.png"  
+[305] "A  exports/manuscript_final_clean/RT4_ZT10/RawEVS/fig_lead/Figure_RT4_ZT10_RawEVS_Lead_HCProfile.png"  
+[306] "A  exports/manuscript_final_clean/RT4_ZT10/RawEVS/fig_lead/Figure_RT4_ZT10_RawEVS_Lead_MeanHist.png"   
+[307] "A  exports/manuscript_final_clean/RT4_ZT10/RawEVS/fig_lead/Figure_RT4_ZT10_RawEVS_Lead_Summary.png"    
+[308] "A  exports/manuscript_final_clean/RT4_ZT10/RawEVS/fig_lead/Figure_RT4_ZT10_RawEVS_Lead_Volcano.png"    
+[309] "A  exports/manuscript_final_clean/RT4_ZT10/RawEVS/fig_raw/Figure_RT4_ZT10_RawEVS_Raw_DispEst.png"      
+[310] "A  exports/manuscript_final_clean/RT4_ZT10/RawEVS/fig_raw/Figure_RT4_ZT10_RawEVS_Raw_DispResid.png"    
+[311] "A  exports/manuscript_final_clean/RT4_ZT10/RawEVS/fig_raw/Figure_RT4_ZT10_RawEVS_Raw_EmpHist.png"      
+[312] "A  exports/manuscript_final_clean/RT4_ZT10/RawEVS/fig_raw/Figure_RT4_ZT10_RawEVS_Raw_HBFSSDist.png"    
+[313] "A  exports/manuscript_final_clean/RT4_ZT10/RawEVS/fig_raw/Figure_RT4_ZT10_RawEVS_Raw_HCProfile.png"    
+[314] "A  exports/manuscript_final_clean/RT4_ZT10/RawEVS/fig_raw/Figure_RT4_ZT10_RawEVS_Raw_MeanHist.png"     
+[315] "A  exports/manuscript_final_clean/RT4_ZT10/RawEVS/fig_raw/Figure_RT4_ZT10_RawEVS_Raw_Summary.png"      
+[316] "A  exports/manuscript_final_clean/RT4_ZT10/RawEVS/fig_raw/Figure_RT4_ZT10_RawEVS_Raw_Volcano.png"      
+[317] "A  exports/manuscript_final_clean/RT4_ZT10/RawEVS/fig_rem/Figure_RT4_ZT10_RawEVS_Rem_DispEst.png"      
+[318] "A  exports/manuscript_final_clean/RT4_ZT10/RawEVS/fig_rem/Figure_RT4_ZT10_RawEVS_Rem_DispResid.png"    
+[319] "A  exports/manuscript_final_clean/RT4_ZT10/RawEVS/fig_rem/Figure_RT4_ZT10_RawEVS_Rem_EmpHist.png"      
+[320] "A  exports/manuscript_final_clean/RT4_ZT10/RawEVS/fig_rem/Figure_RT4_ZT10_RawEVS_Rem_HBFSSDist.png"    
+[321] "A  exports/manuscript_final_clean/RT4_ZT10/RawEVS/fig_rem/Figure_RT4_ZT10_RawEVS_Rem_HCProfile.png"    
+[322] "A  exports/manuscript_final_clean/RT4_ZT10/RawEVS/fig_rem/Figure_RT4_ZT10_RawEVS_Rem_MeanHist.png"     
+[323] "A  exports/manuscript_final_clean/RT4_ZT10/RawEVS/fig_rem/Figure_RT4_ZT10_RawEVS_Rem_Summary.png"      
+[324] "A  exports/manuscript_final_clean/RT4_ZT10/RawEVS/fig_rem/Figure_RT4_ZT10_RawEVS_Rem_Volcano.png"      
+[325] "A  exports/manuscript_final_clean/RT4_ZT10/RawEVS/tables/Table_RT4_ZT10_RawEVS_Lead_DispResid.csv"     
+[326] "A  exports/manuscript_final_clean/RT4_ZT10/RawEVS/tables/Table_RT4_ZT10_RawEVS_Lead_HBFSS.csv"         
+[327] "A  exports/manuscript_final_clean/RT4_ZT10/RawEVS/tables/Table_RT4_ZT10_RawEVS_Lead_Overlap.csv"       
+[328] "A  exports/manuscript_final_clean/RT4_ZT10/RawEVS/tables/Table_RT4_ZT10_RawEVS_Lead_Results.csv"       
+[329] "A  exports/manuscript_final_clean/RT4_ZT10/RawEVS/tables/Table_RT4_ZT10_RawEVS_Lead_Standard.csv"      
+[330] "A  exports/manuscript_final_clean/RT4_ZT10/RawEVS/tables/Table_RT4_ZT10_RawEVS_Lead_StrongCNH.csv"     
+[331] "A  exports/manuscript_final_clean/RT4_ZT10/RawEVS/tables/Table_RT4_ZT10_RawEVS_Lead_Summary.csv"       
+[332] "A  exports/manuscript_final_clean/RT4_ZT10/RawEVS/tables/Table_RT4_ZT10_RawEVS_Lead_WeakCNH.csv"       
+[333] "A  exports/manuscript_final_clean/RT4_ZT10/RawEVS/tables/Table_RT4_ZT10_RawEVS_Raw_DispResid.csv"      
+[334] "A  exports/manuscript_final_clean/RT4_ZT10/RawEVS/tables/Table_RT4_ZT10_RawEVS_Raw_HBFSS.csv"          
+[335] "A  exports/manuscript_final_clean/RT4_ZT10/RawEVS/tables/Table_RT4_ZT10_RawEVS_Raw_Overlap.csv"        
+[336] "A  exports/manuscript_final_clean/RT4_ZT10/RawEVS/tables/Table_RT4_ZT10_RawEVS_Raw_Results.csv"        
+[337] "A  exports/manuscript_final_clean/RT4_ZT10/RawEVS/tables/Table_RT4_ZT10_RawEVS_Raw_Standard.csv"       
+[338] "A  exports/manuscript_final_clean/RT4_ZT10/RawEVS/tables/Table_RT4_ZT10_RawEVS_Raw_StrongCNH.csv"      
+[339] "A  exports/manuscript_final_clean/RT4_ZT10/RawEVS/tables/Table_RT4_ZT10_RawEVS_Raw_Summary.csv"        
+[340] "A  exports/manuscript_final_clean/RT4_ZT10/RawEVS/tables/Table_RT4_ZT10_RawEVS_Raw_WeakCNH.csv"        
+[341] "A  exports/manuscript_final_clean/RT4_ZT10/RawEVS/tables/Table_RT4_ZT10_RawEVS_Rem_DispResid.csv"      
+[342] "A  exports/manuscript_final_clean/RT4_ZT10/RawEVS/tables/Table_RT4_ZT10_RawEVS_Rem_HBFSS.csv"          
+[343] "A  exports/manuscript_final_clean/RT4_ZT10/RawEVS/tables/Table_RT4_ZT10_RawEVS_Rem_Overlap.csv"        
+[344] "A  exports/manuscript_final_clean/RT4_ZT10/RawEVS/tables/Table_RT4_ZT10_RawEVS_Rem_Results.csv"        
+[345] "A  exports/manuscript_final_clean/RT4_ZT10/RawEVS/tables/Table_RT4_ZT10_RawEVS_Rem_Standard.csv"       
+[346] "A  exports/manuscript_final_clean/RT4_ZT10/RawEVS/tables/Table_RT4_ZT10_RawEVS_Rem_StrongCNH.csv"      
+[347] "A  exports/manuscript_final_clean/RT4_ZT10/RawEVS/tables/Table_RT4_ZT10_RawEVS_Rem_Summary.csv"        
+[348] "A  exports/manuscript_final_clean/RT4_ZT10/RawEVS/tables/Table_RT4_ZT10_RawEVS_Rem_WeakCNH.csv"        
+[349] "A  exports/manuscript_final_clean/RT8_ZT14/NormEVS/Figure_RT8_ZT14_NormEVS_EVS_Ctrl_Hist.png"          
+[350] "A  exports/manuscript_final_clean/RT8_ZT14/NormEVS/Figure_RT8_ZT14_NormEVS_EVS_Ctrl_PCA.png"           
+[351] "A  exports/manuscript_final_clean/RT8_ZT14/NormEVS/Figure_RT8_ZT14_NormEVS_EVS_Ctrl_Rank.png"          
+[352] "A  exports/manuscript_final_clean/RT8_ZT14/NormEVS/Figure_RT8_ZT14_NormEVS_EVS_Trt_Hist.png"           
+[353] "A  exports/manuscript_final_clean/RT8_ZT14/NormEVS/Figure_RT8_ZT14_NormEVS_EVS_Trt_PCA.png"            
+[354] "A  exports/manuscript_final_clean/RT8_ZT14/NormEVS/Figure_RT8_ZT14_NormEVS_EVS_Trt_Rank.png"           
+[355] "A  exports/manuscript_final_clean/RT8_ZT14/NormEVS/Figure_RT8_ZT14_NormEVS_Panel_EmpHist.png"          
+[356] "A  exports/manuscript_final_clean/RT8_ZT14/NormEVS/Figure_RT8_ZT14_NormEVS_Panel_PCA.png"              
+[357] "A  exports/manuscript_final_clean/RT8_ZT14/NormEVS/Figure_RT8_ZT14_NormEVS_Panel_Volcano.png"          
+[358] "A  exports/manuscript_final_clean/RT8_ZT14/NormEVS/Table_RT8_ZT14_NormEVS_Panel_Summary.csv"           
+[359] "A  exports/manuscript_final_clean/RT8_ZT14/NormEVS/fig_lead/Figure_RT8_ZT14_NormEVS_Lead_DispEst.png"  
+[360] "A  exports/manuscript_final_clean/RT8_ZT14/NormEVS/fig_lead/Figure_RT8_ZT14_NormEVS_Lead_DispResid.png"
+[361] "A  exports/manuscript_final_clean/RT8_ZT14/NormEVS/fig_lead/Figure_RT8_ZT14_NormEVS_Lead_EmpHist.png"  
+[362] "A  exports/manuscript_final_clean/RT8_ZT14/NormEVS/fig_lead/Figure_RT8_ZT14_NormEVS_Lead_HBFSSDist.png"
+[363] "A  exports/manuscript_final_clean/RT8_ZT14/NormEVS/fig_lead/Figure_RT8_ZT14_NormEVS_Lead_HCProfile.png"
+[364] "A  exports/manuscript_final_clean/RT8_ZT14/NormEVS/fig_lead/Figure_RT8_ZT14_NormEVS_Lead_MeanHist.png" 
+[365] "A  exports/manuscript_final_clean/RT8_ZT14/NormEVS/fig_lead/Figure_RT8_ZT14_NormEVS_Lead_Summary.png"  
+[366] "A  exports/manuscript_final_clean/RT8_ZT14/NormEVS/fig_lead/Figure_RT8_ZT14_NormEVS_Lead_Volcano.png"  
+[367] "A  exports/manuscript_final_clean/RT8_ZT14/NormEVS/fig_raw/Figure_RT8_ZT14_NormEVS_Raw_DispEst.png"    
+[368] "A  exports/manuscript_final_clean/RT8_ZT14/NormEVS/fig_raw/Figure_RT8_ZT14_NormEVS_Raw_DispResid.png"  
+[369] "A  exports/manuscript_final_clean/RT8_ZT14/NormEVS/fig_raw/Figure_RT8_ZT14_NormEVS_Raw_EmpHist.png"    
+[370] "A  exports/manuscript_final_clean/RT8_ZT14/NormEVS/fig_raw/Figure_RT8_ZT14_NormEVS_Raw_HBFSSDist.png"  
+[371] "A  exports/manuscript_final_clean/RT8_ZT14/NormEVS/fig_raw/Figure_RT8_ZT14_NormEVS_Raw_HCProfile.png"  
+[372] "A  exports/manuscript_final_clean/RT8_ZT14/NormEVS/fig_raw/Figure_RT8_ZT14_NormEVS_Raw_MeanHist.png"   
+[373] "A  exports/manuscript_final_clean/RT8_ZT14/NormEVS/fig_raw/Figure_RT8_ZT14_NormEVS_Raw_Summary.png"    
+[374] "A  exports/manuscript_final_clean/RT8_ZT14/NormEVS/fig_raw/Figure_RT8_ZT14_NormEVS_Raw_Volcano.png"    
+[375] "A  exports/manuscript_final_clean/RT8_ZT14/NormEVS/fig_rem/Figure_RT8_ZT14_NormEVS_Rem_DispEst.png"    
+[376] "A  exports/manuscript_final_clean/RT8_ZT14/NormEVS/fig_rem/Figure_RT8_ZT14_NormEVS_Rem_DispResid.png"  
+[377] "A  exports/manuscript_final_clean/RT8_ZT14/NormEVS/fig_rem/Figure_RT8_ZT14_NormEVS_Rem_EmpHist.png"    
+[378] "A  exports/manuscript_final_clean/RT8_ZT14/NormEVS/fig_rem/Figure_RT8_ZT14_NormEVS_Rem_HBFSSDist.png"  
+[379] "A  exports/manuscript_final_clean/RT8_ZT14/NormEVS/fig_rem/Figure_RT8_ZT14_NormEVS_Rem_HCProfile.png"  
+[380] "A  exports/manuscript_final_clean/RT8_ZT14/NormEVS/fig_rem/Figure_RT8_ZT14_NormEVS_Rem_MeanHist.png"   
+[381] "A  exports/manuscript_final_clean/RT8_ZT14/NormEVS/fig_rem/Figure_RT8_ZT14_NormEVS_Rem_Summary.png"    
+[382] "A  exports/manuscript_final_clean/RT8_ZT14/NormEVS/fig_rem/Figure_RT8_ZT14_NormEVS_Rem_Volcano.png"    
+[383] "A  exports/manuscript_final_clean/RT8_ZT14/NormEVS/tables/Table_RT8_ZT14_NormEVS_Lead_DispResid.csv"   
+[384] "A  exports/manuscript_final_clean/RT8_ZT14/NormEVS/tables/Table_RT8_ZT14_NormEVS_Lead_HBFSS.csv"       
+[385] "A  exports/manuscript_final_clean/RT8_ZT14/NormEVS/tables/Table_RT8_ZT14_NormEVS_Lead_Overlap.csv"     
+[386] "A  exports/manuscript_final_clean/RT8_ZT14/NormEVS/tables/Table_RT8_ZT14_NormEVS_Lead_Results.csv"     
+[387] "A  exports/manuscript_final_clean/RT8_ZT14/NormEVS/tables/Table_RT8_ZT14_NormEVS_Lead_Standard.csv"    
+[388] "A  exports/manuscript_final_clean/RT8_ZT14/NormEVS/tables/Table_RT8_ZT14_NormEVS_Lead_StrongCNH.csv"   
+[389] "A  exports/manuscript_final_clean/RT8_ZT14/NormEVS/tables/Table_RT8_ZT14_NormEVS_Lead_Summary.csv"     
+[390] "A  exports/manuscript_final_clean/RT8_ZT14/NormEVS/tables/Table_RT8_ZT14_NormEVS_Lead_WeakCNH.csv"     
+[391] "A  exports/manuscript_final_clean/RT8_ZT14/NormEVS/tables/Table_RT8_ZT14_NormEVS_Raw_DispResid.csv"    
+[392] "A  exports/manuscript_final_clean/RT8_ZT14/NormEVS/tables/Table_RT8_ZT14_NormEVS_Raw_HBFSS.csv"        
+[393] "A  exports/manuscript_final_clean/RT8_ZT14/NormEVS/tables/Table_RT8_ZT14_NormEVS_Raw_Overlap.csv"      
+[394] "A  exports/manuscript_final_clean/RT8_ZT14/NormEVS/tables/Table_RT8_ZT14_NormEVS_Raw_Results.csv"      
+[395] "A  exports/manuscript_final_clean/RT8_ZT14/NormEVS/tables/Table_RT8_ZT14_NormEVS_Raw_Standard.csv"     
+[396] "A  exports/manuscript_final_clean/RT8_ZT14/NormEVS/tables/Table_RT8_ZT14_NormEVS_Raw_StrongCNH.csv"    
+[397] "A  exports/manuscript_final_clean/RT8_ZT14/NormEVS/tables/Table_RT8_ZT14_NormEVS_Raw_Summary.csv"      
+[398] "A  exports/manuscript_final_clean/RT8_ZT14/NormEVS/tables/Table_RT8_ZT14_NormEVS_Raw_WeakCNH.csv"      
+[399] "A  exports/manuscript_final_clean/RT8_ZT14/NormEVS/tables/Table_RT8_ZT14_NormEVS_Rem_DispResid.csv"    
+[400] "A  exports/manuscript_final_clean/RT8_ZT14/NormEVS/tables/Table_RT8_ZT14_NormEVS_Rem_HBFSS.csv"        
+[401] "A  exports/manuscript_final_clean/RT8_ZT14/NormEVS/tables/Table_RT8_ZT14_NormEVS_Rem_Overlap.csv"      
+[402] "A  exports/manuscript_final_clean/RT8_ZT14/NormEVS/tables/Table_RT8_ZT14_NormEVS_Rem_Results.csv"      
+[403] "A  exports/manuscript_final_clean/RT8_ZT14/NormEVS/tables/Table_RT8_ZT14_NormEVS_Rem_Standard.csv"     
+[404] "A  exports/manuscript_final_clean/RT8_ZT14/NormEVS/tables/Table_RT8_ZT14_NormEVS_Rem_StrongCNH.csv"    
+[405] "A  exports/manuscript_final_clean/RT8_ZT14/NormEVS/tables/Table_RT8_ZT14_NormEVS_Rem_Summary.csv"      
+[406] "A  exports/manuscript_final_clean/RT8_ZT14/NormEVS/tables/Table_RT8_ZT14_NormEVS_Rem_WeakCNH.csv"      
+[407] "A  exports/manuscript_final_clean/RT8_ZT14/RawEVS/Figure_RT8_ZT14_RawEVS_EVS_Ctrl_Hist.png"            
+[408] "A  exports/manuscript_final_clean/RT8_ZT14/RawEVS/Figure_RT8_ZT14_RawEVS_EVS_Ctrl_PCA.png"             
+[409] "A  exports/manuscript_final_clean/RT8_ZT14/RawEVS/Figure_RT8_ZT14_RawEVS_EVS_Ctrl_Rank.png"            
+[410] "A  exports/manuscript_final_clean/RT8_ZT14/RawEVS/Figure_RT8_ZT14_RawEVS_EVS_Trt_Hist.png"             
+[411] "A  exports/manuscript_final_clean/RT8_ZT14/RawEVS/Figure_RT8_ZT14_RawEVS_EVS_Trt_PCA.png"              
+[412] "A  exports/manuscript_final_clean/RT8_ZT14/RawEVS/Figure_RT8_ZT14_RawEVS_EVS_Trt_Rank.png"             
+[413] "A  exports/manuscript_final_clean/RT8_ZT14/RawEVS/Figure_RT8_ZT14_RawEVS_Panel_EmpHist.png"            
+[414] "A  exports/manuscript_final_clean/RT8_ZT14/RawEVS/Figure_RT8_ZT14_RawEVS_Panel_PCA.png"                
+[415] "A  exports/manuscript_final_clean/RT8_ZT14/RawEVS/Figure_RT8_ZT14_RawEVS_Panel_Volcano.png"            
+[416] "A  exports/manuscript_final_clean/RT8_ZT14/RawEVS/Table_RT8_ZT14_RawEVS_Panel_Summary.csv"             
+[417] "A  exports/manuscript_final_clean/RT8_ZT14/RawEVS/fig_lead/Figure_RT8_ZT14_RawEVS_Lead_DispEst.png"    
+[418] "A  exports/manuscript_final_clean/RT8_ZT14/RawEVS/fig_lead/Figure_RT8_ZT14_RawEVS_Lead_DispResid.png"  
+[419] "A  exports/manuscript_final_clean/RT8_ZT14/RawEVS/fig_lead/Figure_RT8_ZT14_RawEVS_Lead_EmpHist.png"    
+[420] "A  exports/manuscript_final_clean/RT8_ZT14/RawEVS/fig_lead/Figure_RT8_ZT14_RawEVS_Lead_HBFSSDist.png"  
+[421] "A  exports/manuscript_final_clean/RT8_ZT14/RawEVS/fig_lead/Figure_RT8_ZT14_RawEVS_Lead_HCProfile.png"  
+[422] "A  exports/manuscript_final_clean/RT8_ZT14/RawEVS/fig_lead/Figure_RT8_ZT14_RawEVS_Lead_MeanHist.png"   
+[423] "A  exports/manuscript_final_clean/RT8_ZT14/RawEVS/fig_lead/Figure_RT8_ZT14_RawEVS_Lead_Summary.png"    
+[424] "A  exports/manuscript_final_clean/RT8_ZT14/RawEVS/fig_lead/Figure_RT8_ZT14_RawEVS_Lead_Volcano.png"    
+[425] "A  exports/manuscript_final_clean/RT8_ZT14/RawEVS/fig_raw/Figure_RT8_ZT14_RawEVS_Raw_DispEst.png"      
+[426] "A  exports/manuscript_final_clean/RT8_ZT14/RawEVS/fig_raw/Figure_RT8_ZT14_RawEVS_Raw_DispResid.png"    
+[427] "A  exports/manuscript_final_clean/RT8_ZT14/RawEVS/fig_raw/Figure_RT8_ZT14_RawEVS_Raw_EmpHist.png"      
+[428] "A  exports/manuscript_final_clean/RT8_ZT14/RawEVS/fig_raw/Figure_RT8_ZT14_RawEVS_Raw_HBFSSDist.png"    
+[429] "A  exports/manuscript_final_clean/RT8_ZT14/RawEVS/fig_raw/Figure_RT8_ZT14_RawEVS_Raw_HCProfile.png"    
+[430] "A  exports/manuscript_final_clean/RT8_ZT14/RawEVS/fig_raw/Figure_RT8_ZT14_RawEVS_Raw_MeanHist.png"     
+[431] "A  exports/manuscript_final_clean/RT8_ZT14/RawEVS/fig_raw/Figure_RT8_ZT14_RawEVS_Raw_Summary.png"      
+[432] "A  exports/manuscript_final_clean/RT8_ZT14/RawEVS/fig_raw/Figure_RT8_ZT14_RawEVS_Raw_Volcano.png"      
+[433] "A  exports/manuscript_final_clean/RT8_ZT14/RawEVS/fig_rem/Figure_RT8_ZT14_RawEVS_Rem_DispEst.png"      
+[434] "A  exports/manuscript_final_clean/RT8_ZT14/RawEVS/fig_rem/Figure_RT8_ZT14_RawEVS_Rem_DispResid.png"    
+[435] "A  exports/manuscript_final_clean/RT8_ZT14/RawEVS/fig_rem/Figure_RT8_ZT14_RawEVS_Rem_EmpHist.png"      
+[436] "A  exports/manuscript_final_clean/RT8_ZT14/RawEVS/fig_rem/Figure_RT8_ZT14_RawEVS_Rem_HBFSSDist.png"    
+[437] "A  exports/manuscript_final_clean/RT8_ZT14/RawEVS/fig_rem/Figure_RT8_ZT14_RawEVS_Rem_HCProfile.png"    
+[438] "A  exports/manuscript_final_clean/RT8_ZT14/RawEVS/fig_rem/Figure_RT8_ZT14_RawEVS_Rem_MeanHist.png"     
+[439] "A  exports/manuscript_final_clean/RT8_ZT14/RawEVS/fig_rem/Figure_RT8_ZT14_RawEVS_Rem_Summary.png"      
+[440] "A  exports/manuscript_final_clean/RT8_ZT14/RawEVS/fig_rem/Figure_RT8_ZT14_RawEVS_Rem_Volcano.png"      
+[441] "A  exports/manuscript_final_clean/RT8_ZT14/RawEVS/tables/Table_RT8_ZT14_RawEVS_Lead_DispResid.csv"     
+[442] "A  exports/manuscript_final_clean/RT8_ZT14/RawEVS/tables/Table_RT8_ZT14_RawEVS_Lead_HBFSS.csv"         
+[443] "A  exports/manuscript_final_clean/RT8_ZT14/RawEVS/tables/Table_RT8_ZT14_RawEVS_Lead_Overlap.csv"       
+[444] "A  exports/manuscript_final_clean/RT8_ZT14/RawEVS/tables/Table_RT8_ZT14_RawEVS_Lead_Results.csv"       
+[445] "A  exports/manuscript_final_clean/RT8_ZT14/RawEVS/tables/Table_RT8_ZT14_RawEVS_Lead_Standard.csv"      
+[446] "A  exports/manuscript_final_clean/RT8_ZT14/RawEVS/tables/Table_RT8_ZT14_RawEVS_Lead_StrongCNH.csv"     
+[447] "A  exports/manuscript_final_clean/RT8_ZT14/RawEVS/tables/Table_RT8_ZT14_RawEVS_Lead_Summary.csv"       
+[448] "A  exports/manuscript_final_clean/RT8_ZT14/RawEVS/tables/Table_RT8_ZT14_RawEVS_Lead_WeakCNH.csv"       
+[449] "A  exports/manuscript_final_clean/RT8_ZT14/RawEVS/tables/Table_RT8_ZT14_RawEVS_Raw_DispResid.csv"      
+[450] "A  exports/manuscript_final_clean/RT8_ZT14/RawEVS/tables/Table_RT8_ZT14_RawEVS_Raw_HBFSS.csv"          
+[451] "A  exports/manuscript_final_clean/RT8_ZT14/RawEVS/tables/Table_RT8_ZT14_RawEVS_Raw_Overlap.csv"        
+[452] "A  exports/manuscript_final_clean/RT8_ZT14/RawEVS/tables/Table_RT8_ZT14_RawEVS_Raw_Results.csv"        
+[453] "A  exports/manuscript_final_clean/RT8_ZT14/RawEVS/tables/Table_RT8_ZT14_RawEVS_Raw_Standard.csv"       
+[454] "A  exports/manuscript_final_clean/RT8_ZT14/RawEVS/tables/Table_RT8_ZT14_RawEVS_Raw_StrongCNH.csv"      
+[455] "A  exports/manuscript_final_clean/RT8_ZT14/RawEVS/tables/Table_RT8_ZT14_RawEVS_Raw_Summary.csv"        
+[456] "A  exports/manuscript_final_clean/RT8_ZT14/RawEVS/tables/Table_RT8_ZT14_RawEVS_Raw_WeakCNH.csv"        
+[457] "A  exports/manuscript_final_clean/RT8_ZT14/RawEVS/tables/Table_RT8_ZT14_RawEVS_Rem_DispResid.csv"      
+[458] "A  exports/manuscript_final_clean/RT8_ZT14/RawEVS/tables/Table_RT8_ZT14_RawEVS_Rem_HBFSS.csv"          
+[459] "A  exports/manuscript_final_clean/RT8_ZT14/RawEVS/tables/Table_RT8_ZT14_RawEVS_Rem_Overlap.csv"        
+[460] "A  exports/manuscript_final_clean/RT8_ZT14/RawEVS/tables/Table_RT8_ZT14_RawEVS_Rem_Results.csv"        
+[461] "A  exports/manuscript_final_clean/RT8_ZT14/RawEVS/tables/Table_RT8_ZT14_RawEVS_Rem_Standard.csv"       
+[462] "A  exports/manuscript_final_clean/RT8_ZT14/RawEVS/tables/Table_RT8_ZT14_RawEVS_Rem_StrongCNH.csv"      
+[463] "A  exports/manuscript_final_clean/RT8_ZT14/RawEVS/tables/Table_RT8_ZT14_RawEVS_Rem_Summary.csv"        
+[464] "A  exports/manuscript_final_clean/RT8_ZT14/RawEVS/tables/Table_RT8_ZT14_RawEVS_Rem_WeakCNH.csv"        
+[465] "A  exports/manuscript_final_clean/Table_Export_Manifest.csv"                                           
+[466] "A  exports/manuscript_final_clean/Table_Overall_Summary.csv"                                           
+[467] " M run.log"                                                                                            
+[468] "?? Rplots.pdf"                                                                                         
 
 =====================================================
 Pipeline complete.
+Repository root:
+/root/REAPER98632 
 Output directory:
-/root/REAPER98632/EVS_HBFSS_Output 
+/root/REAPER98632/exports/manuscript_final_clean 
+Exported files:
+465 
 =====================================================
 
-   comparison_name                  dataset_name n_features hc_p_threshold
-1          RT0_ZT6           RT0_ZT6_raw_dataset      31553   0.0005325461
-2          RT0_ZT6  RT0_ZT6_leading_edge_dataset       6722   0.0342924015
-3          RT0_ZT6     RT0_ZT6_remainder_dataset      24831   0.0369015079
-4          RT2_ZT8           RT2_ZT8_raw_dataset      31534   0.0136775582
-5          RT2_ZT8  RT2_ZT8_leading_edge_dataset       7107   0.0220541331
-6          RT2_ZT8     RT2_ZT8_remainder_dataset      24427   0.0145657313
-7         RT4_ZT10          RT4_ZT10_raw_dataset      31658   0.0223630002
-8         RT4_ZT10 RT4_ZT10_leading_edge_dataset       7093   0.0179174848
-9         RT4_ZT10    RT4_ZT10_remainder_dataset      24565   0.0339201556
-10        RT8_ZT14          RT8_ZT14_raw_dataset      31580   0.0186581006
-11        RT8_ZT14 RT8_ZT14_leading_edge_dataset       6787   0.0064045432
-12        RT8_ZT14    RT8_ZT14_remainder_dataset      24793   0.0181617074
-   hbfss_threshold n_standard_significant n_HBFSS_significant
-1         3.273643                      9                  61
-2         1.464802                      3                  15
-3         1.432956                     48                 175
-4         1.863991                      0                   4
-5         1.656510                      0                   0
-6         1.836668                      0                  15
-7         1.650470                    743                1014
-8         1.746723                    286                 317
-9         1.469542                    686                 943
-10        1.729133                      4                  50
-11        2.193512                      1                  10
-12        1.740843                     28                 100
-   n_overlap_significant n_strong_effect n_weak_effect top_n_target
-1                      9               3          3469         5000
-2                      3               1          2143         5000
-3                     48               2          2127         5000
-4                      0               0          7704         5000
-5                      0               0          4824         5000
-6                      0               0          3633         5000
-7                    743              41          6128         5000
-8                    275              15          3745         5000
-9                    686              55          2967         5000
-10                     4               0          8714         5000
-11                     1               0          4954         5000
-12                    28               0          4559         5000
-   trt_cutoff_quantile ctrl_cutoff_quantile
-1            0.8415365            0.8415365
-2            0.8415365            0.8415365
-3            0.8415365            0.8415365
-4            0.8414410            0.8414410
-5            0.8414410            0.8414410
-6            0.8414410            0.8414410
-7            0.8420620            0.8420620
-8            0.8420620            0.8420620
-9            0.8420620            0.8420620
-10           0.8416719            0.8416719
-11           0.8416719            0.8416719
-12           0.8416719            0.8416719
+   comparison_name      track_key track_label          dataset_key
+1          RT0_ZT6 normalized_evs     NormEVS          raw_dataset
+2          RT0_ZT6 normalized_evs     NormEVS leading_edge_dataset
+3          RT0_ZT6 normalized_evs     NormEVS    remainder_dataset
+4          RT0_ZT6        raw_evs      RawEVS          raw_dataset
+5          RT0_ZT6        raw_evs      RawEVS leading_edge_dataset
+6          RT0_ZT6        raw_evs      RawEVS    remainder_dataset
+7          RT2_ZT8 normalized_evs     NormEVS          raw_dataset
+8          RT2_ZT8 normalized_evs     NormEVS leading_edge_dataset
+9          RT2_ZT8 normalized_evs     NormEVS    remainder_dataset
+10         RT2_ZT8        raw_evs      RawEVS          raw_dataset
+11         RT2_ZT8        raw_evs      RawEVS leading_edge_dataset
+12         RT2_ZT8        raw_evs      RawEVS    remainder_dataset
+13        RT4_ZT10 normalized_evs     NormEVS          raw_dataset
+14        RT4_ZT10 normalized_evs     NormEVS leading_edge_dataset
+15        RT4_ZT10 normalized_evs     NormEVS    remainder_dataset
+16        RT4_ZT10        raw_evs      RawEVS          raw_dataset
+17        RT4_ZT10        raw_evs      RawEVS leading_edge_dataset
+18        RT4_ZT10        raw_evs      RawEVS    remainder_dataset
+19        RT8_ZT14 normalized_evs     NormEVS          raw_dataset
+20        RT8_ZT14 normalized_evs     NormEVS leading_edge_dataset
+21        RT8_ZT14 normalized_evs     NormEVS    remainder_dataset
+22        RT8_ZT14        raw_evs      RawEVS          raw_dataset
+23        RT8_ZT14        raw_evs      RawEVS leading_edge_dataset
+24        RT8_ZT14        raw_evs      RawEVS    remainder_dataset
+                            dataset_name n_features hc_p_threshold
+1            RT0_ZT6_NormEVS_raw_dataset      31553   0.0005325461
+2   RT0_ZT6_NormEVS_leading_edge_dataset       6722   0.0342924015
+3      RT0_ZT6_NormEVS_remainder_dataset      24831   0.0369015079
+4             RT0_ZT6_RawEVS_raw_dataset      31553   0.0005325461
+5    RT0_ZT6_RawEVS_leading_edge_dataset       6629   0.0195442804
+6       RT0_ZT6_RawEVS_remainder_dataset      24924   0.0620391747
+7            RT2_ZT8_NormEVS_raw_dataset      31534   0.0136775582
+8   RT2_ZT8_NormEVS_leading_edge_dataset       7107   0.0220541331
+9      RT2_ZT8_NormEVS_remainder_dataset      24427   0.0145657313
+10            RT2_ZT8_RawEVS_raw_dataset      31534   0.0136775582
+11   RT2_ZT8_RawEVS_leading_edge_dataset       6717   0.0122361569
+12      RT2_ZT8_RawEVS_remainder_dataset      24817   0.0170388690
+13          RT4_ZT10_NormEVS_raw_dataset      31658   0.0223630002
+14 RT4_ZT10_NormEVS_leading_edge_dataset       7093   0.0179174848
+15    RT4_ZT10_NormEVS_remainder_dataset      24565   0.0339201556
+16           RT4_ZT10_RawEVS_raw_dataset      31658   0.0223630002
+17  RT4_ZT10_RawEVS_leading_edge_dataset       6741   0.0229484285
+18     RT4_ZT10_RawEVS_remainder_dataset      24917   0.0475021845
+19          RT8_ZT14_NormEVS_raw_dataset      31580   0.0186581006
+20 RT8_ZT14_NormEVS_leading_edge_dataset       6787   0.0064045432
+21    RT8_ZT14_NormEVS_remainder_dataset      24793   0.0181617074
+22           RT8_ZT14_RawEVS_raw_dataset      31580   0.0186581006
+23  RT8_ZT14_RawEVS_leading_edge_dataset       6556   0.0008689516
+24     RT8_ZT14_RawEVS_remainder_dataset      25024   0.0262387925
+   hbfss_threshold n_weak_cnh n_strong_cnh n_standard n_hbfss n_overlap
+1         3.273643          0            3          9      34         9
+2         1.464802          0            1          3      15         3
+3         1.432956         23            2         48     191        48
+4         3.273643          0            3          9      34         9
+5         1.708980          0            0          3       9         3
+6         1.207334          1            3         41     160        41
+7         1.863991         59            0          0       8         0
+8         1.656510         67            0          0       3         0
+9         1.836668         49            0          0      21         2
+10        1.863991         59            0          0       8         0
+11        1.912355         44            0          0       6         0
+12        1.768559         27            0          0      10         0
+13        1.650470         84           39        743    1100       752
+14        1.746723         18           13        252     320       254
+15        1.469542        106           55        686    1062       704
+16        1.650470         84           39        743    1100       752
+17        1.639247         40           15        243     302       248
+18        1.323286          6           43        639    1092       639
+19        1.729133        138            0          4      76         8
+20        2.193512          7            0          1      12         1
+21        1.740843        107            0         28     138        36
+22        1.729133        138            0          4      76         8
+23        3.061004          3            0          4       5         4
+24        1.581056         12            0         17      88        17
+   n_weak_hbfss_overlap n_strong_hbfss_overlap n_standard_hbfss_overlap
+1                     0                      3                        9
+2                     0                      1                        3
+3                     0                      2                       48
+4                     0                      3                        9
+5                     0                      0                        3
+6                     0                      3                       41
+7                     0                      0                        0
+8                     0                      0                        0
+9                     2                      0                        0
+10                    0                      0                        0
+11                    0                      0                        0
+12                    0                      0                        0
+13                    9                     39                      743
+14                    2                     13                      252
+15                   18                     55                      686
+16                    9                     39                      743
+17                    5                     15                      243
+18                    0                     43                      639
+19                    4                      0                        4
+20                    0                      0                        1
+21                    8                      0                       28
+22                    4                      0                        4
+23                    0                      0                        4
+24                    0                      0                       17
+   top_n_target trt_cutoff_quantile ctrl_cutoff_quantile leading_edge_n
+1          5000           0.8415365            0.8415365           6722
+2          5000           0.8415365            0.8415365           6722
+3          5000           0.8415365            0.8415365           6722
+4          5000           0.8425544            0.8425544           6629
+5          5000           0.8425544            0.8425544           6629
+6          5000           0.8425544            0.8425544           6629
+7          5000           0.8414410            0.8414410           7107
+8          5000           0.8414410            0.8414410           7107
+9          5000           0.8414410            0.8414410           7107
+10         5000           0.8425544            0.8425544           6717
+11         5000           0.8425544            0.8425544           6717
+12         5000           0.8425544            0.8425544           6717
+13         5000           0.8420620            0.8420620           7093
+14         5000           0.8420620            0.8420620           7093
+15         5000           0.8420620            0.8420620           7093
+16         5000           0.8425544            0.8425544           6741
+17         5000           0.8425544            0.8425544           6741
+18         5000           0.8425544            0.8425544           6741
+19         5000           0.8416719            0.8416719           6787
+20         5000           0.8416719            0.8416719           6787
+21         5000           0.8416719            0.8416719           6787
+22         5000           0.8425544            0.8425544           6556
+23         5000           0.8425544            0.8425544           6556
+24         5000           0.8425544            0.8425544           6556
+   remainder_n
+1        25035
+2        25035
+3        25035
+4        25128
+5        25128
+6        25128
+7        24650
+8        24650
+9        24650
+10       25040
+11       25040
+12       25040
+13       24664
+14       24664
+15       24664
+16       25016
+17       25016
+18       25016
+19       24970
+20       24970
+21       24970
+22       25201
+23       25201
+24       25201
