@@ -6,9 +6,11 @@
 # =============================================================================
 #
 # This script is written as a manuscript supplement and a runnable analysis
-# pipeline. It is intentionally verbose. The comments are part of the scientific
-# record: they define the analytic choices, the mathematical thresholds, the
-# figure logic, and the export structure.
+# pipeline. The scientific explanations are intentionally extensive, but the
+# executable export path is intentionally lean: the final run writes the result
+# tables, compact summary tables, and paper-ready multi-comparison figures only.
+# Auxiliary histograms, single-dataset diagnostic panels, and duplicate figure
+# exports are not generated in final manuscript mode.
 #
 # -----------------------------------------------------------------------------
 # STUDY UNIT
@@ -49,9 +51,13 @@
 #      PCA / PC1-loading ranking is performed directly on raw counts, without
 #      normalization before eigenvector splitting.
 #
-# For each track, the downstream DESeq2 analysis is still run independently on
-# each resulting dataset. Thus the two tracks compare the effect of the EVS
-# preprocessing/ranking input, not the downstream DESeq2 modeling framework.
+# For each track, the EVS step ONLY selects feature IDs for the leading-edge
+# and remainder split. The downstream DESeq2 input is always the raw count
+# subset corresponding to those feature IDs. DESeq2 is then fit independently
+# to Raw, Lead, and Rem datasets, including its own size-factor normalization
+# after the split. Thus NormEVS versus RawEVS compares only the data used for
+# PC1-loading ranking before the split, not the downstream DESeq2 modeling or
+# normalization framework.
 #
 # -----------------------------------------------------------------------------
 # DATASETS PRODUCED PER COMPARISON AND PER EVS TRACK
@@ -78,9 +84,10 @@
 #
 #   hc_p_threshold_dataset = fdrtool::hc.thresh(sort(empirical_p))
 #
-# This threshold is used as a dataset-specific evidence threshold on volcano
-# plots. Nothing below this empirical-null HC threshold is colored as a
-# manuscript-positive category.
+# This threshold is used only to derive the HBFSS decision boundary. It is not
+# allowed to suppress DESeq2 standard, weak-CNH, or strong-CNH discoveries after
+# those tests are run. That is essential because the manuscript compares HBFSS
+# against the complete DESeq2-derived calls, not against HC-filtered subsets.
 #
 # -----------------------------------------------------------------------------
 # HBFSS DEFINITION
@@ -122,11 +129,10 @@
 #   altHypothesis = "greaterAbs"
 #   lfcThreshold  = c
 #
-# A PAS is plotted as Strong CNH only if all of the following hold:
+# A PAS is plotted as Strong CNH if all of the following hold:
 #
 #   resGA_padj < alpha_level
 #   |lfc_shrunk| >= c
-#   empirical_p <= hc_p_threshold_dataset
 #
 # Weak composite-null hypothesis, abbreviated Weak CNH:
 #
@@ -138,27 +144,25 @@
 #   altHypothesis = "lessAbs"
 #   lfcThreshold  = c
 #
-# A PAS is plotted as Weak CNH only if all of the following hold:
+# A PAS is plotted as Weak CNH if all of the following hold:
 #
 #   resLA_padj < alpha_level
 #   |lfc_shrunk| < c
-#   empirical_p <= hc_p_threshold_dataset
 #
 # Standard DESeq2:
 #
-# A PAS is plotted as Standard only if all of the following hold:
+# A PAS is plotted as Standard if all of the following hold:
 #
 #   padj < alpha_level
 #   |raw log2FoldChange| >= c
 #   |lfc_shrunk| >= c
-#   empirical_p <= hc_p_threshold_dataset
 #
 # HBFSS:
 #
-# A PAS is plotted as HBFSS only if all of the following hold:
-#
-#   HBFSS >= hbfss_threshold_dataset
-#   empirical_p <= hc_p_threshold_dataset
+# A PAS is plotted as HBFSS when it passes the HBFSS threshold and is not
+# already displayed as Weak CNH, Strong CNH, or Standard. Standard DESeq2
+# discoveries are considered included within the HBFSS methodology, but retain
+# the Standard marker on the volcano plot so the comparison remains visible.
 #
 # -----------------------------------------------------------------------------
 # FINAL VOLCANO DISPLAY RULES
@@ -776,27 +780,21 @@ condition_labels <- c(
   trt = "Treatment"
 )
 
-final_class_levels <- c(
-  "Background",
-  "Weak CNH",
-  "Strong CNH",
-  "Standard",
-  "HBFSS"
-)
+final_class_levels <- c("BG", "Weak", "Strong", "Std", "HBFSS")
 
 final_class_colors <- c(
-  "Background" = plot_palette$background,
-  "Weak CNH" = plot_palette$weak,
-  "Strong CNH" = plot_palette$strong,
-  "Standard" = plot_palette$standard,
+  "BG" = plot_palette$background,
+  "Weak" = plot_palette$weak,
+  "Strong" = plot_palette$strong,
+  "Std" = plot_palette$standard,
   "HBFSS" = plot_palette$hbfss
 )
 
 final_class_shapes <- c(
-  "Background" = 16,
-  "Weak CNH" = 17,
-  "Strong CNH" = 15,
-  "Standard" = 18,
+  "BG" = 16,
+  "Weak" = 17,
+  "Strong" = 15,
+  "Std" = 18,
   "HBFSS" = 8
 )
 
@@ -1125,6 +1123,26 @@ prepare_comparison_data <- function(comparison_name, group1_prefix, group2_prefi
   )
 }
 
+
+coerce_raw_count_matrix_for_deseq2 <- function(count_mat, context = "count matrix") {
+  count_mat <- as.matrix(count_mat)
+
+  if (!is.numeric(count_mat)) {
+    stop(context, " must be numeric raw counts before DESeq2.")
+  }
+
+  if (any(!is.finite(count_mat), na.rm = TRUE)) {
+    stop(context, " contains non-finite values.")
+  }
+
+  if (any(count_mat < 0, na.rm = TRUE)) {
+    stop(context, " contains negative values; DESeq2 requires non-negative counts.")
+  }
+
+  storage.mode(count_mat) <- "numeric"
+  round(count_mat)
+}
+
 make_rank_matrix_for_track <- function(count_matrix, coldata, track_key) {
   track_key <- match.arg(track_key, c("normalized_evs", "raw_evs"))
 
@@ -1138,7 +1156,10 @@ make_rank_matrix_for_track <- function(count_matrix, coldata, track_key) {
   }
 
   dds_init <- DESeq2::DESeqDataSetFromMatrix(
-    countData = round(count_matrix),
+    countData = coerce_raw_count_matrix_for_deseq2(
+      count_matrix,
+      context = "NormEVS pre-split full comparison matrix"
+    ),
     colData = coldata,
     design = make_design_formula(coldata)
   )
@@ -1209,8 +1230,16 @@ compute_pc1_loading_table <- function(value_df, sample_names, top_n = top_n_targ
 build_eigenvector_split <- function(count_matrix, coldata, track_key) {
   track_key <- match.arg(track_key, c("normalized_evs", "raw_evs"))
 
+  # The EVS matrix is used only to choose leading-edge/remainder feature IDs.
+  # The returned datasets are always raw count subsets. DESeq2 normalization is
+  # performed later, independently, inside run_core_analysis() after the split.
+  raw_count_matrix <- coerce_raw_count_matrix_for_deseq2(
+    count_matrix,
+    context = paste0(track_key, " full comparison matrix before EVS")
+  )
+
   rank_obj <- make_rank_matrix_for_track(
-    count_matrix = count_matrix,
+    count_matrix = raw_count_matrix,
     coldata = coldata,
     track_key = track_key
   )
@@ -1218,7 +1247,7 @@ build_eigenvector_split <- function(count_matrix, coldata, track_key) {
   rank_matrix <- rank_obj$rank_matrix
   preprocessing_label <- rank_obj$preprocessing_label
 
-  sample_ids <- colnames(count_matrix)
+  sample_ids <- colnames(raw_count_matrix)
 
   trt_ids <- sample_ids[coldata$condition == "trt"]
   untrt_ids <- sample_ids[coldata$condition == "untrt"]
@@ -1254,7 +1283,7 @@ build_eigenvector_split <- function(count_matrix, coldata, track_key) {
   leading_edge_ids <- union(trt_high, untrt_high)
 
   remainder_ids <- setdiff(
-    rownames(count_matrix),
+    rownames(raw_count_matrix),
     leading_edge_ids
   )
 
@@ -1274,9 +1303,10 @@ build_eigenvector_split <- function(count_matrix, coldata, track_key) {
     fit_untrt = fit_untrt,
     leading_edge_ids = leading_edge_ids,
     remainder_ids = remainder_ids,
-    raw_dataset = count_matrix,
-    leading_edge_dataset = count_matrix[leading_edge_ids, , drop = FALSE],
-    remainder_dataset = count_matrix[remainder_ids, , drop = FALSE]
+    downstream_deseq2_input = "raw count subsets; DESeq2 size-factor normalization is run after EVS split",
+    raw_dataset = raw_count_matrix,
+    leading_edge_dataset = raw_count_matrix[leading_edge_ids, , drop = FALSE],
+    remainder_dataset = raw_count_matrix[remainder_ids, , drop = FALSE]
   )
 }
 
@@ -1571,7 +1601,10 @@ run_core_analysis <- function(count_mat, coldata, dataset_name, annot_df) {
   design_formula <- make_design_formula(coldata)
 
   dds <- DESeq2::DESeqDataSetFromMatrix(
-    countData = round(count_mat),
+    countData = coerce_raw_count_matrix_for_deseq2(
+      count_mat,
+      context = paste0(dataset_name, " DESeq2 input after EVS split")
+    ),
     colData = coldata,
     design = design_formula
   )
@@ -1756,29 +1789,33 @@ run_core_analysis <- function(count_mat, coldata, dataset_name, annot_df) {
     is.finite(res_df$empirical_p) &
     res_df$empirical_p <= hc_p_threshold_dataset
 
+  # Displayed DESeq2 classes should reflect the full DESeq2 calls rather than
+  # only the HC-screened subset. This keeps all significant weak, strong, and
+  # standard DESeq2 features visibly colored on the manuscript volcano plots.
   res_df$weak_cnh_flag <- !is.na(res_df$resLA_padj) &
     res_df$resLA_padj < alpha_level &
     !is.na(res_df$lfc_shrunk) &
-    abs(res_df$lfc_shrunk) < lfc_boundary &
-    res_df$hc_pass
+    abs(res_df$lfc_shrunk) < lfc_boundary
 
   res_df$strong_cnh_flag <- !is.na(res_df$resGA_padj) &
     res_df$resGA_padj < alpha_level &
     !is.na(res_df$lfc_shrunk) &
-    abs(res_df$lfc_shrunk) >= lfc_boundary &
-    res_df$hc_pass
+    abs(res_df$lfc_shrunk) >= lfc_boundary
 
   res_df$standard_significant <- !is.na(res_df$padj) &
     res_df$padj < alpha_level &
     res_df$raw_lfc_pass &
     res_df$shrunk_lfc_pass
 
-  res_df$standard_flag <- res_df$standard_significant &
-    res_df$hc_pass
+  res_df$standard_flag <- res_df$standard_significant
 
-  res_df$hbfss_flag <- !is.na(res_df$HBFSS_core_pass) &
-    res_df$HBFSS_core_pass &
-    res_df$hc_pass
+  # HBFSS should not suppress the established DESeq2 standard calls. Standard
+  # DESeq2 discoveries are therefore carried forward as HBFSS-positive by
+  # definition, while HBFSS can also contribute additional discoveries beyond
+  # the DESeq2-derived classes.
+  res_df$hbfss_flag <- (!is.na(res_df$HBFSS_core_pass) &
+    res_df$HBFSS_core_pass) |
+    res_df$standard_flag
 
   res_df$HBFSS_significant <- res_df$hbfss_flag
 
@@ -1790,10 +1827,10 @@ run_core_analysis <- function(count_mat, coldata, dataset_name, annot_df) {
     res_df$strong_hbfss_overlap |
     res_df$standard_hbfss_overlap
 
-  # Display classes are deliberately mutually exclusive. HBFSS no longer
-  # overwrites Weak CNH, Strong CNH, or Standard calls on the plot. This prevents
-  # significant weak-effect features from disappearing into the purple HBFSS
-  # class while retaining the total HBFSS and overlap counts in the tables.
+  # Display classes are deliberately mutually exclusive. Standard DESeq2,
+  # Strong CNH, and Weak CNH remain visible as their own DESeq2-derived classes.
+  # The purple HBFSS class is reserved for additional HBFSS discoveries that
+  # are not already called by the DESeq2-derived classes.
   res_df$display_weak_flag <- res_df$weak_cnh_flag
   res_df$display_standard_flag <- res_df$standard_flag
   res_df$display_strong_flag <- res_df$strong_cnh_flag &
@@ -1804,11 +1841,11 @@ run_core_analysis <- function(count_mat, coldata, dataset_name, annot_df) {
     !res_df$display_standard_flag &
     !res_df$display_strong_flag
 
-  res_df$final_class <- "Background"
+  res_df$final_class <- "BG"
   res_df$final_class[res_df$display_hbfss_flag] <- "HBFSS"
-  res_df$final_class[res_df$display_weak_flag] <- "Weak CNH"
-  res_df$final_class[res_df$display_strong_flag] <- "Strong CNH"
-  res_df$final_class[res_df$display_standard_flag] <- "Standard"
+  res_df$final_class[res_df$display_weak_flag] <- "Weak"
+  res_df$final_class[res_df$display_strong_flag] <- "Strong"
+  res_df$final_class[res_df$display_standard_flag] <- "Std"
 
   res_df$final_class <- factor(
     res_df$final_class,
@@ -1955,13 +1992,7 @@ build_final_volcano_df <- function(df, y_col = "neglog10_empirical_p") {
     levels = final_class_levels
   )
 
-  draw_order <- c(
-    "Background" = 1,
-    "HBFSS" = 2,
-    "Weak CNH" = 3,
-    "Strong CNH" = 4,
-    "Standard" = 5
-  )
+  draw_order <- c("BG" = 1, "HBFSS" = 2, "Weak" = 3, "Strong" = 4, "Std" = 5)
 
   df$final_draw_order <- unname(draw_order[as.character(df$final_class)])
   df$final_draw_order[is.na(df$final_draw_order)] <- 1
@@ -1986,13 +2017,7 @@ select_final_volcano_labels <- function(df, y_col, n_labels = n_top_labels_volca
     return(df[0, , drop = FALSE])
   }
 
-  class_priority <- c(
-    "HBFSS" = 1,
-    "Standard" = 2,
-    "Strong CNH" = 3,
-    "Weak CNH" = 4,
-    "Background" = 5
-  )
+  class_priority <- c("HBFSS" = 1, "Std" = 2, "Strong" = 3, "Weak" = 4, "BG" = 5)
 
   df$label_priority <- class_priority[as.character(df$final_class)]
 
@@ -2096,7 +2121,7 @@ plot_final_volcano <- function(df, dataset_name, short_title = NULL, label_genes
   weak_n <- sum(df$weak_cnh_flag, na.rm = TRUE)
   strong_n <- sum(df$strong_cnh_flag, na.rm = TRUE)
   std_n <- sum(df$standard_flag, na.rm = TRUE)
-  hbfss_n <- sum(df$hbfss_flag, na.rm = TRUE)
+  hbfss_n <- sum(df$display_hbfss_flag, na.rm = TRUE)
   overlap_n <- sum(df$any_overlap, na.rm = TRUE)
 
   count_text <- paste0(
@@ -2104,7 +2129,7 @@ plot_final_volcano <- function(df, dataset_name, short_title = NULL, label_genes
     "  Strong=", strong_n,
     "  Std=", std_n,
     "  HBFSS=", hbfss_n,
-    "  Overlap=", overlap_n
+    "  Ovlp=", overlap_n
   )
 
   plot_title <- if (is.null(short_title)) {
@@ -2129,23 +2154,25 @@ plot_final_volcano <- function(df, dataset_name, short_title = NULL, label_genes
     ) +
     scale_color_manual(
       values = final_class_colors,
+      breaks = final_class_levels,
       drop = FALSE,
-      name = "Class"
+      name = "Class",
+      guide = guide_legend(
+        nrow = 1,
+        override.aes = list(
+          shape = unname(final_class_shapes[final_class_levels]),
+          size = rep(3.0, length(final_class_levels)),
+          alpha = rep(1.0, length(final_class_levels)),
+          stroke = rep(0.55, length(final_class_levels))
+        )
+      )
     ) +
     scale_shape_manual(
       values = final_class_shapes,
+      breaks = final_class_levels,
       drop = FALSE,
-      name = "Class"
-    ) +
-    guides(
-      color = guide_legend(
-        override.aes = list(size = 3.0, alpha = 1.0, stroke = 0.55),
-        nrow = 1
-      ),
-      shape = guide_legend(
-        override.aes = list(size = 3.0, alpha = 1.0, stroke = 0.55),
-        nrow = 1
-      )
+      name = "Class",
+      guide = "none"
     ) +
     geom_vline(
       xintercept = c(-lfc_boundary, lfc_boundary),
@@ -2162,7 +2189,8 @@ plot_final_volcano <- function(df, dataset_name, short_title = NULL, label_genes
     labs(
       title = plot_title,
       x = "Shrunken log2FC",
-      y = expression(-log[10]("Empirical p"))
+      y = expression(-log[10]("Empirical p")),
+      caption = compact_caption(count_text, width = 84)
     ) +
     coord_cartesian(clip = "off") +
     manuscript_theme() +
@@ -2170,28 +2198,23 @@ plot_final_volcano <- function(df, dataset_name, short_title = NULL, label_genes
     theme(
       legend.position = "bottom",
       legend.box = "vertical",
+      plot.caption = element_text(
+        size = base_theme_size - 2,
+        hjust = 0.5,
+        margin = margin(t = 4)
+      ),
+      plot.caption.position = "plot",
       plot.margin = margin(10, 12, 10, 10)
     )
 
   if (!is.na(hc_y) && is.finite(hc_y)) {
     x_rng <- range(plot_df$lfc_shrunk, na.rm = TRUE)
-
     p <- p +
       geom_hline(
         yintercept = hc_y,
         linetype = "dotted",
         linewidth = 0.65,
         color = plot_palette$hc
-      ) +
-      annotate(
-        "text",
-        x = x_rng[1] + diff(x_rng) * 0.04,
-        y = hc_y,
-        label = paste0("HC=", signif(hc_raw, 3)),
-        color = plot_palette$hc,
-        hjust = 0,
-        vjust = -0.35,
-        size = 2.9
       )
   }
 
@@ -2203,21 +2226,6 @@ plot_final_volcano <- function(df, dataset_name, short_title = NULL, label_genes
         inherit.aes = FALSE,
         color = plot_palette$hbfss_line,
         linewidth = 0.80
-      )
-
-    x_rng <- range(plot_df$lfc_shrunk, na.rm = TRUE)
-    y_rng <- range(plot_df$neglog10_empirical_p, na.rm = TRUE)
-
-    p <- p +
-      annotate(
-        "text",
-        x = x_rng[2] - diff(x_rng) * 0.24,
-        y = y_rng[1] + diff(y_rng) * 0.14,
-        label = paste0("HBFSS=", signif(hbfss_raw, 3)),
-        color = plot_palette$hbfss_line,
-        hjust = 0,
-        vjust = 0,
-        size = 2.9
       )
   }
 
@@ -3010,11 +3018,8 @@ run_one_evs_track <- function(comparison_name, track_key, count_matrix, coldata,
   )
 
   tab_dir <- file.path(track_dir, "tables")
-  fig_raw_dir <- file.path(track_dir, "fig_raw")
-  fig_lead_dir <- file.path(track_dir, "fig_lead")
-  fig_rem_dir <- file.path(track_dir, "fig_rem")
 
-  for (d in c(track_dir, tab_dir, fig_raw_dir, fig_lead_dir, fig_rem_dir)) {
+  for (d in c(track_dir, tab_dir)) {
     dir.create(d, recursive = TRUE, showWarnings = FALSE)
   }
 
@@ -3024,148 +3029,20 @@ run_one_evs_track <- function(comparison_name, track_key, count_matrix, coldata,
     track_key = track_key
   )
 
-  save_plot(
-    plot_pca_scatter(
-      evs$fit_trt$pca_fit,
-      paste(comparison_name, unname(track_short[track_key])),
-      "treatment",
-      evs$fit_trt$preprocessing_label
-    ),
-    file.path(
-      track_dir,
-      paste0(
-        "Figure_",
-        comparison_name,
-        "_",
-        unname(track_short[track_key]),
-        "_EVS_Trt_PCA.png"
-      )
-    ),
-    width = 8.3,
-    height = 6.2
+  message(
+    "EVS track ", unname(track_short[track_key]),
+    ": split IDs selected using ", evs$preprocessing_label,
+    "; downstream Raw/Lead/Rem DESeq2 inputs are raw count subsets and are normalized by DESeq2 after the split."
   )
 
-  save_plot(
-    plot_pca_scatter(
-      evs$fit_untrt$pca_fit,
-      paste(comparison_name, unname(track_short[track_key])),
-      "control",
-      evs$fit_untrt$preprocessing_label
-    ),
-    file.path(
-      track_dir,
-      paste0(
-        "Figure_",
-        comparison_name,
-        "_",
-        unname(track_short[track_key]),
-        "_EVS_Ctrl_PCA.png"
-      )
-    ),
-    width = 8.3,
-    height = 6.2
-  )
-
-  save_plot(
-    plot_pc1_loading_rank(
-      evs$fit_trt$loading_table,
-      evs$fit_trt$cutoff,
-      paste(comparison_name, unname(track_short[track_key])),
-      "treatment",
-      top_n_used = evs$fit_trt$top_n_used,
-      cutoff_quantile = evs$fit_trt$cutoff_quantile,
-      preprocessing_label = evs$fit_trt$preprocessing_label
-    ),
-    file.path(
-      track_dir,
-      paste0(
-        "Figure_",
-        comparison_name,
-        "_",
-        unname(track_short[track_key]),
-        "_EVS_Trt_Rank.png"
-      )
-    ),
-    width = 9.0,
-    height = 6.2
-  )
-
-  save_plot(
-    plot_pc1_loading_rank(
-      evs$fit_untrt$loading_table,
-      evs$fit_untrt$cutoff,
-      paste(comparison_name, unname(track_short[track_key])),
-      "control",
-      top_n_used = evs$fit_untrt$top_n_used,
-      cutoff_quantile = evs$fit_untrt$cutoff_quantile,
-      preprocessing_label = evs$fit_untrt$preprocessing_label
-    ),
-    file.path(
-      track_dir,
-      paste0(
-        "Figure_",
-        comparison_name,
-        "_",
-        unname(track_short[track_key]),
-        "_EVS_Ctrl_Rank.png"
-      )
-    ),
-    width = 9.0,
-    height = 6.2
-  )
-
-  save_grob(
-    plot_eigenvector_histograms(
-      evs$fit_trt$loading_table,
-      evs$fit_trt$cutoff,
-      paste(comparison_name, unname(track_short[track_key])),
-      "treatment"
-    ),
-    file.path(
-      track_dir,
-      paste0(
-        "Figure_",
-        comparison_name,
-        "_",
-        unname(track_short[track_key]),
-        "_EVS_Trt_Hist.png"
-      )
-    ),
-    width = 14.0,
-    height = 4.8
-  )
-
-  save_grob(
-    plot_eigenvector_histograms(
-      evs$fit_untrt$loading_table,
-      evs$fit_untrt$cutoff,
-      paste(comparison_name, unname(track_short[track_key])),
-      "control"
-    ),
-    file.path(
-      track_dir,
-      paste0(
-        "Figure_",
-        comparison_name,
-        "_",
-        unname(track_short[track_key]),
-        "_EVS_Ctrl_Hist.png"
-      )
-    ),
-    width = 14.0,
-    height = 4.8
-  )
+  # Final manuscript mode does not export EVS diagnostic PCA/rank/histogram
+  # panels. The EVS split itself is fully recorded in the result and summary
+  # tables below.
 
   dataset_list <- list(
     raw_dataset = evs$raw_dataset,
     leading_edge_dataset = evs$leading_edge_dataset,
     remainder_dataset = evs$remainder_dataset
-  )
-
-  dataset_fig_dirs <- list(
-    raw_dataset = fig_raw_dir,
-    leading_edge_dataset = fig_lead_dir,
-    remainder_dataset = fig_rem_dir
   )
 
   analysis_results <- list()
@@ -3177,8 +3054,6 @@ run_one_evs_track <- function(comparison_name, track_key, count_matrix, coldata,
       nm,
       sep = "_"
     )
-
-    fig_subdir <- dataset_fig_dirs[[nm]]
 
     fit <- tryCatch(
       run_core_analysis(
@@ -3211,30 +3086,8 @@ run_one_evs_track <- function(comparison_name, track_key, count_matrix, coldata,
       tab_file(tab_dir, comparison_name, track_key, nm, "Results")
     )
 
-    save_csv(
-      subset(df, weak_cnh_flag),
-      tab_file(tab_dir, comparison_name, track_key, nm, "WeakCNH")
-    )
-
-    save_csv(
-      subset(df, strong_cnh_flag),
-      tab_file(tab_dir, comparison_name, track_key, nm, "StrongCNH")
-    )
-
-    save_csv(
-      subset(df, standard_flag),
-      tab_file(tab_dir, comparison_name, track_key, nm, "Standard")
-    )
-
-    save_csv(
-      subset(df, hbfss_flag),
-      tab_file(tab_dir, comparison_name, track_key, nm, "HBFSS")
-    )
-
-    save_csv(
-      subset(df, any_overlap),
-      tab_file(tab_dir, comparison_name, track_key, nm, "Overlap")
-    )
+    # The Results table contains all class flags and display classes, so
+    # separate class-specific tables are not exported in final manuscript mode.
 
     summary_row <- data.frame(
       comparison_name = comparison_name,
@@ -3242,6 +3095,8 @@ run_one_evs_track <- function(comparison_name, track_key, count_matrix, coldata,
       track_label = unname(track_short[track_key]),
       dataset_key = nm,
       dataset_name = full_dataset_name,
+      evs_split_input = evs$preprocessing_label,
+      deseq2_input = evs$downstream_deseq2_input,
       n_features = nrow(df),
       hc_p_threshold = fit$hc_p_threshold,
       hbfss_threshold = fit$hbfss_threshold,
@@ -3249,10 +3104,10 @@ run_one_evs_track <- function(comparison_name, track_key, count_matrix, coldata,
       n_strong_cnh = sum(df$strong_cnh_flag, na.rm = TRUE),
       n_standard = sum(df$standard_flag, na.rm = TRUE),
       n_hbfss = sum(df$hbfss_flag, na.rm = TRUE),
-      n_display_weak_cnh = sum(df$final_class == "Weak CNH", na.rm = TRUE),
-      n_display_strong_cnh = sum(df$final_class == "Strong CNH", na.rm = TRUE),
-      n_display_standard = sum(df$final_class == "Standard", na.rm = TRUE),
-      n_display_hbfss_only = sum(df$final_class == "HBFSS", na.rm = TRUE),
+      n_display_weak_cnh = sum(df$final_class == "Weak", na.rm = TRUE),
+      n_display_strong_cnh = sum(df$final_class == "Strong", na.rm = TRUE),
+      n_display_standard = sum(df$final_class == "Std", na.rm = TRUE),
+      n_display_hbfss = sum(df$final_class == "HBFSS", na.rm = TRUE),
       n_overlap = sum(df$any_overlap, na.rm = TRUE),
       n_weak_hbfss_overlap = sum(df$weak_hbfss_overlap, na.rm = TRUE),
       n_strong_hbfss_overlap = sum(df$strong_hbfss_overlap, na.rm = TRUE),
@@ -3270,195 +3125,20 @@ run_one_evs_track <- function(comparison_name, track_key, count_matrix, coldata,
       tab_file(tab_dir, comparison_name, track_key, nm, "Summary")
     )
 
-    mean_df <- compute_mean_expression_table(
-      dataset_list[[nm]],
-      coldata
-    )
-
-    mean_panel <- plot_mean_histogram_panel(
-      mean_df,
-      fit$base_mean_vec,
-      full_dataset_name
-    )
-
-    save_grob(
-      mean_panel,
-      fig_file(fig_subdir, comparison_name, track_key, nm, "MeanHist"),
-      width = 12.0,
-      height = 8.5
-    )
-
-    p_vol <- plot_final_volcano(
-      df,
-      full_dataset_name,
-      short_title = paste(
-        unname(track_short[track_key]),
-        unname(dataset_short[nm])
-      )
-    )
-
-    p_emp <- plot_empirical_p_histogram(
-      df,
-      full_dataset_name,
-      fit$hc_p_threshold
-    )
-
-    p_hc <- plot_hc_profile(
-      df,
-      full_dataset_name,
-      fit$hc_p_threshold
-    )
-
-    p_hbfss_dist <- plot_hbfss_distribution(
-      df,
-      full_dataset_name,
-      fit$hbfss_threshold
-    )
-
-    p_ma <- plot_shrunken_ma(
-      df,
-      full_dataset_name
-    )
-
-    save_plot(
-      p_vol,
-      fig_file(fig_subdir, comparison_name, track_key, nm, "Volcano"),
-      width = 8.4,
-      height = 6.4
-    )
-
-    save_plot(
-      p_emp,
-      fig_file(fig_subdir, comparison_name, track_key, nm, "EmpHist"),
-      width = 8.4,
-      height = 6.0
-    )
-
-    if (!is.null(p_hc)) {
-      save_plot(
-        p_hc,
-        fig_file(fig_subdir, comparison_name, track_key, nm, "HCProfile"),
-        width = 8.4,
-        height = 6.0
-      )
-    }
-
-    save_plot(
-      p_hbfss_dist,
-      fig_file(fig_subdir, comparison_name, track_key, nm, "HBFSSDist"),
-      width = 8.4,
-      height = 6.0
-    )
-
-    if (!is.null(p_ma)) {
-      save_plot(
-        p_ma,
-        fig_file(fig_subdir, comparison_name, track_key, nm, "MA"),
-        width = 8.4,
-        height = 6.0
-      )
-    }
-
-    plot_dispersion_cloud(
-      fit$dds,
-      full_dataset_name,
-      fig_subdir,
-      comparison_name,
-      track_key,
-      nm
-    )
-
-    disp_panel <- plot_dispersion_relationships(
-      df,
-      full_dataset_name
-    )
-
-    if (!is.null(disp_panel)) {
-      save_grob(
-        disp_panel,
-        fig_file(fig_subdir, comparison_name, track_key, nm, "DispRel"),
-        width = 12.0,
-        height = 7.6
-      )
-    }
-
-    dispersion_residual_section(
-      df,
-      full_dataset_name,
-      fig_subdir,
-      tab_dir,
-      comparison_name,
-      track_key,
-      nm
-    )
-
-    summary_components <- Filter(
-      Negate(is.null),
-      list(
-        p_vol,
-        p_emp,
-        p_hc,
-        p_hbfss_dist,
-        p_ma
-      )
-    )
-
-    summary_panel <- do.call(
-      gridExtra::arrangeGrob,
-      c(
-        summary_components,
-        list(
-          ncol = 2,
-          top = grid::textGrob(
-            paste(
-              pretty_dataset_label(full_dataset_name),
-              "summary panel"
-            ),
-            gp = grid::gpar(fontface = "bold", cex = 1.15)
-          )
-        )
-      )
-    )
-
-    save_grob(
-      summary_panel,
-      fig_file(fig_subdir, comparison_name, track_key, nm, "Summary"),
-      width = 14.0,
-      height = 12.0
-    )
+    # Final manuscript figures are generated once at the paper-panel stage
+    # after all comparisons have completed. No single-dataset diagnostic plots
+    # are generated here.
 
     analysis_results[[nm]] <- list(
       dds = fit$dds,
       results = df,
       summary = summary_row,
-      dataset_mat = dataset_list[[nm]],
-      fig_subdir = fig_subdir
+      dataset_mat = dataset_list[[nm]]
     )
   }
 
-  tryCatch(
-    {
-      save_cross_dataset_comparison_panels(
-        comparison_name = comparison_name,
-        track_key = track_key,
-        analysis_results = analysis_results,
-        cmp_dir = track_dir,
-        dataset_list = dataset_list,
-        coldata = coldata
-      )
-    },
-    error = function(e) {
-      warning(
-        paste0(
-          comparison_name,
-          " ",
-          track_key,
-          ": cross-dataset panel generation failed: ",
-          conditionMessage(e)
-        )
-      )
-    }
-  )
+  # Cross-dataset diagnostic panels are intentionally omitted from final
+  # manuscript export; final paper panels are built at the end of the run.
 
   if (run_twas_overlap) {
     twas_genes <- clean_gene_set(TWAS_data$gene_symbol)
@@ -3654,6 +3334,9 @@ read_result_table_for_panel <- function(comparison_name, track_key, dataset_key)
 }
 
 save_paper_volcano_panels <- function() {
+  # Paper-ready output is intentionally restricted to shared-legend,
+  # multi-comparison volcano panels only. Single-dataset summary figures and
+  # auxiliary diagnostic plots are excluded from manuscript export.
   dir.create(paper_fig_dir, recursive = TRUE, showWarnings = FALSE)
 
   comparison_order <- as.character(comparison_table$comparison_name)
