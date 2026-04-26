@@ -171,14 +171,11 @@
 #   Standard
 #   HBFSS
 #
-# There is one legend for each volcano panel. Overlap counts are written in the
-# plot caption and on-panel summary text. Overlap is not a separate color class.
-#
-# Priority for coloring is:
-#
-#   HBFSS > Standard > Strong CNH > Weak CNH > Background
-#
-# This preserves a single clean legend while still reporting overlap counts.
+# There is one shared legend for each manuscript volcano panel. The plotted
+# classes are mutually exclusive so the visible marker count matches the visible
+# class. HBFSS-positive features that also meet Weak CNH, Strong CNH, or Standard
+# criteria retain their primary class marker rather than being overwritten by the
+# purple HBFSS class. HBFSS totals and overlap counts are retained in the tables.
 #
 # -----------------------------------------------------------------------------
 # EXPORT RULES
@@ -245,6 +242,11 @@ figure_dpi <- 320
 base_theme_size <- 10
 
 n_top_labels_volcano <- 18
+
+# Manuscript export behavior. When TRUE, the script writes only the focused
+# paper-ready figure panels into exports/manuscript_final_clean/manuscript_figures.
+# Tables are still written in full for verification and supplement building.
+EXPORT_ONLY_PAPER_FIGURES <- TRUE
 
 # Git export behavior.
 # The script always writes exports into the repository exports folder when it
@@ -420,6 +422,29 @@ output_dir <- file.path(
 
 dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
 
+paper_fig_dir <- file.path(output_dir, "manuscript_figures")
+dir.create(paper_fig_dir, recursive = TRUE, showWarnings = FALSE)
+
+should_write_figure <- function(path) {
+  if (!isTRUE(EXPORT_ONLY_PAPER_FIGURES)) {
+    return(TRUE)
+  }
+
+  target_dir <- normalizePath(
+    paper_fig_dir,
+    winslash = "/",
+    mustWork = FALSE
+  )
+
+  path_dir <- normalizePath(
+    dirname(path),
+    winslash = "/",
+    mustWork = FALSE
+  )
+
+  startsWith(path_dir, target_dir)
+}
+
 fig_file <- function(dir, cmp, track_key, ds_key, tag) {
   file.path(
     dir,
@@ -517,6 +542,10 @@ save_csv <- function(df, path) {
 }
 
 save_plot <- function(p, path, width = 12.0, height = 8.5, dpi = figure_dpi, bg = "white") {
+  if (!should_write_figure(path)) {
+    return(invisible(NULL))
+  }
+
   ggplot2::ggsave(
     filename = path,
     plot = p,
@@ -530,6 +559,10 @@ save_plot <- function(p, path, width = 12.0, height = 8.5, dpi = figure_dpi, bg 
 }
 
 save_grob <- function(g, path, width = 14.0, height = 8.5, dpi = figure_dpi, bg = "white") {
+  if (!should_write_figure(path)) {
+    return(invisible(NULL))
+  }
+
   ggplot2::ggsave(
     filename = path,
     plot = g,
@@ -761,10 +794,10 @@ final_class_colors <- c(
 
 final_class_shapes <- c(
   "Background" = 16,
-  "Weak CNH" = 16,
-  "Strong CNH" = 17,
-  "Standard" = 15,
-  "HBFSS" = 18
+  "Weak CNH" = 17,
+  "Strong CNH" = 15,
+  "Standard" = 18,
+  "HBFSS" = 8
 )
 
 plot_expand_xy <- function() {
@@ -1757,11 +1790,25 @@ run_core_analysis <- function(count_mat, coldata, dataset_name, annot_df) {
     res_df$strong_hbfss_overlap |
     res_df$standard_hbfss_overlap
 
+  # Display classes are deliberately mutually exclusive. HBFSS no longer
+  # overwrites Weak CNH, Strong CNH, or Standard calls on the plot. This prevents
+  # significant weak-effect features from disappearing into the purple HBFSS
+  # class while retaining the total HBFSS and overlap counts in the tables.
+  res_df$display_weak_flag <- res_df$weak_cnh_flag
+  res_df$display_standard_flag <- res_df$standard_flag
+  res_df$display_strong_flag <- res_df$strong_cnh_flag &
+    !res_df$display_standard_flag &
+    !res_df$display_weak_flag
+  res_df$display_hbfss_flag <- res_df$hbfss_flag &
+    !res_df$display_weak_flag &
+    !res_df$display_standard_flag &
+    !res_df$display_strong_flag
+
   res_df$final_class <- "Background"
-  res_df$final_class[res_df$weak_cnh_flag] <- "Weak CNH"
-  res_df$final_class[res_df$strong_cnh_flag] <- "Strong CNH"
-  res_df$final_class[res_df$standard_flag] <- "Standard"
-  res_df$final_class[res_df$hbfss_flag] <- "HBFSS"
+  res_df$final_class[res_df$display_hbfss_flag] <- "HBFSS"
+  res_df$final_class[res_df$display_weak_flag] <- "Weak CNH"
+  res_df$final_class[res_df$display_strong_flag] <- "Strong CNH"
+  res_df$final_class[res_df$display_standard_flag] <- "Standard"
 
   res_df$final_class <- factor(
     res_df$final_class,
@@ -1903,6 +1950,28 @@ build_final_volcano_df <- function(df, y_col = "neglog10_empirical_p") {
     NA_character_
   )
 
+  df$final_class <- factor(
+    as.character(df$final_class),
+    levels = final_class_levels
+  )
+
+  draw_order <- c(
+    "Background" = 1,
+    "HBFSS" = 2,
+    "Weak CNH" = 3,
+    "Strong CNH" = 4,
+    "Standard" = 5
+  )
+
+  df$final_draw_order <- unname(draw_order[as.character(df$final_class)])
+  df$final_draw_order[is.na(df$final_draw_order)] <- 1
+
+  df <- df[
+    order(df$final_draw_order, df$neglog10_empirical_p),
+    ,
+    drop = FALSE
+  ]
+
   df
 }
 
@@ -1980,7 +2049,7 @@ make_hbfss_boundary_df <- function(plot_df, hbfss_threshold, y_limit) {
   )
 }
 
-plot_final_volcano <- function(df, dataset_name, short_title = NULL) {
+plot_final_volcano <- function(df, dataset_name, short_title = NULL, label_genes = TRUE) {
   plot_df <- build_final_volcano_df(
     df,
     y_col = "neglog10_empirical_p"
@@ -1990,10 +2059,14 @@ plot_final_volcano <- function(df, dataset_name, short_title = NULL) {
     stop("No finite volcano plotting rows for ", dataset_name)
   }
 
-  lab_df <- select_final_volcano_labels(
-    plot_df,
-    y_col = "neglog10_empirical_p"
-  )
+  lab_df <- if (isTRUE(label_genes)) {
+    select_final_volcano_labels(
+      plot_df,
+      y_col = "neglog10_empirical_p"
+    )
+  } else {
+    plot_df[0, , drop = FALSE]
+  }
 
   hc_raw <- suppressWarnings(
     as.numeric(df$hc_p_threshold_dataset[1])
@@ -2064,6 +2137,16 @@ plot_final_volcano <- function(df, dataset_name, short_title = NULL) {
       drop = FALSE,
       name = "Class"
     ) +
+    guides(
+      color = guide_legend(
+        override.aes = list(size = 3.0, alpha = 1.0, stroke = 0.55),
+        nrow = 1
+      ),
+      shape = guide_legend(
+        override.aes = list(size = 3.0, alpha = 1.0, stroke = 0.55),
+        nrow = 1
+      )
+    ) +
     geom_vline(
       xintercept = c(-lfc_boundary, lfc_boundary),
       linetype = "dashed",
@@ -2078,10 +2161,8 @@ plot_final_volcano <- function(df, dataset_name, short_title = NULL) {
     ) +
     labs(
       title = plot_title,
-      subtitle = "x = shrunken log2FC; y = -log10(empirical p)",
       x = "Shrunken log2FC",
-      y = expression(-log[10]("Empirical p")),
-      caption = count_text
+      y = expression(-log[10]("Empirical p"))
     ) +
     coord_cartesian(clip = "off") +
     manuscript_theme() +
@@ -2142,34 +2223,6 @@ plot_final_volcano <- function(df, dataset_name, short_title = NULL) {
 
   x_rng <- range(plot_df$lfc_shrunk, na.rm = TRUE)
   y_rng <- range(plot_df$neglog10_empirical_p, na.rm = TRUE)
-
-  p <- p +
-    annotate(
-      "text",
-      x = 0,
-      y = y_rng[2] - diff(y_rng) * 0.08,
-      label = count_text,
-      size = 3.0,
-      fontface = "plain"
-    ) +
-    annotate(
-      "text",
-      x = -lfc_boundary,
-      y = y_rng[1] + diff(y_rng) * 0.06,
-      label = "LFC=-1",
-      color = plot_palette$threshold,
-      hjust = 1.05,
-      size = 2.8
-    ) +
-    annotate(
-      "text",
-      x = lfc_boundary,
-      y = y_rng[1] + diff(y_rng) * 0.06,
-      label = "LFC=1",
-      color = plot_palette$threshold,
-      hjust = -0.05,
-      size = 2.8
-    )
 
   if (nrow(lab_df) > 0L) {
     p <- p +
@@ -2397,6 +2450,10 @@ plot_dispersion_cloud <- function(dds, dataset_name, fig_subdir, cmp_short, trac
     ds_key,
     "DispEst"
   )
+
+  if (!should_write_figure(outfile)) {
+    return(invisible(NULL))
+  }
 
   png(
     outfile,
@@ -3192,6 +3249,10 @@ run_one_evs_track <- function(comparison_name, track_key, count_matrix, coldata,
       n_strong_cnh = sum(df$strong_cnh_flag, na.rm = TRUE),
       n_standard = sum(df$standard_flag, na.rm = TRUE),
       n_hbfss = sum(df$hbfss_flag, na.rm = TRUE),
+      n_display_weak_cnh = sum(df$final_class == "Weak CNH", na.rm = TRUE),
+      n_display_strong_cnh = sum(df$final_class == "Strong CNH", na.rm = TRUE),
+      n_display_standard = sum(df$final_class == "Standard", na.rm = TRUE),
+      n_display_hbfss_only = sum(df$final_class == "HBFSS", na.rm = TRUE),
       n_overlap = sum(df$any_overlap, na.rm = TRUE),
       n_weak_hbfss_overlap = sum(df$weak_hbfss_overlap, na.rm = TRUE),
       n_strong_hbfss_overlap = sum(df$strong_hbfss_overlap, na.rm = TRUE),
@@ -3547,6 +3608,128 @@ run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata,
   dplyr::bind_rows(track_summaries)
 }
 
+
+# -----------------------------------------------------------------------------
+# Paper-ready multi-comparison volcano panels
+# -----------------------------------------------------------------------------
+
+read_result_table_for_panel <- function(comparison_name, track_key, dataset_key) {
+  tab_dir <- file.path(
+    output_dir,
+    comparison_name,
+    unname(track_short[track_key]),
+    "tables"
+  )
+
+  path <- tab_file(
+    tab_dir,
+    comparison_name,
+    track_key,
+    dataset_key,
+    "Results"
+  )
+
+  if (!file.exists(path)) {
+    warning("Missing result table for manuscript panel: ", path)
+    return(NULL)
+  }
+
+  df <- read.csv(
+    path,
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+
+  if (!"final_class" %in% names(df)) {
+    warning("Result table does not contain final_class: ", path)
+    return(NULL)
+  }
+
+  df$final_class <- factor(
+    as.character(df$final_class),
+    levels = final_class_levels
+  )
+
+  df
+}
+
+save_paper_volcano_panels <- function() {
+  dir.create(paper_fig_dir, recursive = TRUE, showWarnings = FALSE)
+
+  comparison_order <- as.character(comparison_table$comparison_name)
+  track_order <- c("normalized_evs", "raw_evs")
+
+  for (dataset_key in dataset_key_order) {
+    plots <- list()
+
+    for (track_key in track_order) {
+      for (comparison_name in comparison_order) {
+        df <- read_result_table_for_panel(
+          comparison_name = comparison_name,
+          track_key = track_key,
+          dataset_key = dataset_key
+        )
+
+        if (is.null(df)) {
+          next
+        }
+
+        dataset_name <- paste(
+          comparison_name,
+          unname(track_short[track_key]),
+          dataset_key,
+          sep = "_"
+        )
+
+        plots[[length(plots) + 1L]] <- plot_final_volcano(
+          df = df,
+          dataset_name = dataset_name,
+          short_title = paste0(
+            comparison_name,
+            "\n",
+            unname(track_short[track_key])
+          ),
+          label_genes = FALSE
+        ) +
+          theme(
+            plot.title = element_text(size = base_theme_size, face = "bold"),
+            axis.title = element_text(size = base_theme_size - 1),
+            axis.text = element_text(size = base_theme_size - 2)
+          )
+      }
+    }
+
+    if (length(plots) == 0L) {
+      next
+    }
+
+    panel <- assemble_one_legend_panel(
+      plots,
+      panel_title = paste(
+        pretty_dataset_type(dataset_key),
+        "volcano comparison: NormEVS vs RawEVS across all comparisons"
+      ),
+      ncol = length(comparison_order)
+    )
+
+    save_grob(
+      panel,
+      file.path(
+        paper_fig_dir,
+        paste0(
+          "Figure_Manuscript_Volcano_",
+          unname(dataset_short[dataset_key]),
+          "_AllComparisons_NormEVS_vs_RawEVS.png"
+        )
+      ),
+      width = 18.0,
+      height = 9.6
+    )
+  }
+
+  invisible(TRUE)
+}
+
 comparison_inputs <- lapply(seq_len(nrow(comparison_table)), function(i) {
   prepare_comparison_data(
     comparison_name = comparison_table$comparison_name[i],
@@ -3604,6 +3787,13 @@ if (nrow(all_summaries) > 0L) {
     file.path(output_dir, "Table_Overall_Summary.csv")
   )
 }
+
+tryCatch(
+  save_paper_volcano_panels(),
+  error = function(e) {
+    warning("Paper volcano panel generation failed: ", conditionMessage(e))
+  }
+)
 
 if (length(failed_comparisons) > 0L) {
   failed_df <- dplyr::bind_rows(failed_comparisons)
