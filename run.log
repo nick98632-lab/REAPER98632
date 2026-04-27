@@ -326,214 +326,92 @@ using 'apeglm' for LFC shrinkage. If used in published research, please cite:
     sequence count data: removing the noise and preserving large differences.
     Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
 There were 50 or more warnings (use warnings() to see the first 50)
+converting counts to integer mode
+converting counts to integer mode
+converting counts to integer mode
+converting counts to integer mode
+converting counts to integer mode
+converting counts to integer mode
+converting counts to integer mode
+converting counts to integer mode
+converting counts to integer mode
+converting counts to integer mode
+converting counts to integer mode
+converting counts to integer mode
+converting counts to integer mode
+converting counts to integer mode
+converting counts to integer mode
+converting counts to integer mode
+converting counts to integer mode
+converting counts to integer mode
+converting counts to integer mode
+converting counts to integer mode
 Git status after staging exports:
-  [1] "D  exports/manuscript_final_clean/RT0_ZT6/NormEVS/Table_RT0_ZT6_NormEVS_Panel_Summary.csv"                               
-  [2] "D  exports/manuscript_final_clean/RT0_ZT6/NormEVS/tables/Table_RT0_ZT6_NormEVS_Lead_DispResid.csv"                       
-  [3] "D  exports/manuscript_final_clean/RT0_ZT6/NormEVS/tables/Table_RT0_ZT6_NormEVS_Lead_HBFSS.csv"                           
-  [4] "D  exports/manuscript_final_clean/RT0_ZT6/NormEVS/tables/Table_RT0_ZT6_NormEVS_Lead_Overlap.csv"                         
-  [5] "M  exports/manuscript_final_clean/RT0_ZT6/NormEVS/tables/Table_RT0_ZT6_NormEVS_Lead_Results.csv"                         
-  [6] "D  exports/manuscript_final_clean/RT0_ZT6/NormEVS/tables/Table_RT0_ZT6_NormEVS_Lead_Standard.csv"                        
-  [7] "D  exports/manuscript_final_clean/RT0_ZT6/NormEVS/tables/Table_RT0_ZT6_NormEVS_Lead_StrongCNH.csv"                       
-  [8] "M  exports/manuscript_final_clean/RT0_ZT6/NormEVS/tables/Table_RT0_ZT6_NormEVS_Lead_Summary.csv"                         
-  [9] "D  exports/manuscript_final_clean/RT0_ZT6/NormEVS/tables/Table_RT0_ZT6_NormEVS_Lead_WeakCNH.csv"                         
- [10] "D  exports/manuscript_final_clean/RT0_ZT6/NormEVS/tables/Table_RT0_ZT6_NormEVS_Raw_DispResid.csv"                        
- [11] "D  exports/manuscript_final_clean/RT0_ZT6/NormEVS/tables/Table_RT0_ZT6_NormEVS_Raw_HBFSS.csv"                            
- [12] "D  exports/manuscript_final_clean/RT0_ZT6/NormEVS/tables/Table_RT0_ZT6_NormEVS_Raw_Overlap.csv"                          
- [13] "M  exports/manuscript_final_clean/RT0_ZT6/NormEVS/tables/Table_RT0_ZT6_NormEVS_Raw_Results.csv"                          
- [14] "D  exports/manuscript_final_clean/RT0_ZT6/NormEVS/tables/Table_RT0_ZT6_NormEVS_Raw_Standard.csv"                         
- [15] "D  exports/manuscript_final_clean/RT0_ZT6/NormEVS/tables/Table_RT0_ZT6_NormEVS_Raw_StrongCNH.csv"                        
- [16] "M  exports/manuscript_final_clean/RT0_ZT6/NormEVS/tables/Table_RT0_ZT6_NormEVS_Raw_Summary.csv"                          
- [17] "D  exports/manuscript_final_clean/RT0_ZT6/NormEVS/tables/Table_RT0_ZT6_NormEVS_Raw_WeakCNH.csv"                          
- [18] "D  exports/manuscript_final_clean/RT0_ZT6/NormEVS/tables/Table_RT0_ZT6_NormEVS_Rem_DispResid.csv"                        
- [19] "D  exports/manuscript_final_clean/RT0_ZT6/NormEVS/tables/Table_RT0_ZT6_NormEVS_Rem_HBFSS.csv"                            
- [20] "D  exports/manuscript_final_clean/RT0_ZT6/NormEVS/tables/Table_RT0_ZT6_NormEVS_Rem_Overlap.csv"                          
- [21] "M  exports/manuscript_final_clean/RT0_ZT6/NormEVS/tables/Table_RT0_ZT6_NormEVS_Rem_Results.csv"                          
- [22] "D  exports/manuscript_final_clean/RT0_ZT6/NormEVS/tables/Table_RT0_ZT6_NormEVS_Rem_Standard.csv"                         
- [23] "D  exports/manuscript_final_clean/RT0_ZT6/NormEVS/tables/Table_RT0_ZT6_NormEVS_Rem_StrongCNH.csv"                        
- [24] "M  exports/manuscript_final_clean/RT0_ZT6/NormEVS/tables/Table_RT0_ZT6_NormEVS_Rem_Summary.csv"                          
- [25] "D  exports/manuscript_final_clean/RT0_ZT6/NormEVS/tables/Table_RT0_ZT6_NormEVS_Rem_WeakCNH.csv"                          
- [26] "D  exports/manuscript_final_clean/RT0_ZT6/RawEVS/Table_RT0_ZT6_RawEVS_Panel_Summary.csv"                                 
- [27] "D  exports/manuscript_final_clean/RT0_ZT6/RawEVS/tables/Table_RT0_ZT6_RawEVS_Lead_DispResid.csv"                         
- [28] "D  exports/manuscript_final_clean/RT0_ZT6/RawEVS/tables/Table_RT0_ZT6_RawEVS_Lead_HBFSS.csv"                             
- [29] "D  exports/manuscript_final_clean/RT0_ZT6/RawEVS/tables/Table_RT0_ZT6_RawEVS_Lead_Overlap.csv"                           
- [30] "M  exports/manuscript_final_clean/RT0_ZT6/RawEVS/tables/Table_RT0_ZT6_RawEVS_Lead_Results.csv"                           
- [31] "D  exports/manuscript_final_clean/RT0_ZT6/RawEVS/tables/Table_RT0_ZT6_RawEVS_Lead_Standard.csv"                          
- [32] "D  exports/manuscript_final_clean/RT0_ZT6/RawEVS/tables/Table_RT0_ZT6_RawEVS_Lead_StrongCNH.csv"                         
- [33] "M  exports/manuscript_final_clean/RT0_ZT6/RawEVS/tables/Table_RT0_ZT6_RawEVS_Lead_Summary.csv"                           
- [34] "D  exports/manuscript_final_clean/RT0_ZT6/RawEVS/tables/Table_RT0_ZT6_RawEVS_Lead_WeakCNH.csv"                           
- [35] "D  exports/manuscript_final_clean/RT0_ZT6/RawEVS/tables/Table_RT0_ZT6_RawEVS_Raw_DispResid.csv"                          
- [36] "D  exports/manuscript_final_clean/RT0_ZT6/RawEVS/tables/Table_RT0_ZT6_RawEVS_Raw_HBFSS.csv"                              
- [37] "D  exports/manuscript_final_clean/RT0_ZT6/RawEVS/tables/Table_RT0_ZT6_RawEVS_Raw_Overlap.csv"                            
- [38] "M  exports/manuscript_final_clean/RT0_ZT6/RawEVS/tables/Table_RT0_ZT6_RawEVS_Raw_Results.csv"                            
- [39] "D  exports/manuscript_final_clean/RT0_ZT6/RawEVS/tables/Table_RT0_ZT6_RawEVS_Raw_Standard.csv"                           
- [40] "D  exports/manuscript_final_clean/RT0_ZT6/RawEVS/tables/Table_RT0_ZT6_RawEVS_Raw_StrongCNH.csv"                          
- [41] "M  exports/manuscript_final_clean/RT0_ZT6/RawEVS/tables/Table_RT0_ZT6_RawEVS_Raw_Summary.csv"                            
- [42] "D  exports/manuscript_final_clean/RT0_ZT6/RawEVS/tables/Table_RT0_ZT6_RawEVS_Raw_WeakCNH.csv"                            
- [43] "D  exports/manuscript_final_clean/RT0_ZT6/RawEVS/tables/Table_RT0_ZT6_RawEVS_Rem_DispResid.csv"                          
- [44] "D  exports/manuscript_final_clean/RT0_ZT6/RawEVS/tables/Table_RT0_ZT6_RawEVS_Rem_HBFSS.csv"                              
- [45] "D  exports/manuscript_final_clean/RT0_ZT6/RawEVS/tables/Table_RT0_ZT6_RawEVS_Rem_Overlap.csv"                            
- [46] "M  exports/manuscript_final_clean/RT0_ZT6/RawEVS/tables/Table_RT0_ZT6_RawEVS_Rem_Results.csv"                            
- [47] "D  exports/manuscript_final_clean/RT0_ZT6/RawEVS/tables/Table_RT0_ZT6_RawEVS_Rem_Standard.csv"                           
- [48] "D  exports/manuscript_final_clean/RT0_ZT6/RawEVS/tables/Table_RT0_ZT6_RawEVS_Rem_StrongCNH.csv"                          
- [49] "M  exports/manuscript_final_clean/RT0_ZT6/RawEVS/tables/Table_RT0_ZT6_RawEVS_Rem_Summary.csv"                            
- [50] "D  exports/manuscript_final_clean/RT0_ZT6/RawEVS/tables/Table_RT0_ZT6_RawEVS_Rem_WeakCNH.csv"                            
- [51] "D  exports/manuscript_final_clean/RT2_ZT8/NormEVS/Table_RT2_ZT8_NormEVS_Panel_Summary.csv"                               
- [52] "D  exports/manuscript_final_clean/RT2_ZT8/NormEVS/tables/Table_RT2_ZT8_NormEVS_Lead_DispResid.csv"                       
- [53] "D  exports/manuscript_final_clean/RT2_ZT8/NormEVS/tables/Table_RT2_ZT8_NormEVS_Lead_HBFSS.csv"                           
- [54] "D  exports/manuscript_final_clean/RT2_ZT8/NormEVS/tables/Table_RT2_ZT8_NormEVS_Lead_Overlap.csv"                         
- [55] "M  exports/manuscript_final_clean/RT2_ZT8/NormEVS/tables/Table_RT2_ZT8_NormEVS_Lead_Results.csv"                         
- [56] "D  exports/manuscript_final_clean/RT2_ZT8/NormEVS/tables/Table_RT2_ZT8_NormEVS_Lead_Standard.csv"                        
- [57] "D  exports/manuscript_final_clean/RT2_ZT8/NormEVS/tables/Table_RT2_ZT8_NormEVS_Lead_StrongCNH.csv"                       
- [58] "M  exports/manuscript_final_clean/RT2_ZT8/NormEVS/tables/Table_RT2_ZT8_NormEVS_Lead_Summary.csv"                         
- [59] "D  exports/manuscript_final_clean/RT2_ZT8/NormEVS/tables/Table_RT2_ZT8_NormEVS_Lead_WeakCNH.csv"                         
- [60] "D  exports/manuscript_final_clean/RT2_ZT8/NormEVS/tables/Table_RT2_ZT8_NormEVS_Raw_DispResid.csv"                        
- [61] "D  exports/manuscript_final_clean/RT2_ZT8/NormEVS/tables/Table_RT2_ZT8_NormEVS_Raw_HBFSS.csv"                            
- [62] "D  exports/manuscript_final_clean/RT2_ZT8/NormEVS/tables/Table_RT2_ZT8_NormEVS_Raw_Overlap.csv"                          
- [63] "M  exports/manuscript_final_clean/RT2_ZT8/NormEVS/tables/Table_RT2_ZT8_NormEVS_Raw_Results.csv"                          
- [64] "D  exports/manuscript_final_clean/RT2_ZT8/NormEVS/tables/Table_RT2_ZT8_NormEVS_Raw_Standard.csv"                         
- [65] "D  exports/manuscript_final_clean/RT2_ZT8/NormEVS/tables/Table_RT2_ZT8_NormEVS_Raw_StrongCNH.csv"                        
- [66] "M  exports/manuscript_final_clean/RT2_ZT8/NormEVS/tables/Table_RT2_ZT8_NormEVS_Raw_Summary.csv"                          
- [67] "D  exports/manuscript_final_clean/RT2_ZT8/NormEVS/tables/Table_RT2_ZT8_NormEVS_Raw_WeakCNH.csv"                          
- [68] "D  exports/manuscript_final_clean/RT2_ZT8/NormEVS/tables/Table_RT2_ZT8_NormEVS_Rem_DispResid.csv"                        
- [69] "D  exports/manuscript_final_clean/RT2_ZT8/NormEVS/tables/Table_RT2_ZT8_NormEVS_Rem_HBFSS.csv"                            
- [70] "D  exports/manuscript_final_clean/RT2_ZT8/NormEVS/tables/Table_RT2_ZT8_NormEVS_Rem_Overlap.csv"                          
- [71] "M  exports/manuscript_final_clean/RT2_ZT8/NormEVS/tables/Table_RT2_ZT8_NormEVS_Rem_Results.csv"                          
- [72] "D  exports/manuscript_final_clean/RT2_ZT8/NormEVS/tables/Table_RT2_ZT8_NormEVS_Rem_Standard.csv"                         
- [73] "D  exports/manuscript_final_clean/RT2_ZT8/NormEVS/tables/Table_RT2_ZT8_NormEVS_Rem_StrongCNH.csv"                        
- [74] "M  exports/manuscript_final_clean/RT2_ZT8/NormEVS/tables/Table_RT2_ZT8_NormEVS_Rem_Summary.csv"                          
- [75] "D  exports/manuscript_final_clean/RT2_ZT8/NormEVS/tables/Table_RT2_ZT8_NormEVS_Rem_WeakCNH.csv"                          
- [76] "D  exports/manuscript_final_clean/RT2_ZT8/RawEVS/Table_RT2_ZT8_RawEVS_Panel_Summary.csv"                                 
- [77] "D  exports/manuscript_final_clean/RT2_ZT8/RawEVS/tables/Table_RT2_ZT8_RawEVS_Lead_DispResid.csv"                         
- [78] "D  exports/manuscript_final_clean/RT2_ZT8/RawEVS/tables/Table_RT2_ZT8_RawEVS_Lead_HBFSS.csv"                             
- [79] "D  exports/manuscript_final_clean/RT2_ZT8/RawEVS/tables/Table_RT2_ZT8_RawEVS_Lead_Overlap.csv"                           
- [80] "M  exports/manuscript_final_clean/RT2_ZT8/RawEVS/tables/Table_RT2_ZT8_RawEVS_Lead_Results.csv"                           
- [81] "D  exports/manuscript_final_clean/RT2_ZT8/RawEVS/tables/Table_RT2_ZT8_RawEVS_Lead_Standard.csv"                          
- [82] "D  exports/manuscript_final_clean/RT2_ZT8/RawEVS/tables/Table_RT2_ZT8_RawEVS_Lead_StrongCNH.csv"                         
- [83] "M  exports/manuscript_final_clean/RT2_ZT8/RawEVS/tables/Table_RT2_ZT8_RawEVS_Lead_Summary.csv"                           
- [84] "D  exports/manuscript_final_clean/RT2_ZT8/RawEVS/tables/Table_RT2_ZT8_RawEVS_Lead_WeakCNH.csv"                           
- [85] "D  exports/manuscript_final_clean/RT2_ZT8/RawEVS/tables/Table_RT2_ZT8_RawEVS_Raw_DispResid.csv"                          
- [86] "D  exports/manuscript_final_clean/RT2_ZT8/RawEVS/tables/Table_RT2_ZT8_RawEVS_Raw_HBFSS.csv"                              
- [87] "D  exports/manuscript_final_clean/RT2_ZT8/RawEVS/tables/Table_RT2_ZT8_RawEVS_Raw_Overlap.csv"                            
- [88] "M  exports/manuscript_final_clean/RT2_ZT8/RawEVS/tables/Table_RT2_ZT8_RawEVS_Raw_Results.csv"                            
- [89] "D  exports/manuscript_final_clean/RT2_ZT8/RawEVS/tables/Table_RT2_ZT8_RawEVS_Raw_Standard.csv"                           
- [90] "D  exports/manuscript_final_clean/RT2_ZT8/RawEVS/tables/Table_RT2_ZT8_RawEVS_Raw_StrongCNH.csv"                          
- [91] "M  exports/manuscript_final_clean/RT2_ZT8/RawEVS/tables/Table_RT2_ZT8_RawEVS_Raw_Summary.csv"                            
- [92] "D  exports/manuscript_final_clean/RT2_ZT8/RawEVS/tables/Table_RT2_ZT8_RawEVS_Raw_WeakCNH.csv"                            
- [93] "D  exports/manuscript_final_clean/RT2_ZT8/RawEVS/tables/Table_RT2_ZT8_RawEVS_Rem_DispResid.csv"                          
- [94] "D  exports/manuscript_final_clean/RT2_ZT8/RawEVS/tables/Table_RT2_ZT8_RawEVS_Rem_HBFSS.csv"                              
- [95] "D  exports/manuscript_final_clean/RT2_ZT8/RawEVS/tables/Table_RT2_ZT8_RawEVS_Rem_Overlap.csv"                            
- [96] "M  exports/manuscript_final_clean/RT2_ZT8/RawEVS/tables/Table_RT2_ZT8_RawEVS_Rem_Results.csv"                            
- [97] "D  exports/manuscript_final_clean/RT2_ZT8/RawEVS/tables/Table_RT2_ZT8_RawEVS_Rem_Standard.csv"                           
- [98] "D  exports/manuscript_final_clean/RT2_ZT8/RawEVS/tables/Table_RT2_ZT8_RawEVS_Rem_StrongCNH.csv"                          
- [99] "M  exports/manuscript_final_clean/RT2_ZT8/RawEVS/tables/Table_RT2_ZT8_RawEVS_Rem_Summary.csv"                            
-[100] "D  exports/manuscript_final_clean/RT2_ZT8/RawEVS/tables/Table_RT2_ZT8_RawEVS_Rem_WeakCNH.csv"                            
-[101] "D  exports/manuscript_final_clean/RT4_ZT10/NormEVS/Table_RT4_ZT10_NormEVS_Panel_Summary.csv"                             
-[102] "D  exports/manuscript_final_clean/RT4_ZT10/NormEVS/tables/Table_RT4_ZT10_NormEVS_Lead_DispResid.csv"                     
-[103] "D  exports/manuscript_final_clean/RT4_ZT10/NormEVS/tables/Table_RT4_ZT10_NormEVS_Lead_HBFSS.csv"                         
-[104] "D  exports/manuscript_final_clean/RT4_ZT10/NormEVS/tables/Table_RT4_ZT10_NormEVS_Lead_Overlap.csv"                       
-[105] "M  exports/manuscript_final_clean/RT4_ZT10/NormEVS/tables/Table_RT4_ZT10_NormEVS_Lead_Results.csv"                       
-[106] "D  exports/manuscript_final_clean/RT4_ZT10/NormEVS/tables/Table_RT4_ZT10_NormEVS_Lead_Standard.csv"                      
-[107] "D  exports/manuscript_final_clean/RT4_ZT10/NormEVS/tables/Table_RT4_ZT10_NormEVS_Lead_StrongCNH.csv"                     
-[108] "M  exports/manuscript_final_clean/RT4_ZT10/NormEVS/tables/Table_RT4_ZT10_NormEVS_Lead_Summary.csv"                       
-[109] "D  exports/manuscript_final_clean/RT4_ZT10/NormEVS/tables/Table_RT4_ZT10_NormEVS_Lead_WeakCNH.csv"                       
-[110] "D  exports/manuscript_final_clean/RT4_ZT10/NormEVS/tables/Table_RT4_ZT10_NormEVS_Raw_DispResid.csv"                      
-[111] "D  exports/manuscript_final_clean/RT4_ZT10/NormEVS/tables/Table_RT4_ZT10_NormEVS_Raw_HBFSS.csv"                          
-[112] "D  exports/manuscript_final_clean/RT4_ZT10/NormEVS/tables/Table_RT4_ZT10_NormEVS_Raw_Overlap.csv"                        
-[113] "M  exports/manuscript_final_clean/RT4_ZT10/NormEVS/tables/Table_RT4_ZT10_NormEVS_Raw_Results.csv"                        
-[114] "D  exports/manuscript_final_clean/RT4_ZT10/NormEVS/tables/Table_RT4_ZT10_NormEVS_Raw_Standard.csv"                       
-[115] "D  exports/manuscript_final_clean/RT4_ZT10/NormEVS/tables/Table_RT4_ZT10_NormEVS_Raw_StrongCNH.csv"                      
-[116] "M  exports/manuscript_final_clean/RT4_ZT10/NormEVS/tables/Table_RT4_ZT10_NormEVS_Raw_Summary.csv"                        
-[117] "D  exports/manuscript_final_clean/RT4_ZT10/NormEVS/tables/Table_RT4_ZT10_NormEVS_Raw_WeakCNH.csv"                        
-[118] "D  exports/manuscript_final_clean/RT4_ZT10/NormEVS/tables/Table_RT4_ZT10_NormEVS_Rem_DispResid.csv"                      
-[119] "D  exports/manuscript_final_clean/RT4_ZT10/NormEVS/tables/Table_RT4_ZT10_NormEVS_Rem_HBFSS.csv"                          
-[120] "D  exports/manuscript_final_clean/RT4_ZT10/NormEVS/tables/Table_RT4_ZT10_NormEVS_Rem_Overlap.csv"                        
-[121] "M  exports/manuscript_final_clean/RT4_ZT10/NormEVS/tables/Table_RT4_ZT10_NormEVS_Rem_Results.csv"                        
-[122] "D  exports/manuscript_final_clean/RT4_ZT10/NormEVS/tables/Table_RT4_ZT10_NormEVS_Rem_Standard.csv"                       
-[123] "D  exports/manuscript_final_clean/RT4_ZT10/NormEVS/tables/Table_RT4_ZT10_NormEVS_Rem_StrongCNH.csv"                      
-[124] "M  exports/manuscript_final_clean/RT4_ZT10/NormEVS/tables/Table_RT4_ZT10_NormEVS_Rem_Summary.csv"                        
-[125] "D  exports/manuscript_final_clean/RT4_ZT10/NormEVS/tables/Table_RT4_ZT10_NormEVS_Rem_WeakCNH.csv"                        
-[126] "D  exports/manuscript_final_clean/RT4_ZT10/RawEVS/Table_RT4_ZT10_RawEVS_Panel_Summary.csv"                               
-[127] "D  exports/manuscript_final_clean/RT4_ZT10/RawEVS/tables/Table_RT4_ZT10_RawEVS_Lead_DispResid.csv"                       
-[128] "D  exports/manuscript_final_clean/RT4_ZT10/RawEVS/tables/Table_RT4_ZT10_RawEVS_Lead_HBFSS.csv"                           
-[129] "D  exports/manuscript_final_clean/RT4_ZT10/RawEVS/tables/Table_RT4_ZT10_RawEVS_Lead_Overlap.csv"                         
-[130] "M  exports/manuscript_final_clean/RT4_ZT10/RawEVS/tables/Table_RT4_ZT10_RawEVS_Lead_Results.csv"                         
-[131] "D  exports/manuscript_final_clean/RT4_ZT10/RawEVS/tables/Table_RT4_ZT10_RawEVS_Lead_Standard.csv"                        
-[132] "D  exports/manuscript_final_clean/RT4_ZT10/RawEVS/tables/Table_RT4_ZT10_RawEVS_Lead_StrongCNH.csv"                       
-[133] "M  exports/manuscript_final_clean/RT4_ZT10/RawEVS/tables/Table_RT4_ZT10_RawEVS_Lead_Summary.csv"                         
-[134] "D  exports/manuscript_final_clean/RT4_ZT10/RawEVS/tables/Table_RT4_ZT10_RawEVS_Lead_WeakCNH.csv"                         
-[135] "D  exports/manuscript_final_clean/RT4_ZT10/RawEVS/tables/Table_RT4_ZT10_RawEVS_Raw_DispResid.csv"                        
-[136] "D  exports/manuscript_final_clean/RT4_ZT10/RawEVS/tables/Table_RT4_ZT10_RawEVS_Raw_HBFSS.csv"                            
-[137] "D  exports/manuscript_final_clean/RT4_ZT10/RawEVS/tables/Table_RT4_ZT10_RawEVS_Raw_Overlap.csv"                          
-[138] "M  exports/manuscript_final_clean/RT4_ZT10/RawEVS/tables/Table_RT4_ZT10_RawEVS_Raw_Results.csv"                          
-[139] "D  exports/manuscript_final_clean/RT4_ZT10/RawEVS/tables/Table_RT4_ZT10_RawEVS_Raw_Standard.csv"                         
-[140] "D  exports/manuscript_final_clean/RT4_ZT10/RawEVS/tables/Table_RT4_ZT10_RawEVS_Raw_StrongCNH.csv"                        
-[141] "M  exports/manuscript_final_clean/RT4_ZT10/RawEVS/tables/Table_RT4_ZT10_RawEVS_Raw_Summary.csv"                          
-[142] "D  exports/manuscript_final_clean/RT4_ZT10/RawEVS/tables/Table_RT4_ZT10_RawEVS_Raw_WeakCNH.csv"                          
-[143] "D  exports/manuscript_final_clean/RT4_ZT10/RawEVS/tables/Table_RT4_ZT10_RawEVS_Rem_DispResid.csv"                        
-[144] "D  exports/manuscript_final_clean/RT4_ZT10/RawEVS/tables/Table_RT4_ZT10_RawEVS_Rem_HBFSS.csv"                            
-[145] "D  exports/manuscript_final_clean/RT4_ZT10/RawEVS/tables/Table_RT4_ZT10_RawEVS_Rem_Overlap.csv"                          
-[146] "M  exports/manuscript_final_clean/RT4_ZT10/RawEVS/tables/Table_RT4_ZT10_RawEVS_Rem_Results.csv"                          
-[147] "D  exports/manuscript_final_clean/RT4_ZT10/RawEVS/tables/Table_RT4_ZT10_RawEVS_Rem_Standard.csv"                         
-[148] "D  exports/manuscript_final_clean/RT4_ZT10/RawEVS/tables/Table_RT4_ZT10_RawEVS_Rem_StrongCNH.csv"                        
-[149] "M  exports/manuscript_final_clean/RT4_ZT10/RawEVS/tables/Table_RT4_ZT10_RawEVS_Rem_Summary.csv"                          
-[150] "D  exports/manuscript_final_clean/RT4_ZT10/RawEVS/tables/Table_RT4_ZT10_RawEVS_Rem_WeakCNH.csv"                          
-[151] "D  exports/manuscript_final_clean/RT8_ZT14/NormEVS/Table_RT8_ZT14_NormEVS_Panel_Summary.csv"                             
-[152] "D  exports/manuscript_final_clean/RT8_ZT14/NormEVS/tables/Table_RT8_ZT14_NormEVS_Lead_DispResid.csv"                     
-[153] "D  exports/manuscript_final_clean/RT8_ZT14/NormEVS/tables/Table_RT8_ZT14_NormEVS_Lead_HBFSS.csv"                         
-[154] "D  exports/manuscript_final_clean/RT8_ZT14/NormEVS/tables/Table_RT8_ZT14_NormEVS_Lead_Overlap.csv"                       
-[155] "M  exports/manuscript_final_clean/RT8_ZT14/NormEVS/tables/Table_RT8_ZT14_NormEVS_Lead_Results.csv"                       
-[156] "D  exports/manuscript_final_clean/RT8_ZT14/NormEVS/tables/Table_RT8_ZT14_NormEVS_Lead_Standard.csv"                      
-[157] "D  exports/manuscript_final_clean/RT8_ZT14/NormEVS/tables/Table_RT8_ZT14_NormEVS_Lead_StrongCNH.csv"                     
-[158] "M  exports/manuscript_final_clean/RT8_ZT14/NormEVS/tables/Table_RT8_ZT14_NormEVS_Lead_Summary.csv"                       
-[159] "D  exports/manuscript_final_clean/RT8_ZT14/NormEVS/tables/Table_RT8_ZT14_NormEVS_Lead_WeakCNH.csv"                       
-[160] "D  exports/manuscript_final_clean/RT8_ZT14/NormEVS/tables/Table_RT8_ZT14_NormEVS_Raw_DispResid.csv"                      
-[161] "D  exports/manuscript_final_clean/RT8_ZT14/NormEVS/tables/Table_RT8_ZT14_NormEVS_Raw_HBFSS.csv"                          
-[162] "D  exports/manuscript_final_clean/RT8_ZT14/NormEVS/tables/Table_RT8_ZT14_NormEVS_Raw_Overlap.csv"                        
-[163] "M  exports/manuscript_final_clean/RT8_ZT14/NormEVS/tables/Table_RT8_ZT14_NormEVS_Raw_Results.csv"                        
-[164] "D  exports/manuscript_final_clean/RT8_ZT14/NormEVS/tables/Table_RT8_ZT14_NormEVS_Raw_Standard.csv"                       
-[165] "D  exports/manuscript_final_clean/RT8_ZT14/NormEVS/tables/Table_RT8_ZT14_NormEVS_Raw_StrongCNH.csv"                      
-[166] "M  exports/manuscript_final_clean/RT8_ZT14/NormEVS/tables/Table_RT8_ZT14_NormEVS_Raw_Summary.csv"                        
-[167] "D  exports/manuscript_final_clean/RT8_ZT14/NormEVS/tables/Table_RT8_ZT14_NormEVS_Raw_WeakCNH.csv"                        
-[168] "D  exports/manuscript_final_clean/RT8_ZT14/NormEVS/tables/Table_RT8_ZT14_NormEVS_Rem_DispResid.csv"                      
-[169] "D  exports/manuscript_final_clean/RT8_ZT14/NormEVS/tables/Table_RT8_ZT14_NormEVS_Rem_HBFSS.csv"                          
-[170] "D  exports/manuscript_final_clean/RT8_ZT14/NormEVS/tables/Table_RT8_ZT14_NormEVS_Rem_Overlap.csv"                        
-[171] "M  exports/manuscript_final_clean/RT8_ZT14/NormEVS/tables/Table_RT8_ZT14_NormEVS_Rem_Results.csv"                        
-[172] "D  exports/manuscript_final_clean/RT8_ZT14/NormEVS/tables/Table_RT8_ZT14_NormEVS_Rem_Standard.csv"                       
-[173] "D  exports/manuscript_final_clean/RT8_ZT14/NormEVS/tables/Table_RT8_ZT14_NormEVS_Rem_StrongCNH.csv"                      
-[174] "M  exports/manuscript_final_clean/RT8_ZT14/NormEVS/tables/Table_RT8_ZT14_NormEVS_Rem_Summary.csv"                        
-[175] "D  exports/manuscript_final_clean/RT8_ZT14/NormEVS/tables/Table_RT8_ZT14_NormEVS_Rem_WeakCNH.csv"                        
-[176] "D  exports/manuscript_final_clean/RT8_ZT14/RawEVS/Table_RT8_ZT14_RawEVS_Panel_Summary.csv"                               
-[177] "D  exports/manuscript_final_clean/RT8_ZT14/RawEVS/tables/Table_RT8_ZT14_RawEVS_Lead_DispResid.csv"                       
-[178] "D  exports/manuscript_final_clean/RT8_ZT14/RawEVS/tables/Table_RT8_ZT14_RawEVS_Lead_HBFSS.csv"                           
-[179] "D  exports/manuscript_final_clean/RT8_ZT14/RawEVS/tables/Table_RT8_ZT14_RawEVS_Lead_Overlap.csv"                         
-[180] "M  exports/manuscript_final_clean/RT8_ZT14/RawEVS/tables/Table_RT8_ZT14_RawEVS_Lead_Results.csv"                         
-[181] "D  exports/manuscript_final_clean/RT8_ZT14/RawEVS/tables/Table_RT8_ZT14_RawEVS_Lead_Standard.csv"                        
-[182] "D  exports/manuscript_final_clean/RT8_ZT14/RawEVS/tables/Table_RT8_ZT14_RawEVS_Lead_StrongCNH.csv"                       
-[183] "M  exports/manuscript_final_clean/RT8_ZT14/RawEVS/tables/Table_RT8_ZT14_RawEVS_Lead_Summary.csv"                         
-[184] "D  exports/manuscript_final_clean/RT8_ZT14/RawEVS/tables/Table_RT8_ZT14_RawEVS_Lead_WeakCNH.csv"                         
-[185] "D  exports/manuscript_final_clean/RT8_ZT14/RawEVS/tables/Table_RT8_ZT14_RawEVS_Raw_DispResid.csv"                        
-[186] "D  exports/manuscript_final_clean/RT8_ZT14/RawEVS/tables/Table_RT8_ZT14_RawEVS_Raw_HBFSS.csv"                            
-[187] "D  exports/manuscript_final_clean/RT8_ZT14/RawEVS/tables/Table_RT8_ZT14_RawEVS_Raw_Overlap.csv"                          
-[188] "M  exports/manuscript_final_clean/RT8_ZT14/RawEVS/tables/Table_RT8_ZT14_RawEVS_Raw_Results.csv"                          
-[189] "D  exports/manuscript_final_clean/RT8_ZT14/RawEVS/tables/Table_RT8_ZT14_RawEVS_Raw_Standard.csv"                         
-[190] "D  exports/manuscript_final_clean/RT8_ZT14/RawEVS/tables/Table_RT8_ZT14_RawEVS_Raw_StrongCNH.csv"                        
-[191] "M  exports/manuscript_final_clean/RT8_ZT14/RawEVS/tables/Table_RT8_ZT14_RawEVS_Raw_Summary.csv"                          
-[192] "D  exports/manuscript_final_clean/RT8_ZT14/RawEVS/tables/Table_RT8_ZT14_RawEVS_Raw_WeakCNH.csv"                          
-[193] "D  exports/manuscript_final_clean/RT8_ZT14/RawEVS/tables/Table_RT8_ZT14_RawEVS_Rem_DispResid.csv"                        
-[194] "D  exports/manuscript_final_clean/RT8_ZT14/RawEVS/tables/Table_RT8_ZT14_RawEVS_Rem_HBFSS.csv"                            
-[195] "D  exports/manuscript_final_clean/RT8_ZT14/RawEVS/tables/Table_RT8_ZT14_RawEVS_Rem_Overlap.csv"                          
-[196] "M  exports/manuscript_final_clean/RT8_ZT14/RawEVS/tables/Table_RT8_ZT14_RawEVS_Rem_Results.csv"                          
-[197] "D  exports/manuscript_final_clean/RT8_ZT14/RawEVS/tables/Table_RT8_ZT14_RawEVS_Rem_Standard.csv"                         
-[198] "D  exports/manuscript_final_clean/RT8_ZT14/RawEVS/tables/Table_RT8_ZT14_RawEVS_Rem_StrongCNH.csv"                        
-[199] "M  exports/manuscript_final_clean/RT8_ZT14/RawEVS/tables/Table_RT8_ZT14_RawEVS_Rem_Summary.csv"                          
-[200] "D  exports/manuscript_final_clean/RT8_ZT14/RawEVS/tables/Table_RT8_ZT14_RawEVS_Rem_WeakCNH.csv"                          
-[201] "M  exports/manuscript_final_clean/Table_Export_Manifest.csv"                                                             
-[202] "M  exports/manuscript_final_clean/Table_Overall_Summary.csv"                                                             
-[203] "M  exports/manuscript_final_clean/manuscript_figures/Figure_Manuscript_Volcano_Lead_AllComparisons_NormEVS_vs_RawEVS.png"
-[204] "M  exports/manuscript_final_clean/manuscript_figures/Figure_Manuscript_Volcano_Raw_AllComparisons_NormEVS_vs_RawEVS.png" 
-[205] "M  exports/manuscript_final_clean/manuscript_figures/Figure_Manuscript_Volcano_Rem_AllComparisons_NormEVS_vs_RawEVS.png" 
-[206] " M run.log"                                                                                                              
-[207] "?? Rplots.pdf"                                                                                                           
+ [1] "M  exports/manuscript_final_clean/RT0_ZT6/NormEVS/tables/Table_RT0_ZT6_NormEVS_Lead_Results.csv"                                 
+ [2] "M  exports/manuscript_final_clean/RT0_ZT6/NormEVS/tables/Table_RT0_ZT6_NormEVS_Lead_Summary.csv"                                 
+ [3] "M  exports/manuscript_final_clean/RT0_ZT6/NormEVS/tables/Table_RT0_ZT6_NormEVS_Raw_Results.csv"                                  
+ [4] "M  exports/manuscript_final_clean/RT0_ZT6/NormEVS/tables/Table_RT0_ZT6_NormEVS_Raw_Summary.csv"                                  
+ [5] "M  exports/manuscript_final_clean/RT0_ZT6/NormEVS/tables/Table_RT0_ZT6_NormEVS_Rem_Results.csv"                                  
+ [6] "M  exports/manuscript_final_clean/RT0_ZT6/NormEVS/tables/Table_RT0_ZT6_NormEVS_Rem_Summary.csv"                                  
+ [7] "M  exports/manuscript_final_clean/RT0_ZT6/RawEVS/tables/Table_RT0_ZT6_RawEVS_Lead_Results.csv"                                   
+ [8] "M  exports/manuscript_final_clean/RT0_ZT6/RawEVS/tables/Table_RT0_ZT6_RawEVS_Lead_Summary.csv"                                   
+ [9] "M  exports/manuscript_final_clean/RT0_ZT6/RawEVS/tables/Table_RT0_ZT6_RawEVS_Raw_Results.csv"                                    
+[10] "M  exports/manuscript_final_clean/RT0_ZT6/RawEVS/tables/Table_RT0_ZT6_RawEVS_Raw_Summary.csv"                                    
+[11] "M  exports/manuscript_final_clean/RT0_ZT6/RawEVS/tables/Table_RT0_ZT6_RawEVS_Rem_Results.csv"                                    
+[12] "M  exports/manuscript_final_clean/RT0_ZT6/RawEVS/tables/Table_RT0_ZT6_RawEVS_Rem_Summary.csv"                                    
+[13] "M  exports/manuscript_final_clean/RT2_ZT8/NormEVS/tables/Table_RT2_ZT8_NormEVS_Lead_Results.csv"                                 
+[14] "M  exports/manuscript_final_clean/RT2_ZT8/NormEVS/tables/Table_RT2_ZT8_NormEVS_Lead_Summary.csv"                                 
+[15] "M  exports/manuscript_final_clean/RT2_ZT8/NormEVS/tables/Table_RT2_ZT8_NormEVS_Raw_Results.csv"                                  
+[16] "M  exports/manuscript_final_clean/RT2_ZT8/NormEVS/tables/Table_RT2_ZT8_NormEVS_Raw_Summary.csv"                                  
+[17] "M  exports/manuscript_final_clean/RT2_ZT8/NormEVS/tables/Table_RT2_ZT8_NormEVS_Rem_Results.csv"                                  
+[18] "M  exports/manuscript_final_clean/RT2_ZT8/NormEVS/tables/Table_RT2_ZT8_NormEVS_Rem_Summary.csv"                                  
+[19] "M  exports/manuscript_final_clean/RT2_ZT8/RawEVS/tables/Table_RT2_ZT8_RawEVS_Lead_Results.csv"                                   
+[20] "M  exports/manuscript_final_clean/RT2_ZT8/RawEVS/tables/Table_RT2_ZT8_RawEVS_Lead_Summary.csv"                                   
+[21] "M  exports/manuscript_final_clean/RT2_ZT8/RawEVS/tables/Table_RT2_ZT8_RawEVS_Raw_Results.csv"                                    
+[22] "M  exports/manuscript_final_clean/RT2_ZT8/RawEVS/tables/Table_RT2_ZT8_RawEVS_Raw_Summary.csv"                                    
+[23] "M  exports/manuscript_final_clean/RT2_ZT8/RawEVS/tables/Table_RT2_ZT8_RawEVS_Rem_Results.csv"                                    
+[24] "M  exports/manuscript_final_clean/RT2_ZT8/RawEVS/tables/Table_RT2_ZT8_RawEVS_Rem_Summary.csv"                                    
+[25] "M  exports/manuscript_final_clean/RT4_ZT10/NormEVS/tables/Table_RT4_ZT10_NormEVS_Lead_Results.csv"                               
+[26] "M  exports/manuscript_final_clean/RT4_ZT10/NormEVS/tables/Table_RT4_ZT10_NormEVS_Lead_Summary.csv"                               
+[27] "M  exports/manuscript_final_clean/RT4_ZT10/NormEVS/tables/Table_RT4_ZT10_NormEVS_Raw_Results.csv"                                
+[28] "M  exports/manuscript_final_clean/RT4_ZT10/NormEVS/tables/Table_RT4_ZT10_NormEVS_Raw_Summary.csv"                                
+[29] "M  exports/manuscript_final_clean/RT4_ZT10/NormEVS/tables/Table_RT4_ZT10_NormEVS_Rem_Results.csv"                                
+[30] "M  exports/manuscript_final_clean/RT4_ZT10/NormEVS/tables/Table_RT4_ZT10_NormEVS_Rem_Summary.csv"                                
+[31] "M  exports/manuscript_final_clean/RT4_ZT10/RawEVS/tables/Table_RT4_ZT10_RawEVS_Lead_Results.csv"                                 
+[32] "M  exports/manuscript_final_clean/RT4_ZT10/RawEVS/tables/Table_RT4_ZT10_RawEVS_Lead_Summary.csv"                                 
+[33] "M  exports/manuscript_final_clean/RT4_ZT10/RawEVS/tables/Table_RT4_ZT10_RawEVS_Raw_Results.csv"                                  
+[34] "M  exports/manuscript_final_clean/RT4_ZT10/RawEVS/tables/Table_RT4_ZT10_RawEVS_Raw_Summary.csv"                                  
+[35] "M  exports/manuscript_final_clean/RT4_ZT10/RawEVS/tables/Table_RT4_ZT10_RawEVS_Rem_Results.csv"                                  
+[36] "M  exports/manuscript_final_clean/RT4_ZT10/RawEVS/tables/Table_RT4_ZT10_RawEVS_Rem_Summary.csv"                                  
+[37] "M  exports/manuscript_final_clean/RT8_ZT14/NormEVS/tables/Table_RT8_ZT14_NormEVS_Lead_Results.csv"                               
+[38] "M  exports/manuscript_final_clean/RT8_ZT14/NormEVS/tables/Table_RT8_ZT14_NormEVS_Lead_Summary.csv"                               
+[39] "M  exports/manuscript_final_clean/RT8_ZT14/NormEVS/tables/Table_RT8_ZT14_NormEVS_Raw_Results.csv"                                
+[40] "M  exports/manuscript_final_clean/RT8_ZT14/NormEVS/tables/Table_RT8_ZT14_NormEVS_Raw_Summary.csv"                                
+[41] "M  exports/manuscript_final_clean/RT8_ZT14/NormEVS/tables/Table_RT8_ZT14_NormEVS_Rem_Results.csv"                                
+[42] "M  exports/manuscript_final_clean/RT8_ZT14/NormEVS/tables/Table_RT8_ZT14_NormEVS_Rem_Summary.csv"                                
+[43] "M  exports/manuscript_final_clean/RT8_ZT14/RawEVS/tables/Table_RT8_ZT14_RawEVS_Lead_Results.csv"                                 
+[44] "M  exports/manuscript_final_clean/RT8_ZT14/RawEVS/tables/Table_RT8_ZT14_RawEVS_Lead_Summary.csv"                                 
+[45] "M  exports/manuscript_final_clean/RT8_ZT14/RawEVS/tables/Table_RT8_ZT14_RawEVS_Raw_Results.csv"                                  
+[46] "M  exports/manuscript_final_clean/RT8_ZT14/RawEVS/tables/Table_RT8_ZT14_RawEVS_Raw_Summary.csv"                                  
+[47] "M  exports/manuscript_final_clean/RT8_ZT14/RawEVS/tables/Table_RT8_ZT14_RawEVS_Rem_Results.csv"                                  
+[48] "M  exports/manuscript_final_clean/RT8_ZT14/RawEVS/tables/Table_RT8_ZT14_RawEVS_Rem_Summary.csv"                                  
+[49] "M  exports/manuscript_final_clean/Table_Export_Manifest.csv"                                                                     
+[50] "A  exports/manuscript_final_clean/Table_Final_Discovery_Counts_Long.csv"                                                         
+[51] "M  exports/manuscript_final_clean/Table_Overall_Summary.csv"                                                                     
+[52] "A  exports/manuscript_final_clean/manuscript_figures/Figure_Manuscript_Discovery_Counts.png"                                     
+[53] "A  exports/manuscript_final_clean/manuscript_figures/Figure_Manuscript_EVS_PC1_Loading_Rank.png"                                 
+[54] "A  exports/manuscript_final_clean/manuscript_figures/Figure_Manuscript_Empirical_HBFSS_Lead_AllComparisons_NormEVS_vs_RawEVS.png"
+[55] "A  exports/manuscript_final_clean/manuscript_figures/Figure_Manuscript_Empirical_HBFSS_Raw_AllComparisons.png"                   
+[56] "A  exports/manuscript_final_clean/manuscript_figures/Figure_Manuscript_Empirical_HBFSS_Rem_AllComparisons_NormEVS_vs_RawEVS.png" 
+[57] "A  exports/manuscript_final_clean/manuscript_figures/Figure_Manuscript_PCA_Lead_AllComparisons_NormEVS_vs_RawEVS.png"            
+[58] "A  exports/manuscript_final_clean/manuscript_figures/Figure_Manuscript_PCA_Raw_AllComparisons.png"                               
+[59] "A  exports/manuscript_final_clean/manuscript_figures/Figure_Manuscript_PCA_Rem_AllComparisons_NormEVS_vs_RawEVS.png"             
+[60] "M  exports/manuscript_final_clean/manuscript_figures/Figure_Manuscript_Volcano_Lead_AllComparisons_NormEVS_vs_RawEVS.png"        
+[61] "A  exports/manuscript_final_clean/manuscript_figures/Figure_Manuscript_Volcano_Raw_AllComparisons.png"                           
+[62] "D  exports/manuscript_final_clean/manuscript_figures/Figure_Manuscript_Volcano_Raw_AllComparisons_NormEVS_vs_RawEVS.png"         
+[63] "M  exports/manuscript_final_clean/manuscript_figures/Figure_Manuscript_Volcano_Rem_AllComparisons_NormEVS_vs_RawEVS.png"         
+[64] " M run.log"                                                                                                                      
+[65] "?? Rplots.pdf"                                                                                                                   
 
 =====================================================
 Pipeline complete.
@@ -542,7 +420,7 @@ Repository root:
 Output directory:
 /root/REAPER98632/exports/manuscript_final_clean 
 Exported files:
-52 
+61 
 =====================================================
 
    comparison_name      track_key track_label          dataset_key
@@ -620,128 +498,153 @@ Exported files:
 22 raw count subsets; DESeq2 size-factor normalization is run after EVS split
 23 raw count subsets; DESeq2 size-factor normalization is run after EVS split
 24 raw count subsets; DESeq2 size-factor normalization is run after EVS split
-   n_features hc_p_threshold hbfss_threshold n_weak_cnh n_strong_cnh n_standard
-1       31553   0.0005325461        3.273643       3469            3          9
-2        6722   0.0342924015        1.464802       2143            1          3
-3       24831   0.0369015079        1.432956       2127            2         48
-4       31553   0.0005325461        3.273643       3469            3          9
-5        6629   0.0195442804        1.708980       2914            0          3
-6       24924   0.0620391747        1.207334       1313            3         41
-7       31534   0.0136775582        1.863991       7704            0          0
-8        7107   0.0220541331        1.656510       4824            0          0
-9       24427   0.0145657313        1.836668       3633            0          0
-10      31534   0.0136775582        1.863991       7704            0          0
-11       6717   0.0122361569        1.912355       5036            0          0
-12      24817   0.0170388690        1.768559       3483            0          0
-13      31658   0.0223630002        1.650470       6128           39        743
-14       7093   0.0179174848        1.746723       3745           13        286
-15      24565   0.0339201556        1.469542       2967           55        686
-16      31658   0.0223630002        1.650470       6128           39        743
-17       6741   0.0229484285        1.639247       4204           15        295
-18      24917   0.0475021845        1.323286       2369           43        639
-19      31580   0.0186581006        1.729133       8714            0          4
-20       6787   0.0064045432        2.193512       4954            0          1
-21      24793   0.0181617074        1.740843       4559            0         28
-22      31580   0.0186581006        1.729133       8714            0          4
-23       6556   0.0008689516        3.061004       5510            0          4
-24      25024   0.0262387925        1.581056       3835            0         17
-   n_hbfss n_display_weak_cnh n_display_strong_cnh n_display_standard
-1       61               3469                    0                  9
-2       15               2143                    0                  3
-3      191               2127                    0                 48
-4       61               3469                    0                  9
-5       16               2914                    0                  3
-6      160               1313                    0                 41
-7        8               7704                    0                  0
-8        3               4824                    0                  0
-9       21               3633                    0                  0
-10       8               7704                    0                  0
-11       6               5036                    0                  0
-12      10               3483                    0                  0
-13    1100               6128                    0                743
-14     354               3745                    0                286
-15    1062               2967                    0                686
-16    1100               6128                    0                743
-17     354               4204                    0                295
-18    1092               2369                    0                639
-19      76               8714                    0                  4
-20      12               4954                    0                  1
-21     138               4559                    0                 28
-22      76               8714                    0                  4
-23       6               5510                    0                  4
-24      88               3835                    0                 17
-   n_display_hbfss n_overlap n_weak_hbfss_overlap n_strong_hbfss_overlap
-1               52         9                    0                      3
-2               12         3                    0                      1
-3              143        48                    0                      2
-4               52         9                    0                      3
-5               13         3                    0                      0
-6              119        41                    0                      3
-7                8         0                    0                      0
-8                3         0                    0                      0
-9               19         2                    2                      0
-10               8         0                    0                      0
-11               6         0                    0                      0
-12              10         0                    0                      0
-13             348       752                    9                     39
-14              66       288                    2                     13
-15             358       704                   18                     55
-16             348       752                    9                     39
-17              54       300                    5                     15
-18             453       639                    0                     43
-19              68         8                    4                      0
-20              11         1                    0                      0
-21             102        36                    8                      0
-22              68         8                    4                      0
-23               2         4                    0                      0
-24              71        17                    0                      0
-   n_standard_hbfss_overlap top_n_target trt_cutoff_quantile
-1                         9         5000           0.8415365
-2                         3         5000           0.8415365
-3                        48         5000           0.8415365
-4                         9         5000           0.8425544
-5                         3         5000           0.8425544
-6                        41         5000           0.8425544
-7                         0         5000           0.8414410
-8                         0         5000           0.8414410
-9                         0         5000           0.8414410
-10                        0         5000           0.8425544
-11                        0         5000           0.8425544
-12                        0         5000           0.8425544
-13                      743         5000           0.8420620
-14                      286         5000           0.8420620
-15                      686         5000           0.8420620
-16                      743         5000           0.8425544
-17                      295         5000           0.8425544
-18                      639         5000           0.8425544
-19                        4         5000           0.8416719
-20                        1         5000           0.8416719
-21                       28         5000           0.8416719
-22                        4         5000           0.8425544
-23                        4         5000           0.8425544
-24                       17         5000           0.8425544
-   ctrl_cutoff_quantile leading_edge_n remainder_n
-1             0.8415365           6722       25035
-2             0.8415365           6722       25035
-3             0.8415365           6722       25035
-4             0.8425544           6629       25128
-5             0.8425544           6629       25128
-6             0.8425544           6629       25128
-7             0.8414410           7107       24650
-8             0.8414410           7107       24650
-9             0.8414410           7107       24650
-10            0.8425544           6717       25040
-11            0.8425544           6717       25040
-12            0.8425544           6717       25040
-13            0.8420620           7093       24664
-14            0.8420620           7093       24664
-15            0.8420620           7093       24664
-16            0.8425544           6741       25016
-17            0.8425544           6741       25016
-18            0.8425544           6741       25016
-19            0.8416719           6787       24970
-20            0.8416719           6787       24970
-21            0.8416719           6787       24970
-22            0.8425544           6556       25201
-23            0.8425544           6556       25201
-24            0.8425544           6556       25201
+   n_features hc_p_threshold hbfss_threshold standard_bh_fdr cnh_bh_fdr
+1       31553   0.0005325461        3.273643             0.2        0.1
+2        6722   0.0342924015        1.464802             0.2        0.1
+3       24831   0.0369015079        1.432956             0.2        0.1
+4       31553   0.0005325461        3.273643             0.2        0.1
+5        6629   0.0195442804        1.708980             0.2        0.1
+6       24924   0.0620391747        1.207334             0.2        0.1
+7       31534   0.0136775582        1.863991             0.2        0.1
+8        7107   0.0220541331        1.656510             0.2        0.1
+9       24427   0.0145657313        1.836668             0.2        0.1
+10      31534   0.0136775582        1.863991             0.2        0.1
+11       6717   0.0122361569        1.912355             0.2        0.1
+12      24817   0.0170388690        1.768559             0.2        0.1
+13      31658   0.0223630002        1.650470             0.2        0.1
+14       7093   0.0179174848        1.746723             0.2        0.1
+15      24565   0.0339201556        1.469542             0.2        0.1
+16      31658   0.0223630002        1.650470             0.2        0.1
+17       6741   0.0229484285        1.639247             0.2        0.1
+18      24917   0.0475021845        1.323286             0.2        0.1
+19      31580   0.0186581006        1.729133             0.2        0.1
+20       6787   0.0064045432        2.193512             0.2        0.1
+21      24793   0.0181617074        1.740843             0.2        0.1
+22      31580   0.0186581006        1.729133             0.2        0.1
+23       6556   0.0008689516        3.061004             0.2        0.1
+24      25024   0.0262387925        1.581056             0.2        0.1
+   n_weak_cnh n_strong_cnh n_standard n_hbfss n_hbfss_display
+1           0            3         16      61              45
+2           0            1          3      15              12
+3          23            2         93     191              98
+4           0            3         16      61              45
+5           0            0          3      16              13
+6           1            3         66     160              94
+7          59            0          0       8               8
+8          67            0          0       3               3
+9          49            0          1      21              18
+10         59            0          0       8               8
+11         44            0          0       6               6
+12         27            0          0      10              10
+13         84           39        825    1100             266
+14         18           13        286     354              66
+15        106           55        809    1062             235
+16         84           39        825    1100             266
+17         40           15        295     354              54
+18          6           43        813    1092             279
+19        138            0          5      76              67
+20          7            0          3      12               9
+21        107            0         41     138              89
+22        138            0          5      76              67
+23          3            0          4       6               2
+24         12            0         19      88              69
+   n_display_weak_cnh n_display_strong_cnh n_display_standard n_overlap
+1                   0                    3                 13        16
+2                   0                    1                  2         3
+3                  23                    2                 91        93
+4                   0                    3                 13        16
+5                   0                    0                  3         3
+6                   1                    3                 63        66
+7                  59                    0                  0         0
+8                  67                    0                  0         0
+9                  49                    0                  1         1
+10                 59                    0                  0         0
+11                 44                    0                  0         0
+12                 27                    0                  0         0
+13                 84                   39                786       825
+14                 18                   13                273       286
+15                106                   55                754       809
+16                 84                   39                786       825
+17                 40                   15                280       295
+18                  6                   43                770       813
+19                138                    0                  5         5
+20                  7                    0                  3         3
+21                107                    0                 41        41
+22                138                    0                  5         5
+23                  3                    0                  4         4
+24                 12                    0                 19        19
+   n_weak_hbfss_overlap n_strong_hbfss_overlap n_standard_hbfss_overlap
+1                     0                      0                       16
+2                     0                      0                        3
+3                     0                      0                       93
+4                     0                      0                       16
+5                     0                      0                        3
+6                     0                      0                       66
+7                     0                      0                        0
+8                     0                      0                        0
+9                     0                      0                        1
+10                    0                      0                        0
+11                    0                      0                        0
+12                    0                      0                        0
+13                    0                      0                      825
+14                    0                      0                      286
+15                    0                      0                      809
+16                    0                      0                      825
+17                    0                      0                      295
+18                    0                      0                      813
+19                    0                      0                        5
+20                    0                      0                        3
+21                    0                      0                       41
+22                    0                      0                        5
+23                    0                      0                        4
+24                    0                      0                       19
+   top_n_target trt_cutoff_quantile ctrl_cutoff_quantile leading_edge_n
+1          5000           0.8415365            0.8415365           6722
+2          5000           0.8415365            0.8415365           6722
+3          5000           0.8415365            0.8415365           6722
+4          5000           0.8425544            0.8425544           6629
+5          5000           0.8425544            0.8425544           6629
+6          5000           0.8425544            0.8425544           6629
+7          5000           0.8414410            0.8414410           7107
+8          5000           0.8414410            0.8414410           7107
+9          5000           0.8414410            0.8414410           7107
+10         5000           0.8425544            0.8425544           6717
+11         5000           0.8425544            0.8425544           6717
+12         5000           0.8425544            0.8425544           6717
+13         5000           0.8420620            0.8420620           7093
+14         5000           0.8420620            0.8420620           7093
+15         5000           0.8420620            0.8420620           7093
+16         5000           0.8425544            0.8425544           6741
+17         5000           0.8425544            0.8425544           6741
+18         5000           0.8425544            0.8425544           6741
+19         5000           0.8416719            0.8416719           6787
+20         5000           0.8416719            0.8416719           6787
+21         5000           0.8416719            0.8416719           6787
+22         5000           0.8425544            0.8425544           6556
+23         5000           0.8425544            0.8425544           6556
+24         5000           0.8425544            0.8425544           6556
+   remainder_n
+1        25035
+2        25035
+3        25035
+4        25128
+5        25128
+6        25128
+7        24650
+8        24650
+9        24650
+10       25040
+11       25040
+12       25040
+13       24664
+14       24664
+15       24664
+16       25016
+17       25016
+18       25016
+19       24970
+20       24970
+21       24970
+22       25201
+23       25201
+24       25201
