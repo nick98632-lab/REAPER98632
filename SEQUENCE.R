@@ -514,7 +514,12 @@ safe_neglog10 <- function(x, pseudocount = 1e-12) {
 clip_probabilities <- function(x, eps = 1e-300) {
   x <- unname(as.numeric(x))
 
-  if (!length(x)eal_
+  if (!length(x)) {
+    return(numeric(0))
+  }
+
+  bad <- !is.finite(x) | is.na(x)
+  x[bad] <- NA_real_
 
   good <- !is.na(x)
   x[good] <- pmin(pmax(x[good], eps), 1 - 1e-12)
@@ -587,7 +592,11 @@ clean_gene_set <- function(x) {
   unique(tolower(trimws(x[!is.na(x) & x != ""])))
 }
 
-# ---------------------------------------------------------------tion_coef <- function(dds) {
+make_design_formula <- function(coldata) {
+  ~ condition
+}
+
+get_condition_coef <- function(dds) {
   rn <- DESeq2::resultsNames(dds)
   idx <- grep("^condition_", rn)
 
