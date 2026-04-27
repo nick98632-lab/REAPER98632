@@ -1,7 +1,7 @@
 #!/usr/bin/env Rscript
 
 # =============================================================================
-# FINAL MANUSCRIPT PIPELINE
+# FINAL MANUSCRIPT PIPELINE — JOURNAL REVIEW VERSION
 # EVS + DESeq2 + empirical-null calibration + higher criticism + HBFSS
 # =============================================================================
 #
@@ -133,6 +133,7 @@
 #
 #   resGA_padj < alpha_level
 #   |lfc_shrunk| >= c
+#   empirical_p <= hc_p_threshold_dataset
 #
 # Weak composite-null hypothesis, abbreviated Weak CNH:
 #
@@ -148,6 +149,7 @@
 #
 #   resLA_padj < alpha_level
 #   |lfc_shrunk| < c
+#   empirical_p <= hc_p_threshold_dataset
 #
 # Standard DESeq2:
 #
@@ -179,7 +181,7 @@
 # classes are mutually exclusive so the visible marker count matches the visible
 # class. HBFSS-positive features that also meet Weak CNH, Strong CNH, or Standard
 # criteria retain their primary class marker rather than being overwritten by the
-# purple HBFSS class. HBFSS totals and overlap counts are retained in the tables.
+# purple HBFSS class. HBFSS totals and overlap counts are retained in the tables. Gene labels on volcano plots are restricted to the top ten displayed HBFSS additions ranked by HBFSS score.
 #
 # -----------------------------------------------------------------------------
 # EXPORT RULES
@@ -273,7 +275,7 @@ plot_palette <- list(
   hc = "#A65628",
   hbfss_line = "#6A3D9A",
   weak = "#4EA3F1",
-  strong = "#1F78B4",
+  strong = "#E31A1C",
   standard = "#33A02C",
   hbfss = "#6A3D9A",
   control = "#4D4D4D",
@@ -756,6 +758,22 @@ final_class_shapes <- c(
   "Strong" = 15,
   "Std" = 18,
   "HBFSS" = 8
+)
+
+final_class_sizes <- c(
+  "BG" = 0.55,
+  "Weak" = 1.15,
+  "Strong" = 1.25,
+  "Std" = 1.10,
+  "HBFSS" = 1.25
+)
+
+final_class_alphas <- c(
+  "BG" = 0.26,
+  "Weak" = 0.92,
+  "Strong" = 0.95,
+  "Std" = 0.88,
+  "HBFSS" = 0.95
 )
 
 plot_expand_xy <- function() {
@@ -1677,33 +1695,38 @@ build_final_volcano_df <- function(df, y_col = "neglog10_empirical_p") {
 }
 
 select_final_volcano_labels <- function(df, y_col, n_labels = n_top_labels_volcano) {
+  # Label only the purple HBFSS additions. These are the discoveries not already
+  # represented as Weak, Strong, or standard DESeq2 calls. Ranking by HBFSS
+  # score makes the labels communicate the added value of the method directly.
   if (!nrow(df)) {
     return(df[0, , drop = FALSE])
   }
 
-  df <- df[df$has_valid_gene_symbol, , drop = FALSE]
+  df <- df[
+    df$has_valid_gene_symbol &
+      as.character(df$final_class) == "HBFSS" &
+      !is.na(df$HBFSS) &
+      is.finite(df$HBFSS),
+    ,
+    drop = FALSE
+  ]
 
   if (!nrow(df)) {
     return(df[0, , drop = FALSE])
   }
 
-  class_priority <- c("HBFSS" = 1, "Strong" = 2, "Weak" = 3, "Std" = 4, "BG" = 5)
-
-  df$label_priority <- class_priority[as.character(df$final_class)]
-
-  metric <- suppressWarnings(as.numeric(df[[y_col]]))
-  metric[!is.finite(metric)] <- -Inf
+  emp <- suppressWarnings(as.numeric(df$empirical_p))
+  emp[!is.finite(emp)] <- Inf
 
   ord <- order(
-    df$label_priority,
-    -metric,
+    -df$HBFSS,
+    emp,
     -abs(df$lfc_shrunk),
     na.last = TRUE
   )
 
   df <- df[ord, , drop = FALSE]
   df <- df[!duplicated(df$gene_symbol_plot), , drop = FALSE]
-
   df[seq_len(min(n_labels, nrow(df))), , drop = FALSE]
 }
 
@@ -1828,12 +1851,12 @@ plot_final_volcano <- function(df, dataset_name, short_title = NULL, label_genes
       lfc_shrunk,
       neglog10_empirical_p,
       color = final_class,
-      shape = final_class
+      shape = final_class,
+      size = final_class,
+      alpha = final_class
     )
   ) +
     geom_point(
-      alpha = 0.80,
-      size = 1.35,
       stroke = 0.30
     ) +
     scale_color_manual(
@@ -1845,7 +1868,7 @@ plot_final_volcano <- function(df, dataset_name, short_title = NULL, label_genes
         nrow = 1,
         override.aes = list(
           shape = unname(final_class_shapes[final_class_levels]),
-          size = rep(3.0, length(final_class_levels)),
+          size = rep(3.2, length(final_class_levels)),
           alpha = rep(1.0, length(final_class_levels)),
           stroke = rep(0.55, length(final_class_levels))
         )
@@ -1856,6 +1879,16 @@ plot_final_volcano <- function(df, dataset_name, short_title = NULL, label_genes
       breaks = final_class_levels,
       drop = FALSE,
       name = "Class",
+      guide = "none"
+    ) +
+    scale_size_manual(
+      values = final_class_sizes,
+      breaks = final_class_levels,
+      guide = "none"
+    ) +
+    scale_alpha_manual(
+      values = final_class_alphas,
+      breaks = final_class_levels,
       guide = "none"
     ) +
     geom_vline(
@@ -1920,17 +1953,23 @@ plot_final_volcano <- function(df, dataset_name, short_title = NULL, label_genes
     p <- p +
       ggrepel::geom_text_repel(
         data = lab_df,
-        aes(label = gene_symbol_plot),
-        size = 1.8,
+        aes(
+          x = lfc_shrunk,
+          y = neglog10_empirical_p,
+          label = gene_symbol_plot
+        ),
+        inherit.aes = FALSE,
+        color = plot_palette$hbfss,
+        size = 1.9,
         seed = 1,
-        max.overlaps = 20,
-        force = 1.15,
-        force_pull = 0.4,
+        max.overlaps = 25,
+        force = 1.25,
+        force_pull = 0.35,
         box.padding = 0.30,
         point.padding = 0.14,
         min.segment.length = 0,
-        segment.alpha = 0.55,
-        segment.size = 0.20
+        segment.alpha = 0.60,
+        segment.size = 0.22
       )
   }
 
