@@ -84,10 +84,10 @@
 #
 #   hc_p_threshold_dataset = fdrtool::hc.thresh(sort(empirical_p))
 #
-# This threshold is used only to derive the HBFSS decision boundary. It is not
-# allowed to suppress DESeq2 standard, weak-CNH, or strong-CNH discoveries after
-# those tests are run. That is essential because the manuscript compares HBFSS
-# against the complete DESeq2-derived calls, not against HC-filtered subsets.
+# This threshold is used to derive the HBFSS decision boundary and to require
+# empirical-p support for HBFSS calls. Standard DESeq2 calls remain DESeq2/BH
+# calls and are not suppressed by HC. Weak-effect display can also be supported
+# by the DESeq2 lessAbs composite-null test or by HBFSS.
 #
 # -----------------------------------------------------------------------------
 # HBFSS DEFINITION
@@ -105,9 +105,9 @@
 #
 #   hbfss_threshold_dataset = abs(log10(hc_p_threshold_dataset)) * lfc_boundary
 #
-# On a volcano plot, the HBFSS decision boundary is:
+# On a volcano plot, the HBFSS decision boundary is the upper envelope:
 #
-#   y = hbfss_threshold_dataset / |x|
+#   y = max[-log10(hc_p_threshold_dataset), hbfss_threshold_dataset / |x|]
 #
 # where x is the shrunken log2 fold change and y is -log10(empirical_p).
 # The curve is drawn only inside the plotted coordinate range to avoid a
@@ -145,11 +145,10 @@
 #   altHypothesis = "lessAbs"
 #   lfcThreshold  = c
 #
-# A PAS is plotted as Weak CNH if all of the following hold:
-#
-#   resLA_padj < alpha_level
-#   |lfc_shrunk| < c
-#   empirical_p <= hc_p_threshold_dataset
+# A PAS is plotted as Weak CNH if the DESeq2 lessAbs composite-null test passes
+# BH FDR alpha_level and |lfc_shrunk| < c. A sub-threshold HBFSS-supported PAS is
+# also displayed in the same blue weak-effect class so weak HBFSS discoveries are
+# visually distinct from purple added-HBFSS sites.
 #
 # Standard DESeq2:
 #
@@ -161,9 +160,9 @@
 #
 # HBFSS:
 #
-# A PAS is plotted as HBFSS when it passes the HBFSS threshold and is not
-# already displayed as Weak CNH, Strong CNH, or Standard. Standard DESeq2
-# discoveries are considered included within the HBFSS methodology, but retain
+# A PAS is plotted as purple HBFSS when it passes the HBFSS threshold, passes the
+# HC empirical-p requirement, and is not already displayed as Weak CNH, Strong CNH,
+# or Standard. Standard DESeq2 discoveries are counted in HBFSS totals but retain
 # the Standard marker on the volcano plot so the comparison remains visible.
 #
 # -----------------------------------------------------------------------------
@@ -181,7 +180,10 @@
 # classes are mutually exclusive so the visible marker count matches the visible
 # class. HBFSS-positive features that also meet Weak CNH, Strong CNH, or Standard
 # criteria retain their primary class marker rather than being overwritten by the
-# purple HBFSS class. HBFSS totals and overlap counts are retained in the tables. Gene labels on volcano plots are restricted to the top ten displayed HBFSS additions ranked by HBFSS score.
+# purple HBFSS class. HBFSS totals and overlap counts are retained in the tables
+# and discovery-count figure. By default, all displayed significant genes/features
+# are labeled on the volcano plots; set label_all_significant_genes <- FALSE to
+# revert to compact top-HBFSS-addition labeling.
 #
 # -----------------------------------------------------------------------------
 # EXPORT RULES
@@ -237,7 +239,10 @@ twas_file_candidates <- c(
   "/root/REAPER98632/data/3aTWAS_genes_of_11_brain_disorders.csv"
 )
 
-alpha_level <- 0.10
+# Both DESeq2 composite-null calls and standard DESeq2 calls use the
+# manuscript-specified Benjamini-Hochberg FDR threshold of 20%.
+# alpha_level is retained as the composite-null alpha used by greaterAbs/lessAbs.
+alpha_level <- 0.20
 standard_alpha_level <- 0.20
 
 lfc_boundary <- 1.0
@@ -249,6 +254,7 @@ figure_dpi <- 320
 base_theme_size <- 10
 
 n_top_labels_volcano <- 10
+label_all_significant_genes <- TRUE
 
 # Manuscript export behavior. When TRUE, the script writes only the focused
 # paper-ready figure panels into exports/manuscript_final_clean/manuscript_figures.
@@ -1137,7 +1143,7 @@ make_rank_matrix_for_track <- function(count_matrix, coldata, track_key) {
     return(
       list(
         rank_matrix = as.data.frame(count_matrix),
-        preprocessing_label = "Raw counts prior to EVS"
+        preprocessing_label = "Raw counts prior to EVS; PC1 ranking uses log2(x + 1)"
       )
     )
   }
@@ -1161,12 +1167,18 @@ make_rank_matrix_for_track <- function(count_matrix, coldata, track_key) {
 
   list(
     rank_matrix = norm_counts,
-    preprocessing_label = "DESeq2-normalized counts prior to EVS"
+    preprocessing_label = "DESeq2-normalized counts prior to EVS; PC1 ranking uses log2(x + 1)"
   )
 }
 
 compute_pc1_loading_table <- function(value_df, sample_names, top_n = top_n_target, preprocessing_label = "Normalized prior to EVS") {
   x <- as.matrix(value_df[, sample_names, drop = FALSE])
+  storage.mode(x) <- "numeric"
+
+  # EVS ranks are based on PC1 feature-loading structure after log2(x + 1).
+  # This preserves the raw-versus-normalized EVS comparison while preventing
+  # the raw-count track from being dominated by the highest-count PAS features.
+  x <- log2(pmax(x, 0) + 1)
 
   pca_fit <- stats::prcomp(
     t(x),
@@ -1319,21 +1331,23 @@ run_core_analysis <- function(count_mat, coldata, dataset_name, annot_df) {
   res <- DESeq2::results(
     dds,
     contrast = c("condition", "trt", "untrt"),
-    alpha = alpha_level
+    alpha = standard_alpha_level
   )
 
   res_strong <- DESeq2::results(
     dds,
     contrast = c("condition", "trt", "untrt"),
     lfcThreshold = lfc_boundary,
-    altHypothesis = "greaterAbs"
+    altHypothesis = "greaterAbs",
+    alpha = alpha_level
   )
 
   res_weak <- DESeq2::results(
     dds,
     contrast = c("condition", "trt", "untrt"),
     lfcThreshold = lfc_boundary,
-    altHypothesis = "lessAbs"
+    altHypothesis = "lessAbs",
+    alpha = alpha_level
   )
 
   res_all_df <- as.data.frame(res)
@@ -1432,7 +1446,12 @@ run_core_analysis <- function(count_mat, coldata, dataset_name, annot_df) {
     res_df$HBFSS_core_pass <- FALSE
   } else {
     hbfss_threshold_dataset <- abs(log10(hc_p_threshold_dataset)) * lfc_boundary
-    res_df$HBFSS_core_pass <- res_df$HBFSS >= hbfss_threshold_dataset
+    res_df$HBFSS_core_pass <- !is.na(res_df$HBFSS) &
+      is.finite(res_df$HBFSS) &
+      res_df$HBFSS >= hbfss_threshold_dataset &
+      !is.na(res_df$empirical_p) &
+      is.finite(res_df$empirical_p) &
+      res_df$empirical_p <= hc_p_threshold_dataset
   }
 
   res_df$regulation_direction <- ifelse(
@@ -1489,15 +1508,19 @@ run_core_analysis <- function(count_mat, coldata, dataset_name, annot_df) {
     is.finite(res_df$empirical_p) &
     res_df$empirical_p <= hc_p_threshold_dataset
 
-  # Weak and strong CNH calls are DESeq2 composite-null discoveries gated by
-  # the empirical-null HC threshold. Standard DESeq2 calls use BH FDR 20% and
-  # are not gated by HC. HBFSS includes all standard DESeq2 discoveries and can
-  # add extra discoveries beyond the DESeq2-derived classes.
+  # Final decision flags.
+  # Standard DESeq2 uses BH FDR 20% and the manuscript LFC boundary.
+  # HBFSS requires both the score boundary and empirical-p support at or beyond
+  # the HC threshold. Standard DESeq2 discoveries are retained as green standard
+  # calls on the volcano even when they also overlap with HBFSS support.
+  # Weak effect sites are blue whenever they are sub-threshold in effect size and
+  # are supported either by the DESeq2 lessAbs composite-null test at BH FDR 20%
+  # or by HBFSS. This keeps HBFSS-supported weak effects blue instead of hiding
+  # them inside the purple added-HBFSS class.
   res_df$weak_cnh_flag <- !is.na(res_df$resLA_padj) &
     res_df$resLA_padj < alpha_level &
     !is.na(res_df$lfc_shrunk) &
-    abs(res_df$lfc_shrunk) < lfc_boundary &
-    res_df$hc_pass
+    abs(res_df$lfc_shrunk) < lfc_boundary
 
   res_df$strong_cnh_flag <- !is.na(res_df$resGA_padj) &
     res_df$resGA_padj < alpha_level &
@@ -1518,16 +1541,25 @@ run_core_analysis <- function(count_mat, coldata, dataset_name, annot_df) {
 
   res_df$HBFSS_significant <- res_df$hbfss_flag
 
-  res_df$standard_hbfss_overlap <- res_df$standard_flag & res_df$hbfss_flag
-  res_df$weak_hbfss_overlap <- rep(FALSE, nrow(res_df))
-  res_df$strong_hbfss_overlap <- rep(FALSE, nrow(res_df))
-  res_df$any_overlap <- res_df$standard_hbfss_overlap
+  res_df$hbfss_weak_effect_flag <- res_df$hbfss_flag &
+    !is.na(res_df$lfc_shrunk) &
+    abs(res_df$lfc_shrunk) < lfc_boundary
 
-  # Display is mutually exclusive and prioritizes visible interpretation:
-  # Weak, Strong, and Standard remain their own DESeq2-derived colors; the
-  # purple HBFSS class shows additional HBFSS discoveries not already shown as
-  # Weak, Strong, or Standard.
-  res_df$display_weak_flag <- res_df$weak_cnh_flag
+  res_df$standard_hbfss_overlap <- res_df$standard_flag &
+    !is.na(res_df$HBFSS_core_pass) &
+    res_df$HBFSS_core_pass
+  res_df$weak_hbfss_overlap <- res_df$weak_cnh_flag & res_df$hbfss_flag
+  res_df$strong_hbfss_overlap <- res_df$strong_cnh_flag & res_df$hbfss_flag
+  res_df$any_overlap <- res_df$standard_hbfss_overlap |
+    res_df$weak_hbfss_overlap |
+    res_df$strong_hbfss_overlap
+
+  # Display is mutually exclusive and prioritizes visual interpretation:
+  # Weak effect support is blue, strong CNH is red, standard DESeq2 is green,
+  # and purple HBFSS means HBFSS-added sites not already explained by those
+  # visible classes. HBFSS totals are retained separately in the tables and bar
+  # plots, so the purple plotted class is intentionally the added-HBFSS subset.
+  res_df$display_weak_flag <- res_df$weak_cnh_flag | res_df$hbfss_weak_effect_flag
   res_df$display_strong_flag <- res_df$strong_cnh_flag &
     !res_df$display_weak_flag
   res_df$display_standard_flag <- res_df$standard_flag &
@@ -1643,6 +1675,7 @@ run_core_analysis <- function(count_mat, coldata, dataset_name, annot_df) {
     "strong_cnh_flag",
     "standard_flag",
     "hbfss_flag",
+    "hbfss_weak_effect_flag",
     "final_class",
     "weak_hbfss_overlap",
     "strong_hbfss_overlap",
@@ -1681,8 +1714,11 @@ build_final_volcano_df <- function(df, y_col = "neglog10_empirical_p") {
   df$gene_symbol_plot <- ifelse(
     df$has_valid_gene_symbol,
     trimws(df$gene_symbol),
-    NA_character_
+    as.character(df$feature_id)
   )
+
+  df$has_valid_gene_symbol <- !is.na(df$gene_symbol_plot) &
+    grepl("[A-Za-z0-9]", trimws(df$gene_symbol_plot))
 
   df$final_class <- factor(
     as.character(df$final_class),
@@ -1704,44 +1740,69 @@ build_final_volcano_df <- function(df, y_col = "neglog10_empirical_p") {
 }
 
 select_final_volcano_labels <- function(df, y_col, n_labels = n_top_labels_volcano) {
-  # Label only the purple HBFSS additions. These are the discoveries not already
-  # represented as Weak, Strong, or standard DESeq2 calls. Ranking by HBFSS
-  # score makes the labels communicate the added value of the method directly.
   if (!nrow(df)) {
     return(df[0, , drop = FALSE])
   }
 
-  df <- df[
-    df$has_valid_gene_symbol &
-      as.character(df$final_class) == "HBFSS" &
-      !is.na(df$HBFSS) &
-      is.finite(df$HBFSS),
-    ,
-    drop = FALSE
-  ]
-
-  if (!nrow(df)) {
-    return(df[0, , drop = FALSE])
+  if (isTRUE(label_all_significant_genes)) {
+    lab_df <- df[
+      df$has_valid_gene_symbol &
+        as.character(df$final_class) != "BG",
+      ,
+      drop = FALSE
+    ]
+  } else {
+    # Compact manuscript mode: label the top purple HBFSS additions only.
+    lab_df <- df[
+      df$has_valid_gene_symbol &
+        as.character(df$final_class) == "HBFSS" &
+        !is.na(df$HBFSS) &
+        is.finite(df$HBFSS),
+      ,
+      drop = FALSE
+    ]
   }
 
-  emp <- suppressWarnings(as.numeric(df$empirical_p))
+  if (!nrow(lab_df)) {
+    return(lab_df[0, , drop = FALSE])
+  }
+
+  emp <- suppressWarnings(as.numeric(lab_df$empirical_p))
   emp[!is.finite(emp)] <- Inf
 
+  class_priority <- match(
+    as.character(lab_df$final_class),
+    c("HBFSS", "Strong", "Std", "Weak", "BG")
+  )
+  class_priority[is.na(class_priority)] <- 99
+
   ord <- order(
-    -df$HBFSS,
+    class_priority,
+    -lab_df$HBFSS,
     emp,
-    -abs(df$lfc_shrunk),
+    -abs(lab_df$lfc_shrunk),
     na.last = TRUE
   )
 
-  df <- df[ord, , drop = FALSE]
-  df <- df[!duplicated(df$gene_symbol_plot), , drop = FALSE]
-  df[seq_len(min(n_labels, nrow(df))), , drop = FALSE]
+  lab_df <- lab_df[ord, , drop = FALSE]
+  lab_df <- lab_df[!duplicated(lab_df$gene_symbol_plot), , drop = FALSE]
+
+  if (isTRUE(label_all_significant_genes)) {
+    return(lab_df)
+  }
+
+  lab_df[seq_len(min(n_labels, nrow(lab_df))), , drop = FALSE]
 }
 
-make_hbfss_boundary_df <- function(plot_df, hbfss_threshold, y_limit) {
+make_hbfss_boundary_df <- function(plot_df, hbfss_threshold, hc_y, y_limit) {
   if (!is.finite(hbfss_threshold) || is.na(hbfss_threshold) || hbfss_threshold <= 0) {
     return(NULL)
+  }
+
+  hc_floor <- if (is.finite(hc_y) && !is.na(hc_y) && hc_y > 0) {
+    hc_y
+  } else {
+    0
   }
 
   x_max <- max(
@@ -1757,7 +1818,9 @@ make_hbfss_boundary_df <- function(plot_df, hbfss_threshold, y_limit) {
     length.out = 600
   )
 
-  y_curve <- hbfss_threshold / x_abs
+  # The plotted HBFSS decision boundary is the upper envelope of the HC empirical
+  # p-value boundary and the HBFSS score hyperbola.
+  y_curve <- pmax(hbfss_threshold / x_abs, hc_floor)
 
   keep <- is.finite(y_curve) &
     y_curve >= 0 &
@@ -1817,13 +1880,15 @@ plot_final_volcano <- function(df, dataset_name, short_title = NULL, label_genes
   boundary_df <- make_hbfss_boundary_df(
     plot_df = plot_df,
     hbfss_threshold = hbfss_raw,
+    hc_y = hc_y,
     y_limit = y_limit
   )
 
   weak_n <- sum(df$weak_cnh_flag, na.rm = TRUE)
   strong_n <- sum(df$strong_cnh_flag, na.rm = TRUE)
   std_n <- sum(df$standard_flag, na.rm = TRUE)
-  hbfss_n <- sum(df$display_hbfss_flag, na.rm = TRUE)
+  hbfss_total_n <- sum(df$hbfss_flag, na.rm = TRUE)
+  hbfss_added_n <- sum(df$display_hbfss_flag, na.rm = TRUE)
   overlap_n <- sum(df$any_overlap, na.rm = TRUE)
 
   hc_label <- if (is.finite(hc_raw) && !is.na(hc_raw)) {
@@ -1842,7 +1907,8 @@ plot_final_volcano <- function(df, dataset_name, short_title = NULL, label_genes
     "Weak=", weak_n,
     "  Strong=", strong_n,
     "  Std=", std_n,
-    "  HBFSS=", hbfss_n,
+    "  HBFSS(total)=", hbfss_total_n,
+    "  HBFSS(add)=", hbfss_added_n,
     "  Ovlp=", overlap_n,
     hc_label,
     hbfss_label
@@ -1965,14 +2031,15 @@ plot_final_volcano <- function(df, dataset_name, short_title = NULL, label_genes
         aes(
           x = lfc_shrunk,
           y = neglog10_empirical_p,
-          label = gene_symbol_plot
+          label = gene_symbol_plot,
+          color = final_class
         ),
         inherit.aes = FALSE,
-        color = plot_palette$hbfss,
-        size = 1.9,
+        show.legend = FALSE,
+        size = 1.65,
         seed = 1,
-        max.overlaps = 25,
-        force = 1.25,
+        max.overlaps = Inf,
+        force = 1.15,
         force_pull = 0.35,
         box.padding = 0.30,
         point.padding = 0.14,
@@ -2009,9 +2076,9 @@ run_one_evs_track <- function(comparison_name, track_key, count_matrix, coldata,
     "; downstream Raw/Lead/Rem DESeq2 inputs are raw count subsets and are normalized by DESeq2 after the split."
   )
 
-  # Final manuscript mode does not export EVS diagnostic PCA/rank/histogram
-  # panels. The EVS split itself is fully recorded in the result and summary
-  # tables below.
+  # EVS diagnostics are registered here and exported later as manuscript support
+  # panels: PCA structure, PC1-loading rank curves, and PC1-loading histograms
+  # with treatment/control cutoffs and leading-edge union counts.
 
   dataset_list <- list(
     raw_dataset = evs$raw_dataset,
@@ -2583,6 +2650,73 @@ plot_evs_rank_support <- function(evs, comparison_name, track_key) {
     )
 }
 
+plot_evs_loading_histogram_support <- function(evs, comparison_name, track_key) {
+  trt_df <- evs$fit_trt$loading_table
+  ctrl_df <- evs$fit_untrt$loading_table
+
+  trt_df$Group <- "Treatment"
+  ctrl_df$Group <- "Control"
+
+  hist_df <- rbind(
+    trt_df[, c("pc1_loading_abs", "split_class", "Group")],
+    ctrl_df[, c("pc1_loading_abs", "split_class", "Group")]
+  )
+
+  hist_df <- hist_df[
+    is.finite(hist_df$pc1_loading_abs) &
+      !is.na(hist_df$pc1_loading_abs) &
+      hist_df$pc1_loading_abs > 0,
+    ,
+    drop = FALSE
+  ]
+
+  cutoff_df <- data.frame(
+    Group = c("Treatment", "Control"),
+    cutoff = c(evs$fit_trt$cutoff, evs$fit_untrt$cutoff),
+    stringsAsFactors = FALSE
+  )
+
+  ggplot(
+    hist_df,
+    aes(pc1_loading_abs, fill = Group, color = Group)
+  ) +
+    geom_histogram(
+      bins = 60,
+      alpha = 0.28,
+      position = "identity",
+      linewidth = 0.15
+    ) +
+    geom_vline(
+      data = cutoff_df,
+      aes(xintercept = cutoff, color = Group),
+      linetype = "dashed",
+      linewidth = 0.60,
+      inherit.aes = FALSE
+    ) +
+    scale_x_log10(labels = scales::label_number()) +
+    scale_fill_manual(
+      values = c("Treatment" = plot_palette$treatment, "Control" = plot_palette$control),
+      name = "Group"
+    ) +
+    scale_color_manual(
+      values = c("Treatment" = plot_palette$treatment, "Control" = plot_palette$control),
+      name = "Group"
+    ) +
+    labs(
+      title = paste0(comparison_name, "\n", unname(track_short[track_key])),
+      x = "|PC1 loading|",
+      y = "Feature count",
+      caption = paste0("Top ", evs$fit_trt$top_n_used, " per condition; leading edge is treatment/control union")
+    ) +
+    coord_cartesian(clip = "off") +
+    manuscript_theme() +
+    theme(
+      legend.position = "bottom",
+      plot.caption = element_text(size = base_theme_size - 3, hjust = 0.5),
+      plot.margin = margin(8, 8, 8, 8)
+    )
+}
+
 plot_empirical_hbfss_support <- function(df, short_title) {
   req <- c("empirical_p", "HBFSS", "final_class", "hc_p_threshold_dataset", "hbfss_threshold_dataset")
   if (length(setdiff(req, names(df))) > 0L) {
@@ -2773,6 +2907,51 @@ save_paper_evs_rank_panel <- function() {
   invisible(TRUE)
 }
 
+save_paper_evs_loading_histogram_panel <- function() {
+  if (!isTRUE(EXPORT_SUPPORT_FIGURES)) {
+    return(invisible(FALSE))
+  }
+
+  plots <- list()
+
+  for (track_key in c("normalized_evs", "raw_evs")) {
+    for (comparison_name in as.character(comparison_table$comparison_name)) {
+      obj <- paper_registry[[registry_key(comparison_name, track_key)]]
+
+      if (is.null(obj) || is.null(obj$evs)) {
+        next
+      }
+
+      plots[[length(plots) + 1L]] <- plot_evs_loading_histogram_support(
+        evs = obj$evs,
+        comparison_name = comparison_name,
+        track_key = track_key
+      )
+    }
+  }
+
+  plots <- Filter(Negate(is.null), plots)
+
+  if (length(plots) == 0L) {
+    return(invisible(FALSE))
+  }
+
+  panel <- assemble_one_legend_panel(
+    plots,
+    panel_title = "EVS PC1-loading distribution support: NormEVS vs RawEVS",
+    ncol = length(as.character(comparison_table$comparison_name))
+  )
+
+  save_grob(
+    panel,
+    file.path(paper_fig_dir, "Figure_Manuscript_EVS_PC1_Loading_Histogram.png"),
+    width = 18.0,
+    height = 9.4
+  )
+
+  invisible(TRUE)
+}
+
 save_paper_empirical_hbfss_panels <- function() {
   if (!isTRUE(EXPORT_SUPPORT_FIGURES)) {
     return(invisible(FALSE))
@@ -2879,7 +3058,7 @@ build_discovery_long_table <- function(summary_df) {
         sm$n_display_weak_cnh,
         sm$n_display_strong_cnh,
         sm$n_display_standard,
-        sm$n_hbfss_display
+        sm$n_hbfss
       )),
       stringsAsFactors = FALSE
     )
@@ -2923,7 +3102,8 @@ save_discovery_count_panel <- function(summary_df) {
     labs(
       title = "Discovery counts by dataset, EVS mode, and method",
       x = NULL,
-      y = "Significant sites"
+      y = "Significant sites",
+      caption = "Purple HBFSS bars show total HBFSS-supported discoveries, including overlap with DESeq2 standard and blue weak-effect calls; purple volcano points show added HBFSS sites only."
     ) +
     manuscript_theme() +
     theme(
@@ -2949,7 +3129,8 @@ save_paper_support_figures <- function(summary_df) {
 
   support_steps <- list(
     PCA = function() save_paper_pca_panels(),
-    EVS = function() save_paper_evs_rank_panel(),
+    EVS_Rank = function() save_paper_evs_rank_panel(),
+    EVS_Histogram = function() save_paper_evs_loading_histogram_panel(),
     Empirical_HBFSS = function() save_paper_empirical_hbfss_panels(),
     Counts = function() save_discovery_count_panel(summary_df)
   )
