@@ -160,10 +160,14 @@
 #
 # HBFSS:
 #
-# A PAS is plotted as purple HBFSS when it passes the HBFSS threshold, passes the
-# HC empirical-p requirement, and is not already displayed as Weak CNH, Strong CNH,
-# or Standard. Standard DESeq2 discoveries are counted in HBFSS totals but retain
-# the Standard marker on the volcano plot so the comparison remains visible.
+# A PAS is HBFSS-positive only when it passes BOTH the dataset-specific HBFSS
+# score threshold and the HC empirical-p requirement. Standard DESeq2 significance
+# is intentionally not added into the HBFSS flag. Overlap between DESeq2 standard
+# significance and HBFSS is recorded separately in standard_hbfss_overlap.
+# A PAS is plotted as purple HBFSS only when it is HBFSS-positive and is not
+# already displayed as Weak CNH, Strong CNH, or Standard. This makes purple
+# volcano points the added HBFSS discovery layer, while tables and bar plots
+# retain the total HBFSS-positive count.
 #
 # -----------------------------------------------------------------------------
 # FINAL VOLCANO DISPLAY RULES
@@ -181,9 +185,12 @@
 # class. HBFSS-positive features that also meet Weak CNH, Strong CNH, or Standard
 # criteria retain their primary class marker rather than being overwritten by the
 # purple HBFSS class. HBFSS totals and overlap counts are retained in the tables
-# and discovery-count figure. By default, all displayed significant genes/features
-# are labeled on the volcano plots; set label_all_significant_genes <- FALSE to
-# revert to compact top-HBFSS-addition labeling.
+# and discovery-count figure. Thus a purple bar can be larger than the number of
+# purple points in a volcano plot because the bar is total HBFSS support, while
+# purple points are added HBFSS-only display points. By default, all displayed
+# significant genes/features are labeled on the volcano plots; set
+# label_all_significant_genes <- FALSE to revert to compact top-HBFSS-addition
+# labeling.
 #
 # -----------------------------------------------------------------------------
 # EXPORT RULES
@@ -271,6 +278,26 @@ GIT_COMMIT_EXPORTS <- FALSE
 GIT_PUSH_EXPORTS <- FALSE
 GIT_COMMIT_MESSAGE <- "Refresh final manuscript EVS HBFSS exports"
 
+# -----------------------------------------------------------------------------
+# Decision-rule audit notes for manuscript review
+# -----------------------------------------------------------------------------
+# These settings intentionally use 20% BH/FDR for both the standard DESeq2 Wald
+# call and the DESeq2 composite-null calls. The 20% value is a manuscript-level
+# exploratory discovery threshold, not a package default. Changing alpha_level
+# and standard_alpha_level above will propagate consistently through results,
+# summaries, legends, and figure captions.
+#
+# The HBFSS method is kept mathematically separate from DESeq2 standard
+# significance:
+#
+#   standard_flag = DESeq2/BH support at standard_alpha_level plus |LFC| >= 1
+#   hbfss_flag    = HBFSS score support plus empirical_p <= HC threshold
+#
+# Overlap between these methods is reported separately rather than forcing one
+# method to absorb the other. This is essential for the manuscript comparison:
+# DESeq2 standard discoveries, HBFSS discoveries, and their overlap can be read
+# directly from the exported results and summary tables.
+#
 # -----------------------------------------------------------------------------
 # Palette
 # -----------------------------------------------------------------------------
@@ -1509,10 +1536,12 @@ run_core_analysis <- function(count_mat, coldata, dataset_name, annot_df) {
     res_df$empirical_p <= hc_p_threshold_dataset
 
   # Final decision flags.
-  # Standard DESeq2 uses BH FDR 20% and the manuscript LFC boundary.
-  # HBFSS requires both the score boundary and empirical-p support at or beyond
-  # the HC threshold. Standard DESeq2 discoveries are retained as green standard
-  # calls on the volcano even when they also overlap with HBFSS support.
+  # Standard DESeq2 uses BH FDR 20% and the manuscript LFC boundary. It is a
+  # DESeq2/BH call and is not suppressed by the empirical-null HC threshold.
+  # HBFSS requires both the score boundary and empirical-p support at or below
+  # the HC p-value threshold, which appears as a horizontal line on the volcano
+  # scale. Standard DESeq2 discoveries are not automatically counted as HBFSS;
+  # standard-HBFSS agreement is stored separately as overlap.
   # Weak effect sites are blue whenever they are sub-threshold in effect size and
   # are supported either by the DESeq2 lessAbs composite-null test at BH FDR 20%
   # or by HBFSS. This keeps HBFSS-supported weak effects blue instead of hiding
@@ -1535,9 +1564,8 @@ run_core_analysis <- function(count_mat, coldata, dataset_name, annot_df) {
 
   res_df$standard_flag <- res_df$standard_significant
 
-  res_df$hbfss_flag <- (!is.na(res_df$HBFSS_core_pass) &
-    res_df$HBFSS_core_pass) |
-    res_df$standard_flag
+  res_df$hbfss_flag <- !is.na(res_df$HBFSS_core_pass) &
+    res_df$HBFSS_core_pass
 
   res_df$HBFSS_significant <- res_df$hbfss_flag
 
@@ -3055,9 +3083,9 @@ build_discovery_long_table <- function(summary_df) {
       ),
       Class = factor(c("Weak", "Strong", "Std", "HBFSS"), levels = c("Weak", "Strong", "Std", "HBFSS")),
       Count = as.numeric(c(
-        sm$n_display_weak_cnh,
-        sm$n_display_strong_cnh,
-        sm$n_display_standard,
+        sm$n_weak_cnh,
+        sm$n_strong_cnh,
+        sm$n_standard,
         sm$n_hbfss
       )),
       stringsAsFactors = FALSE
@@ -3103,7 +3131,7 @@ save_discovery_count_panel <- function(summary_df) {
       title = "Discovery counts by dataset, EVS mode, and method",
       x = NULL,
       y = "Significant sites",
-      caption = "Purple HBFSS bars show total HBFSS-supported discoveries, including overlap with DESeq2 standard and blue weak-effect calls; purple volcano points show added HBFSS sites only."
+      caption = "Bars are method-level discovery totals and may overlap across methods. Purple HBFSS bars show total HBFSS-positive discoveries; purple volcano points show only the added HBFSS layer not already displayed as Weak, Strong, or Standard."
     ) +
     manuscript_theme() +
     theme(
