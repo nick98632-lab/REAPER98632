@@ -208,6 +208,32 @@
 #
 # =============================================================================
 
+required_packages <- c(
+  "DESeq2",
+  "apeglm",
+  "fdrtool",
+  "ggplot2",
+  "ggrepel",
+  "dplyr",
+  "gridExtra",
+  "grid",
+  "scales",
+  "grDevices",
+  "S4Vectors"
+)
+
+missing_packages <- required_packages[
+  !vapply(required_packages, requireNamespace, logical(1), quietly = TRUE)
+]
+
+if (length(missing_packages) > 0L) {
+  stop(
+    "Required R package(s) are not installed: ",
+    paste(missing_packages, collapse = ", "),
+    ". Install them before running this manuscript pipeline."
+  )
+}
+
 suppressPackageStartupMessages({
   library(DESeq2)
   library(apeglm)
@@ -255,6 +281,19 @@ standard_alpha_level <- 0.20
 lfc_boundary <- 1.0
 
 top_n_target <- 5000L
+
+# The intended EVS rule is top-N from the high-loading end of each condition.
+# The script uses rank <= top_n_target, not a numeric loading cutoff, so tied
+# low-loading values cannot accidentally pull the entire matrix into the leading
+# edge. If the requested top-N would leave no biologically interpretable
+# remainder for a small input matrix, the effective N is reduced and recorded in
+# the summary table.
+minimum_remainder_features <- 100L
+
+# Higher-criticism thresholds at or near 1 make the HBFSS threshold essentially
+# zero and convert the volcano boundary into a noninformative rule. Such values
+# are treated as invalid and reported as NA.
+hc_p_threshold_invalid_above <- 0.95
 
 figure_dpi <- 320
 
@@ -616,6 +655,13 @@ pretty_dataset_label <- function(dataset_name) {
   }
 
   comparison_name <- paste(parts[1], parts[2], sep = "_")
+
+  if (length(parts) >= 5L && parts[3] %in% unname(track_short)) {
+    track_label <- parts[3]
+    dataset_key <- paste(parts[4:length(parts)], collapse = "_")
+    return(paste(comparison_name, track_label, pretty_dataset_type(dataset_key), sep = " | "))
+  }
+
   dataset_key <- paste(parts[3:length(parts)], collapse = "_")
 
   paste(comparison_name, pretty_dataset_type(dataset_key), sep = " | ")
@@ -666,6 +712,97 @@ resolve_top_n_cutoff <- function(sorted_values_desc, top_n = top_n_target) {
     cutoff_quantile = cutoff_quantile,
     n_total = n_total
   )
+}
+
+apply_top_n_to_loading_fit <- function(fit_obj, top_n) {
+  loading_tbl <- fit_obj$loading_table
+
+  if (!is.data.frame(loading_tbl) || nrow(loading_tbl) == 0L) {
+    stop("apply_top_n_to_loading_fit() received an empty loading table.")
+  }
+
+  top_n_actual <- min(max(1L, as.integer(top_n)), nrow(loading_tbl))
+  cutoff_value <- loading_tbl$pc1_loading_abs[top_n_actual]
+  cutoff_quantile <- 1 - (top_n_actual / nrow(loading_tbl))
+
+  loading_tbl$split_class <- ifelse(
+    loading_tbl$rank <= top_n_actual,
+    "high_loading",
+    "background_loading"
+  )
+
+  fit_obj$loading_table <- loading_tbl
+  fit_obj$cutoff <- cutoff_value
+  fit_obj$top_n_used <- top_n_actual
+  fit_obj$cutoff_quantile <- cutoff_quantile
+
+  fit_obj
+}
+
+select_top_loading_ids <- function(fit_obj, top_n) {
+  loading_tbl <- fit_obj$loading_table
+  top_n_actual <- min(max(1L, as.integer(top_n)), nrow(loading_tbl))
+
+  as.character(
+    loading_tbl$feature_id[loading_tbl$rank <= top_n_actual]
+  )
+}
+
+choose_joint_top_n_for_remainder <- function(fit_trt, fit_untrt, feature_ids, target_top_n) {
+  feature_ids <- as.character(feature_ids)
+  n_total <- length(feature_ids)
+
+  if (n_total < 2L) {
+    stop("At least two features are required for EVS splitting.")
+  }
+
+  desired_min_remainder <- min(
+    as.integer(minimum_remainder_features),
+    max(1L, floor(0.02 * n_total))
+  )
+
+  max_top_n <- min(
+    max(1L, as.integer(target_top_n)),
+    nrow(fit_trt$loading_table),
+    nrow(fit_untrt$loading_table),
+    n_total - 1L
+  )
+
+  remainder_count_at_n <- function(n_top) {
+    lead_ids <- union(
+      select_top_loading_ids(fit_trt, n_top),
+      select_top_loading_ids(fit_untrt, n_top)
+    )
+
+    length(setdiff(feature_ids, lead_ids))
+  }
+
+  if (remainder_count_at_n(max_top_n) >= desired_min_remainder) {
+    return(max_top_n)
+  }
+
+  low <- 1L
+  high <- max_top_n
+  best <- 1L
+
+  while (low <= high) {
+    mid <- floor((low + high) / 2L)
+
+    if (remainder_count_at_n(mid) >= desired_min_remainder) {
+      best <- mid
+      low <- mid + 1L
+    } else {
+      high <- mid - 1L
+    }
+  }
+
+  message(
+    "Requested top_n_target=", target_top_n,
+    " would leave too few remainder features; using effective_top_n=", best,
+    " per condition for this EVS split."
+  )
+
+  best
 }
 
 run_empirical_null_fdrtool <- function(stat_vec, dataset_name) {
@@ -758,7 +895,11 @@ safe_hc_thresh <- function(empirical_p, dataset_name) {
 
   out <- as.numeric(out[1])
 
-  if (!is.finite(out) || is.na(out) || out <= 0 || out >= 1) {
+  if (!is.finite(out) ||
+      is.na(out) ||
+      out <= 0 ||
+      out >= 1 ||
+      out >= hc_p_threshold_invalid_above) {
     return(NA_real_)
   }
 
@@ -1047,23 +1188,49 @@ assert_required_columns(
   object_name = "WTTS count file sample columns"
 )
 
+coerce_count_column <- function(x) {
+  suppressWarnings(
+    as.numeric(
+      gsub(
+        ",",
+        "",
+        trimws(as.character(x)),
+        fixed = TRUE
+      )
+    )
+  )
+}
+
+for (sid in meta_all$id) {
+  WTTS_Seq[[sid]] <- coerce_count_column(WTTS_Seq[[sid]])
+}
+
 WTTS_Seq <- WTTS_Seq[
-  !is.na(WTTS_Seq$OrigID) & !is.na(WTTS_Seq$Symbol),
+  !is.na(WTTS_Seq$OrigID) & nzchar(trimws(WTTS_Seq$OrigID)),
   ,
   drop = FALSE
 ]
 
 sample_na <- rowSums(is.na(WTTS_Seq[, meta_all$id, drop = FALSE])) > 0
 
+if (any(sample_na)) {
+  message("Removing ", sum(sample_na), " rows with missing or nonnumeric sample counts.")
+}
+
 WTTS_Seq <- WTTS_Seq[!sample_na, , drop = FALSE]
 
-rownames(WTTS_Seq) <- make.unique(WTTS_Seq$OrigID)
+WTTS_Seq$feature_id <- make.unique(as.character(WTTS_Seq$OrigID), sep = "_dup")
+rownames(WTTS_Seq) <- WTTS_Seq$feature_id
 
-OrigID_Symbol <- unique(WTTS_Seq[, c("OrigID", "Symbol"), drop = FALSE])
-
-colnames(OrigID_Symbol) <- c("feature_id", "gene_symbol")
+OrigID_Symbol <- data.frame(
+  feature_id = WTTS_Seq$feature_id,
+  orig_id = WTTS_Seq$OrigID,
+  gene_symbol = WTTS_Seq$Symbol,
+  stringsAsFactors = FALSE
+)
 
 OrigID_Symbol$feature_id <- as.character(OrigID_Symbol$feature_id)
+OrigID_Symbol$orig_id <- as.character(OrigID_Symbol$orig_id)
 OrigID_Symbol$gene_symbol <- as.character(OrigID_Symbol$gene_symbol)
 
 OrigID_Symbol <- OrigID_Symbol %>%
@@ -1133,34 +1300,58 @@ prepare_comparison_data <- function(comparison_name, group1_prefix, group2_prefi
   }
 
   count_sub <- WTTS_Seq[, sample_ids, drop = FALSE]
+  rownames(count_sub) <- rownames(WTTS_Seq)
 
   stopifnot(all(colnames(count_sub) == rownames(coldata)))
 
   list(
     comparison_name = comparison_name,
-    count_matrix = as.matrix(count_sub),
+    count_matrix = coerce_raw_count_matrix_for_deseq2(
+      count_sub,
+      context = paste0(comparison_name, " raw comparison matrix")
+    ),
     coldata = coldata
   )
 }
 
 
 coerce_raw_count_matrix_for_deseq2 <- function(count_mat, context = "count matrix") {
+  original_rownames <- rownames(count_mat)
+  original_colnames <- colnames(count_mat)
+
   count_mat <- as.matrix(count_mat)
+
+  if (!is.numeric(count_mat)) {
+    suppressWarnings(storage.mode(count_mat) <- "numeric")
+  }
 
   if (!is.numeric(count_mat)) {
     stop(context, " must be numeric raw counts before DESeq2.")
   }
 
-  if (any(!is.finite(count_mat), na.rm = TRUE)) {
-    stop(context, " contains non-finite values.")
+  if (any(!is.finite(count_mat) | is.na(count_mat))) {
+    stop(context, " contains NA or non-finite values after numeric coercion.")
   }
 
-  if (any(count_mat < 0, na.rm = TRUE)) {
+  if (any(count_mat < 0)) {
     stop(context, " contains negative values; DESeq2 requires non-negative counts.")
   }
 
-  storage.mode(count_mat) <- "numeric"
-  round(count_mat)
+  rounded <- round(count_mat)
+
+  if (any(abs(count_mat - rounded) > 1e-6)) {
+    warning(context, " contained non-integer values; values were rounded for DESeq2.")
+  }
+
+  if (any(rounded > .Machine$integer.max)) {
+    stop(context, " contains counts larger than R integer storage can represent.")
+  }
+
+  storage.mode(rounded) <- "integer"
+  rownames(rounded) <- original_rownames
+  colnames(rounded) <- original_colnames
+
+  rounded
 }
 
 make_rank_matrix_for_track <- function(count_matrix, coldata, track_key) {
@@ -1238,7 +1429,7 @@ compute_pc1_loading_table <- function(value_df, sample_names, top_n = top_n_targ
   cutoff <- cutoff_info$cutoff_value
 
   loading_tbl$split_class <- ifelse(
-    loading_tbl$pc1_loading_abs >= cutoff,
+    loading_tbl$rank <= cutoff_info$top_n_actual,
     "high_loading",
     "background_loading"
   )
@@ -1291,6 +1482,16 @@ build_eigenvector_split <- function(count_matrix, coldata, track_key) {
     top_n = top_n_target,
     preprocessing_label = preprocessing_label
   )
+
+  effective_top_n <- choose_joint_top_n_for_remainder(
+    fit_trt = fit_trt,
+    fit_untrt = fit_untrt,
+    feature_ids = rownames(raw_count_matrix),
+    target_top_n = top_n_target
+  )
+
+  fit_trt <- apply_top_n_to_loading_fit(fit_trt, effective_top_n)
+  fit_untrt <- apply_top_n_to_loading_fit(fit_untrt, effective_top_n)
 
   trt_high <- as.character(
     subset(
@@ -1437,8 +1638,7 @@ run_core_analysis <- function(count_mat, coldata, dataset_name, annot_df) {
   shr <- DESeq2::lfcShrink(
     dds,
     coef = coef_name,
-    type = "apeglm",
-    res = res
+    type = "apeglm"
   )
 
   shr_df <- as.data.frame(shr)
@@ -1627,7 +1827,6 @@ run_core_analysis <- function(count_mat, coldata, dataset_name, annot_df) {
       "dispFit",
       "dispersion",
       "dispIter",
-      "baseMean",
       "dispOutlier"
     ),
     colnames(mm)
@@ -1636,6 +1835,9 @@ run_core_analysis <- function(count_mat, coldata, dataset_name, annot_df) {
   disp_df <- mm[, disp_cols_available, drop = FALSE]
 
   annot_df$feature_id <- as.character(annot_df$feature_id)
+  if (!"gene_symbol" %in% names(annot_df)) {
+    annot_df$gene_symbol <- NA_character_
+  }
   annot_df$gene_symbol <- as.character(annot_df$gene_symbol)
 
   annot_df <- annot_df %>%
@@ -1680,6 +1882,7 @@ run_core_analysis <- function(count_mat, coldata, dataset_name, annot_df) {
   preferred_cols <- c(
     "dataset_name",
     "feature_id",
+    "orig_id",
     "gene_symbol",
     "baseMean",
     "log2FoldChange",
@@ -2192,6 +2395,7 @@ run_one_evs_track <- function(comparison_name, track_key, count_matrix, coldata,
       n_strong_hbfss_overlap = sum(df$strong_hbfss_overlap, na.rm = TRUE),
       n_standard_hbfss_overlap = sum(df$standard_hbfss_overlap, na.rm = TRUE),
       top_n_target = top_n_target,
+      effective_top_n_per_condition = evs$fit_trt$top_n_used,
       trt_cutoff_quantile = evs$fit_trt$cutoff_quantile,
       ctrl_cutoff_quantile = evs$fit_untrt$cutoff_quantile,
       leading_edge_n = length(evs$leading_edge_ids),
