@@ -6,9 +6,7 @@ Output directory: /root/REAPER98632/exports/manuscript_final_clean
 Running comparison: RT0_ZT6
 =====================================================
 Running RT0_ZT6 NormEVS
-converting counts to integer mode
-EVS track NormEVS: split IDs selected using DESeq2-normalized counts prior to EVS; downstream Raw/Lead/Rem DESeq2 inputs are raw count subsets and are normalized by DESeq2 after the split.
-converting counts to integer mode
+EVS track NormEVS: split IDs selected using DESeq2-normalized counts prior to EVS; PC1 ranking uses log2(x + 1); downstream Raw/Lead/Rem DESeq2 inputs are raw count subsets and are normalized by DESeq2 after the split.
 estimating size factors
 estimating dispersions
 gene-wise dispersion estimates
@@ -19,7 +17,6 @@ using 'apeglm' for LFC shrinkage. If used in published research, please cite:
     Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
     sequence count data: removing the noise and preserving large differences.
     Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
-converting counts to integer mode
 estimating size factors
 estimating dispersions
 gene-wise dispersion estimates
@@ -30,23 +27,6 @@ using 'apeglm' for LFC shrinkage. If used in published research, please cite:
     Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
     sequence count data: removing the noise and preserving large differences.
     Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
-converting counts to integer mode
-estimating size factors
-estimating dispersions
-gene-wise dispersion estimates
-mean-dispersion relationship
--- note: fitType='parametric', but the dispersion trend was not well captured by the
-   function: y = a/x + b, and a local regression fit was automatically substituted.
-   specify fitType='local' or 'mean' to avoid this message next time.
-final dispersion estimates
-fitting model and testing
-using 'apeglm' for LFC shrinkage. If used in published research, please cite:
-    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
-    sequence count data: removing the noise and preserving large differences.
-    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
-Running RT0_ZT6 RawEVS
-EVS track RawEVS: split IDs selected using Raw counts prior to EVS; downstream Raw/Lead/Rem DESeq2 inputs are raw count subsets and are normalized by DESeq2 after the split.
-converting counts to integer mode
 estimating size factors
 estimating dispersions
 gene-wise dispersion estimates
@@ -57,7 +37,8 @@ using 'apeglm' for LFC shrinkage. If used in published research, please cite:
     Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
     sequence count data: removing the noise and preserving large differences.
     Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
-converting counts to integer mode
+Running RT0_ZT6 RawEVS
+EVS track RawEVS: split IDs selected using Raw counts prior to EVS; PC1 ranking uses log2(x + 1); downstream Raw/Lead/Rem DESeq2 inputs are raw count subsets and are normalized by DESeq2 after the split.
 estimating size factors
 estimating dispersions
 gene-wise dispersion estimates
@@ -68,14 +49,20 @@ using 'apeglm' for LFC shrinkage. If used in published research, please cite:
     Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
     sequence count data: removing the noise and preserving large differences.
     Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
-converting counts to integer mode
 estimating size factors
 estimating dispersions
 gene-wise dispersion estimates
 mean-dispersion relationship
--- note: fitType='parametric', but the dispersion trend was not well captured by the
-   function: y = a/x + b, and a local regression fit was automatically substituted.
-   specify fitType='local' or 'mean' to avoid this message next time.
+final dispersion estimates
+fitting model and testing
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
 final dispersion estimates
 fitting model and testing
 using 'apeglm' for LFC shrinkage. If used in published research, please cite:
@@ -87,9 +74,7 @@ using 'apeglm' for LFC shrinkage. If used in published research, please cite:
 Running comparison: RT2_ZT8
 =====================================================
 Running RT2_ZT8 NormEVS
-converting counts to integer mode
-EVS track NormEVS: split IDs selected using DESeq2-normalized counts prior to EVS; downstream Raw/Lead/Rem DESeq2 inputs are raw count subsets and are normalized by DESeq2 after the split.
-converting counts to integer mode
+EVS track NormEVS: split IDs selected using DESeq2-normalized counts prior to EVS; PC1 ranking uses log2(x + 1); downstream Raw/Lead/Rem DESeq2 inputs are raw count subsets and are normalized by DESeq2 after the split.
 estimating size factors
 estimating dispersions
 gene-wise dispersion estimates
@@ -100,7 +85,6 @@ using 'apeglm' for LFC shrinkage. If used in published research, please cite:
     Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
     sequence count data: removing the noise and preserving large differences.
     Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
-converting counts to integer mode
 estimating size factors
 estimating dispersions
 gene-wise dispersion estimates
@@ -111,23 +95,6 @@ using 'apeglm' for LFC shrinkage. If used in published research, please cite:
     Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
     sequence count data: removing the noise and preserving large differences.
     Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
-converting counts to integer mode
-estimating size factors
-estimating dispersions
-gene-wise dispersion estimates
-mean-dispersion relationship
--- note: fitType='parametric', but the dispersion trend was not well captured by the
-   function: y = a/x + b, and a local regression fit was automatically substituted.
-   specify fitType='local' or 'mean' to avoid this message next time.
-final dispersion estimates
-fitting model and testing
-using 'apeglm' for LFC shrinkage. If used in published research, please cite:
-    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
-    sequence count data: removing the noise and preserving large differences.
-    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
-Running RT2_ZT8 RawEVS
-EVS track RawEVS: split IDs selected using Raw counts prior to EVS; downstream Raw/Lead/Rem DESeq2 inputs are raw count subsets and are normalized by DESeq2 after the split.
-converting counts to integer mode
 estimating size factors
 estimating dispersions
 gene-wise dispersion estimates
@@ -138,7 +105,8 @@ using 'apeglm' for LFC shrinkage. If used in published research, please cite:
     Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
     sequence count data: removing the noise and preserving large differences.
     Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
-converting counts to integer mode
+Running RT2_ZT8 RawEVS
+EVS track RawEVS: split IDs selected using Raw counts prior to EVS; PC1 ranking uses log2(x + 1); downstream Raw/Lead/Rem DESeq2 inputs are raw count subsets and are normalized by DESeq2 after the split.
 estimating size factors
 estimating dispersions
 gene-wise dispersion estimates
@@ -149,14 +117,20 @@ using 'apeglm' for LFC shrinkage. If used in published research, please cite:
     Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
     sequence count data: removing the noise and preserving large differences.
     Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
-converting counts to integer mode
 estimating size factors
 estimating dispersions
 gene-wise dispersion estimates
 mean-dispersion relationship
--- note: fitType='parametric', but the dispersion trend was not well captured by the
-   function: y = a/x + b, and a local regression fit was automatically substituted.
-   specify fitType='local' or 'mean' to avoid this message next time.
+final dispersion estimates
+fitting model and testing
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
 final dispersion estimates
 fitting model and testing
 using 'apeglm' for LFC shrinkage. If used in published research, please cite:
@@ -168,9 +142,7 @@ using 'apeglm' for LFC shrinkage. If used in published research, please cite:
 Running comparison: RT4_ZT10
 =====================================================
 Running RT4_ZT10 NormEVS
-converting counts to integer mode
-EVS track NormEVS: split IDs selected using DESeq2-normalized counts prior to EVS; downstream Raw/Lead/Rem DESeq2 inputs are raw count subsets and are normalized by DESeq2 after the split.
-converting counts to integer mode
+EVS track NormEVS: split IDs selected using DESeq2-normalized counts prior to EVS; PC1 ranking uses log2(x + 1); downstream Raw/Lead/Rem DESeq2 inputs are raw count subsets and are normalized by DESeq2 after the split.
 estimating size factors
 estimating dispersions
 gene-wise dispersion estimates
@@ -181,7 +153,6 @@ using 'apeglm' for LFC shrinkage. If used in published research, please cite:
     Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
     sequence count data: removing the noise and preserving large differences.
     Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
-converting counts to integer mode
 estimating size factors
 estimating dispersions
 gene-wise dispersion estimates
@@ -192,23 +163,6 @@ using 'apeglm' for LFC shrinkage. If used in published research, please cite:
     Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
     sequence count data: removing the noise and preserving large differences.
     Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
-converting counts to integer mode
-estimating size factors
-estimating dispersions
-gene-wise dispersion estimates
-mean-dispersion relationship
--- note: fitType='parametric', but the dispersion trend was not well captured by the
-   function: y = a/x + b, and a local regression fit was automatically substituted.
-   specify fitType='local' or 'mean' to avoid this message next time.
-final dispersion estimates
-fitting model and testing
-using 'apeglm' for LFC shrinkage. If used in published research, please cite:
-    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
-    sequence count data: removing the noise and preserving large differences.
-    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
-Running RT4_ZT10 RawEVS
-EVS track RawEVS: split IDs selected using Raw counts prior to EVS; downstream Raw/Lead/Rem DESeq2 inputs are raw count subsets and are normalized by DESeq2 after the split.
-converting counts to integer mode
 estimating size factors
 estimating dispersions
 gene-wise dispersion estimates
@@ -219,7 +173,8 @@ using 'apeglm' for LFC shrinkage. If used in published research, please cite:
     Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
     sequence count data: removing the noise and preserving large differences.
     Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
-converting counts to integer mode
+Running RT4_ZT10 RawEVS
+EVS track RawEVS: split IDs selected using Raw counts prior to EVS; PC1 ranking uses log2(x + 1); downstream Raw/Lead/Rem DESeq2 inputs are raw count subsets and are normalized by DESeq2 after the split.
 estimating size factors
 estimating dispersions
 gene-wise dispersion estimates
@@ -230,14 +185,20 @@ using 'apeglm' for LFC shrinkage. If used in published research, please cite:
     Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
     sequence count data: removing the noise and preserving large differences.
     Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
-converting counts to integer mode
 estimating size factors
 estimating dispersions
 gene-wise dispersion estimates
 mean-dispersion relationship
--- note: fitType='parametric', but the dispersion trend was not well captured by the
-   function: y = a/x + b, and a local regression fit was automatically substituted.
-   specify fitType='local' or 'mean' to avoid this message next time.
+final dispersion estimates
+fitting model and testing
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
 final dispersion estimates
 fitting model and testing
 using 'apeglm' for LFC shrinkage. If used in published research, please cite:
@@ -249,9 +210,7 @@ using 'apeglm' for LFC shrinkage. If used in published research, please cite:
 Running comparison: RT8_ZT14
 =====================================================
 Running RT8_ZT14 NormEVS
-converting counts to integer mode
-EVS track NormEVS: split IDs selected using DESeq2-normalized counts prior to EVS; downstream Raw/Lead/Rem DESeq2 inputs are raw count subsets and are normalized by DESeq2 after the split.
-converting counts to integer mode
+EVS track NormEVS: split IDs selected using DESeq2-normalized counts prior to EVS; PC1 ranking uses log2(x + 1); downstream Raw/Lead/Rem DESeq2 inputs are raw count subsets and are normalized by DESeq2 after the split.
 estimating size factors
 estimating dispersions
 gene-wise dispersion estimates
@@ -262,7 +221,6 @@ using 'apeglm' for LFC shrinkage. If used in published research, please cite:
     Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
     sequence count data: removing the noise and preserving large differences.
     Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
-converting counts to integer mode
 estimating size factors
 estimating dispersions
 gene-wise dispersion estimates
@@ -273,14 +231,10 @@ using 'apeglm' for LFC shrinkage. If used in published research, please cite:
     Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
     sequence count data: removing the noise and preserving large differences.
     Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
-converting counts to integer mode
 estimating size factors
 estimating dispersions
 gene-wise dispersion estimates
 mean-dispersion relationship
--- note: fitType='parametric', but the dispersion trend was not well captured by the
-   function: y = a/x + b, and a local regression fit was automatically substituted.
-   specify fitType='local' or 'mean' to avoid this message next time.
 final dispersion estimates
 fitting model and testing
 using 'apeglm' for LFC shrinkage. If used in published research, please cite:
@@ -288,8 +242,7 @@ using 'apeglm' for LFC shrinkage. If used in published research, please cite:
     sequence count data: removing the noise and preserving large differences.
     Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
 Running RT8_ZT14 RawEVS
-EVS track RawEVS: split IDs selected using Raw counts prior to EVS; downstream Raw/Lead/Rem DESeq2 inputs are raw count subsets and are normalized by DESeq2 after the split.
-converting counts to integer mode
+EVS track RawEVS: split IDs selected using Raw counts prior to EVS; PC1 ranking uses log2(x + 1); downstream Raw/Lead/Rem DESeq2 inputs are raw count subsets and are normalized by DESeq2 after the split.
 estimating size factors
 estimating dispersions
 gene-wise dispersion estimates
@@ -300,7 +253,6 @@ using 'apeglm' for LFC shrinkage. If used in published research, please cite:
     Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
     sequence count data: removing the noise and preserving large differences.
     Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
-converting counts to integer mode
 estimating size factors
 estimating dispersions
 gene-wise dispersion estimates
@@ -311,14 +263,10 @@ using 'apeglm' for LFC shrinkage. If used in published research, please cite:
     Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
     sequence count data: removing the noise and preserving large differences.
     Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
-converting counts to integer mode
 estimating size factors
 estimating dispersions
 gene-wise dispersion estimates
 mean-dispersion relationship
--- note: fitType='parametric', but the dispersion trend was not well captured by the
-   function: y = a/x + b, and a local regression fit was automatically substituted.
-   specify fitType='local' or 'mean' to avoid this message next time.
 final dispersion estimates
 fitting model and testing
 using 'apeglm' for LFC shrinkage. If used in published research, please cite:
@@ -326,26 +274,6 @@ using 'apeglm' for LFC shrinkage. If used in published research, please cite:
     sequence count data: removing the noise and preserving large differences.
     Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
 There were 50 or more warnings (use warnings() to see the first 50)
-converting counts to integer mode
-converting counts to integer mode
-converting counts to integer mode
-converting counts to integer mode
-converting counts to integer mode
-converting counts to integer mode
-converting counts to integer mode
-converting counts to integer mode
-converting counts to integer mode
-converting counts to integer mode
-converting counts to integer mode
-converting counts to integer mode
-converting counts to integer mode
-converting counts to integer mode
-converting counts to integer mode
-converting counts to integer mode
-converting counts to integer mode
-converting counts to integer mode
-converting counts to integer mode
-converting counts to integer mode
 Git status after staging exports:
  [1] "M  exports/manuscript_final_clean/RT0_ZT6/NormEVS/tables/Table_RT0_ZT6_NormEVS_Lead_Results.csv"                                 
  [2] "M  exports/manuscript_final_clean/RT0_ZT6/NormEVS/tables/Table_RT0_ZT6_NormEVS_Lead_Summary.csv"                                 
@@ -396,19 +324,19 @@ Git status after staging exports:
 [47] "M  exports/manuscript_final_clean/RT8_ZT14/RawEVS/tables/Table_RT8_ZT14_RawEVS_Rem_Results.csv"                                  
 [48] "M  exports/manuscript_final_clean/RT8_ZT14/RawEVS/tables/Table_RT8_ZT14_RawEVS_Rem_Summary.csv"                                  
 [49] "M  exports/manuscript_final_clean/Table_Export_Manifest.csv"                                                                     
-[50] "A  exports/manuscript_final_clean/Table_Final_Discovery_Counts_Long.csv"                                                         
+[50] "M  exports/manuscript_final_clean/Table_Final_Discovery_Counts_Long.csv"                                                         
 [51] "M  exports/manuscript_final_clean/Table_Overall_Summary.csv"                                                                     
-[52] "A  exports/manuscript_final_clean/manuscript_figures/Figure_Manuscript_Discovery_Counts.png"                                     
-[53] "A  exports/manuscript_final_clean/manuscript_figures/Figure_Manuscript_EVS_PC1_Loading_Rank.png"                                 
-[54] "A  exports/manuscript_final_clean/manuscript_figures/Figure_Manuscript_Empirical_HBFSS_Lead_AllComparisons_NormEVS_vs_RawEVS.png"
-[55] "A  exports/manuscript_final_clean/manuscript_figures/Figure_Manuscript_Empirical_HBFSS_Raw_AllComparisons.png"                   
-[56] "A  exports/manuscript_final_clean/manuscript_figures/Figure_Manuscript_Empirical_HBFSS_Rem_AllComparisons_NormEVS_vs_RawEVS.png" 
-[57] "A  exports/manuscript_final_clean/manuscript_figures/Figure_Manuscript_PCA_Lead_AllComparisons_NormEVS_vs_RawEVS.png"            
-[58] "A  exports/manuscript_final_clean/manuscript_figures/Figure_Manuscript_PCA_Raw_AllComparisons.png"                               
-[59] "A  exports/manuscript_final_clean/manuscript_figures/Figure_Manuscript_PCA_Rem_AllComparisons_NormEVS_vs_RawEVS.png"             
-[60] "M  exports/manuscript_final_clean/manuscript_figures/Figure_Manuscript_Volcano_Lead_AllComparisons_NormEVS_vs_RawEVS.png"        
-[61] "A  exports/manuscript_final_clean/manuscript_figures/Figure_Manuscript_Volcano_Raw_AllComparisons.png"                           
-[62] "D  exports/manuscript_final_clean/manuscript_figures/Figure_Manuscript_Volcano_Raw_AllComparisons_NormEVS_vs_RawEVS.png"         
+[52] "M  exports/manuscript_final_clean/manuscript_figures/Figure_Manuscript_Discovery_Counts.png"                                     
+[53] "A  exports/manuscript_final_clean/manuscript_figures/Figure_Manuscript_EVS_PC1_Loading_Histogram.png"                            
+[54] "M  exports/manuscript_final_clean/manuscript_figures/Figure_Manuscript_EVS_PC1_Loading_Rank.png"                                 
+[55] "M  exports/manuscript_final_clean/manuscript_figures/Figure_Manuscript_Empirical_HBFSS_Lead_AllComparisons_NormEVS_vs_RawEVS.png"
+[56] "M  exports/manuscript_final_clean/manuscript_figures/Figure_Manuscript_Empirical_HBFSS_Raw_AllComparisons.png"                   
+[57] "M  exports/manuscript_final_clean/manuscript_figures/Figure_Manuscript_Empirical_HBFSS_Rem_AllComparisons_NormEVS_vs_RawEVS.png" 
+[58] "M  exports/manuscript_final_clean/manuscript_figures/Figure_Manuscript_PCA_Lead_AllComparisons_NormEVS_vs_RawEVS.png"            
+[59] "M  exports/manuscript_final_clean/manuscript_figures/Figure_Manuscript_PCA_Raw_AllComparisons.png"                               
+[60] "M  exports/manuscript_final_clean/manuscript_figures/Figure_Manuscript_PCA_Rem_AllComparisons_NormEVS_vs_RawEVS.png"             
+[61] "M  exports/manuscript_final_clean/manuscript_figures/Figure_Manuscript_Volcano_Lead_AllComparisons_NormEVS_vs_RawEVS.png"        
+[62] "M  exports/manuscript_final_clean/manuscript_figures/Figure_Manuscript_Volcano_Raw_AllComparisons.png"                           
 [63] "M  exports/manuscript_final_clean/manuscript_figures/Figure_Manuscript_Volcano_Rem_AllComparisons_NormEVS_vs_RawEVS.png"         
 [64] " M run.log"                                                                                                                      
 [65] "?? Rplots.pdf"                                                                                                                   
@@ -420,7 +348,7 @@ Repository root:
 Output directory:
 /root/REAPER98632/exports/manuscript_final_clean 
 Exported files:
-61 
+62 
 =====================================================
 
    comparison_name      track_key track_label          dataset_key
@@ -448,31 +376,56 @@ Exported files:
 22        RT8_ZT14        raw_evs      RawEVS          raw_dataset
 23        RT8_ZT14        raw_evs      RawEVS leading_edge_dataset
 24        RT8_ZT14        raw_evs      RawEVS    remainder_dataset
-                            dataset_name                       evs_split_input
-1            RT0_ZT6_NormEVS_raw_dataset DESeq2-normalized counts prior to EVS
-2   RT0_ZT6_NormEVS_leading_edge_dataset DESeq2-normalized counts prior to EVS
-3      RT0_ZT6_NormEVS_remainder_dataset DESeq2-normalized counts prior to EVS
-4             RT0_ZT6_RawEVS_raw_dataset               Raw counts prior to EVS
-5    RT0_ZT6_RawEVS_leading_edge_dataset               Raw counts prior to EVS
-6       RT0_ZT6_RawEVS_remainder_dataset               Raw counts prior to EVS
-7            RT2_ZT8_NormEVS_raw_dataset DESeq2-normalized counts prior to EVS
-8   RT2_ZT8_NormEVS_leading_edge_dataset DESeq2-normalized counts prior to EVS
-9      RT2_ZT8_NormEVS_remainder_dataset DESeq2-normalized counts prior to EVS
-10            RT2_ZT8_RawEVS_raw_dataset               Raw counts prior to EVS
-11   RT2_ZT8_RawEVS_leading_edge_dataset               Raw counts prior to EVS
-12      RT2_ZT8_RawEVS_remainder_dataset               Raw counts prior to EVS
-13          RT4_ZT10_NormEVS_raw_dataset DESeq2-normalized counts prior to EVS
-14 RT4_ZT10_NormEVS_leading_edge_dataset DESeq2-normalized counts prior to EVS
-15    RT4_ZT10_NormEVS_remainder_dataset DESeq2-normalized counts prior to EVS
-16           RT4_ZT10_RawEVS_raw_dataset               Raw counts prior to EVS
-17  RT4_ZT10_RawEVS_leading_edge_dataset               Raw counts prior to EVS
-18     RT4_ZT10_RawEVS_remainder_dataset               Raw counts prior to EVS
-19          RT8_ZT14_NormEVS_raw_dataset DESeq2-normalized counts prior to EVS
-20 RT8_ZT14_NormEVS_leading_edge_dataset DESeq2-normalized counts prior to EVS
-21    RT8_ZT14_NormEVS_remainder_dataset DESeq2-normalized counts prior to EVS
-22           RT8_ZT14_RawEVS_raw_dataset               Raw counts prior to EVS
-23  RT8_ZT14_RawEVS_leading_edge_dataset               Raw counts prior to EVS
-24     RT8_ZT14_RawEVS_remainder_dataset               Raw counts prior to EVS
+                            dataset_name
+1            RT0_ZT6_NormEVS_raw_dataset
+2   RT0_ZT6_NormEVS_leading_edge_dataset
+3      RT0_ZT6_NormEVS_remainder_dataset
+4             RT0_ZT6_RawEVS_raw_dataset
+5    RT0_ZT6_RawEVS_leading_edge_dataset
+6       RT0_ZT6_RawEVS_remainder_dataset
+7            RT2_ZT8_NormEVS_raw_dataset
+8   RT2_ZT8_NormEVS_leading_edge_dataset
+9      RT2_ZT8_NormEVS_remainder_dataset
+10            RT2_ZT8_RawEVS_raw_dataset
+11   RT2_ZT8_RawEVS_leading_edge_dataset
+12      RT2_ZT8_RawEVS_remainder_dataset
+13          RT4_ZT10_NormEVS_raw_dataset
+14 RT4_ZT10_NormEVS_leading_edge_dataset
+15    RT4_ZT10_NormEVS_remainder_dataset
+16           RT4_ZT10_RawEVS_raw_dataset
+17  RT4_ZT10_RawEVS_leading_edge_dataset
+18     RT4_ZT10_RawEVS_remainder_dataset
+19          RT8_ZT14_NormEVS_raw_dataset
+20 RT8_ZT14_NormEVS_leading_edge_dataset
+21    RT8_ZT14_NormEVS_remainder_dataset
+22           RT8_ZT14_RawEVS_raw_dataset
+23  RT8_ZT14_RawEVS_leading_edge_dataset
+24     RT8_ZT14_RawEVS_remainder_dataset
+                                                       evs_split_input
+1  DESeq2-normalized counts prior to EVS; PC1 ranking uses log2(x + 1)
+2  DESeq2-normalized counts prior to EVS; PC1 ranking uses log2(x + 1)
+3  DESeq2-normalized counts prior to EVS; PC1 ranking uses log2(x + 1)
+4                Raw counts prior to EVS; PC1 ranking uses log2(x + 1)
+5                Raw counts prior to EVS; PC1 ranking uses log2(x + 1)
+6                Raw counts prior to EVS; PC1 ranking uses log2(x + 1)
+7  DESeq2-normalized counts prior to EVS; PC1 ranking uses log2(x + 1)
+8  DESeq2-normalized counts prior to EVS; PC1 ranking uses log2(x + 1)
+9  DESeq2-normalized counts prior to EVS; PC1 ranking uses log2(x + 1)
+10               Raw counts prior to EVS; PC1 ranking uses log2(x + 1)
+11               Raw counts prior to EVS; PC1 ranking uses log2(x + 1)
+12               Raw counts prior to EVS; PC1 ranking uses log2(x + 1)
+13 DESeq2-normalized counts prior to EVS; PC1 ranking uses log2(x + 1)
+14 DESeq2-normalized counts prior to EVS; PC1 ranking uses log2(x + 1)
+15 DESeq2-normalized counts prior to EVS; PC1 ranking uses log2(x + 1)
+16               Raw counts prior to EVS; PC1 ranking uses log2(x + 1)
+17               Raw counts prior to EVS; PC1 ranking uses log2(x + 1)
+18               Raw counts prior to EVS; PC1 ranking uses log2(x + 1)
+19 DESeq2-normalized counts prior to EVS; PC1 ranking uses log2(x + 1)
+20 DESeq2-normalized counts prior to EVS; PC1 ranking uses log2(x + 1)
+21 DESeq2-normalized counts prior to EVS; PC1 ranking uses log2(x + 1)
+22               Raw counts prior to EVS; PC1 ranking uses log2(x + 1)
+23               Raw counts prior to EVS; PC1 ranking uses log2(x + 1)
+24               Raw counts prior to EVS; PC1 ranking uses log2(x + 1)
                                                                  deseq2_input
 1  raw count subsets; DESeq2 size-factor normalization is run after EVS split
 2  raw count subsets; DESeq2 size-factor normalization is run after EVS split
@@ -499,152 +452,152 @@ Exported files:
 23 raw count subsets; DESeq2 size-factor normalization is run after EVS split
 24 raw count subsets; DESeq2 size-factor normalization is run after EVS split
    n_features hc_p_threshold hbfss_threshold standard_bh_fdr cnh_bh_fdr
-1       31553   0.0005325461        3.273643             0.2        0.1
-2        6722   0.0342924015        1.464802             0.2        0.1
-3       24831   0.0369015079        1.432956             0.2        0.1
-4       31553   0.0005325461        3.273643             0.2        0.1
-5        6629   0.0195442804        1.708980             0.2        0.1
-6       24924   0.0620391747        1.207334             0.2        0.1
-7       31534   0.0136775582        1.863991             0.2        0.1
-8        7107   0.0220541331        1.656510             0.2        0.1
-9       24427   0.0145657313        1.836668             0.2        0.1
-10      31534   0.0136775582        1.863991             0.2        0.1
-11       6717   0.0122361569        1.912355             0.2        0.1
-12      24817   0.0170388690        1.768559             0.2        0.1
-13      31658   0.0223630002        1.650470             0.2        0.1
-14       7093   0.0179174848        1.746723             0.2        0.1
-15      24565   0.0339201556        1.469542             0.2        0.1
-16      31658   0.0223630002        1.650470             0.2        0.1
-17       6741   0.0229484285        1.639247             0.2        0.1
-18      24917   0.0475021845        1.323286             0.2        0.1
-19      31580   0.0186581006        1.729133             0.2        0.1
-20       6787   0.0064045432        2.193512             0.2        0.1
-21      24793   0.0181617074        1.740843             0.2        0.1
-22      31580   0.0186581006        1.729133             0.2        0.1
-23       6556   0.0008689516        3.061004             0.2        0.1
-24      25024   0.0262387925        1.581056             0.2        0.1
+1       31553   0.0005325461        3.273643             0.2        0.2
+2        8836   0.0315711774        1.500709             0.2        0.2
+3       22717   0.0006178404        3.209124             0.2        0.2
+4       31553   0.0005325461        3.273643             0.2        0.2
+5        8983   0.0217907987        1.661727             0.2        0.2
+6       22570             NA              NA             0.2        0.2
+7       31534   0.0136775582        1.863991             0.2        0.2
+8        8860   0.0160726698        1.793912             0.2        0.2
+9       22674   0.0147670030        1.830708             0.2        0.2
+10      31534   0.0136775582        1.863991             0.2        0.2
+11       8896   0.0132103658        1.879085             0.2        0.2
+12      22638   0.0196629756        1.706351             0.2        0.2
+13      31658   0.0223630002        1.650470             0.2        0.2
+14       8962   0.0307506396        1.512146             0.2        0.2
+15      22696   0.0281432446        1.550626             0.2        0.2
+16      31658   0.0223630002        1.650470             0.2        0.2
+17       8953   0.0173475577        1.760762             0.2        0.2
+18      22705   0.0289175687        1.538838             0.2        0.2
+19      31580   0.0186581006        1.729133             0.2        0.2
+20       8821   0.0028855977        2.539764             0.2        0.2
+21      22759   0.0165867255        1.780239             0.2        0.2
+22      31580   0.0186581006        1.729133             0.2        0.2
+23       9177             NA              NA             0.2        0.2
+24      22403   0.0143109909        1.844330             0.2        0.2
    n_weak_cnh n_strong_cnh n_standard n_hbfss n_hbfss_display
-1           0            3         16      61              45
-2           0            1          3      15              12
-3          23            2         93     191              98
-4           0            3         16      61              45
-5           0            0          3      16              13
-6           1            3         66     160              94
-7          59            0          0       8               8
-8          67            0          0       3               3
-9          49            0          1      21              18
-10         59            0          0       8               8
-11         44            0          0       6               6
-12         27            0          0      10              10
-13         84           39        825    1100             266
-14         18           13        286     354              66
-15        106           55        809    1062             235
-16         84           39        825    1100             266
-17         40           15        295     354              54
-18          6           43        813    1092             279
-19        138            0          5      76              67
-20          7            0          3      12               9
-21        107            0         41     138              89
-22        138            0          5      76              67
-23          3            0          4       6               2
-24         12            0         19      88              69
+1        5737            3         22      34              12
+2           0            0          0       1               1
+3        6580            3         40      33               0
+4        5737            3         22      34              12
+5           0            0          0       3               3
+6        6369            0         35       0               0
+7       10592            0          0       8               2
+8           0            0          0       0               0
+9       10577            0          1      13               3
+10      10592            0          0       8               2
+11          0            0          0       0               0
+12      10373            0          1      12               3
+13       8549           65        825    1100               2
+14          0            1         30      36               6
+15       8992           97        849    1076               0
+16       8549           65        825    1100               2
+17        110            0         59      81              11
+18       8713           98        812    1053               1
+19      11712            0          7      76              22
+20        118            0          1       3               2
+21      11675            0         17      85              20
+22      11712            0          7      76              22
+23        457            0          0       0               0
+24       9533            0         20      85              21
    n_display_weak_cnh n_display_strong_cnh n_display_standard n_overlap
-1                   0                    3                 13        16
-2                   0                    1                  2         3
-3                  23                    2                 91        93
-4                   0                    3                 13        16
-5                   0                    0                  3         3
-6                   1                    3                 63        66
-7                  59                    0                  0         0
-8                  67                    0                  0         0
-9                  49                    0                  1         1
-10                 59                    0                  0         0
-11                 44                    0                  0         0
-12                 27                    0                  0         0
-13                 84                   39                786       825
-14                 18                   13                273       286
-15                106                   55                754       809
-16                 84                   39                786       825
-17                 40                   15                280       295
-18                  6                   43                770       813
-19                138                    0                  5         5
-20                  7                    0                  3         3
-21                107                    0                 41        41
-22                138                    0                  5         5
-23                  3                    0                  4         4
-24                 12                    0                 19        19
+1                5737                    3                 19        22
+2                   0                    0                  0         0
+3                6580                    3                 37        33
+4                5737                    3                 19        22
+5                   0                    0                  0         0
+6                6369                    0                 35         0
+7               10597                    0                  0         1
+8                   0                    0                  0         0
+9               10585                    0                  1         2
+10              10597                    0                  0         1
+11                  0                    0                  0         0
+12              10380                    0                  1         2
+13               8806                   65                760       841
+14                  0                    1                 29        30
+15               9213                   97                752       855
+16               8806                   65                760       841
+17                121                    0                 59        59
+18               8942                   98                714       823
+19              11753                    0                  7        13
+20                118                    0                  1         1
+21              11717                    0                 17        23
+22              11753                    0                  7        13
+23                457                    0                  0         0
+24               9573                    0                 20        24
    n_weak_hbfss_overlap n_strong_hbfss_overlap n_standard_hbfss_overlap
-1                     0                      0                       16
-2                     0                      0                        3
-3                     0                      0                       93
-4                     0                      0                       16
-5                     0                      0                        3
-6                     0                      0                       66
-7                     0                      0                        0
+1                     0                      3                       22
+2                     0                      0                        0
+3                     0                      3                       33
+4                     0                      3                       22
+5                     0                      0                        0
+6                     0                      0                        0
+7                     1                      0                        0
 8                     0                      0                        0
-9                     0                      0                        1
-10                    0                      0                        0
+9                     1                      0                        1
+10                    1                      0                        0
 11                    0                      0                        0
-12                    0                      0                        0
-13                    0                      0                      825
-14                    0                      0                      286
-15                    0                      0                      809
-16                    0                      0                      825
-17                    0                      0                      295
-18                    0                      0                      813
-19                    0                      0                        5
-20                    0                      0                        3
-21                    0                      0                       41
-22                    0                      0                        5
-23                    0                      0                        4
-24                    0                      0                       19
-   top_n_target trt_cutoff_quantile ctrl_cutoff_quantile leading_edge_n
-1          5000           0.8415365            0.8415365           6722
-2          5000           0.8415365            0.8415365           6722
-3          5000           0.8415365            0.8415365           6722
-4          5000           0.8425544            0.8425544           6629
-5          5000           0.8425544            0.8425544           6629
-6          5000           0.8425544            0.8425544           6629
-7          5000           0.8414410            0.8414410           7107
-8          5000           0.8414410            0.8414410           7107
-9          5000           0.8414410            0.8414410           7107
-10         5000           0.8425544            0.8425544           6717
-11         5000           0.8425544            0.8425544           6717
-12         5000           0.8425544            0.8425544           6717
-13         5000           0.8420620            0.8420620           7093
-14         5000           0.8420620            0.8420620           7093
-15         5000           0.8420620            0.8420620           7093
-16         5000           0.8425544            0.8425544           6741
-17         5000           0.8425544            0.8425544           6741
-18         5000           0.8425544            0.8425544           6741
-19         5000           0.8416719            0.8416719           6787
-20         5000           0.8416719            0.8416719           6787
-21         5000           0.8416719            0.8416719           6787
-22         5000           0.8425544            0.8425544           6556
-23         5000           0.8425544            0.8425544           6556
-24         5000           0.8425544            0.8425544           6556
-   remainder_n
-1        25035
-2        25035
-3        25035
-4        25128
-5        25128
-6        25128
-7        24650
-8        24650
-9        24650
-10       25040
-11       25040
-12       25040
-13       24664
-14       24664
-15       24664
-16       25016
-17       25016
-18       25016
-19       24970
-20       24970
-21       24970
-22       25201
-23       25201
-24       25201
+12                    1                      0                        1
+13                   16                     65                      825
+14                    0                      1                       30
+15                   19                     97                      836
+16                   16                     65                      825
+17                    0                      0                       59
+18                   21                     98                      802
+19                    6                      0                        7
+20                    0                      0                        1
+21                    6                      0                       17
+22                    6                      0                        7
+23                    0                      0                        0
+24                    4                      0                       20
+   top_n_target effective_top_n_per_condition trt_cutoff_quantile
+1          5000                          5000           0.8415365
+2          5000                          5000           0.8415365
+3          5000                          5000           0.8415365
+4          5000                          5000           0.8425544
+5          5000                          5000           0.8425544
+6          5000                          5000           0.8425544
+7          5000                          5000           0.8414410
+8          5000                          5000           0.8414410
+9          5000                          5000           0.8414410
+10         5000                          5000           0.8425544
+11         5000                          5000           0.8425544
+12         5000                          5000           0.8425544
+13         5000                          5000           0.8420620
+14         5000                          5000           0.8420620
+15         5000                          5000           0.8420620
+16         5000                          5000           0.8425544
+17         5000                          5000           0.8425544
+18         5000                          5000           0.8425544
+19         5000                          5000           0.8416719
+20         5000                          5000           0.8416719
+21         5000                          5000           0.8416719
+22         5000                          5000           0.8425544
+23         5000                          5000           0.8425544
+24         5000                          5000           0.8425544
+   ctrl_cutoff_quantile leading_edge_n remainder_n
+1             0.8415365           8836       22921
+2             0.8415365           8836       22921
+3             0.8415365           8836       22921
+4             0.8425544           8983       22774
+5             0.8425544           8983       22774
+6             0.8425544           8983       22774
+7             0.8414410           8860       22897
+8             0.8414410           8860       22897
+9             0.8414410           8860       22897
+10            0.8425544           8896       22861
+11            0.8425544           8896       22861
+12            0.8425544           8896       22861
+13            0.8420620           8962       22795
+14            0.8420620           8962       22795
+15            0.8420620           8962       22795
+16            0.8425544           8953       22804
+17            0.8425544           8953       22804
+18            0.8425544           8953       22804
+19            0.8416719           8821       22936
+20            0.8416719           8821       22936
+21            0.8416719           8821       22936
+22            0.8425544           9177       22580
+23            0.8425544           9177       22580
+24            0.8425544           9177       22580

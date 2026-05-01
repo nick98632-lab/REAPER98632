@@ -1,81 +1,81 @@
 "comparison_name","dataset_key","dataset_label","track_key","track_label","Panel","Class","Count"
-"RT0_ZT6","raw_dataset","Raw","normalized_evs","Original","Raw","Weak",0
+"RT0_ZT6","raw_dataset","Raw","normalized_evs","Original","Raw","Weak",5737
 "RT0_ZT6","raw_dataset","Raw","normalized_evs","Original","Raw","Strong",3
-"RT0_ZT6","raw_dataset","Raw","normalized_evs","Original","Raw","Std",13
-"RT0_ZT6","raw_dataset","Raw","normalized_evs","Original","Raw","HBFSS",45
+"RT0_ZT6","raw_dataset","Raw","normalized_evs","Original","Raw","Std",22
+"RT0_ZT6","raw_dataset","Raw","normalized_evs","Original","Raw","HBFSS",34
 "RT0_ZT6","leading_edge_dataset","Lead","normalized_evs","NormEVS","Lead NormEVS","Weak",0
-"RT0_ZT6","leading_edge_dataset","Lead","normalized_evs","NormEVS","Lead NormEVS","Strong",1
-"RT0_ZT6","leading_edge_dataset","Lead","normalized_evs","NormEVS","Lead NormEVS","Std",2
-"RT0_ZT6","leading_edge_dataset","Lead","normalized_evs","NormEVS","Lead NormEVS","HBFSS",12
-"RT0_ZT6","remainder_dataset","Rem","normalized_evs","NormEVS","Rem NormEVS","Weak",23
-"RT0_ZT6","remainder_dataset","Rem","normalized_evs","NormEVS","Rem NormEVS","Strong",2
-"RT0_ZT6","remainder_dataset","Rem","normalized_evs","NormEVS","Rem NormEVS","Std",91
-"RT0_ZT6","remainder_dataset","Rem","normalized_evs","NormEVS","Rem NormEVS","HBFSS",98
+"RT0_ZT6","leading_edge_dataset","Lead","normalized_evs","NormEVS","Lead NormEVS","Strong",0
+"RT0_ZT6","leading_edge_dataset","Lead","normalized_evs","NormEVS","Lead NormEVS","Std",0
+"RT0_ZT6","leading_edge_dataset","Lead","normalized_evs","NormEVS","Lead NormEVS","HBFSS",1
+"RT0_ZT6","remainder_dataset","Rem","normalized_evs","NormEVS","Rem NormEVS","Weak",6580
+"RT0_ZT6","remainder_dataset","Rem","normalized_evs","NormEVS","Rem NormEVS","Strong",3
+"RT0_ZT6","remainder_dataset","Rem","normalized_evs","NormEVS","Rem NormEVS","Std",40
+"RT0_ZT6","remainder_dataset","Rem","normalized_evs","NormEVS","Rem NormEVS","HBFSS",33
 "RT0_ZT6","leading_edge_dataset","Lead","raw_evs","RawEVS","Lead RawEVS","Weak",0
 "RT0_ZT6","leading_edge_dataset","Lead","raw_evs","RawEVS","Lead RawEVS","Strong",0
-"RT0_ZT6","leading_edge_dataset","Lead","raw_evs","RawEVS","Lead RawEVS","Std",3
-"RT0_ZT6","leading_edge_dataset","Lead","raw_evs","RawEVS","Lead RawEVS","HBFSS",13
-"RT0_ZT6","remainder_dataset","Rem","raw_evs","RawEVS","Rem RawEVS","Weak",1
-"RT0_ZT6","remainder_dataset","Rem","raw_evs","RawEVS","Rem RawEVS","Strong",3
-"RT0_ZT6","remainder_dataset","Rem","raw_evs","RawEVS","Rem RawEVS","Std",63
-"RT0_ZT6","remainder_dataset","Rem","raw_evs","RawEVS","Rem RawEVS","HBFSS",94
-"RT2_ZT8","raw_dataset","Raw","normalized_evs","Original","Raw","Weak",59
+"RT0_ZT6","leading_edge_dataset","Lead","raw_evs","RawEVS","Lead RawEVS","Std",0
+"RT0_ZT6","leading_edge_dataset","Lead","raw_evs","RawEVS","Lead RawEVS","HBFSS",3
+"RT0_ZT6","remainder_dataset","Rem","raw_evs","RawEVS","Rem RawEVS","Weak",6369
+"RT0_ZT6","remainder_dataset","Rem","raw_evs","RawEVS","Rem RawEVS","Strong",0
+"RT0_ZT6","remainder_dataset","Rem","raw_evs","RawEVS","Rem RawEVS","Std",35
+"RT0_ZT6","remainder_dataset","Rem","raw_evs","RawEVS","Rem RawEVS","HBFSS",0
+"RT2_ZT8","raw_dataset","Raw","normalized_evs","Original","Raw","Weak",10592
 "RT2_ZT8","raw_dataset","Raw","normalized_evs","Original","Raw","Strong",0
 "RT2_ZT8","raw_dataset","Raw","normalized_evs","Original","Raw","Std",0
 "RT2_ZT8","raw_dataset","Raw","normalized_evs","Original","Raw","HBFSS",8
-"RT2_ZT8","leading_edge_dataset","Lead","normalized_evs","NormEVS","Lead NormEVS","Weak",67
+"RT2_ZT8","leading_edge_dataset","Lead","normalized_evs","NormEVS","Lead NormEVS","Weak",0
 "RT2_ZT8","leading_edge_dataset","Lead","normalized_evs","NormEVS","Lead NormEVS","Strong",0
 "RT2_ZT8","leading_edge_dataset","Lead","normalized_evs","NormEVS","Lead NormEVS","Std",0
-"RT2_ZT8","leading_edge_dataset","Lead","normalized_evs","NormEVS","Lead NormEVS","HBFSS",3
-"RT2_ZT8","remainder_dataset","Rem","normalized_evs","NormEVS","Rem NormEVS","Weak",49
+"RT2_ZT8","leading_edge_dataset","Lead","normalized_evs","NormEVS","Lead NormEVS","HBFSS",0
+"RT2_ZT8","remainder_dataset","Rem","normalized_evs","NormEVS","Rem NormEVS","Weak",10577
 "RT2_ZT8","remainder_dataset","Rem","normalized_evs","NormEVS","Rem NormEVS","Strong",0
 "RT2_ZT8","remainder_dataset","Rem","normalized_evs","NormEVS","Rem NormEVS","Std",1
-"RT2_ZT8","remainder_dataset","Rem","normalized_evs","NormEVS","Rem NormEVS","HBFSS",18
-"RT2_ZT8","leading_edge_dataset","Lead","raw_evs","RawEVS","Lead RawEVS","Weak",44
+"RT2_ZT8","remainder_dataset","Rem","normalized_evs","NormEVS","Rem NormEVS","HBFSS",13
+"RT2_ZT8","leading_edge_dataset","Lead","raw_evs","RawEVS","Lead RawEVS","Weak",0
 "RT2_ZT8","leading_edge_dataset","Lead","raw_evs","RawEVS","Lead RawEVS","Strong",0
 "RT2_ZT8","leading_edge_dataset","Lead","raw_evs","RawEVS","Lead RawEVS","Std",0
-"RT2_ZT8","leading_edge_dataset","Lead","raw_evs","RawEVS","Lead RawEVS","HBFSS",6
-"RT2_ZT8","remainder_dataset","Rem","raw_evs","RawEVS","Rem RawEVS","Weak",27
+"RT2_ZT8","leading_edge_dataset","Lead","raw_evs","RawEVS","Lead RawEVS","HBFSS",0
+"RT2_ZT8","remainder_dataset","Rem","raw_evs","RawEVS","Rem RawEVS","Weak",10373
 "RT2_ZT8","remainder_dataset","Rem","raw_evs","RawEVS","Rem RawEVS","Strong",0
-"RT2_ZT8","remainder_dataset","Rem","raw_evs","RawEVS","Rem RawEVS","Std",0
-"RT2_ZT8","remainder_dataset","Rem","raw_evs","RawEVS","Rem RawEVS","HBFSS",10
-"RT4_ZT10","raw_dataset","Raw","normalized_evs","Original","Raw","Weak",84
-"RT4_ZT10","raw_dataset","Raw","normalized_evs","Original","Raw","Strong",39
-"RT4_ZT10","raw_dataset","Raw","normalized_evs","Original","Raw","Std",786
-"RT4_ZT10","raw_dataset","Raw","normalized_evs","Original","Raw","HBFSS",266
-"RT4_ZT10","leading_edge_dataset","Lead","normalized_evs","NormEVS","Lead NormEVS","Weak",18
-"RT4_ZT10","leading_edge_dataset","Lead","normalized_evs","NormEVS","Lead NormEVS","Strong",13
-"RT4_ZT10","leading_edge_dataset","Lead","normalized_evs","NormEVS","Lead NormEVS","Std",273
-"RT4_ZT10","leading_edge_dataset","Lead","normalized_evs","NormEVS","Lead NormEVS","HBFSS",66
-"RT4_ZT10","remainder_dataset","Rem","normalized_evs","NormEVS","Rem NormEVS","Weak",106
-"RT4_ZT10","remainder_dataset","Rem","normalized_evs","NormEVS","Rem NormEVS","Strong",55
-"RT4_ZT10","remainder_dataset","Rem","normalized_evs","NormEVS","Rem NormEVS","Std",754
-"RT4_ZT10","remainder_dataset","Rem","normalized_evs","NormEVS","Rem NormEVS","HBFSS",235
-"RT4_ZT10","leading_edge_dataset","Lead","raw_evs","RawEVS","Lead RawEVS","Weak",40
-"RT4_ZT10","leading_edge_dataset","Lead","raw_evs","RawEVS","Lead RawEVS","Strong",15
-"RT4_ZT10","leading_edge_dataset","Lead","raw_evs","RawEVS","Lead RawEVS","Std",280
-"RT4_ZT10","leading_edge_dataset","Lead","raw_evs","RawEVS","Lead RawEVS","HBFSS",54
-"RT4_ZT10","remainder_dataset","Rem","raw_evs","RawEVS","Rem RawEVS","Weak",6
-"RT4_ZT10","remainder_dataset","Rem","raw_evs","RawEVS","Rem RawEVS","Strong",43
-"RT4_ZT10","remainder_dataset","Rem","raw_evs","RawEVS","Rem RawEVS","Std",770
-"RT4_ZT10","remainder_dataset","Rem","raw_evs","RawEVS","Rem RawEVS","HBFSS",279
-"RT8_ZT14","raw_dataset","Raw","normalized_evs","Original","Raw","Weak",138
+"RT2_ZT8","remainder_dataset","Rem","raw_evs","RawEVS","Rem RawEVS","Std",1
+"RT2_ZT8","remainder_dataset","Rem","raw_evs","RawEVS","Rem RawEVS","HBFSS",12
+"RT4_ZT10","raw_dataset","Raw","normalized_evs","Original","Raw","Weak",8549
+"RT4_ZT10","raw_dataset","Raw","normalized_evs","Original","Raw","Strong",65
+"RT4_ZT10","raw_dataset","Raw","normalized_evs","Original","Raw","Std",825
+"RT4_ZT10","raw_dataset","Raw","normalized_evs","Original","Raw","HBFSS",1100
+"RT4_ZT10","leading_edge_dataset","Lead","normalized_evs","NormEVS","Lead NormEVS","Weak",0
+"RT4_ZT10","leading_edge_dataset","Lead","normalized_evs","NormEVS","Lead NormEVS","Strong",1
+"RT4_ZT10","leading_edge_dataset","Lead","normalized_evs","NormEVS","Lead NormEVS","Std",30
+"RT4_ZT10","leading_edge_dataset","Lead","normalized_evs","NormEVS","Lead NormEVS","HBFSS",36
+"RT4_ZT10","remainder_dataset","Rem","normalized_evs","NormEVS","Rem NormEVS","Weak",8992
+"RT4_ZT10","remainder_dataset","Rem","normalized_evs","NormEVS","Rem NormEVS","Strong",97
+"RT4_ZT10","remainder_dataset","Rem","normalized_evs","NormEVS","Rem NormEVS","Std",849
+"RT4_ZT10","remainder_dataset","Rem","normalized_evs","NormEVS","Rem NormEVS","HBFSS",1076
+"RT4_ZT10","leading_edge_dataset","Lead","raw_evs","RawEVS","Lead RawEVS","Weak",110
+"RT4_ZT10","leading_edge_dataset","Lead","raw_evs","RawEVS","Lead RawEVS","Strong",0
+"RT4_ZT10","leading_edge_dataset","Lead","raw_evs","RawEVS","Lead RawEVS","Std",59
+"RT4_ZT10","leading_edge_dataset","Lead","raw_evs","RawEVS","Lead RawEVS","HBFSS",81
+"RT4_ZT10","remainder_dataset","Rem","raw_evs","RawEVS","Rem RawEVS","Weak",8713
+"RT4_ZT10","remainder_dataset","Rem","raw_evs","RawEVS","Rem RawEVS","Strong",98
+"RT4_ZT10","remainder_dataset","Rem","raw_evs","RawEVS","Rem RawEVS","Std",812
+"RT4_ZT10","remainder_dataset","Rem","raw_evs","RawEVS","Rem RawEVS","HBFSS",1053
+"RT8_ZT14","raw_dataset","Raw","normalized_evs","Original","Raw","Weak",11712
 "RT8_ZT14","raw_dataset","Raw","normalized_evs","Original","Raw","Strong",0
-"RT8_ZT14","raw_dataset","Raw","normalized_evs","Original","Raw","Std",5
-"RT8_ZT14","raw_dataset","Raw","normalized_evs","Original","Raw","HBFSS",67
-"RT8_ZT14","leading_edge_dataset","Lead","normalized_evs","NormEVS","Lead NormEVS","Weak",7
+"RT8_ZT14","raw_dataset","Raw","normalized_evs","Original","Raw","Std",7
+"RT8_ZT14","raw_dataset","Raw","normalized_evs","Original","Raw","HBFSS",76
+"RT8_ZT14","leading_edge_dataset","Lead","normalized_evs","NormEVS","Lead NormEVS","Weak",118
 "RT8_ZT14","leading_edge_dataset","Lead","normalized_evs","NormEVS","Lead NormEVS","Strong",0
-"RT8_ZT14","leading_edge_dataset","Lead","normalized_evs","NormEVS","Lead NormEVS","Std",3
-"RT8_ZT14","leading_edge_dataset","Lead","normalized_evs","NormEVS","Lead NormEVS","HBFSS",9
-"RT8_ZT14","remainder_dataset","Rem","normalized_evs","NormEVS","Rem NormEVS","Weak",107
+"RT8_ZT14","leading_edge_dataset","Lead","normalized_evs","NormEVS","Lead NormEVS","Std",1
+"RT8_ZT14","leading_edge_dataset","Lead","normalized_evs","NormEVS","Lead NormEVS","HBFSS",3
+"RT8_ZT14","remainder_dataset","Rem","normalized_evs","NormEVS","Rem NormEVS","Weak",11675
 "RT8_ZT14","remainder_dataset","Rem","normalized_evs","NormEVS","Rem NormEVS","Strong",0
-"RT8_ZT14","remainder_dataset","Rem","normalized_evs","NormEVS","Rem NormEVS","Std",41
-"RT8_ZT14","remainder_dataset","Rem","normalized_evs","NormEVS","Rem NormEVS","HBFSS",89
-"RT8_ZT14","leading_edge_dataset","Lead","raw_evs","RawEVS","Lead RawEVS","Weak",3
+"RT8_ZT14","remainder_dataset","Rem","normalized_evs","NormEVS","Rem NormEVS","Std",17
+"RT8_ZT14","remainder_dataset","Rem","normalized_evs","NormEVS","Rem NormEVS","HBFSS",85
+"RT8_ZT14","leading_edge_dataset","Lead","raw_evs","RawEVS","Lead RawEVS","Weak",457
 "RT8_ZT14","leading_edge_dataset","Lead","raw_evs","RawEVS","Lead RawEVS","Strong",0
-"RT8_ZT14","leading_edge_dataset","Lead","raw_evs","RawEVS","Lead RawEVS","Std",4
-"RT8_ZT14","leading_edge_dataset","Lead","raw_evs","RawEVS","Lead RawEVS","HBFSS",2
-"RT8_ZT14","remainder_dataset","Rem","raw_evs","RawEVS","Rem RawEVS","Weak",12
+"RT8_ZT14","leading_edge_dataset","Lead","raw_evs","RawEVS","Lead RawEVS","Std",0
+"RT8_ZT14","leading_edge_dataset","Lead","raw_evs","RawEVS","Lead RawEVS","HBFSS",0
+"RT8_ZT14","remainder_dataset","Rem","raw_evs","RawEVS","Rem RawEVS","Weak",9533
 "RT8_ZT14","remainder_dataset","Rem","raw_evs","RawEVS","Rem RawEVS","Strong",0
-"RT8_ZT14","remainder_dataset","Rem","raw_evs","RawEVS","Rem RawEVS","Std",19
-"RT8_ZT14","remainder_dataset","Rem","raw_evs","RawEVS","Rem RawEVS","HBFSS",69
+"RT8_ZT14","remainder_dataset","Rem","raw_evs","RawEVS","Rem RawEVS","Std",20
+"RT8_ZT14","remainder_dataset","Rem","raw_evs","RawEVS","Rem RawEVS","HBFSS",85
