@@ -1,2 +1,2 @@
-"comparison_name","analysis_label","dataset_key","n_features","n_weak","n_strong","n_standard","n_hbfss_total","n_hbfss_added_display","hc_p_threshold","hbfss_threshold","alpha_level","lfc_boundary"
-"RT8_ZT14","Lead_RawEVS","Lead",6556,1,0,4,5,0,0.000868951572243093,3.06100442665105,0.2,1
+"comparison_name","analysis_label","dataset_key","n_features","n_lessAbs_alt_BH20","n_lessAbs_alt_BH20_HBFSS","n_weak","n_strong_alt_BH20","n_strong","n_standard","n_hbfss_total","n_hbfss_added_display","hc_p_threshold","hbfss_threshold","alpha_level","strong_alpha_level","weak_alpha_level","lfc_boundary"
+"RT8_ZT14","Lead_RawEVS","Lead",6556,6020,0,0,0,0,4,5,1,0.000868951572243093,3.06100442665105,0.2,0.2,0.2,1
