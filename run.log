@@ -245,90 +245,90 @@ There were 50 or more warnings (use warnings() to see the first 50)
 =====================================================
 SEQUENCE pipeline complete.
 Output directory: /root/REAPER98632/exports/manuscript_final_clean
-Exported files: 70
+Exported files: 82
 =====================================================
 
-   comparison_name analysis_label dataset_key n_features n_lessAbs_alt_BH20
-1          RT0_ZT6            Raw         Raw      31553               5737
-2          RT0_ZT6   Lead_NormEVS        Lead       6722               3334
-3          RT0_ZT6    Rem_NormEVS         Rem      24831               3194
-4          RT0_ZT6    Lead_RawEVS        Lead       6629               3991
-5          RT0_ZT6     Rem_RawEVS         Rem      24924                  0
-6          RT2_ZT8            Raw         Raw      31534              10592
-7          RT2_ZT8   Lead_NormEVS        Lead       7107               5662
-8          RT2_ZT8    Rem_NormEVS         Rem      24427               5510
-9          RT2_ZT8    Lead_RawEVS        Lead       6717               5683
-10         RT2_ZT8     Rem_RawEVS         Rem      24817               5515
-11        RT4_ZT10            Raw         Raw      31658               8549
-12        RT4_ZT10   Lead_NormEVS        Lead       7093               4765
-13        RT4_ZT10    Rem_NormEVS         Rem      24565               4416
-14        RT4_ZT10    Lead_RawEVS        Lead       6741               4944
-15        RT4_ZT10     Rem_RawEVS         Rem      24917               3978
-16        RT8_ZT14            Raw         Raw      31580              11712
-17        RT8_ZT14   Lead_NormEVS        Lead       6787               5747
-18        RT8_ZT14    Rem_NormEVS         Rem      24793               6523
-19        RT8_ZT14    Lead_RawEVS        Lead       6556               6020
-20        RT8_ZT14     Rem_RawEVS         Rem      25024               5890
-   n_lessAbs_alt_BH20_HBFSS n_weak n_strong_alt_BH20 n_strong n_standard
-1                         0      0                 3        3         22
-2                         0      0                 1        1          3
-3                         1      1                 2        2         91
-4                         0      0                 0        0          3
-5                         0      0                 3        3         63
-6                         1      1                 0        0          0
-7                         1      1                 0        0          0
-8                         2      2                 0        0          1
-9                         1      1                 0        0          0
-10                        0      0                 0        0          0
-11                       16     16                65       65        825
-12                        4      4                24       24        286
-13                       29     29                91       91        809
-14                        9      9                21       21        295
-15                        1      1                87       87        813
-16                        6      6                 0        0          7
-17                        0      0                 0        0          3
-18                       11     11                 0        0         42
-19                        0      0                 0        0          4
-20                        0      0                 0        0         22
-   n_hbfss_total n_hbfss_added_display hc_p_threshold hbfss_threshold
-1             34                    12   0.0005325461        3.273643
-2             15                    12   0.0342924015        1.464802
-3            191                    99   0.0369015079        1.432956
-4              9                     6   0.0195442804        1.708980
-5            160                    97   0.0620391747        1.207334
-6              8                     7   0.0136775582        1.863991
-7              3                     2   0.0220541331        1.656510
-8             21                    18   0.0145657313        1.836668
-9              6                     5   0.0122361569        1.912355
-10            10                    10   0.0170388690        1.768559
-11          1100                   259   0.0223630002        1.650470
-12           320                    64   0.0179174848        1.746723
-13          1062                   224   0.0339201556        1.469542
-14           302                    50   0.0229484285        1.639247
-15          1092                   278   0.0475021845        1.323286
-16            76                    63   0.0186581006        1.729133
-17            12                     9   0.0064045432        2.193512
-18           138                    85   0.0181617074        1.740843
-19             5                     1   0.0008689516        3.061004
-20            88                    66   0.0262387925        1.581056
-   alpha_level strong_alpha_level weak_alpha_level lfc_boundary
-1          0.2                0.2              0.2            1
-2          0.2                0.2              0.2            1
-3          0.2                0.2              0.2            1
-4          0.2                0.2              0.2            1
-5          0.2                0.2              0.2            1
-6          0.2                0.2              0.2            1
-7          0.2                0.2              0.2            1
-8          0.2                0.2              0.2            1
-9          0.2                0.2              0.2            1
-10         0.2                0.2              0.2            1
-11         0.2                0.2              0.2            1
-12         0.2                0.2              0.2            1
-13         0.2                0.2              0.2            1
-14         0.2                0.2              0.2            1
-15         0.2                0.2              0.2            1
-16         0.2                0.2              0.2            1
-17         0.2                0.2              0.2            1
-18         0.2                0.2              0.2            1
-19         0.2                0.2              0.2            1
-20         0.2                0.2              0.2            1
+   comparison_name analysis_label dataset_key n_features n_lessAbs_alt n_weak
+1          RT0_ZT6            Raw         Raw      31553          3469      0
+2          RT0_ZT6   Lead_NormEVS        Lead       6722          2143      0
+3          RT0_ZT6    Rem_NormEVS         Rem      24831          2127      0
+4          RT0_ZT6    Lead_RawEVS        Lead       6629          2914      0
+5          RT0_ZT6     Rem_RawEVS         Rem      24924          1313      0
+6          RT2_ZT8            Raw         Raw      31534          7704      0
+7          RT2_ZT8   Lead_NormEVS        Lead       7107          4824      0
+8          RT2_ZT8    Rem_NormEVS         Rem      24427          3633      2
+9          RT2_ZT8    Lead_RawEVS        Lead       6717          5036      0
+10         RT2_ZT8     Rem_RawEVS         Rem      24817          3483      0
+11        RT4_ZT10            Raw         Raw      31658          6128      9
+12        RT4_ZT10   Lead_NormEVS        Lead       7093          3745      2
+13        RT4_ZT10    Rem_NormEVS         Rem      24565          2967     18
+14        RT4_ZT10    Lead_RawEVS        Lead       6741          4204      5
+15        RT4_ZT10     Rem_RawEVS         Rem      24917          2369      0
+16        RT8_ZT14            Raw         Raw      31580          8714      4
+17        RT8_ZT14   Lead_NormEVS        Lead       6787          4954      0
+18        RT8_ZT14    Rem_NormEVS         Rem      24793          4559      8
+19        RT8_ZT14    Lead_RawEVS        Lead       6556          5510      0
+20        RT8_ZT14     Rem_RawEVS         Rem      25024          3835      0
+   n_strong_alt n_strong n_standard n_hbfss_total n_hbfss_added_display
+1             3        3          9            34                    25
+2             1        1          3            15                    12
+3             2        2         48           191                   143
+4             0        0          3             9                     6
+5             3        3         41           160                   119
+6             0        0          0             8                     8
+7             0        0          0             3                     3
+8             0        0          0            21                    19
+9             0        0          0             6                     6
+10            0        0          0            10                    10
+11           39       39        743          1100                   348
+12           13       13        286           320                    66
+13           55       55        686          1062                   358
+14           15       15        295           302                    54
+15           43       43        639          1092                   453
+16            0        0          4            76                    68
+17            0        0          1            12                    11
+18            0        0         28           138                   102
+19            0        0          4             5                     1
+20            0        0         17            88                    71
+   hc_p_threshold hbfss_threshold alpha_level strong_alpha_level
+1    0.0005325461        3.273643         0.1                0.1
+2    0.0342924015        1.464802         0.1                0.1
+3    0.0369015079        1.432956         0.1                0.1
+4    0.0195442804        1.708980         0.1                0.1
+5    0.0620391747        1.207334         0.1                0.1
+6    0.0136775582        1.863991         0.1                0.1
+7    0.0220541331        1.656510         0.1                0.1
+8    0.0145657313        1.836668         0.1                0.1
+9    0.0122361569        1.912355         0.1                0.1
+10   0.0170388690        1.768559         0.1                0.1
+11   0.0223630002        1.650470         0.1                0.1
+12   0.0179174848        1.746723         0.1                0.1
+13   0.0339201556        1.469542         0.1                0.1
+14   0.0229484285        1.639247         0.1                0.1
+15   0.0475021845        1.323286         0.1                0.1
+16   0.0186581006        1.729133         0.1                0.1
+17   0.0064045432        2.193512         0.1                0.1
+18   0.0181617074        1.740843         0.1                0.1
+19   0.0008689516        3.061004         0.1                0.1
+20   0.0262387925        1.581056         0.1                0.1
+   weak_alpha_level lfc_boundary
+1               0.1            1
+2               0.1            1
+3               0.1            1
+4               0.1            1
+5               0.1            1
+6               0.1            1
+7               0.1            1
+8               0.1            1
+9               0.1            1
+10              0.1            1
+11              0.1            1
+12              0.1            1
+13              0.1            1
+14              0.1            1
+15              0.1            1
+16              0.1            1
+17              0.1            1
+18              0.1            1
+19              0.1            1
+20              0.1            1

@@ -1,2 +1,2 @@
-"comparison_name","analysis_label","dataset_key","n_features","n_lessAbs_alt_BH20","n_lessAbs_alt_BH20_HBFSS","n_weak","n_strong_alt_BH20","n_strong","n_standard","n_hbfss_total","n_hbfss_added_display","hc_p_threshold","hbfss_threshold","alpha_level","strong_alpha_level","weak_alpha_level","lfc_boundary"
-"RT4_ZT10","Lead_RawEVS","Lead",6741,4944,9,9,21,21,295,302,50,0.0229484284932837,1.63924704956303,0.2,0.2,0.2,1
+"comp","label","set","n","lessAbs","weak","strongAlt","strong","std","H","Honly","HCp","Htau","alpha","alphaS","alphaW","lfc"
+"RT4_ZT10","Lead_RawEVS","Lead",6741,4204,5,15,15,295,302,54,0.0229484284932837,1.63924704956303,0.1,0.1,0.1,1
