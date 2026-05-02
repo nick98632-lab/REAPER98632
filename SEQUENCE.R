@@ -86,8 +86,9 @@
 #
 # This threshold is used to derive the HBFSS decision boundary and to require
 # empirical-p support for HBFSS calls. Standard DESeq2 calls remain DESeq2/BH
-# calls and are not suppressed by HC. Weak-effect display can also be supported
-# by the DESeq2 lessAbs composite-null test or by HBFSS.
+# calls and are not suppressed by HC. Weak-effect display is restricted to
+# sub-threshold effects with evidence against a zero effect; the DESeq2 lessAbs
+# equivalence result is retained only as an audit column unless explicitly enabled.
 #
 # -----------------------------------------------------------------------------
 # HBFSS DEFINITION
@@ -145,10 +146,12 @@
 #   altHypothesis = "lessAbs"
 #   lfcThreshold  = c
 #
-# A PAS is plotted as Weak CNH if the DESeq2 lessAbs composite-null test passes
-# BH FDR alpha_level and |lfc_shrunk| < c. A sub-threshold HBFSS-supported PAS is
-# also displayed in the same blue weak-effect class so weak HBFSS discoveries are
-# visually distinct from purple added-HBFSS sites.
+# A PAS is plotted as Weak only when it is a statistically supported
+# sub-threshold effect: |lfc_shrunk| < c and there is evidence against a zero
+# effect from the ordinary Wald/BH result, empirical/BH result, or HBFSS. The
+# DESeq2 lessAbs equivalence-style result is retained in the tables as
+# lessAbs_equivalence_flag but is not allowed by itself to create thousands of
+# weak-effect discoveries.
 #
 # Standard DESeq2:
 #
@@ -282,13 +285,22 @@ lfc_boundary <- 1.0
 
 top_n_target <- 5000L
 
+# EVS PCA transformation. Default is deliberately "none" because the requested
+# EVS split is the direct PCA/PC1-loading split on the chosen count scale:
+# raw counts for RawEVS and DESeq2 size-factor-normalized counts for NormEVS.
+# Accepted values are "none" and "log2_plus_1".
+evs_pca_transform <- "none"
+
+# Weak-effect display behavior. FALSE means the lessAbs composite-null result is
+# retained for audit but is not counted as a weak discovery by itself.
+use_lessAbs_as_weak_discovery <- FALSE
+
 # The intended EVS rule is top-N from the high-loading end of each condition.
 # The script uses rank <= top_n_target, not a numeric loading cutoff, so tied
 # low-loading values cannot accidentally pull the entire matrix into the leading
-# edge. If the requested top-N would leave no biologically interpretable
-# remainder for a small input matrix, the effective N is reduced and recorded in
-# the summary table.
-minimum_remainder_features <- 100L
+# edge. The effective N is only reduced if the requested value is impossible for
+# the input matrix or would consume the entire matrix, and the actual value used
+# is recorded in the summary table.
 
 # Higher-criticism thresholds at or near 1 make the HBFSS threshold essentially
 # zero and convert the volcano boundary into a noninformative rule. Such values
@@ -756,13 +768,9 @@ choose_joint_top_n_for_remainder <- function(fit_trt, fit_untrt, feature_ids, ta
     stop("At least two features are required for EVS splitting.")
   }
 
-  desired_min_remainder <- min(
-    as.integer(minimum_remainder_features),
-    max(1L, floor(0.02 * n_total))
-  )
-
-  max_top_n <- min(
-    max(1L, as.integer(target_top_n)),
+  requested_n <- max(1L, as.integer(target_top_n))
+  max_possible_n <- min(
+    requested_n,
     nrow(fit_trt$loading_table),
     nrow(fit_untrt$loading_table),
     n_total - 1L
@@ -777,32 +785,36 @@ choose_joint_top_n_for_remainder <- function(fit_trt, fit_untrt, feature_ids, ta
     length(setdiff(feature_ids, lead_ids))
   }
 
-  if (remainder_count_at_n(max_top_n) >= desired_min_remainder) {
-    return(max_top_n)
+  if (remainder_count_at_n(max_possible_n) > 0L) {
+    if (max_possible_n != requested_n) {
+      message(
+        "Requested top_n_target=", requested_n,
+        " exceeds this matrix size; using effective_top_n=", max_possible_n,
+        " per condition."
+      )
+    }
+    return(max_possible_n)
   }
 
-  low <- 1L
-  high <- max_top_n
-  best <- 1L
+  # Only back off if the requested top-N would consume the entire matrix. This
+  # avoids the previous hidden behavior where the split could be reduced simply
+  # to preserve an arbitrary large remainder.
+  n_top <- max_possible_n
+  while (n_top > 1L && remainder_count_at_n(n_top) == 0L) {
+    n_top <- n_top - 1L
+  }
 
-  while (low <= high) {
-    mid <- floor((low + high) / 2L)
-
-    if (remainder_count_at_n(mid) >= desired_min_remainder) {
-      best <- mid
-      low <- mid + 1L
-    } else {
-      high <- mid - 1L
-    }
+  if (remainder_count_at_n(n_top) == 0L) {
+    stop("EVS split could not leave a non-empty remainder. Reduce top_n_target.")
   }
 
   message(
-    "Requested top_n_target=", target_top_n,
-    " would leave too few remainder features; using effective_top_n=", best,
-    " per condition for this EVS split."
+    "Requested top_n_target=", requested_n,
+    " would consume the entire matrix after treatment/control union; using effective_top_n=", n_top,
+    " per condition."
   )
 
-  best
+  n_top
 }
 
 run_empirical_null_fdrtool <- function(stat_vec, dataset_name) {
@@ -936,10 +948,10 @@ final_class_colors <- c(
 )
 
 final_class_shapes <- c(
-  "BG" = 16,
-  "Weak" = 17,
-  "Strong" = 15,
-  "Std" = 18,
+  "BG" = 21,
+  "Weak" = 24,
+  "Strong" = 22,
+  "Std" = 23,
   "HBFSS" = 8
 )
 
@@ -1361,7 +1373,7 @@ make_rank_matrix_for_track <- function(count_matrix, coldata, track_key) {
     return(
       list(
         rank_matrix = as.data.frame(count_matrix),
-        preprocessing_label = "Raw counts prior to EVS; PC1 ranking uses log2(x + 1)"
+        preprocessing_label = paste0("Raw counts prior to EVS; PC1 ranking transform=", evs_pca_transform)
       )
     )
   }
@@ -1385,7 +1397,7 @@ make_rank_matrix_for_track <- function(count_matrix, coldata, track_key) {
 
   list(
     rank_matrix = norm_counts,
-    preprocessing_label = "DESeq2-normalized counts prior to EVS; PC1 ranking uses log2(x + 1)"
+    preprocessing_label = paste0("DESeq2-normalized counts prior to EVS; PC1 ranking transform=", evs_pca_transform)
   )
 }
 
@@ -1393,11 +1405,24 @@ compute_pc1_loading_table <- function(value_df, sample_names, top_n = top_n_targ
   x <- as.matrix(value_df[, sample_names, drop = FALSE])
   storage.mode(x) <- "numeric"
 
-  # EVS ranks are based on PC1 feature-loading structure after log2(x + 1).
-  # This preserves the raw-versus-normalized EVS comparison while preventing
-  # the raw-count track from being dominated by the highest-count PAS features.
-  x <- log2(pmax(x, 0) + 1)
+  if (any(!is.finite(x) | is.na(x))) {
+    stop("EVS PCA input contains NA or non-finite values.")
+  }
 
+  if (any(x < 0)) {
+    stop("EVS PCA input contains negative values.")
+  }
+
+  if (identical(evs_pca_transform, "log2_plus_1")) {
+    x <- log2(pmax(x, 0) + 1)
+  } else if (identical(evs_pca_transform, "none")) {
+    x <- pmax(x, 0)
+  } else {
+    stop("Unsupported evs_pca_transform: ", evs_pca_transform)
+  }
+
+  # EVS ranks are based on the high-loading end of PC1. The split is rank-based
+  # and uses rank <= top_n_target; it is not a low-loading numeric cutoff.
   pca_fit <- stats::prcomp(
     t(x),
     center = TRUE,
@@ -1723,11 +1748,7 @@ run_core_analysis <- function(count_mat, coldata, dataset_name, annot_df) {
   res_df$resGA_padj <- res_df$padj_strong_effect
   res_df$resLA_padj <- res_df$padj_weak_effect
 
-  res_df$effect_class <- classify_effect_strength(
-    res_df$padj_strong_effect,
-    res_df$padj_weak_effect,
-    alpha = alpha_level
-  )
+  res_df$effect_class <- "background"
 
   res_df$hc_pass <- !is.na(hc_p_threshold_dataset) &
     is.finite(hc_p_threshold_dataset) &
@@ -1742,12 +1763,23 @@ run_core_analysis <- function(count_mat, coldata, dataset_name, annot_df) {
   # the HC p-value threshold, which appears as a horizontal line on the volcano
   # scale. Standard DESeq2 discoveries are not automatically counted as HBFSS;
   # standard-HBFSS agreement is stored separately as overlap.
-  # Weak effect sites are blue whenever they are sub-threshold in effect size and
-  # are supported either by the DESeq2 lessAbs composite-null test at BH FDR 20%
-  # or by HBFSS. This keeps HBFSS-supported weak effects blue instead of hiding
-  # them inside the purple added-HBFSS class.
-  res_df$weak_cnh_flag <- !is.na(res_df$resLA_padj) &
+  # Weak effect sites are blue only when they are sub-threshold in effect size and
+  # also have evidence against a zero effect from ordinary DESeq2/BH,
+  # empirical/BH, or HBFSS. The lessAbs result is saved as an equivalence audit
+  # field, but it is not used alone as a discovery flag because it otherwise
+  # marks very large numbers of precisely estimated near-zero effects.
+  res_df$lessAbs_equivalence_flag <- !is.na(res_df$resLA_padj) &
     res_df$resLA_padj < alpha_level &
+    !is.na(res_df$lfc_shrunk) &
+    abs(res_df$lfc_shrunk) < lfc_boundary
+
+  res_df$standard_wald_subthreshold_flag <- !is.na(res_df$padj) &
+    res_df$padj < standard_alpha_level &
+    !is.na(res_df$lfc_shrunk) &
+    abs(res_df$lfc_shrunk) < lfc_boundary
+
+  res_df$empirical_bh_subthreshold_flag <- !is.na(res_df$empirical_bh) &
+    res_df$empirical_bh < standard_alpha_level &
     !is.na(res_df$lfc_shrunk) &
     abs(res_df$lfc_shrunk) < lfc_boundary
 
@@ -1772,6 +1804,21 @@ run_core_analysis <- function(count_mat, coldata, dataset_name, annot_df) {
   res_df$hbfss_weak_effect_flag <- res_df$hbfss_flag &
     !is.na(res_df$lfc_shrunk) &
     abs(res_df$lfc_shrunk) < lfc_boundary
+
+  res_df$weak_cnh_flag <- !is.na(res_df$lfc_shrunk) &
+    abs(res_df$lfc_shrunk) < lfc_boundary &
+    (
+      res_df$standard_wald_subthreshold_flag |
+        res_df$empirical_bh_subthreshold_flag |
+        res_df$hbfss_weak_effect_flag |
+        (isTRUE(use_lessAbs_as_weak_discovery) & res_df$lessAbs_equivalence_flag)
+    )
+
+  res_df$effect_class <- "background"
+  res_df$effect_class[res_df$weak_cnh_flag] <- "supported_weak_effect"
+  res_df$effect_class[res_df$strong_cnh_flag] <- "supported_strong_effect"
+  res_df$effect_class[res_df$standard_flag] <- "standard_effect"
+  res_df$effect_class[res_df$hbfss_flag & res_df$effect_class == "background"] <- "hbfss_added_effect"
 
   res_df$standard_hbfss_overlap <- res_df$standard_flag &
     !is.na(res_df$HBFSS_core_pass) &
@@ -1902,6 +1949,9 @@ run_core_analysis <- function(count_mat, coldata, dataset_name, annot_df) {
     "hbfss_threshold_dataset",
     "resLA_padj",
     "resGA_padj",
+    "lessAbs_equivalence_flag",
+    "standard_wald_subthreshold_flag",
+    "empirical_bh_subthreshold_flag",
     "weak_cnh_flag",
     "strong_cnh_flag",
     "standard_flag",
@@ -2157,6 +2207,7 @@ plot_final_volcano <- function(df, dataset_name, short_title = NULL, label_genes
       lfc_shrunk,
       neglog10_empirical_p,
       color = final_class,
+      fill = final_class,
       shape = final_class,
       size = final_class,
       alpha = final_class
@@ -2174,11 +2225,20 @@ plot_final_volcano <- function(df, dataset_name, short_title = NULL, label_genes
         nrow = 1,
         override.aes = list(
           shape = unname(final_class_shapes[final_class_levels]),
+          fill = unname(final_class_colors[final_class_levels]),
+          colour = unname(final_class_colors[final_class_levels]),
           size = rep(3.2, length(final_class_levels)),
           alpha = rep(1.0, length(final_class_levels)),
           stroke = rep(0.55, length(final_class_levels))
         )
       )
+    ) +
+    scale_fill_manual(
+      values = final_class_colors,
+      breaks = final_class_levels,
+      drop = FALSE,
+      name = "Class",
+      guide = "none"
     ) +
     scale_shape_manual(
       values = final_class_shapes,
@@ -2378,6 +2438,7 @@ run_one_evs_track <- function(comparison_name, track_key, count_matrix, coldata,
       evs_split_input = evs$preprocessing_label,
       deseq2_input = evs$downstream_deseq2_input,
       n_features = nrow(df),
+      n_lessAbs_equivalence = sum(df$lessAbs_equivalence_flag, na.rm = TRUE),
       hc_p_threshold = fit$hc_p_threshold,
       hbfss_threshold = fit$hbfss_threshold,
       standard_bh_fdr = standard_alpha_level,
@@ -2728,11 +2789,20 @@ make_single_legend_scale <- function() {
         nrow = 1,
         override.aes = list(
           shape = unname(final_class_shapes[final_class_levels]),
+          fill = unname(final_class_colors[final_class_levels]),
+          colour = unname(final_class_colors[final_class_levels]),
           size = rep(3.0, length(final_class_levels)),
           alpha = rep(1.0, length(final_class_levels)),
           stroke = rep(0.55, length(final_class_levels))
         )
       )
+    ),
+    scale_fill_manual(
+      values = final_class_colors,
+      breaks = final_class_levels,
+      drop = FALSE,
+      name = "Class",
+      guide = "none"
     ),
     scale_shape_manual(
       values = final_class_shapes,
@@ -2767,7 +2837,7 @@ compute_pca_support_plot <- function(count_df, coldata, short_title) {
   }
 
   dds <- DESeq2::estimateSizeFactors(dds)
-  x <- log2(DESeq2::counts(dds, normalized = TRUE) + 1)
+  x <- DESeq2::counts(dds, normalized = TRUE)
 
   pca_fit <- stats::prcomp(
     t(x),
@@ -2813,7 +2883,7 @@ compute_pca_support_plot <- function(count_df, coldata, short_title) {
       title = short_title,
       x = paste0("PC1 ", pca_var_per[1], "%"),
       y = paste0("PC2 ", pca_var_per[2], "%"),
-      caption = "DESeq2-normalized after dataset definition"
+      caption = "DESeq2-normalized after dataset definition; no log transform before PCA"
     ) +
     coord_cartesian(clip = "off") +
     manuscript_theme() +
@@ -2855,12 +2925,11 @@ plot_evs_rank_support <- function(evs, comparison_name, track_key) {
     aes(rank, pc1_loading_abs, color = Group)
   ) +
     geom_line(linewidth = 0.45, alpha = 0.95) +
-    geom_hline(
-      data = cutoff_df,
-      aes(yintercept = cutoff, color = Group),
+    geom_vline(
+      xintercept = evs$fit_trt$top_n_used,
       linetype = "dashed",
       linewidth = 0.55,
-      inherit.aes = FALSE
+      colour = plot_palette$threshold
     ) +
     scale_x_log10(labels = scales::label_number()) +
     scale_y_log10(labels = scales::label_number()) +
@@ -2982,7 +3051,7 @@ plot_empirical_hbfss_support <- function(df, short_title) {
 
   p <- ggplot(
     plot_df,
-    aes(empirical_p, HBFSS, color = final_class, shape = final_class)
+    aes(empirical_p, HBFSS, color = final_class, fill = final_class, shape = final_class)
   ) +
     geom_point(alpha = 0.65, size = 1.05, stroke = 0.25) +
     make_single_legend_scale() +
@@ -3335,7 +3404,7 @@ save_discovery_count_panel <- function(summary_df) {
       title = "Discovery counts by dataset, EVS mode, and method",
       x = NULL,
       y = "Significant sites",
-      caption = "Bars are method-level discovery totals and may overlap across methods. Purple HBFSS bars show total HBFSS-positive discoveries; purple volcano points show only the added HBFSS layer not already displayed as Weak, Strong, or Standard."
+      caption = "Bars are method-level discovery totals and may overlap across methods. Weak bars show supported sub-threshold effects, not all lessAbs equivalence calls. Purple HBFSS bars show total HBFSS-positive discoveries; purple volcano points show only the added HBFSS layer not already displayed as Weak, Strong, or Standard."
     ) +
     manuscript_theme() +
     theme(
