@@ -5,11 +5,14 @@
 # DESeq2 + Eigenvector Splitting + empirical-null HC/HBFSS
 # This file is a complete rewrite, not a patch.
 # No legacy changepoint logic, no hidden cutoff fallback, no log transform for EVS.
+# Standard effects use DESeq2 Wald BH < 20% with |shrunken LFC| >= 1.
+# Strong effects are DESeq2 greaterAbs alternative-hypothesis calls: BH < 20% with |shrunken LFC| >= 1.
+# Weak effects are DESeq2 lessAbs alternative-hypothesis calls: BH < 20%, |shrunken LFC| < 1, plus the HBFSS parabolic cutoff.
 # =============================================================================
 
 required_packages <- c(
   "DESeq2", "apeglm", "fdrtool", "ggplot2", "ggrepel",
-  "dplyr", "gridExtra", "grid", "scales", "S4Vectors"
+  "dplyr", "gridExtra", "grid", "scales", "S4Vectors", "SummarizedExperiment"
 )
 
 missing_packages <- required_packages[
@@ -31,6 +34,7 @@ suppressPackageStartupMessages({
   library(grid)
   library(scales)
   library(S4Vectors)
+  library(SummarizedExperiment)
 })
 
 options(stringsAsFactors = FALSE)
@@ -46,6 +50,8 @@ count_file_candidates <- c(
 )
 
 alpha_level <- 0.20
+strong_alpha_level <- 0.20
+weak_alpha_level <- 0.20
 lfc_boundary <- 1.0
 top_n_target <- 5000L
 hc_invalid_at_or_above <- 0.95
@@ -57,10 +63,17 @@ n_top_labels <- 10L
 class_levels <- c("BG", "Weak", "Strong", "Std", "HBFSS")
 class_colors <- c(
   BG = "#BDBDBD",
-  Weak = "#4EA3F1",
+  Weak = "#0072B2",
   Strong = "#E31A1C",
   Std = "#33A02C",
   HBFSS = "#6A3D9A"
+)
+class_labels <- c(
+  BG = "Background",
+  Weak = "Weak effect: lessAbs BH<20% + HBFSS",
+  Strong = "Strong effect: greaterAbs BH<20%",
+  Std = "Standard DESeq2: BH<20%",
+  HBFSS = "HBFSS only"
 )
 class_shapes <- c(BG = 21, Weak = 24, Strong = 22, Std = 23, HBFSS = 25)
 class_sizes <- c(BG = 0.55, Weak = 1.10, Strong = 1.15, Std = 1.10, HBFSS = 1.15)
@@ -492,10 +505,12 @@ classify_results <- function(df, hc_p, hbfss_cutoff) {
     !is.na(df$lfc_shrunk) &
     abs(df$lfc_shrunk) >= lfc_boundary
 
-  df$strong_flag <- !is.na(df$greaterAbs_padj) &
-    df$greaterAbs_padj < alpha_level &
+  df$strong_alt_BH20_flag <- !is.na(df$greaterAbs_padj) &
+    df$greaterAbs_padj < strong_alpha_level &
     !is.na(df$lfc_shrunk) &
     abs(df$lfc_shrunk) >= lfc_boundary
+
+  df$strong_flag <- df$strong_alt_BH20_flag
 
   df$hc_pass <- !is.na(hc_p) &
     !is.na(df$empirical_p) &
@@ -510,13 +525,20 @@ classify_results <- function(df, hc_p, hbfss_cutoff) {
     df$HBFSS >= hbfss_cutoff &
     df$hc_pass
 
-  df$weak_flag <- df$hbfss_flag &
+  df$lessAbs_alt_BH20_flag <- !is.na(df$lessAbs_padj) &
+    df$lessAbs_padj < weak_alpha_level &
     !is.na(df$lfc_shrunk) &
     abs(df$lfc_shrunk) < lfc_boundary
+
+  # Weak-effect display calls are not just lessAbs equivalence calls.
+  # They must also pass the same HBFSS parabolic cutoff used in the manuscript volcano boundary.
+  df$weak_flag <- df$lessAbs_alt_BH20_flag & df$hbfss_flag
+  df$weak_hbfss_flag <- df$weak_flag
 
   df$display_strong <- df$strong_flag
   df$display_standard <- df$standard_flag & !df$display_strong
   df$display_weak <- df$weak_flag & !df$display_strong & !df$display_standard
+  # Volcano/display-only HBFSS points are restricted to HBFSS-significant features that are not already BG/Weak/Strong/Std.
   df$display_hbfss <- df$hbfss_flag & !df$display_strong & !df$display_standard & !df$display_weak
 
   df$final_class <- "BG"
@@ -548,7 +570,14 @@ run_deseq2_hbfss <- function(count_matrix, coldata, comparison_name, analysis_la
     contrast = c("condition", "trt", "untrt"),
     lfcThreshold = lfc_boundary,
     altHypothesis = "greaterAbs",
-    alpha = alpha_level
+    alpha = strong_alpha_level
+  )
+  weak <- results(
+    dds,
+    contrast = c("condition", "trt", "untrt"),
+    lfcThreshold = lfc_boundary,
+    altHypothesis = "lessAbs",
+    alpha = weak_alpha_level
   )
   shrunk <- lfcShrink(dds, coef = coef_name, type = "apeglm")
 
@@ -559,6 +588,12 @@ run_deseq2_hbfss <- function(count_matrix, coldata, comparison_name, analysis_la
     feature_id = rownames(strong),
     greaterAbs_pvalue = strong$pvalue,
     greaterAbs_padj = strong$padj
+  )
+
+  weak_df <- data.frame(
+    feature_id = rownames(weak),
+    lessAbs_pvalue = weak$pvalue,
+    lessAbs_padj = weak$padj
   )
 
   shrink_df <- data.frame(
@@ -575,6 +610,7 @@ run_deseq2_hbfss <- function(count_matrix, coldata, comparison_name, analysis_la
 
   df <- df %>%
     left_join(strong_df, by = "feature_id") %>%
+    left_join(weak_df, by = "feature_id") %>%
     left_join(shrink_df, by = "feature_id") %>%
     left_join(annotation_df, by = "feature_id")
 
@@ -612,11 +648,14 @@ run_deseq2_hbfss <- function(count_matrix, coldata, comparison_name, analysis_la
     "comparison_name", "analysis_label", "dataset_key",
     "feature_id", "orig_id", "gene_symbol",
     "baseMean", "log2FoldChange", "lfc_shrunk", "regulation_direction",
-    "stat", "pvalue", "padj", "greaterAbs_pvalue", "greaterAbs_padj",
+    "stat", "pvalue", "padj",
+    "greaterAbs_pvalue", "greaterAbs_padj",
+    "lessAbs_pvalue", "lessAbs_padj",
     "empirical_p", "empirical_bh", "empirical_q", "empirical_lfdr",
     "neglog10_empirical_p", "HBFSS",
     "hc_p_threshold_dataset", "hbfss_threshold_dataset",
-    "standard_flag", "strong_flag", "weak_flag", "hbfss_flag",
+    "hc_pass", "standard_flag", "strong_alt_BH20_flag", "strong_flag",
+    "lessAbs_alt_BH20_flag", "weak_hbfss_flag", "weak_flag", "hbfss_flag",
     "display_standard", "display_strong", "display_weak", "display_hbfss",
     "final_class"
   )
@@ -627,7 +666,10 @@ run_deseq2_hbfss <- function(count_matrix, coldata, comparison_name, analysis_la
     analysis_label = analysis_label,
     dataset_key = dataset_key,
     n_features = nrow(df),
+    n_lessAbs_alt_BH20 = sum(df$lessAbs_alt_BH20_flag, na.rm = TRUE),
+    n_lessAbs_alt_BH20_HBFSS = sum(df$weak_flag, na.rm = TRUE),
     n_weak = sum(df$weak_flag, na.rm = TRUE),
+    n_strong_alt_BH20 = sum(df$strong_alt_BH20_flag, na.rm = TRUE),
     n_strong = sum(df$strong_flag, na.rm = TRUE),
     n_standard = sum(df$standard_flag, na.rm = TRUE),
     n_hbfss_total = sum(df$hbfss_flag, na.rm = TRUE),
@@ -635,6 +677,8 @@ run_deseq2_hbfss <- function(count_matrix, coldata, comparison_name, analysis_la
     hc_p_threshold = hc_p,
     hbfss_threshold = hbfss_cutoff,
     alpha_level = alpha_level,
+    strong_alpha_level = strong_alpha_level,
+    weak_alpha_level = weak_alpha_level,
     lfc_boundary = lfc_boundary
   )
 
@@ -736,9 +780,9 @@ plot_volcano <- function(df, title) {
     geom_point(stroke = 0.32) +
     geom_vline(xintercept = c(-lfc_boundary, lfc_boundary), linetype = "dashed", linewidth = 0.50, color = threshold_color) +
     geom_vline(xintercept = 0, linewidth = 0.30, color = "grey55") +
-    scale_color_manual(values = class_colors, breaks = class_levels, drop = FALSE, name = "Class") +
-    scale_fill_manual(values = class_colors, breaks = class_levels, drop = FALSE, name = "Class") +
-    scale_shape_manual(values = class_shapes, breaks = class_levels, drop = FALSE, name = "Class") +
+    scale_color_manual(values = class_colors, breaks = class_levels, labels = class_labels[class_levels], drop = FALSE, name = "Class") +
+    scale_fill_manual(values = class_colors, breaks = class_levels, labels = class_labels[class_levels], drop = FALSE, name = "Class") +
+    scale_shape_manual(values = class_shapes, breaks = class_levels, labels = class_labels[class_levels], drop = FALSE, name = "Class") +
     scale_size_manual(values = class_sizes, breaks = class_levels, guide = "none") +
     scale_alpha_manual(values = class_alphas, breaks = class_levels, guide = "none") +
     guides(
@@ -847,6 +891,7 @@ plot_discovery_counts <- function(summary_df) {
       analysis_label = row$analysis_label,
       dataset_key = row$dataset_key,
       Class = factor(c("Weak", "Strong", "Std", "HBFSS"), levels = c("Weak", "Strong", "Std", "HBFSS")),
+      # Histogram/discovery counts use all HBFSS-significant genes, not only the HBFSS-only display subset.
       Count = as.numeric(c(row$n_weak, row$n_strong, row$n_standard, row$n_hbfss_total))
     )
   }))
@@ -856,15 +901,140 @@ plot_discovery_counts <- function(summary_df) {
   ggplot(long_df, aes(comparison_name, Count, fill = Class)) +
     geom_col(position = position_dodge(width = 0.82), width = 0.74, color = "grey25", linewidth = 0.15) +
     facet_wrap(~ analysis_label, scales = "free_y", ncol = 3) +
-    scale_fill_manual(values = class_colors[c("Weak", "Strong", "Std", "HBFSS")], drop = FALSE, name = "Class") +
+    scale_fill_manual(
+      values = class_colors[c("Weak", "Strong", "Std", "HBFSS")],
+      breaks = c("Weak", "Strong", "Std", "HBFSS"),
+      labels = class_labels[c("Weak", "Strong", "Std", "HBFSS")],
+      drop = FALSE,
+      name = "Class"
+    ) +
     labs(
       title = "Discovery counts by dataset, EVS mode, and method",
       x = NULL,
       y = "Significant PAS features",
-      caption = "Weak is restricted to subthreshold-LFC HBFSS discoveries; lessAbs equivalence testing is intentionally not counted."
+      caption = "Standard uses DESeq2 Wald BH < 20% with shrunken |LFC| >= 1; Strong uses greaterAbs alternative-hypothesis BH < 20% with shrunken |LFC| >= 1; Weak uses lessAbs alternative-hypothesis BH < 20%, shrunken |LFC| < 1, and passage of the HBFSS parabolic cutoff; HBFSS histogram counts use all HBFSS-significant genes, whereas purple triangle volcano points are restricted to the HBFSS-only display subset."
     ) +
     manuscript_theme() +
     theme(axis.text.x = element_text(angle = 35, hjust = 1))
+}
+
+
+plot_pca_support <- function(fit_obj, title) {
+  dds <- fit_obj$dds
+  if (is.null(dds)) return(NULL)
+
+  x <- as.matrix(DESeq2::counts(dds, normalized = TRUE))
+  storage.mode(x) <- "numeric"
+
+  keep <- rowSums(is.finite(x) & !is.na(x)) == ncol(x)
+  keep <- keep & apply(x, 1, stats::var, na.rm = TRUE) > 0
+  x <- x[keep, , drop = FALSE]
+
+  if (nrow(x) < 2L || ncol(x) < 3L) return(NULL)
+
+  pca <- stats::prcomp(t(x), center = TRUE, scale. = FALSE, rank. = 2)
+  var_pct <- round((pca$sdev^2 / sum(pca$sdev^2)) * 100, 1)
+
+  pca_df <- data.frame(
+    sample_id = rownames(pca$x),
+    PC1 = pca$x[, 1],
+    PC2 = pca$x[, 2],
+    condition = as.character(SummarizedExperiment::colData(dds)[rownames(pca$x), "condition"]),
+    stringsAsFactors = FALSE
+  )
+  pca_df$condition <- factor(
+    ifelse(pca_df$condition == "trt", "Treatment", "Control"),
+    levels = c("Control", "Treatment")
+  )
+
+  ggplot(pca_df, aes(PC1, PC2, label = sample_id, shape = condition, fill = condition)) +
+    geom_hline(yintercept = 0, linewidth = 0.22, linetype = "dashed", color = "grey70") +
+    geom_vline(xintercept = 0, linewidth = 0.22, linetype = "dashed", color = "grey70") +
+    geom_point(size = 2.2, color = "white", stroke = 0.45) +
+    ggrepel::geom_text_repel(
+      size = 1.9,
+      max.overlaps = 12,
+      force = 0.7,
+      box.padding = 0.18,
+      point.padding = 0.10,
+      min.segment.length = 0,
+      segment.alpha = 0.42,
+      segment.size = 0.14
+    ) +
+    scale_shape_manual(values = c(Control = 21, Treatment = 24), drop = FALSE, name = "Condition") +
+    scale_fill_manual(values = c(Control = control_color, Treatment = treatment_color), drop = FALSE, name = "Condition") +
+    labs(
+      title = title,
+      x = paste0("PC1 ", var_pct[1], "%"),
+      y = paste0("PC2 ", var_pct[2], "%"),
+      caption = "PCA support plot uses DESeq2-normalized counts from the analyzed dataset; no log transform is applied."
+    ) +
+    manuscript_theme()
+}
+
+plot_empirical_hbfss_support <- function(df, title) {
+  req <- c("empirical_p", "HBFSS", "final_class", "hc_p_threshold_dataset", "hbfss_threshold_dataset")
+  if (length(setdiff(req, colnames(df))) > 0L) return(NULL)
+
+  plot_df <- df[
+    is.finite(df$empirical_p) & !is.na(df$empirical_p) &
+      is.finite(df$HBFSS) & !is.na(df$HBFSS),
+    ,
+    drop = FALSE
+  ]
+  if (nrow(plot_df) == 0L) return(NULL)
+
+  plot_df$empirical_p <- pmax(plot_df$empirical_p, probability_floor)
+  plot_df$final_class <- factor(as.character(plot_df$final_class), levels = class_levels)
+
+  hc_p <- suppressWarnings(as.numeric(plot_df$hc_p_threshold_dataset[1]))
+  hbfss_cutoff <- suppressWarnings(as.numeric(plot_df$hbfss_threshold_dataset[1]))
+
+  p <- ggplot(
+    plot_df,
+    aes(empirical_p, HBFSS, color = final_class, fill = final_class, shape = final_class)
+  ) +
+    geom_point(alpha = 0.62, size = 1.00, stroke = 0.25) +
+    scale_color_manual(values = class_colors, breaks = class_levels, labels = class_labels[class_levels], drop = FALSE, name = "Class") +
+    scale_fill_manual(values = class_colors, breaks = class_levels, labels = class_labels[class_levels], drop = FALSE, name = "Class") +
+    scale_shape_manual(values = class_shapes, breaks = class_levels, labels = class_labels[class_levels], drop = FALSE, name = "Class") +
+    guides(
+      color = "none",
+      shape = "none",
+      fill = guide_legend(
+        override.aes = list(
+          shape = unname(class_shapes[class_levels]),
+          color = unname(class_colors[class_levels]),
+          fill = unname(class_colors[class_levels]),
+          size = rep(3.1, length(class_levels)),
+          alpha = rep(1, length(class_levels)),
+          stroke = rep(0.55, length(class_levels))
+        ),
+        nrow = 1
+      )
+    ) +
+    scale_x_log10(labels = scales::label_scientific()) +
+    labs(
+      title = title,
+      x = "Empirical p",
+      y = "HBFSS",
+      caption = paste0(
+        if (!is.na(hc_p) && is.finite(hc_p)) paste0("HCp=", signif(hc_p, 3)) else "HCp=NA",
+        "  ",
+        if (!is.na(hbfss_cutoff) && is.finite(hbfss_cutoff)) paste0("Hτ=", signif(hbfss_cutoff, 3)) else "Hτ=NA"
+      )
+    ) +
+    manuscript_theme()
+
+  if (!is.na(hc_p) && is.finite(hc_p) && hc_p > 0 && hc_p < 1) {
+    p <- p + geom_vline(xintercept = hc_p, color = threshold_color, linewidth = 0.55, linetype = "dotted")
+  }
+
+  if (!is.na(hbfss_cutoff) && is.finite(hbfss_cutoff)) {
+    p <- p + geom_hline(yintercept = hbfss_cutoff, color = threshold_color, linewidth = 0.55, linetype = "dashed")
+  }
+
+  p
 }
 
 # =============================================================================
@@ -1018,6 +1188,74 @@ if (nrow(summary_df) > 0L) {
   hist_panel <- arrange_with_one_legend(hist_plots, "EVS PC1-loading distribution support: NormEVS vs RawEVS", ncol = length(comparison_order))
   if (!is.null(hist_panel)) {
     save_plot(hist_panel, file.path(figure_dir, "Figure_Manuscript_EVS_PC1_Loading_Histogram.png"), width = 18.0, height = 9.4)
+  }
+
+  pca_raw_plots <- list()
+  empirical_raw_plots <- list()
+  for (comparison_name in comparison_order) {
+    key <- paste(comparison_name, "Raw", sep = "__")
+    if (!is.null(analysis_store[[key]])) {
+      pca_raw_plots[[comparison_name]] <- plot_pca_support(analysis_store[[key]], comparison_name)
+      empirical_raw_plots[[comparison_name]] <- plot_empirical_hbfss_support(analysis_store[[key]]$results, comparison_name)
+    }
+  }
+
+  pca_raw_panel <- arrange_with_one_legend(pca_raw_plots, "PCA structure: original dataset", ncol = length(comparison_order))
+  if (!is.null(pca_raw_panel)) {
+    save_plot(pca_raw_panel, file.path(figure_dir, "Figure_Manuscript_PCA_Raw_AllComparisons.png"), width = 18.0, height = 5.8)
+  }
+
+  empirical_raw_panel <- arrange_with_one_legend(empirical_raw_plots, "Empirical p and HBFSS support: original dataset", ncol = length(comparison_order))
+  if (!is.null(empirical_raw_panel)) {
+    save_plot(empirical_raw_panel, file.path(figure_dir, "Figure_Manuscript_Empirical_HBFSS_Raw_AllComparisons.png"), width = 18.0, height = 5.8)
+  }
+
+  for (dataset_prefix in c("Lead", "Rem")) {
+    pca_plots <- list()
+    empirical_plots <- list()
+
+    for (track in analysis_tracks) {
+      for (comparison_name in comparison_order) {
+        analysis_label <- paste0(dataset_prefix, "_", track)
+        key <- paste(comparison_name, analysis_label, sep = "__")
+        if (!is.null(analysis_store[[key]])) {
+          short_title <- paste0(comparison_name, "\n", track)
+          pca_plots[[paste(comparison_name, track, sep = "_")]] <- plot_pca_support(analysis_store[[key]], short_title)
+          empirical_plots[[paste(comparison_name, track, sep = "_")]] <- plot_empirical_hbfss_support(analysis_store[[key]]$results, short_title)
+        }
+      }
+    }
+
+    dataset_title <- if (dataset_prefix == "Lead") "leading-edge dataset" else "remainder dataset"
+    dataset_file <- if (dataset_prefix == "Lead") "Lead" else "Rem"
+
+    pca_panel <- arrange_with_one_legend(
+      pca_plots,
+      paste0("PCA structure: ", dataset_title, " NormEVS vs RawEVS"),
+      ncol = length(comparison_order)
+    )
+    if (!is.null(pca_panel)) {
+      save_plot(
+        pca_panel,
+        file.path(figure_dir, paste0("Figure_Manuscript_PCA_", dataset_file, "_AllComparisons_NormEVS_vs_RawEVS.png")),
+        width = 18.0,
+        height = 9.6
+      )
+    }
+
+    empirical_panel <- arrange_with_one_legend(
+      empirical_plots,
+      paste0("Empirical p and HBFSS support: ", dataset_title, " NormEVS vs RawEVS"),
+      ncol = length(comparison_order)
+    )
+    if (!is.null(empirical_panel)) {
+      save_plot(
+        empirical_panel,
+        file.path(figure_dir, paste0("Figure_Manuscript_Empirical_HBFSS_", dataset_file, "_AllComparisons_NormEVS_vs_RawEVS.png")),
+        width = 18.0,
+        height = 9.6
+      )
+    }
   }
 }
 
