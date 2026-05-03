@@ -4,7 +4,8 @@
 # SEQUENCE FINAL SUBMISSION PIPELINE
 # DESeq2 + Eigenvector Splitting + empirical-null HC/HBFSS
 # Final manuscript version. Complete rewrite, not a patch.
-# No legacy changepoint logic, no hidden cutoff fallback, no log transform for EVS.
+# No legacy changepoint logic and no hidden cutoff fallback.
+# PCA score-variance figures compare Original vs Leading Edge vs Remainder using PC1 score variance only.
 # Standard effects use DESeq2 Wald BH < 10% with |shrunken LFC| >= 1.
 # Strong effects are DESeq2 greaterAbs alternative-hypothesis calls: BH < 10% with |shrunken LFC| >= 1.
 # Weak volcano class: |shrunken LFC| < 1 plus HBFSS parabolic passage; lessAbs is retained as an audit field.
@@ -1059,44 +1060,88 @@ plot_loading_histograms <- function(load_df, title_text) {
     )
 }
 
-plot_pc1_evs_variance <- function(pca_var_df) {
-  if (nrow(pca_var_df) == 0L) return(NULL)
+pca_pc1_evs_plot_df <- function(pca_var_df) {
+  if (nrow(pca_var_df) == 0L) return(data.frame())
 
   pc1 <- pca_var_df[pca_var_df$component == "PC1", , drop = FALSE]
-  if (nrow(pc1) == 0L) return(NULL)
+  if (nrow(pc1) == 0L) return(data.frame())
 
-  original <- pc1[pc1$dataset_group == "Original", , drop = FALSE]
-  original <- original[original$evs_mode == "Original", , drop = FALSE]
+  pc1$dataset_group <- as.character(pc1$dataset_group)
+  pc1$evs_mode <- as.character(pc1$evs_mode)
 
-  mode_rows <- list()
+  original_rows <- pc1[pc1$dataset_group == "Original" & pc1$evs_mode == "Original", , drop = FALSE]
+  split_rows <- pc1[pc1$dataset_group %in% c("Lead", "Remainder") & pc1$evs_mode %in% c("NormEVS", "RawEVS"), , drop = FALSE]
+  if (nrow(split_rows) == 0L || nrow(original_rows) == 0L) return(data.frame())
+
+  out_rows <- list()
+  idx <- 0L
   for (mode_name in c("NormEVS", "RawEVS")) {
-    mode_df <- pc1[pc1$evs_mode == mode_name & pc1$dataset_group %in% c("Lead", "Remainder"), , drop = FALSE]
-    if (nrow(mode_df) == 0L) next
-    if (nrow(original) > 0L) {
-      orig_copy <- original
-      orig_copy$evs_mode <- factor(mode_name, levels = levels(pc1$evs_mode))
-      mode_df <- bind_rows(orig_copy, mode_df)
+    mode_split <- split_rows[split_rows$evs_mode == mode_name, , drop = FALSE]
+    if (nrow(mode_split) == 0L) next
+
+    for (comparison_name in unique(mode_split$comparison_name)) {
+      original_one <- original_rows[original_rows$comparison_name == comparison_name, , drop = FALSE]
+      split_one <- mode_split[mode_split$comparison_name == comparison_name, , drop = FALSE]
+      if (nrow(original_one) == 0L || nrow(split_one) == 0L) next
+
+      original_one <- original_one[1, , drop = FALSE]
+      original_one$evs_mode <- mode_name
+      original_one$analysis_label <- paste0("Original_for_", mode_name)
+      original_one$analysis_pretty <- "Original"
+
+      block <- bind_rows(original_one, split_one)
+      original_variance <- suppressWarnings(as.numeric(original_one$score_variance[1]))
+      block$original_pc1_score_variance <- original_variance
+      block$pc1_score_variance <- suppressWarnings(as.numeric(block$score_variance))
+      block$pc1_score_variance_ratio_to_original <- if (is.finite(original_variance) && original_variance > 0) {
+        block$pc1_score_variance / original_variance
+      } else {
+        NA_real_
+      }
+      block$pc1_score_variance_percent_of_original <- 100 * block$pc1_score_variance_ratio_to_original
+      block$pc1_score_variance_log10 <- log10(pmax(block$pc1_score_variance, 0) + 1)
+      block$dataset_group <- factor(as.character(block$dataset_group), levels = c("Original", "Lead", "Remainder"))
+      block$evs_mode <- factor(as.character(block$evs_mode), levels = c("NormEVS", "RawEVS"))
+      idx <- idx + 1L
+      out_rows[[idx]] <- block
     }
-    mode_rows[[mode_name]] <- mode_df
   }
 
-  plot_df <- if (length(mode_rows) > 0L) bind_rows(mode_rows) else pc1
+  if (length(out_rows) == 0L) return(data.frame())
+  bind_rows(out_rows)
+}
+
+plot_pc1_evs_variance_absolute <- function(pca_var_df) {
+  plot_df <- pca_pc1_evs_plot_df(pca_var_df)
+  if (nrow(plot_df) == 0L) return(NULL)
+
   plot_df$dataset_group <- factor(as.character(plot_df$dataset_group), levels = c("Original", "Lead", "Remainder"))
   plot_df$evs_mode <- factor(as.character(plot_df$evs_mode), levels = c("NormEVS", "RawEVS"))
 
-  ggplot(plot_df, aes(dataset_group, score_variance, fill = dataset_group)) +
+  ggplot(plot_df, aes(dataset_group, pc1_score_variance, fill = dataset_group)) +
     geom_col(width = 0.70, color = "grey25", linewidth = 0.16) +
-    facet_grid(evs_mode ~ comparison_name, scales = "free_y") +
+    geom_text(
+      aes(label = scales::label_number_si(accuracy = 0.1)(pc1_score_variance)),
+      vjust = -0.25,
+      size = 1.65,
+      color = "grey20"
+    ) +
+    facet_grid(evs_mode ~ comparison_name) +
+    scale_y_continuous(
+      trans = scales::pseudo_log_trans(base = 10),
+      labels = scales::label_number_si(),
+      expand = expansion(mult = c(0.02, 0.16))
+    ) +
     scale_fill_manual(
-      values = c(Original = "#999999", Lead = "#E31A1C", Remainder = "#1F78B4"),
+      values = c(Original = "#9E9E9E", Lead = "#E31A1C", Remainder = "#1F78B4"),
       drop = FALSE,
       name = NULL
     ) +
     labs(
-      title = "PC1 variance after EVS",
+      title = "PCA score variance: Original vs Lead vs Remainder",
       x = NULL,
-      y = "PC1 variance",
-      caption = "Lead > Original and Remainder < Original indicates effective splitting."
+      y = "PC1 score variance (pseudo-log10 scale)",
+      caption = "PC1 score variance is compared across the original dataset, EVS leading edge, and EVS remainder. PC2 is not used for this variance-comparison figure."
     ) +
     manuscript_theme() +
     theme(
@@ -1105,6 +1150,54 @@ plot_pc1_evs_variance <- function(pca_var_df) {
       legend.position = "bottom"
     )
 }
+
+plot_pc1_evs_variance_relative <- function(pca_var_df) {
+  plot_df <- pca_pc1_evs_plot_df(pca_var_df)
+  if (nrow(plot_df) == 0L) return(NULL)
+
+  plot_df$dataset_group <- factor(as.character(plot_df$dataset_group), levels = c("Original", "Lead", "Remainder"))
+  plot_df$evs_mode <- factor(as.character(plot_df$evs_mode), levels = c("NormEVS", "RawEVS"))
+  plot_df$percent_floor <- pmax(plot_df$pc1_score_variance_percent_of_original, 1e-6)
+
+  ggplot(plot_df, aes(dataset_group, percent_floor, fill = dataset_group)) +
+    geom_hline(yintercept = 100, linetype = "dashed", linewidth = 0.35, color = "grey45") +
+    geom_col(width = 0.70, color = "grey25", linewidth = 0.16) +
+    geom_text(
+      aes(label = paste0(scales::number(pc1_score_variance_percent_of_original, accuracy = 0.1), "%")),
+      vjust = -0.25,
+      size = 1.65,
+      color = "grey20"
+    ) +
+    facet_grid(evs_mode ~ comparison_name) +
+    scale_y_continuous(
+      trans = scales::pseudo_log_trans(base = 10),
+      labels = function(x) paste0(scales::number(x, accuracy = 0.1), "%"),
+      expand = expansion(mult = c(0.02, 0.18))
+    ) +
+    scale_fill_manual(
+      values = c(Original = "#9E9E9E", Lead = "#E31A1C", Remainder = "#1F78B4"),
+      drop = FALSE,
+      name = NULL
+    ) +
+    labs(
+      title = "Relative PC1 score variance after EVS",
+      x = NULL,
+      y = "% of original PC1 score variance (pseudo-log10 scale)",
+      caption = "Original is fixed at 100% within each comparison and EVS mode; Lead and Remainder show retained PC1 score variance relative to the same original dataset."
+    ) +
+    manuscript_theme() +
+    theme(
+      strip.text = element_text(size = base_theme_size - 0.6),
+      axis.text.x = element_text(size = base_theme_size - 0.9),
+      legend.position = "bottom"
+    )
+}
+
+# Backward-compatible function name: now returns the corrected absolute PC1 score-variance figure.
+plot_pc1_evs_variance <- function(pca_var_df) {
+  plot_pc1_evs_variance_absolute(pca_var_df)
+}
+
 
 
 plot_discovery_counts <- function(summary_df) {
@@ -1572,6 +1665,72 @@ plot_simulation_cutoffs <- function(results_df) {
     theme(legend.position = "none")
 }
 
+
+simulation_long_metric_rows <- function(results_df, metric) {
+  bind_rows(
+    data.frame(
+      de_fraction = results_df$de_fraction,
+      lfc_magnitude = results_df$lfc_magnitude,
+      null_inflation = results_df$null_inflation,
+      replicate = results_df$replicate,
+      method = "DESeq2 BH",
+      value = results_df[[paste0("standard_", metric)]],
+      stringsAsFactors = FALSE
+    ),
+    data.frame(
+      de_fraction = results_df$de_fraction,
+      lfc_magnitude = results_df$lfc_magnitude,
+      null_inflation = results_df$null_inflation,
+      replicate = results_df$replicate,
+      method = "Empirical BH",
+      value = results_df[[paste0("empirical_bh_", metric)]],
+      stringsAsFactors = FALSE
+    ),
+    data.frame(
+      de_fraction = results_df$de_fraction,
+      lfc_magnitude = results_df$lfc_magnitude,
+      null_inflation = results_df$null_inflation,
+      replicate = results_df$replicate,
+      method = "HBFSS",
+      value = results_df[[paste0("hbfss_", metric)]],
+      stringsAsFactors = FALSE
+    )
+  ) %>%
+    mutate(
+      method = factor(method, levels = c("DESeq2 BH", "Empirical BH", "HBFSS")),
+      lfc_label = factor(
+        paste0("LFC = ", lfc_magnitude),
+        levels = paste0("LFC = ", simulation_lfc_magnitudes)
+      ),
+      de_label = paste0(de_fraction * 100, "% DE"),
+      inflation_label = paste0(null_inflation * 100, "% null inflation")
+    )
+}
+
+plot_simulation_metric_boxplot <- function(results_df, metric, title, y_label, alpha_line = FALSE) {
+  long <- simulation_long_metric_rows(results_df, metric)
+  method_colors <- c("DESeq2 BH" = "#999999", "Empirical BH" = treatment_color, "HBFSS" = class_colors[["HBFSS"]])
+
+  p <- ggplot(long, aes(method, value, fill = method)) +
+    geom_boxplot(outlier.size = 0.45, width = 0.62, linewidth = 0.22, na.rm = TRUE) +
+    facet_grid(inflation_label + de_label ~ lfc_label) +
+    scale_fill_manual(values = method_colors, drop = FALSE, name = NULL) +
+    labs(title = title, x = NULL, y = y_label, caption = NULL) +
+    manuscript_theme() +
+    theme(
+      axis.text.x = element_blank(),
+      axis.ticks.x = element_blank(),
+      strip.text = element_text(size = base_theme_size - 0.8),
+      legend.position = "bottom"
+    )
+
+  if (alpha_line) {
+    p <- p + geom_hline(yintercept = alpha_level, linetype = "dashed", linewidth = 0.30, color = "grey35")
+  }
+
+  p
+}
+
 run_sequence_simulation_validation <- function() {
   set.seed(simulation_seed)
   dir.create(simulation_dir, recursive = TRUE, showWarnings = FALSE)
@@ -1677,21 +1836,21 @@ run_sequence_simulation_validation <- function() {
 
   save_csv(simulation_summary, file.path(simulation_dir, "Simulation_Summary.csv"))
 
-  f1_summary <- simulation_method_summary(simulation_results, "f1")
-  fdr_summary <- simulation_method_summary(simulation_results, "fdr")
+  save_csv(simulation_long_metric_rows(simulation_results, "f1"), file.path(simulation_dir, "Simulation_F1_Long.csv"))
+  save_csv(simulation_long_metric_rows(simulation_results, "fdr"), file.path(simulation_dir, "Simulation_FDR_Long.csv"))
 
   save_plot(
-    plot_simulation_metric(f1_summary, "Simulation F1", "F1", alpha_line = FALSE),
-    file.path(simulation_dir, "Simulation_F1.png"),
-    width = 11,
-    height = 7.4
+    plot_simulation_metric_boxplot(simulation_results, "f1", "Simulation F1 score by method", "F1", alpha_line = FALSE),
+    file.path(simulation_dir, "Simulation_F1_Boxplot.png"),
+    width = 11.8,
+    height = 9.2
   )
 
   save_plot(
-    plot_simulation_metric(fdr_summary, "Simulation FDR", "FDR", alpha_line = TRUE),
-    file.path(simulation_dir, "Simulation_FDR.png"),
-    width = 11,
-    height = 7.4
+    plot_simulation_metric_boxplot(simulation_results, "fdr", "Simulation observed FDR by method", "FDR", alpha_line = TRUE),
+    file.path(simulation_dir, "Simulation_FDR_Boxplot.png"),
+    width = 11.8,
+    height = 9.2
   )
 
   weak_plot <- plot_simulation_weak_recall(simulation_results)
@@ -1901,17 +2060,30 @@ if (nrow(summary_df) > 0L) {
       file.path(output_dir, "Summary_PCA.csv")
     )
 
-    pca_var_plot <- plot_pca_variance_summary(
-      pca_var_df,
-      value_col = "variance_explained_pct",
-      title = "PCA variance explained",
-      y_label = "% variance",
-      caption = NULL
-    )
-    if (!is.null(pca_var_plot)) save_plot(pca_var_plot, file.path(figure_dir, "PCA_Variance.png"), width = 15.0, height = 9.0)
+    pca_pc1_compare_df <- pca_pc1_evs_plot_df(pca_var_df)
+    if (nrow(pca_pc1_compare_df) > 0L) {
+      save_csv(
+        dplyr::rename(
+          pca_pc1_compare_df,
+          comparison = comparison_name,
+          analysis = analysis_label,
+          panel = analysis_pretty,
+          dataset = dataset_group,
+          evs_mode = evs_mode,
+          pc1_score_variance = pc1_score_variance,
+          original_pc1_score_variance = original_pc1_score_variance,
+          pc1_score_variance_ratio_to_original = pc1_score_variance_ratio_to_original,
+          pc1_score_variance_percent_of_original = pc1_score_variance_percent_of_original
+        ),
+        file.path(output_dir, "Summary_PCA_PC1_ScoreVariance_EVS.csv")
+      )
+    }
 
-    pc1_var_plot <- plot_pc1_evs_variance(pca_var_df)
-    if (!is.null(pc1_var_plot)) save_plot(pc1_var_plot, file.path(figure_dir, "PC1_Variance_EVS.png"), width = 15.5, height = 8.3)
+    pca_relative_plot <- plot_pc1_evs_variance_relative(pca_var_df)
+    if (!is.null(pca_relative_plot)) save_plot(pca_relative_plot, file.path(figure_dir, "PCA_Variance.png"), width = 15.8, height = 8.8)
+
+    pc1_var_plot <- plot_pc1_evs_variance_absolute(pca_var_df)
+    if (!is.null(pc1_var_plot)) save_plot(pc1_var_plot, file.path(figure_dir, "PC1_Variance_EVS.png"), width = 15.8, height = 8.8)
 
     evs_benefit_plot <- plot_evs_benefit_summary(pca_var_df)
     if (!is.null(evs_benefit_plot)) save_plot(evs_benefit_plot, file.path(figure_dir, "EVS_ResidualVariance.png"), width = 10.5, height = 5.8)
@@ -1973,7 +2145,7 @@ cat("Exported files: ", nrow(manifest), "\n", sep = "")
 cat("=====================================================\n\n")
 
 if (length(failure_rows) > 0L) {
-  stop("One or more comparisons failed. See Table_Failed.csv.")
+  stop("One or more comparisons failed. See Failures.csv.")
 }
 
 if (nrow(summary_df) == 0L) {
