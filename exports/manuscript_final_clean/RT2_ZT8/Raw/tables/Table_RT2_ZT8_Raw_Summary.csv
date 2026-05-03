@@ -1,2 +1,2 @@
-"comp","label","set","n","lessAbs","weak","strongAlt","strong","std","H","Honly","HCp","Htau","alpha","alphaS","alphaW","lfc"
-"RT2_ZT8","Raw","Raw",31534,7704,0,0,0,0,8,8,0.0136775581992137,1.86399142858533,0.1,0.1,0.1,1
+"comparison","analysis","dataset","n_features","lessAbs_significant","weak_effect_hbfss_region","greaterAbs_significant","strong_effect","standard_effect","hbfss_total","hbfss_only","hc_p_threshold","hbfss_cutoff","wald_bh_alpha","greaterAbs_bh_alpha","lessAbs_bh_alpha","lfc_boundary"
+"RT2_ZT8","Raw","Raw",31534,7704,6,0,0,0,8,2,0.0136775581992137,1.86399142858533,0.1,0.1,0.1,1
