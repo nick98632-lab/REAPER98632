@@ -5,10 +5,10 @@
 # DESeq2 + Eigenvector Splitting + empirical-null HC/HBFSS
 # Final manuscript version. Complete rewrite, not a patch.
 # No legacy changepoint logic and no hidden cutoff fallback.
-# PCA score-variance figures compare Original vs Leading Edge vs Remainder using PC1 score variance only.
+# PCA score-variance figures compare Original vs Leading Edge vs Remainder using PC1 score variance only; EVS histograms show per-feature PC1 variance contributions.
 # Standard effects use DESeq2 Wald BH < 10% with |shrunken LFC| >= 1.
 # Strong effects are DESeq2 greaterAbs alternative-hypothesis calls: BH < 10% with |shrunken LFC| >= 1.
-# Weak volcano class: |shrunken LFC| < 1 plus HBFSS parabolic passage; lessAbs is retained as an audit field.
+# Weak class requires DESeq2 lessAbs support plus |shrunken LFC| < 1 plus HBFSS passage.
 # =============================================================================
 
 required_packages <- c(
@@ -64,6 +64,7 @@ n_top_labels <- 6L
 n_top_labels_per_class <- 2L
 
 run_simulation_validation <- TRUE
+reset_output_dir <- TRUE
 simulation_seed <- 42L
 simulation_n_features <- 10000L
 simulation_n_samples_per_group <- 5L
@@ -162,6 +163,11 @@ repo_root <- find_repo_root()
 output_dir <- file.path(repo_root, "exports", "manuscript_final_clean")
 figure_dir <- file.path(output_dir, "manuscript_figures")
 simulation_dir <- file.path(output_dir, "simulation_validation")
+
+if (isTRUE(reset_output_dir) && dir.exists(output_dir)) {
+  unlink(output_dir, recursive = TRUE, force = TRUE)
+}
+
 dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
 dir.create(figure_dir, recursive = TRUE, showWarnings = FALSE)
 dir.create(simulation_dir, recursive = TRUE, showWarnings = FALSE)
@@ -214,6 +220,26 @@ clip_probability <- function(x, floor = calculation_probability_floor) {
   x
 }
 
+format_compact_number <- function(x, digits = 3) {
+  x <- suppressWarnings(as.numeric(x))
+  out <- rep(NA_character_, length(x))
+  finite <- is.finite(x) & !is.na(x)
+  ax <- abs(x[finite])
+  val <- x[finite]
+  out[finite] <- ifelse(
+    ax >= 1e9, paste0(signif(val / 1e9, digits), "B"),
+    ifelse(
+      ax >= 1e6, paste0(signif(val / 1e6, digits), "M"),
+      ifelse(
+        ax >= 1e3, paste0(signif(val / 1e3, digits), "K"),
+        ifelse(ax > 0 & ax < 0.001, formatC(val, format = "e", digits = digits - 1), as.character(signif(val, digits)))
+      )
+    )
+  )
+  out[!finite] <- "NA"
+  out
+}
+
 
 save_csv <- function(df, path) {
   dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
@@ -233,8 +259,11 @@ concise_analysis_summary <- function(df) {
     n_strong_alt = "greaterAbs_significant",
     n_strong = "strong_effect",
     n_standard = "standard_effect",
+    n_hbfss_raw = "hbfss_raw_geometric",
     n_hbfss_total = "hbfss_total",
-    n_hbfss_added_display = "hbfss_only",
+    n_hbfss_overlap_standard = "hbfss_overlap_standard",
+    n_hbfss_only = "hbfss_only",
+    n_hbfss_display_only = "hbfss_display_only",
     hc_p_threshold = "hc_p_threshold",
     hbfss_threshold = "hbfss_cutoff",
     alpha_level = "wald_bh_alpha",
@@ -249,7 +278,8 @@ concise_analysis_summary <- function(df) {
     "comparison", "analysis", "dataset", "n_features",
     "lessAbs_significant", "weak_effect_hbfss_region",
     "greaterAbs_significant", "strong_effect",
-    "standard_effect", "hbfss_total", "hbfss_only",
+    "standard_effect", "hbfss_raw_geometric", "hbfss_total",
+    "hbfss_overlap_standard", "hbfss_only", "hbfss_display_only",
     "hc_p_threshold", "hbfss_cutoff",
     "wald_bh_alpha", "greaterAbs_bh_alpha", "lessAbs_bh_alpha",
     "lfc_boundary"
@@ -424,13 +454,24 @@ make_norm_evs_matrix <- function(count_matrix, coldata) {
   dds <- DESeqDataSetFromMatrix(countData = count_matrix, colData = coldata, design = ~ condition)
   dds <- dds[rowSums(counts(dds)) > 0, ]
   dds <- estimateSizeFactors(dds)
-  as.matrix(counts(dds, normalized = TRUE))
+
+  transformed <- tryCatch(
+    as.matrix(SummarizedExperiment::assay(DESeq2::vst(dds, blind = TRUE))),
+    error = function(e) NULL
+  )
+
+  if (is.null(transformed)) {
+    transformed <- log2(as.matrix(counts(dds, normalized = TRUE)) + 1)
+  }
+
+  storage.mode(transformed) <- "numeric"
+  transformed
 }
 
 get_evs_matrix <- function(count_matrix, coldata, track) {
   if (track == "RawEVS") {
     x <- matrix(as.numeric(count_matrix), nrow = nrow(count_matrix), dimnames = dimnames(count_matrix))
-    return(x)
+    return(log2(x + 1))
   }
 
   if (track == "NormEVS") {
@@ -450,11 +491,15 @@ condition_pc1_rank <- function(evs_matrix, sample_ids, condition_name) {
   x <- x[variable_feature, , drop = FALSE]
   pca <- stats::prcomp(t(x), center = TRUE, scale. = FALSE)
   loading <- pca$rotation[, 1]
+  pc1_score_variance <- as.numeric(pca$sdev[1]^2)
+  pc1_variance_contribution <- (as.numeric(loading)^2) * pc1_score_variance
 
   rank_df <- data.frame(
     feature_id = names(loading),
     pc1_loading = as.numeric(loading),
-    pc1_loading_abs = abs(as.numeric(loading))
+    pc1_loading_abs = abs(as.numeric(loading)),
+    pc1_score_variance = pc1_score_variance,
+    pc1_variance_contribution = pc1_variance_contribution
   )
   rank_df <- rank_df[order(rank_df$pc1_loading_abs, decreasing = TRUE), , drop = FALSE]
   rank_df$evs_rank <- seq_len(nrow(rank_df))
@@ -463,6 +508,7 @@ condition_pc1_rank <- function(evs_matrix, sample_ids, condition_name) {
   rank_df$evs_selected <- rank_df$evs_rank <= top_n_used
   rank_df$top_n_used <- top_n_used
   rank_df$loading_cutoff_at_top_n <- rank_df$pc1_loading_abs[top_n_used]
+  rank_df$pc1_contribution_cutoff_at_top_n <- rank_df$pc1_variance_contribution[top_n_used]
 
   list(pca = pca, rank_df = rank_df, top_n_used = top_n_used)
 }
@@ -510,7 +556,7 @@ build_evs_split <- function(count_matrix, coldata, comparison_name, track) {
     control_loading_cutoff = control_rank$rank_df$loading_cutoff_at_top_n[1],
     leading_edge_n = length(leading_ids),
     remainder_n = length(remainder_ids),
-    evs_input = ifelse(track == "NormEVS", "DESeq2 normalized counts; no log transform", "Raw counts; no log transform")
+    evs_input = ifelse(track == "NormEVS", "DESeq2 VST counts for PCA/EVS; log2 normalized-count fallback", "log2 raw counts + 1 for RawEVS PCA/EVS")
   )
 
   list(
@@ -591,6 +637,11 @@ classify_results <- function(df, hc_p, hbfss_cutoff) {
 
   df$strong_flag <- df$strong_alt_flag
 
+  df$lessAbs_alt_flag <- !is.na(df$lessAbs_padj) &
+    df$lessAbs_padj < weak_alpha_level &
+    !is.na(df$lfc_shrunk) &
+    abs(df$lfc_shrunk) < lfc_boundary
+
   df$hc_pass <- !is.na(hc_p) &
     !is.na(df$empirical_p) &
     is.finite(df$empirical_p) &
@@ -598,32 +649,25 @@ classify_results <- function(df, hc_p, hbfss_cutoff) {
 
   df$HBFSS <- abs(df$lfc_shrunk) * df$neglog10_empirical_p_calc
 
-  df$hbfss_flag <- !is.na(hbfss_cutoff) &
+  df$hbfss_raw_flag <- !is.na(hbfss_cutoff) &
     !is.na(df$HBFSS) &
     is.finite(df$HBFSS) &
     df$HBFSS >= hbfss_cutoff &
     df$hc_pass
 
-  df$lessAbs_alt_flag <- !is.na(df$lessAbs_padj) &
-    df$lessAbs_padj < weak_alpha_level &
-    !is.na(df$lfc_shrunk) &
-    abs(df$lfc_shrunk) < lfc_boundary
+  # HBFSS is reported as a superset of the ordinary DESeq2 standard calls.
+  # This makes the summary arithmetic explicit:
+  # hbfss_total = standard_effect + hbfss_only.
+  df$hbfss_flag <- df$standard_flag | df$hbfss_raw_flag
 
-  # Weak-effect volcano classification is geometric and threshold-based:
-  # under the LFC boundary and above the HBFSS parabola.
-  # The DESeq2 lessAbs call is retained separately as lessAbs_alt_flag for audit/summary.
-  df$weak_region_hbfss_flag <- !is.na(df$lfc_shrunk) &
-    abs(df$lfc_shrunk) < lfc_boundary &
-    df$hbfss_flag
-
+  df$weak_region_hbfss_flag <- df$lessAbs_alt_flag & df$hbfss_flag
   df$weak_flag <- df$weak_region_hbfss_flag
   df$weak_hbfss_flag <- df$weak_flag
 
   df$display_strong <- df$strong_flag
   df$display_standard <- df$standard_flag & !df$display_strong
   df$display_weak <- df$weak_flag & !df$display_strong & !df$display_standard
-  # Volcano/display-only HBFSS points are restricted to HBFSS-significant features that are not already BG/Weak/Strong/Std.
-  df$display_hbfss <- df$hbfss_flag & !df$display_strong & !df$display_standard & !df$display_weak
+  df$display_hbfss <- df$hbfss_flag & !df$standard_flag & !df$display_weak
 
   df$final_class <- "BG"
   df$final_class[df$display_hbfss] <- "HBFSS"
@@ -749,7 +793,7 @@ run_deseq2_hbfss <- function(count_matrix, coldata, comparison_name, analysis_la
     "neglog10_empirical_p_calc", "neglog10_empirical_p_plot", "neglog10_empirical_p", "HBFSS",
     "hc_p_threshold_dataset", "hbfss_threshold_dataset",
     "hc_pass", "standard_flag", "strong_alt_flag", "strong_flag",
-    "lessAbs_alt_flag", "weak_region_hbfss_flag", "weak_hbfss_flag", "weak_flag", "hbfss_flag",
+    "lessAbs_alt_flag", "weak_region_hbfss_flag", "weak_hbfss_flag", "weak_flag", "hbfss_raw_flag", "hbfss_flag",
     "display_standard", "display_strong", "display_weak", "display_hbfss",
     "final_class"
   )
@@ -765,8 +809,11 @@ run_deseq2_hbfss <- function(count_matrix, coldata, comparison_name, analysis_la
     n_strong_alt = sum(df$strong_alt_flag, na.rm = TRUE),
     n_strong = sum(df$strong_flag, na.rm = TRUE),
     n_standard = sum(df$standard_flag, na.rm = TRUE),
+    n_hbfss_raw = sum(df$hbfss_raw_flag, na.rm = TRUE),
     n_hbfss_total = sum(df$hbfss_flag, na.rm = TRUE),
-    n_hbfss_added_display = sum(df$display_hbfss, na.rm = TRUE),
+    n_hbfss_overlap_standard = sum(df$hbfss_flag & df$standard_flag, na.rm = TRUE),
+    n_hbfss_only = sum(df$hbfss_flag & !df$standard_flag, na.rm = TRUE),
+    n_hbfss_display_only = sum(df$display_hbfss, na.rm = TRUE),
     hc_p_threshold = hc_p,
     hbfss_threshold = hbfss_cutoff,
     alpha_level = alpha_level,
@@ -974,83 +1021,122 @@ plot_volcano <- function(df, title) {
   p
 }
 
-plot_evs_rank <- function(evs_obj) {
-  trt <- evs_obj$treatment_rank$rank_df %>%
-    transmute(condition = "Treatment", evs_rank = evs_rank, pc1_loading_abs = pc1_loading_abs)
-  ctl <- evs_obj$control_rank$rank_df %>%
-    transmute(condition = "Control", evs_rank = evs_rank, pc1_loading_abs = pc1_loading_abs)
-  plot_df <- bind_rows(trt, ctl)
+pc1_variance_contribution_rows <- function(expr_matrix, sample_ids, scope_label) {
+  x <- expr_matrix[, sample_ids, drop = FALSE]
+  storage.mode(x) <- "numeric"
+  keep <- rowSums(is.finite(x) & !is.na(x)) == ncol(x)
+  keep <- keep & apply(x, 1, stats::var, na.rm = TRUE) > 0
+  x <- x[keep, , drop = FALSE]
 
-  ggplot(plot_df, aes(evs_rank, pc1_loading_abs, color = condition)) +
-    geom_line(linewidth = 0.45, alpha = 0.90) +
-    geom_vline(xintercept = top_n_target, linetype = "dashed", linewidth = 0.55, color = threshold_color) +
-    scale_color_manual(values = c(Treatment = treatment_color, Control = control_color), name = NULL) +
-    scale_x_continuous(labels = scales::comma) +
-    labs(
-      title = paste0(evs_obj$comparison_name, "\n", evs_obj$track),
-      x = "Rank",
-      y = "Abs PC1 loading",
-      caption = paste0("topN=", top_n_target, "  Lead=", length(evs_obj$leading_ids), "  Rem=", length(evs_obj$remainder_ids))
-    ) +
-    manuscript_theme()
+  if (nrow(x) < 2L || ncol(x) < 3L) return(data.frame())
+
+  pca <- stats::prcomp(t(x), center = TRUE, scale. = FALSE, rank. = 1)
+  loading <- as.numeric(pca$rotation[, 1])
+  pc1_score_variance <- as.numeric(pca$sdev[1]^2)
+
+  data.frame(
+    feature_id = rownames(pca$rotation),
+    condition = scope_label,
+    pc1_loading = loading,
+    pc1_loading_abs = abs(loading),
+    pc1_score_variance = pc1_score_variance,
+    pc1_variance_contribution = (loading^2) * pc1_score_variance,
+    stringsAsFactors = FALSE
+  )
 }
-
 
 evs_loading_distribution_rows <- function(full_count_matrix, evs_obj, coldata, comparison_name, track) {
   extract_one <- function(mat, dataset_group) {
     source_matrix <- get_evs_matrix(mat, coldata, track)
     trt_ids <- rownames(coldata)[coldata$condition == "trt"]
     ctl_ids <- rownames(coldata)[coldata$condition == "untrt"]
+    all_ids <- rownames(coldata)
 
-    trt <- condition_pc1_rank(source_matrix, trt_ids, "treatment")$rank_df %>%
-      transmute(
+    bind_rows(
+      pc1_variance_contribution_rows(source_matrix, all_ids, "All"),
+      pc1_variance_contribution_rows(source_matrix, ctl_ids, "Control"),
+      pc1_variance_contribution_rows(source_matrix, trt_ids, "Treatment")
+    ) %>%
+      mutate(
         comparison_name = comparison_name,
         track = track,
-        dataset_group = dataset_group,
-        condition = "Treatment",
-        pc1_loading_abs = pc1_loading_abs
+        dataset_group = dataset_group
       )
-
-    ctl <- condition_pc1_rank(source_matrix, ctl_ids, "control")$rank_df %>%
-      transmute(
-        comparison_name = comparison_name,
-        track = track,
-        dataset_group = dataset_group,
-        condition = "Control",
-        pc1_loading_abs = pc1_loading_abs
-      )
-
-    bind_rows(trt, ctl)
   }
 
-  bind_rows(
+  out <- bind_rows(
     extract_one(full_count_matrix, "Original"),
     extract_one(evs_obj$leading_matrix, "Lead"),
     extract_one(evs_obj$remainder_matrix, "Remainder")
   )
+
+  cutoff_rows <- list()
+  if (!is.null(evs_obj$treatment_rank$pca)) {
+    cutoff_rows[[length(cutoff_rows) + 1L]] <- data.frame(
+      comparison_name = comparison_name,
+      track = track,
+      condition = "Treatment",
+      pc1_loading_cutoff = evs_obj$summary$treatment_loading_cutoff[1],
+      pc1_score_variance = as.numeric(evs_obj$treatment_rank$pca$sdev[1]^2),
+      stringsAsFactors = FALSE
+    )
+  }
+  if (!is.null(evs_obj$control_rank$pca)) {
+    cutoff_rows[[length(cutoff_rows) + 1L]] <- data.frame(
+      comparison_name = comparison_name,
+      track = track,
+      condition = "Control",
+      pc1_loading_cutoff = evs_obj$summary$control_loading_cutoff[1],
+      pc1_score_variance = as.numeric(evs_obj$control_rank$pca$sdev[1]^2),
+      stringsAsFactors = FALSE
+    )
+  }
+  cutoffs <- if (length(cutoff_rows) > 0L) bind_rows(cutoff_rows) else data.frame()
+  if (nrow(cutoffs) > 0L) {
+    cutoffs$pc1_variance_contribution_cutoff <- (cutoffs$pc1_loading_cutoff^2) * cutoffs$pc1_score_variance
+    cutoffs <- cutoffs[rep(seq_len(nrow(cutoffs)), each = 3), , drop = FALSE]
+    cutoffs$dataset_group <- rep(c("Original", "Lead", "Remainder"), times = nrow(cutoffs) / 3)
+    attr(out, "cutoffs") <- cutoffs
+  }
+
+  out
 }
 
 plot_loading_histograms <- function(load_df, title_text) {
   if (nrow(load_df) == 0L) return(NULL)
 
-  load_df$dataset_group <- factor(load_df$dataset_group, levels = c("Original", "Lead", "Remainder"))
-  load_df$condition <- factor(load_df$condition, levels = c("Control", "Treatment"))
+  cutoff_df <- attr(load_df, "cutoffs")
+  if (is.null(cutoff_df)) cutoff_df <- data.frame()
 
-  ggplot(load_df, aes(pc1_loading_abs, color = condition, fill = condition)) +
+  load_df$dataset_group <- factor(load_df$dataset_group, levels = c("Original", "Lead", "Remainder"))
+  load_df$condition <- factor(load_df$condition, levels = c("All", "Control", "Treatment"))
+  load_df$pc1_variance_contribution <- pmax(suppressWarnings(as.numeric(load_df$pc1_variance_contribution)), 0)
+
+  if (nrow(cutoff_df) > 0L) {
+    cutoff_df$dataset_group <- factor(cutoff_df$dataset_group, levels = c("Original", "Lead", "Remainder"))
+    cutoff_df$condition <- factor(cutoff_df$condition, levels = c("All", "Control", "Treatment"))
+  }
+
+  p <- ggplot(load_df, aes(pc1_variance_contribution, color = condition, fill = condition)) +
     geom_histogram(
-      bins = 40,
+      bins = 60,
       position = "identity",
-      alpha = 0.20,
-      linewidth = 0.18
+      alpha = 0.18,
+      linewidth = 0.16,
+      boundary = 0
     ) +
     facet_grid(dataset_group ~ comparison_name, scales = "free_y") +
-    scale_color_manual(values = c(Control = control_color, Treatment = treatment_color), drop = FALSE, name = NULL) +
-    scale_fill_manual(values = c(Control = control_color, Treatment = treatment_color), drop = FALSE, name = NULL) +
+    scale_x_continuous(
+      trans = scales::pseudo_log_trans(base = 10),
+      labels = function(x) format_compact_number(x, digits = 3)
+    ) +
+    scale_color_manual(values = c(All = "#7570B3", Control = control_color, Treatment = treatment_color), drop = FALSE, name = NULL) +
+    scale_fill_manual(values = c(All = "#7570B3", Control = control_color, Treatment = treatment_color), drop = FALSE, name = NULL) +
     labs(
       title = title_text,
-      x = "Abs PC1 loading",
-      y = "Count",
-      caption = NULL
+      x = "Per-feature contribution to PC1 score variance",
+      y = "Feature frequency",
+      caption = "Dashed vertical lines mark the treatment/control top-N EVS cutoff projected onto PC1 variance contribution. Original, leading-edge, and remainder distributions are shown directly; no percent-of-original scaling is used."
     ) +
     manuscript_theme() +
     theme(
@@ -1058,6 +1144,19 @@ plot_loading_histograms <- function(load_df, title_text) {
       strip.text = element_text(size = base_theme_size - 0.6),
       axis.text = element_text(size = base_theme_size - 1.0)
     )
+
+  if (nrow(cutoff_df) > 0L) {
+    p <- p + geom_vline(
+      data = cutoff_df,
+      aes(xintercept = pc1_variance_contribution_cutoff, color = condition),
+      inherit.aes = FALSE,
+      linetype = "dashed",
+      linewidth = 0.38,
+      alpha = 0.85
+    )
+  }
+
+  p
 }
 
 pca_pc1_evs_plot_df <- function(pca_var_df) {
@@ -1117,20 +1216,21 @@ plot_pc1_evs_variance_absolute <- function(pca_var_df) {
 
   plot_df$dataset_group <- factor(as.character(plot_df$dataset_group), levels = c("Original", "Lead", "Remainder"))
   plot_df$evs_mode <- factor(as.character(plot_df$evs_mode), levels = c("NormEVS", "RawEVS"))
+  plot_df$pc1_score_variance <- pmax(suppressWarnings(as.numeric(plot_df$pc1_score_variance)), 0)
 
   ggplot(plot_df, aes(dataset_group, pc1_score_variance, fill = dataset_group)) +
     geom_col(width = 0.70, color = "grey25", linewidth = 0.16) +
     geom_text(
-      aes(label = scales::label_number_si(accuracy = 0.1)(pc1_score_variance)),
+      aes(label = format_compact_number(pc1_score_variance, digits = 3)),
       vjust = -0.25,
       size = 1.65,
       color = "grey20"
     ) +
-    facet_grid(evs_mode ~ comparison_name) +
+    facet_grid(evs_mode ~ comparison_name, scales = "free_y") +
     scale_y_continuous(
       trans = scales::pseudo_log_trans(base = 10),
-      labels = scales::label_number_si(),
-      expand = expansion(mult = c(0.02, 0.16))
+      labels = function(x) format_compact_number(x, digits = 3),
+      expand = expansion(mult = c(0.02, 0.18))
     ) +
     scale_fill_manual(
       values = c(Original = "#9E9E9E", Lead = "#E31A1C", Remainder = "#1F78B4"),
@@ -1138,10 +1238,10 @@ plot_pc1_evs_variance_absolute <- function(pca_var_df) {
       name = NULL
     ) +
     labs(
-      title = "PCA score variance: Original vs Lead vs Remainder",
+      title = "PC1 score variance by dataset after EVS",
       x = NULL,
-      y = "PC1 score variance (pseudo-log10 scale)",
-      caption = "PC1 score variance is compared across the original dataset, EVS leading edge, and EVS remainder. PC2 is not used for this variance-comparison figure."
+      y = "PC1 score variance, absolute scale",
+      caption = "Bars compare the original dataset, EVS leading edge, and EVS remainder directly. PC2 percent-variance is not used in this figure."
     ) +
     manuscript_theme() +
     theme(
@@ -1152,53 +1252,14 @@ plot_pc1_evs_variance_absolute <- function(pca_var_df) {
 }
 
 plot_pc1_evs_variance_relative <- function(pca_var_df) {
-  plot_df <- pca_pc1_evs_plot_df(pca_var_df)
-  if (nrow(plot_df) == 0L) return(NULL)
-
-  plot_df$dataset_group <- factor(as.character(plot_df$dataset_group), levels = c("Original", "Lead", "Remainder"))
-  plot_df$evs_mode <- factor(as.character(plot_df$evs_mode), levels = c("NormEVS", "RawEVS"))
-  plot_df$percent_floor <- pmax(plot_df$pc1_score_variance_percent_of_original, 1e-6)
-
-  ggplot(plot_df, aes(dataset_group, percent_floor, fill = dataset_group)) +
-    geom_hline(yintercept = 100, linetype = "dashed", linewidth = 0.35, color = "grey45") +
-    geom_col(width = 0.70, color = "grey25", linewidth = 0.16) +
-    geom_text(
-      aes(label = paste0(scales::number(pc1_score_variance_percent_of_original, accuracy = 0.1), "%")),
-      vjust = -0.25,
-      size = 1.65,
-      color = "grey20"
-    ) +
-    facet_grid(evs_mode ~ comparison_name) +
-    scale_y_continuous(
-      trans = scales::pseudo_log_trans(base = 10),
-      labels = function(x) paste0(scales::number(x, accuracy = 0.1), "%"),
-      expand = expansion(mult = c(0.02, 0.18))
-    ) +
-    scale_fill_manual(
-      values = c(Original = "#9E9E9E", Lead = "#E31A1C", Remainder = "#1F78B4"),
-      drop = FALSE,
-      name = NULL
-    ) +
-    labs(
-      title = "Relative PC1 score variance after EVS",
-      x = NULL,
-      y = "% of original PC1 score variance (pseudo-log10 scale)",
-      caption = "Original is fixed at 100% within each comparison and EVS mode; Lead and Remainder show retained PC1 score variance relative to the same original dataset."
-    ) +
-    manuscript_theme() +
-    theme(
-      strip.text = element_text(size = base_theme_size - 0.6),
-      axis.text.x = element_text(size = base_theme_size - 0.9),
-      legend.position = "bottom"
-    )
-}
-
-# Backward-compatible function name: now returns the corrected absolute PC1 score-variance figure.
-plot_pc1_evs_variance <- function(pca_var_df) {
+  # Kept only for backward compatibility with older script calls.
+  # It now returns the absolute PC1 score-variance plot because the relative 100% plot obscured the remainder.
   plot_pc1_evs_variance_absolute(pca_var_df)
 }
 
-
+plot_pc1_evs_variance <- function(pca_var_df) {
+  plot_pc1_evs_variance_absolute(pca_var_df)
+}
 
 plot_discovery_counts <- function(summary_df) {
   long_df <- bind_rows(lapply(seq_len(nrow(summary_df)), function(i) {
@@ -1208,8 +1269,7 @@ plot_discovery_counts <- function(summary_df) {
       analysis_label = row$analysis_label,
       dataset_key = row$dataset_key,
       Class = factor(c("Weak", "Strong", "Std", "HBFSS"), levels = c("Weak", "Strong", "Std", "HBFSS")),
-      # Histogram/discovery counts use all HBFSS-significant genes, not only the HBFSS-only display subset.
-      Count = as.numeric(c(row$n_weak, row$n_strong, row$n_standard, row$n_hbfss_total))
+      Count = as.numeric(c(row$n_weak, row$n_strong, row$n_standard, row$n_hbfss_display_only))
     )
   }))
 
@@ -1240,7 +1300,13 @@ pca_support_components <- function(fit_obj) {
   dds <- fit_obj$dds
   if (is.null(dds)) return(NULL)
 
-  x <- as.matrix(DESeq2::counts(dds, normalized = TRUE))
+  x <- tryCatch(
+    as.matrix(SummarizedExperiment::assay(DESeq2::vst(dds, blind = TRUE))),
+    error = function(e) NULL
+  )
+  if (is.null(x)) {
+    x <- log2(as.matrix(DESeq2::counts(dds, normalized = TRUE)) + 1)
+  }
   storage.mode(x) <- "numeric"
 
   keep <- rowSums(is.finite(x) & !is.na(x)) == ncol(x)
@@ -1298,69 +1364,6 @@ extract_pca_variance_rows <- function(fit_obj, comparison_name, analysis_label) 
     stringsAsFactors = FALSE
   )
 }
-
-plot_pca_variance_summary <- function(pca_var_df, value_col, title, y_label, caption) {
-  if (nrow(pca_var_df) == 0L) return(NULL)
-
-  ggplot(pca_var_df, aes(comparison_name, .data[[value_col]], fill = component)) +
-    geom_col(position = position_dodge(width = 0.82), width = 0.74, color = "grey25", linewidth = 0.15) +
-    facet_wrap(~ analysis_pretty, scales = "free_y", ncol = 3) +
-    scale_fill_manual(values = pca_component_colors, drop = FALSE, name = NULL) +
-    labs(
-      title = title,
-      x = NULL,
-      y = y_label,
-      caption = caption
-    ) +
-    manuscript_theme() +
-    theme(axis.text.x = element_text(angle = 35, hjust = 1))
-}
-
-plot_evs_benefit_summary <- function(pca_var_df) {
-  pc1 <- pca_var_df[
-    pca_var_df$component == "PC1" &
-      pca_var_df$dataset_group %in% c("Lead", "Remainder") &
-      pca_var_df$evs_mode %in% c("NormEVS", "RawEVS"),
-    ,
-    drop = FALSE
-  ]
-  if (nrow(pc1) == 0L) return(NULL)
-
-  wide <- reshape(
-    pc1[, c("comparison_name", "evs_mode", "dataset_group", "score_variance")],
-    idvar = c("comparison_name", "evs_mode"),
-    timevar = "dataset_group",
-    direction = "wide"
-  )
-
-  lead_col <- "score_variance.Lead"
-  rem_col <- "score_variance.Remainder"
-  if (!all(c(lead_col, rem_col) %in% colnames(wide))) return(NULL)
-
-  wide$rem_lead_pc1_ratio <- wide[[rem_col]] / wide[[lead_col]]
-  wide <- wide[is.finite(wide$rem_lead_pc1_ratio), , drop = FALSE]
-  if (nrow(wide) == 0L) return(NULL)
-
-  wide$evs_mode <- factor(as.character(wide$evs_mode), levels = c("NormEVS", "RawEVS"))
-
-  ggplot(wide, aes(comparison_name, rem_lead_pc1_ratio, fill = evs_mode)) +
-    geom_hline(yintercept = 1, linetype = "dashed", linewidth = 0.35, color = "grey45") +
-    geom_col(position = position_dodge(width = 0.78), width = 0.70, color = "grey25", linewidth = 0.12) +
-    scale_fill_manual(values = c(NormEVS = treatment_color, RawEVS = control_color), drop = FALSE, name = NULL) +
-    labs(
-      title = "EVS residual variance",
-      x = NULL,
-      y = "Rem / Lead PC1 variance",
-      caption = "Lower = less residual PC1 variance."
-    ) +
-    manuscript_theme() +
-    theme(axis.text.x = element_text(angle = 35, hjust = 1))
-}
-
-
-
-
-
 
 plot_pca_support <- function(fit_obj, title) {
   comp <- pca_support_components(fit_obj)
@@ -1511,7 +1514,7 @@ sequence_simulation_analysis <- function(sim_obj, null_inflation) {
     df$empirical_p <= hc_p
 
   df$HBFSS <- abs(df$lfc_shrunk) * df$neglog10_empirical_p_calc
-  df$hbfss_sig <- !is.na(hbfss_cutoff) &
+  df$hbfss_raw_sig <- !is.na(hbfss_cutoff) &
     !is.na(df$HBFSS) &
     is.finite(df$HBFSS) &
     df$HBFSS >= hbfss_cutoff &
@@ -1527,9 +1530,14 @@ sequence_simulation_analysis <- function(sim_obj, null_inflation) {
     !is.na(df$lfc_shrunk) &
     abs(df$lfc_shrunk) >= lfc_boundary
 
-  df$weak_region_hbfss_sig <- !is.na(df$lfc_shrunk) &
-    abs(df$lfc_shrunk) < lfc_boundary &
-    df$hbfss_sig
+  df$hbfss_sig <- df$standard_sig | df$hbfss_raw_sig
+
+  df$lessAbs_sig <- !is.na(df$lessAbs_padj) &
+    df$lessAbs_padj < weak_alpha_level &
+    !is.na(df$lfc_shrunk) &
+    abs(df$lfc_shrunk) < lfc_boundary
+
+  df$weak_region_hbfss_sig <- df$lessAbs_sig & df$hbfss_sig
 
   list(results = df, hc_p = hc_p, hbfss_cutoff = hbfss_cutoff)
 }
@@ -1992,16 +2000,6 @@ if (nrow(summary_df) > 0L) {
   count_plot <- plot_discovery_counts(summary_df)
   if (!is.null(count_plot)) save_plot(count_plot, file.path(figure_dir, "Counts.png"), width = 14.0, height = 8.0)
 
-  rank_plots <- list()
-  for (track in analysis_tracks) {
-    for (comparison_name in comparison_order) {
-      key <- paste(comparison_name, track, sep = "__")
-      if (!is.null(evs_store[[key]])) rank_plots[[key]] <- plot_evs_rank(evs_store[[key]])
-    }
-  }
-  rank_panel <- arrange_with_one_legend(rank_plots, "EVS loading rank", ncol = length(comparison_order))
-  if (!is.null(rank_panel)) save_plot(rank_panel, file.path(figure_dir, "EVS_LoadingRank.png"), width = 18.0, height = 9.2)
-
   pca_raw_plots <- list()
   for (comparison_name in comparison_order) {
     key <- paste(comparison_name, "Raw", sep = "__")
@@ -2079,45 +2077,70 @@ if (nrow(summary_df) > 0L) {
       )
     }
 
-    pca_relative_plot <- plot_pc1_evs_variance_relative(pca_var_df)
-    if (!is.null(pca_relative_plot)) save_plot(pca_relative_plot, file.path(figure_dir, "PCA_Variance.png"), width = 15.8, height = 8.8)
-
     pc1_var_plot <- plot_pc1_evs_variance_absolute(pca_var_df)
-    if (!is.null(pc1_var_plot)) save_plot(pc1_var_plot, file.path(figure_dir, "PC1_Variance_EVS.png"), width = 15.8, height = 8.8)
-
-    evs_benefit_plot <- plot_evs_benefit_summary(pca_var_df)
-    if (!is.null(evs_benefit_plot)) save_plot(evs_benefit_plot, file.path(figure_dir, "EVS_ResidualVariance.png"), width = 10.5, height = 5.8)
+    if (!is.null(pc1_var_plot)) {
+      save_plot(pc1_var_plot, file.path(figure_dir, "PCA_Variance.png"), width = 15.8, height = 8.8)
+      save_plot(pc1_var_plot, file.path(figure_dir, "PC1_Variance_EVS.png"), width = 15.8, height = 8.8)
+    }
   }
 
   load_rows <- list()
-  for (comparison_name in comparison_order) {
-    key <- paste(comparison_name, "NormEVS", sep = "__")
-    comp_obj <- comparison_store[[comparison_name]]
-    if (!is.null(evs_store[[key]]) && !is.null(comp_obj)) {
-      load_rows[[comparison_name]] <- evs_loading_distribution_rows(
-        full_count_matrix = comp_obj$count_matrix,
-        evs_obj = evs_store[[key]],
-        coldata = comp_obj$coldata,
-        comparison_name = comparison_name,
-        track = "NormEVS"
-      )
+  cutoff_rows <- list()
+  for (track in analysis_tracks) {
+    for (comparison_name in comparison_order) {
+      key <- paste(comparison_name, track, sep = "__")
+      comp_obj <- comparison_store[[comparison_name]]
+      if (!is.null(evs_store[[key]]) && !is.null(comp_obj)) {
+        tmp <- evs_loading_distribution_rows(
+          full_count_matrix = comp_obj$count_matrix,
+          evs_obj = evs_store[[key]],
+          coldata = comp_obj$coldata,
+          comparison_name = comparison_name,
+          track = track
+        )
+        load_rows[[paste(comparison_name, track, sep = "__")]] <- tmp
+        cut <- attr(tmp, "cutoffs")
+        if (!is.null(cut) && nrow(cut) > 0L) cutoff_rows[[paste(comparison_name, track, sep = "__")]] <- cut
+      }
     }
   }
   load_df <- if (length(load_rows) > 0L) bind_rows(load_rows) else data.frame()
+  cutoff_df <- if (length(cutoff_rows) > 0L) bind_rows(cutoff_rows) else data.frame()
   if (nrow(load_df) > 0L) {
+    attr(load_df, "cutoffs") <- cutoff_df
     save_csv(
       dplyr::rename(
         load_df,
         comparison = comparison_name,
         evs_mode = track,
         dataset = dataset_group,
-        condition = condition,
-        abs_pc1_loading = pc1_loading_abs
+        scope = condition,
+        abs_pc1_loading = pc1_loading_abs,
+        pc1_score_variance = pc1_score_variance,
+        pc1_variance_contribution = pc1_variance_contribution
       ),
-      file.path(output_dir, "Summary_LoadingDistributions.csv")
+      file.path(output_dir, "Summary_PC1VarianceDistributions.csv")
     )
-    load_plot <- plot_loading_histograms(load_df, "EVS loading distributions")
-    if (!is.null(load_plot)) save_plot(load_plot, file.path(figure_dir, "Loading_Distributions.png"), width = 15.8, height = 10.4)
+    if (nrow(cutoff_df) > 0L) {
+      save_csv(
+        dplyr::rename(
+          cutoff_df,
+          comparison = comparison_name,
+          evs_mode = track,
+          dataset = dataset_group,
+          scope = condition,
+          pc1_loading_cutoff = pc1_loading_cutoff,
+          pc1_score_variance = pc1_score_variance,
+          pc1_variance_contribution_cutoff = pc1_variance_contribution_cutoff
+        ),
+        file.path(output_dir, "Summary_PC1VarianceCutoffs.csv")
+      )
+    }
+    load_plot <- plot_loading_histograms(load_df, "PC1 variance-contribution frequency after EVS")
+    if (!is.null(load_plot)) {
+      save_plot(load_plot, file.path(figure_dir, "EVS_LoadingRank.png"), width = 15.8, height = 10.4)
+      save_plot(load_plot, file.path(figure_dir, "PC1_Variance_Distributions.png"), width = 15.8, height = 10.4)
+    }
   }
 }
 
@@ -2125,6 +2148,34 @@ if (isTRUE(run_simulation_validation)) {
   simulation_summary <- run_sequence_simulation_validation()
   print(simulation_summary)
 }
+
+
+write_sequence_methods <- function() {
+  methods_lines <- c(
+    "# SEQUENCE methods summary",
+    "",
+    "## Input and preprocessing",
+    "Raw read-count matrices are imported for each RT/ZT comparison. Raw integer counts are retained for DESeq2 differential testing. PCA/EVS calculations are performed on variance-stabilized expression for NormEVS, with log2(normalized counts + 1) as a fallback if VST fails. RawEVS uses log2(raw counts + 1).",
+    "",
+    "## Eigenvector splitting",
+    "For each comparison and EVS mode, PC1 is calculated separately in treatment and control samples. Features are ranked by absolute PC1 loading. The leading edge is the union of the top-N treatment-ranked and top-N control-ranked features. The remainder is every feature not in that union. No AIC/BIC or legacy changepoint fallback is used.",
+    "",
+    "## Differential expression",
+    "DESeq2 is run with design ~ condition and reference level untrt. Standard effects are BH-adjusted Wald results with padj < alpha and |apeglm-shrunken log2 fold-change| >= 1. Strong effects are DESeq2 greaterAbs alternative-hypothesis calls at the same LFC boundary. Weak HBFSS-region effects require DESeq2 lessAbs support, |shrunken LFC| < 1, and HBFSS significance.",
+    "",
+    "## Empirical null and HBFSS",
+    "The Wald statistic distribution is passed to fdrtool using statistic = normal. The fndr cutoff method is attempted first, with pct0 fallback. Empirical p-values are clipped only for numerical stability. Higher criticism supplies the dataset-specific empirical-p threshold unless the returned threshold is invalid or near 1. The HBFSS cutoff is -log10(HC p-threshold) multiplied by the LFC boundary. HBFSS is reported as a superset of standard DESeq2 calls so hbfss_total = standard_effect + hbfss_only by construction.",
+    "",
+    "## PCA variance figures",
+    "The PCA variance figure uses PC1 score variance only. It directly compares Original, Lead, and Remainder datasets on an absolute pseudo-log scale, avoiding the prior percent-of-original plot that compressed the remainder to near zero. The PC1 variance-distribution figure shows per-feature contribution to PC1 score variance for All samples, Control samples, and Treatment samples, with dashed treatment/control EVS top-N cutoff lines.",
+    "",
+    "## Simulation validation",
+    "The simulation validation generates negative-binomial count data across DE fractions, LFC magnitudes, and null-inflation settings. It runs the same DESeq2/apeglm/fdrtool/HC/HBFSS logic and exports raw results, summary metrics, F1, FDR, weak-effect recall, and cutoff-stability figures."
+  )
+  writeLines(methods_lines, file.path(output_dir, "METHODS_SEQUENCE_PIPELINE.md"))
+}
+
+write_sequence_methods()
 
 # =============================================================================
 # MANIFEST AND COMPLETION
