@@ -46,8 +46,7 @@ options(stringsAsFactors = FALSE)
 
 count_file_candidates <- c(
   file.path("data", "WTTS-Seq_2022.2_DE_raw_read_numbers.csv"),
-  "WTTS-Seq_2022.2_DE_raw_read_numbers.csv",
-  "/root/REAPER98632/data/WTTS-Seq_2022.2_DE_raw_read_numbers.csv"
+  "WTTS-Seq_2022.2_DE_raw_read_numbers.csv"
 )
 
 alpha_level <- 0.10
@@ -58,13 +57,13 @@ top_n_target <- 5000L
 hc_invalid_at_or_above <- 0.95
 calculation_probability_floor <- .Machine$double.xmin
 plot_probability_floor <- 1e-16
-figure_dpi <- 320
+figure_dpi <- 600
 base_theme_size <- 9
 n_top_labels <- 6L
 n_top_labels_per_class <- 2L
 
-run_simulation_validation <- TRUE
-reset_output_dir <- TRUE
+run_simulation_validation <- FALSE  # Default FALSE for reproducible manuscript reruns; set TRUE only to regenerate simulations.
+reset_output_dir <- FALSE  # Default FALSE so failed reruns do not erase prior outputs; set TRUE only for a clean rebuild.
 simulation_seed <- 42L
 simulation_n_features <- 10000L
 simulation_n_samples_per_group <- 5L
@@ -141,20 +140,26 @@ script_path <- function() {
 }
 
 find_repo_root <- function() {
-  candidates <- unique(c(dirname(script_path()), getwd(), dirname(getwd()), "/root/REAPER98632"))
-  candidates <- candidates[!is.na(candidates) & dir.exists(candidates)]
+  start_points <- unique(c(dirname(script_path()), getwd()))
+  start_points <- start_points[!is.na(start_points) & dir.exists(start_points)]
 
-  for (candidate in candidates) {
-    if (dir.exists(file.path(candidate, ".git"))) {
-      return(normalizePath(candidate, winslash = "/", mustWork = TRUE))
+  check_upward <- function(start) {
+    current <- normalizePath(start, winslash = "/", mustWork = TRUE)
+    repeat {
+      if (dir.exists(file.path(current, ".git")) ||
+          file.exists(file.path(current, "data", "WTTS-Seq_2022.2_DE_raw_read_numbers.csv"))) {
+        return(current)
+      }
+      parent <- dirname(current)
+      if (identical(parent, current)) break
+      current <- parent
     }
+    NA_character_
   }
 
-  for (candidate in candidates) {
-    if (file.exists(file.path(candidate, "data", "WTTS-Seq_2022.2_DE_raw_read_numbers.csv"))) {
-      return(normalizePath(candidate, winslash = "/", mustWork = TRUE))
-    }
-  }
+  hits <- vapply(start_points, check_upward, character(1))
+  hits <- hits[!is.na(hits)]
+  if (length(hits) > 0L) return(hits[1])
 
   normalizePath(getwd(), winslash = "/", mustWork = TRUE)
 }
@@ -247,6 +252,17 @@ save_csv <- function(df, path) {
   invisible(path)
 }
 
+rename_columns_existing <- function(df, map) {
+  # map is named old_column = "new_column". Missing old columns are ignored.
+  # This avoids dplyr::rename identity/new=old failures across dplyr versions.
+  old_names <- names(map)
+  hit <- old_names[old_names %in% names(df)]
+  if (length(hit) > 0L) {
+    names(df)[match(hit, names(df))] <- unname(map[hit])
+  }
+  df
+}
+
 concise_analysis_summary <- function(df) {
   out <- df
   map <- c(
@@ -325,8 +341,9 @@ analysis_table_path <- function(comparison_name, analysis_label, table_label) {
   file.path(path, safe_csv_name("Table", comparison_name, analysis_label, table_label))
 }
 
-save_plot <- function(plot_obj, path, width, height) {
+save_plot <- function(plot_obj, path, width, height, export_pdf = TRUE) {
   dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
+
   ggplot2::ggsave(
     filename = path,
     plot = plot_obj,
@@ -337,6 +354,23 @@ save_plot <- function(plot_obj, path, width, height) {
     bg = "white",
     limitsize = FALSE
   )
+
+  if (isTRUE(export_pdf)) {
+    pdf_path <- sub("\\.[^.]+$", ".pdf", path)
+    if (!identical(pdf_path, path)) {
+      ggplot2::ggsave(
+        filename = pdf_path,
+        plot = plot_obj,
+        width = width,
+        height = height,
+        units = "in",
+        device = "pdf",
+        bg = "white",
+        limitsize = FALSE
+      )
+    }
+  }
+
   invisible(path)
 }
 
@@ -589,14 +623,34 @@ empirical_null <- function(statistic, label) {
   valid <- is.finite(statistic) & !is.na(statistic)
   if (sum(valid) < 5L) stop(label, " has fewer than five finite Wald statistics.")
 
-  fit <- fdrtool::fdrtool(
-    statistic[valid],
-    statistic = "normal",
-    plot = FALSE,
-    verbose = FALSE,
-    cutoff.method = "fndr",
-    pct0 = 0.75
-  )
+  run_fdrtool <- function(method) {
+    args <- list(
+      x = statistic[valid],
+      statistic = "normal",
+      plot = FALSE,
+      verbose = FALSE,
+      cutoff.method = method
+    )
+    if (identical(method, "pct0")) args$pct0 <- 0.75
+
+    fit <- tryCatch(
+      do.call(fdrtool::fdrtool, args),
+      error = function(e) {
+        warning(label, " fdrtool ", method, " failed: ", conditionMessage(e), call. = FALSE)
+        NULL
+      }
+    )
+
+    if (is.null(fit)) return(NULL)
+    if (is.null(fit$pval) || length(fit$pval) != sum(valid)) return(NULL)
+    eta0 <- suppressWarnings(as.numeric(fit$param["eta0"]))
+    if (length(eta0) == 1L && is.finite(eta0) && eta0 <= 0) return(NULL)
+    fit
+  }
+
+  fit <- run_fdrtool("fndr")
+  if (is.null(fit)) fit <- run_fdrtool("pct0")
+  if (is.null(fit)) stop(label, " empirical-null fitting failed with both fndr and pct0.")
 
   p <- rep(NA_real_, length(statistic))
   q <- rep(NA_real_, length(statistic))
@@ -1251,15 +1305,6 @@ plot_pc1_evs_variance_absolute <- function(pca_var_df) {
     )
 }
 
-plot_pc1_evs_variance_relative <- function(pca_var_df) {
-  # Kept only for backward compatibility with older script calls.
-  # It now returns the absolute PC1 score-variance plot because the relative 100% plot obscured the remainder.
-  plot_pc1_evs_variance_absolute(pca_var_df)
-}
-
-plot_pc1_evs_variance <- function(pca_var_df) {
-  plot_pc1_evs_variance_absolute(pca_var_df)
-}
 
 plot_discovery_counts <- function(summary_df) {
   long_df <- bind_rows(lapply(seq_len(nrow(summary_df)), function(i) {
@@ -1273,7 +1318,11 @@ plot_discovery_counts <- function(summary_df) {
     )
   }))
 
-  save_csv(dplyr::rename(long_df, comparison = comparison_name, analysis = analysis_label, dataset = dataset_key, class = Class, count = Count), file.path(output_dir, "Counts_Long.csv"))
+  counts_long_export <- rename_columns_existing(
+    long_df,
+    c(comparison_name = "comparison", analysis_label = "analysis", dataset_key = "dataset", Class = "class", Count = "count")
+  )
+  save_csv(counts_long_export, file.path(output_dir, "Counts_Long.csv"))
 
   ggplot(long_df, aes(comparison_name, Count, fill = Class)) +
     geom_col(position = position_dodge(width = 0.82), width = 0.74, color = "grey25", linewidth = 0.15) +
@@ -1436,12 +1485,12 @@ simulate_sequence_counts <- function(n_features, n_samples, base_mean, disp_null
   colnames(counts) <- c(paste0("ctrl_", seq_len(n_samples)), paste0("trt_", seq_len(n_samples)))
   rownames(counts) <- paste0("sim_feature_", seq_len(n_features))
 
-  data.frame(
+  truth <- data.frame(
     feature_id = rownames(counts),
     is_de = c(rep(TRUE, n_de), rep(FALSE, n_null)),
     true_lfc = c(lfc_magnitude * de_direction, rep(0, n_null)),
     stringsAsFactors = FALSE
-  ) -> truth
+  )
 
   list(counts = counts, truth = truth)
 }
@@ -1876,12 +1925,53 @@ run_sequence_simulation_validation <- function() {
 }
 
 
+
+write_sequence_methods <- function() {
+  methods_lines <- c(
+    "# SEQUENCE methods summary",
+    "",
+    "## Input and preprocessing",
+    "Raw read-count matrices are imported for each RT/ZT comparison. Raw integer counts are retained for DESeq2 differential testing. PCA/EVS calculations are performed on variance-stabilized expression for NormEVS, with log2(normalized counts + 1) used only as a fallback if VST fails. RawEVS uses log2(raw counts + 1).",
+    "",
+    "## Eigenvector splitting",
+    sprintf("For each comparison and EVS mode, PC1 is calculated separately in treatment and control samples. Features are ranked by absolute PC1 loading. The leading edge is the union of the top %s treatment-ranked and top %s control-ranked features. The remainder is every feature not in that union. No AIC/BIC or legacy changepoint fallback is used.", top_n_target, top_n_target),
+    "",
+    "## Differential expression",
+    sprintf("DESeq2 is run with design ~ condition and reference level untrt. Standard effects are BH-adjusted Wald results with padj < %.3f and |apeglm-shrunken log2 fold-change| >= %.2f. Strong effects are DESeq2 greaterAbs alternative-hypothesis calls at the same LFC boundary and BH alpha %.3f. Weak HBFSS-region effects require DESeq2 lessAbs support at BH alpha %.3f, |shrunken LFC| < %.2f, and HBFSS significance.", alpha_level, lfc_boundary, strong_alpha_level, weak_alpha_level, lfc_boundary),
+    "",
+    "## Empirical null and HBFSS",
+    sprintf("The Wald statistic distribution is passed to fdrtool using statistic = normal. The fndr cutoff method is attempted first; pct0 with pct0 = 0.75 is used only if fndr fails or returns an invalid eta0. Empirical p-values are clipped only for numerical stability. Higher criticism supplies the dataset-specific empirical-p threshold unless the returned threshold is invalid or >= %.2f. The HBFSS cutoff is -log10(HC p-threshold) multiplied by the LFC boundary. HBFSS is reported as a superset of standard DESeq2 calls so hbfss_total = standard_effect + hbfss_only by construction.", hc_invalid_at_or_above),
+    "",
+    "## PCA variance figures",
+    "The PCA variance figure uses PC1 score variance only. It directly compares Original, Lead, and Remainder datasets on an absolute pseudo-log scale, avoiding the prior percent-of-original plot that compressed the remainder to near zero. The PC1 variance-distribution figure shows per-feature contribution to PC1 score variance for All samples, Control samples, and Treatment samples, with dashed treatment/control EVS top-N cutoff lines.",
+    "",
+    "## Simulation validation",
+    sprintf("Simulation regeneration is disabled by default for manuscript reruns. If run_simulation_validation is set TRUE, the validation generates negative-binomial count data across DE fractions (%s), LFC magnitudes (%s), null-inflation settings (%s), and %s replicate(s) per condition, then runs the same DESeq2/apeglm/fdrtool/HC/HBFSS logic and exports raw results, summary metrics, F1, FDR, weak-effect recall, and cutoff-stability figures.", paste(simulation_de_fractions, collapse = ", "), paste(simulation_lfc_magnitudes, collapse = ", "), paste(simulation_null_inflation, collapse = ", "), simulation_n_reps)
+  )
+  writeLines(methods_lines, file.path(output_dir, "METHODS_SEQUENCE_PIPELINE.md"))
+}
+
+write_run_session_info <- function() {
+  dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+  writeLines(capture.output(sessionInfo()), file.path(output_dir, "SessionInfo.txt"))
+  invisible(TRUE)
+}
+
+fail_pipeline <- function(message_text, status = 1L) {
+  try(write_run_session_info(), silent = TRUE)
+  message(message_text)
+  quit(save = "no", status = status, runLast = FALSE)
+}
+
+options(error = function() {
+  try(write_run_session_info(), silent = TRUE)
+  traceback(2)
+  quit(save = "no", status = 1L, runLast = FALSE)
+})
+
 # =============================================================================
 # PIPELINE EXECUTION
 # =============================================================================
-
-old_figures <- list.files(figure_dir, pattern = "\\.png$", full.names = TRUE)
-if (length(old_figures) > 0L) unlink(old_figures)
 
 analysis_store <- list()
 evs_store <- list()
@@ -1957,6 +2047,11 @@ if (nrow(summary_df) > 0L) save_csv(concise_analysis_summary(summary_df), file.p
 if (length(failure_rows) > 0L) {
   failure_df <- bind_rows(failure_rows)
   save_csv(failure_df, file.path(output_dir, "Failures.csv"))
+  fail_pipeline("One or more comparisons failed. See Failures.csv. Manifest was not written because the run is incomplete.")
+}
+
+if (nrow(summary_df) == 0L) {
+  fail_pipeline("No successful analyses were completed. Manifest was not written because the run is incomplete.")
 }
 
 # =============================================================================
@@ -2044,16 +2139,18 @@ if (nrow(summary_df) > 0L) {
   pca_var_df <- if (length(pca_var_rows) > 0L) bind_rows(pca_var_rows) else data.frame()
   if (nrow(pca_var_df) > 0L) {
     save_csv(
-      dplyr::rename(
+      rename_columns_existing(
         pca_var_df,
-        comparison = comparison_name,
-        analysis = analysis_label,
-        panel = analysis_pretty,
-        dataset = dataset_group,
-        evs_mode = evs_mode,
-        component = component,
-        variance_explained_pct = variance_explained_pct,
-        score_variance = score_variance
+        c(
+          comparison_name = "comparison",
+          analysis_label = "analysis",
+          analysis_pretty = "panel",
+          dataset_group = "dataset",
+          evs_mode = "evs_mode",
+          component = "component",
+          variance_explained_pct = "variance_explained_pct",
+          score_variance = "score_variance"
+        )
       ),
       file.path(output_dir, "Summary_PCA.csv")
     )
@@ -2061,17 +2158,19 @@ if (nrow(summary_df) > 0L) {
     pca_pc1_compare_df <- pca_pc1_evs_plot_df(pca_var_df)
     if (nrow(pca_pc1_compare_df) > 0L) {
       save_csv(
-        dplyr::rename(
+        rename_columns_existing(
           pca_pc1_compare_df,
-          comparison = comparison_name,
-          analysis = analysis_label,
-          panel = analysis_pretty,
-          dataset = dataset_group,
-          evs_mode = evs_mode,
-          pc1_score_variance = pc1_score_variance,
-          original_pc1_score_variance = original_pc1_score_variance,
-          pc1_score_variance_ratio_to_original = pc1_score_variance_ratio_to_original,
-          pc1_score_variance_percent_of_original = pc1_score_variance_percent_of_original
+          c(
+            comparison_name = "comparison",
+            analysis_label = "analysis",
+            analysis_pretty = "panel",
+            dataset_group = "dataset",
+            evs_mode = "evs_mode",
+            pc1_score_variance = "pc1_score_variance",
+            original_pc1_score_variance = "original_pc1_score_variance",
+            pc1_score_variance_ratio_to_original = "pc1_score_variance_ratio_to_original",
+            pc1_score_variance_percent_of_original = "pc1_score_variance_percent_of_original"
+          )
         ),
         file.path(output_dir, "Summary_PCA_PC1_ScoreVariance_EVS.csv")
       )
@@ -2080,7 +2179,6 @@ if (nrow(summary_df) > 0L) {
     pc1_var_plot <- plot_pc1_evs_variance_absolute(pca_var_df)
     if (!is.null(pc1_var_plot)) {
       save_plot(pc1_var_plot, file.path(figure_dir, "PCA_Variance.png"), width = 15.8, height = 8.8)
-      save_plot(pc1_var_plot, file.path(figure_dir, "PC1_Variance_EVS.png"), width = 15.8, height = 8.8)
     }
   }
 
@@ -2109,36 +2207,39 @@ if (nrow(summary_df) > 0L) {
   if (nrow(load_df) > 0L) {
     attr(load_df, "cutoffs") <- cutoff_df
     save_csv(
-      dplyr::rename(
+      rename_columns_existing(
         load_df,
-        comparison = comparison_name,
-        evs_mode = track,
-        dataset = dataset_group,
-        scope = condition,
-        abs_pc1_loading = pc1_loading_abs,
-        pc1_score_variance = pc1_score_variance,
-        pc1_variance_contribution = pc1_variance_contribution
+        c(
+          comparison_name = "comparison",
+          track = "evs_mode",
+          dataset_group = "dataset",
+          condition = "scope",
+          pc1_loading_abs = "abs_pc1_loading",
+          pc1_score_variance = "pc1_score_variance",
+          pc1_variance_contribution = "pc1_variance_contribution"
+        )
       ),
       file.path(output_dir, "Summary_PC1VarianceDistributions.csv")
     )
     if (nrow(cutoff_df) > 0L) {
       save_csv(
-        dplyr::rename(
+        rename_columns_existing(
           cutoff_df,
-          comparison = comparison_name,
-          evs_mode = track,
-          dataset = dataset_group,
-          scope = condition,
-          pc1_loading_cutoff = pc1_loading_cutoff,
-          pc1_score_variance = pc1_score_variance,
-          pc1_variance_contribution_cutoff = pc1_variance_contribution_cutoff
+          c(
+            comparison_name = "comparison",
+            track = "evs_mode",
+            dataset_group = "dataset",
+            condition = "scope",
+            pc1_loading_cutoff = "pc1_loading_cutoff",
+            pc1_score_variance = "pc1_score_variance",
+            pc1_variance_contribution_cutoff = "pc1_variance_contribution_cutoff"
+          )
         ),
         file.path(output_dir, "Summary_PC1VarianceCutoffs.csv")
       )
     }
     load_plot <- plot_loading_histograms(load_df, "PC1 variance-contribution frequency after EVS")
     if (!is.null(load_plot)) {
-      save_plot(load_plot, file.path(figure_dir, "EVS_LoadingRank.png"), width = 15.8, height = 10.4)
       save_plot(load_plot, file.path(figure_dir, "PC1_Variance_Distributions.png"), width = 15.8, height = 10.4)
     }
   }
@@ -2150,36 +2251,13 @@ if (isTRUE(run_simulation_validation)) {
 }
 
 
-write_sequence_methods <- function() {
-  methods_lines <- c(
-    "# SEQUENCE methods summary",
-    "",
-    "## Input and preprocessing",
-    "Raw read-count matrices are imported for each RT/ZT comparison. Raw integer counts are retained for DESeq2 differential testing. PCA/EVS calculations are performed on variance-stabilized expression for NormEVS, with log2(normalized counts + 1) as a fallback if VST fails. RawEVS uses log2(raw counts + 1).",
-    "",
-    "## Eigenvector splitting",
-    "For each comparison and EVS mode, PC1 is calculated separately in treatment and control samples. Features are ranked by absolute PC1 loading. The leading edge is the union of the top-N treatment-ranked and top-N control-ranked features. The remainder is every feature not in that union. No AIC/BIC or legacy changepoint fallback is used.",
-    "",
-    "## Differential expression",
-    "DESeq2 is run with design ~ condition and reference level untrt. Standard effects are BH-adjusted Wald results with padj < alpha and |apeglm-shrunken log2 fold-change| >= 1. Strong effects are DESeq2 greaterAbs alternative-hypothesis calls at the same LFC boundary. Weak HBFSS-region effects require DESeq2 lessAbs support, |shrunken LFC| < 1, and HBFSS significance.",
-    "",
-    "## Empirical null and HBFSS",
-    "The Wald statistic distribution is passed to fdrtool using statistic = normal. The fndr cutoff method is attempted first, with pct0 fallback. Empirical p-values are clipped only for numerical stability. Higher criticism supplies the dataset-specific empirical-p threshold unless the returned threshold is invalid or near 1. The HBFSS cutoff is -log10(HC p-threshold) multiplied by the LFC boundary. HBFSS is reported as a superset of standard DESeq2 calls so hbfss_total = standard_effect + hbfss_only by construction.",
-    "",
-    "## PCA variance figures",
-    "The PCA variance figure uses PC1 score variance only. It directly compares Original, Lead, and Remainder datasets on an absolute pseudo-log scale, avoiding the prior percent-of-original plot that compressed the remainder to near zero. The PC1 variance-distribution figure shows per-feature contribution to PC1 score variance for All samples, Control samples, and Treatment samples, with dashed treatment/control EVS top-N cutoff lines.",
-    "",
-    "## Simulation validation",
-    "The simulation validation generates negative-binomial count data across DE fractions, LFC magnitudes, and null-inflation settings. It runs the same DESeq2/apeglm/fdrtool/HC/HBFSS logic and exports raw results, summary metrics, F1, FDR, weak-effect recall, and cutoff-stability figures."
-  )
-  writeLines(methods_lines, file.path(output_dir, "METHODS_SEQUENCE_PIPELINE.md"))
-}
-
-write_sequence_methods()
 
 # =============================================================================
 # MANIFEST AND COMPLETION
 # =============================================================================
+
+write_sequence_methods()
+write_run_session_info()
 
 exported_files <- list.files(output_dir, recursive = TRUE, full.names = TRUE)
 exported_files <- exported_files[file.info(exported_files)$isdir %in% FALSE]
@@ -2195,12 +2273,5 @@ cat("Output directory: ", output_dir, "\n", sep = "")
 cat("Exported files: ", nrow(manifest), "\n", sep = "")
 cat("=====================================================\n\n")
 
-if (length(failure_rows) > 0L) {
-  stop("One or more comparisons failed. See Failures.csv.")
-}
-
-if (nrow(summary_df) == 0L) {
-  stop("No successful analyses were completed.")
-}
 
 print(summary_df)
