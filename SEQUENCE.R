@@ -5,7 +5,7 @@
 # DESeq2 + Eigenvector Splitting + empirical-null HC/HBFSS
 # Final manuscript version. Complete rewrite, not a patch.
 # No legacy changepoint logic and no hidden cutoff fallback.
-# PCA score-variance figures compare Original vs Leading Edge vs Remainder using PC1 score variance only; EVS histograms show per-feature PC1 variance contributions.
+# PCA score-variance figures compare Original vs Leading Edge vs Remainder using PC1 score variance only; EVS histograms show per-feature PC1 variance contributions with explicit All/Control/Treatment legends.
 # Standard effects use DESeq2 Wald BH < 10% with |shrunken LFC| >= 1.
 # Strong effects are DESeq2 greaterAbs alternative-hypothesis calls: BH < 10% with |shrunken LFC| >= 1.
 # Weak class requires DESeq2 lessAbs support plus |shrunken LFC| < 1 plus HBFSS passage.
@@ -62,16 +62,27 @@ base_theme_size <- 9
 n_top_labels <- 6L
 n_top_labels_per_class <- 2L
 
-run_simulation_validation <- FALSE  # Default FALSE for reproducible manuscript reruns; set TRUE only to regenerate simulations.
-reset_output_dir <- FALSE  # Default FALSE so failed reruns do not erase prior outputs; set TRUE only for a clean rebuild.
+# =============================================================================
+# SUBMISSION FLAGS -- READ BEFORE RUNNING
+# reset_output_dir: TRUE wipes the entire output directory. Use only when
+#   intentionally starting fresh. FALSE preserves existing outputs and is safe
+#   for repeated manuscript reruns.
+# run_simulation_validation: TRUE re-runs all simulation replicates. For
+#   submission, commit the precomputed simulation_validation/ CSVs and keep this
+#   FALSE unless simulation parameters changed.
+# =============================================================================
+run_simulation_validation <- FALSE
+reset_output_dir <- FALSE
 simulation_seed <- 42L
 simulation_n_features <- 10000L
-simulation_n_samples_per_group <- 5L
+simulation_n_samples_per_group <- 8L
 simulation_base_mean <- 200
 simulation_dispersion_null <- 0.10
 simulation_dispersion_de <- 0.15
 simulation_de_fractions <- c(0.05, 0.10, 0.20)
-simulation_lfc_magnitudes <- c(0.5, 1.0, 2.0)
+simulation_lfc_magnitudes <- c(0.25, 0.5, 1.0, 2.0)
+simulation_weak_lfc_min <- 0.20
+simulation_weak_lfc_max <- 0.80
 simulation_null_inflation <- c(0.0, 0.10)
 simulation_n_reps <- 20L
 
@@ -97,7 +108,6 @@ class_alphas <- c(BG = 0.24, Weak = 0.92, Strong = 0.95, Std = 0.90, HBFSS = 0.9
 threshold_color <- "#A65628"
 treatment_color <- "#1F78B4"
 control_color <- "#4D4D4D"
-pca_component_colors <- c(PC1 = "#1F78B4", PC2 = "#E31A1C")
 
 sample_metadata <- data.frame(
   id = c(
@@ -176,6 +186,12 @@ if (isTRUE(reset_output_dir) && dir.exists(output_dir)) {
 dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
 dir.create(figure_dir, recursive = TRUE, showWarnings = FALSE)
 dir.create(simulation_dir, recursive = TRUE, showWarnings = FALSE)
+
+cleanup_rplots_pdf <- function() {
+  stray <- file.path(repo_root, "Rplots.pdf")
+  if (file.exists(stray)) unlink(stray, force = TRUE)
+}
+cleanup_rplots_pdf()
 
 resolve_file <- function(candidates, label) {
   candidates <- c(file.path(repo_root, candidates), candidates)
@@ -623,34 +639,49 @@ empirical_null <- function(statistic, label) {
   valid <- is.finite(statistic) & !is.na(statistic)
   if (sum(valid) < 5L) stop(label, " has fewer than five finite Wald statistics.")
 
-  run_fdrtool <- function(method) {
-    args <- list(
-      x = statistic[valid],
-      statistic = "normal",
-      plot = FALSE,
-      verbose = FALSE,
-      cutoff.method = method
-    )
-    if (identical(method, "pct0")) args$pct0 <- 0.75
+  valid_stats <- statistic[valid]
 
+  get_eta0 <- function(fit) {
+    if (is.null(fit) || is.null(fit$param)) return(NA_real_)
+    param <- fit$param
+    eta0 <- NA_real_
+    if (is.matrix(param) || is.data.frame(param)) {
+      if ("eta0" %in% colnames(param)) eta0 <- suppressWarnings(as.numeric(param[, "eta0"][1]))
+      if (!is.finite(eta0) && "eta0" %in% rownames(param)) eta0 <- suppressWarnings(as.numeric(param["eta0", ][1]))
+    } else {
+      if ("eta0" %in% names(param)) eta0 <- suppressWarnings(as.numeric(param[["eta0"]][1]))
+    }
+    eta0
+  }
+
+  run_fdrtool <- function(method) {
     fit <- tryCatch(
-      do.call(fdrtool::fdrtool, args),
+      fdrtool::fdrtool(
+        valid_stats,
+        statistic = "normal",
+        plot = FALSE,
+        verbose = FALSE,
+        cutoff.method = method,
+        pct0 = 0.75
+      ),
       error = function(e) {
         warning(label, " fdrtool ", method, " failed: ", conditionMessage(e), call. = FALSE)
         NULL
       }
     )
-
     if (is.null(fit)) return(NULL)
-    if (is.null(fit$pval) || length(fit$pval) != sum(valid)) return(NULL)
-    eta0 <- suppressWarnings(as.numeric(fit$param["eta0"]))
-    if (length(eta0) == 1L && is.finite(eta0) && eta0 <= 0) return(NULL)
+    if (is.null(fit$pval) || length(fit$pval) != length(valid_stats)) return(NULL)
+    eta0 <- get_eta0(fit)
+    if (!is.finite(eta0) || eta0 <= 0) return(NULL)
     fit
   }
 
   fit <- run_fdrtool("fndr")
-  if (is.null(fit)) fit <- run_fdrtool("pct0")
-  if (is.null(fit)) stop(label, " empirical-null fitting failed with both fndr and pct0.")
+  if (is.null(fit)) {
+    message(label, ": fndr failed or returned degenerate eta0; retrying empirical-null fit with pct0.")
+    fit <- run_fdrtool("pct0")
+  }
+  if (is.null(fit)) stop(label, ": fdrtool failed with both fndr and pct0.")
 
   p <- rep(NA_real_, length(statistic))
   q <- rep(NA_real_, length(statistic))
@@ -716,8 +747,6 @@ classify_results <- function(df, hc_p, hbfss_cutoff) {
 
   df$weak_region_hbfss_flag <- df$lessAbs_alt_flag & df$hbfss_flag
   df$weak_flag <- df$weak_region_hbfss_flag
-  df$weak_hbfss_flag <- df$weak_flag
-
   df$display_strong <- df$strong_flag
   df$display_standard <- df$standard_flag & !df$display_strong
   df$display_weak <- df$weak_flag & !df$display_strong & !df$display_standard
@@ -847,7 +876,7 @@ run_deseq2_hbfss <- function(count_matrix, coldata, comparison_name, analysis_la
     "neglog10_empirical_p_calc", "neglog10_empirical_p_plot", "neglog10_empirical_p", "HBFSS",
     "hc_p_threshold_dataset", "hbfss_threshold_dataset",
     "hc_pass", "standard_flag", "strong_alt_flag", "strong_flag",
-    "lessAbs_alt_flag", "weak_region_hbfss_flag", "weak_hbfss_flag", "weak_flag", "hbfss_raw_flag", "hbfss_flag",
+    "lessAbs_alt_flag", "weak_region_hbfss_flag", "weak_flag", "hbfss_raw_flag", "hbfss_flag",
     "display_standard", "display_strong", "display_weak", "display_hbfss",
     "final_class"
   )
@@ -994,20 +1023,22 @@ plot_volcano <- function(df, title) {
     scale_size_manual(values = class_sizes, breaks = class_levels, guide = "none") +
     scale_alpha_manual(values = class_alphas, breaks = class_levels, guide = "none") +
     guides(
-      color = "none",
-      fill = "none",
-      shape = guide_legend(
+      color = guide_legend(
         override.aes = list(
           shape = unname(class_shapes[class_levels]),
           color = unname(class_colors[class_levels]),
           fill = unname(class_colors[class_levels]),
-          size = rep(3.2, length(class_levels)),
+          size = rep(3.4, length(class_levels)),
           alpha = rep(1, length(class_levels)),
-          stroke = rep(0.70, length(class_levels))
+          stroke = rep(0.80, length(class_levels))
         ),
         nrow = 1,
         byrow = TRUE
-      )
+      ),
+      fill = "none",
+      shape = "none",
+      size = "none",
+      alpha = "none"
     ) +
     labs(
       title = title,
@@ -1175,8 +1206,8 @@ plot_loading_histograms <- function(load_df, title_text) {
     geom_histogram(
       bins = 60,
       position = "identity",
-      alpha = 0.18,
-      linewidth = 0.16,
+      alpha = 0.32,
+      linewidth = 0.22,
       boundary = 0
     ) +
     facet_grid(dataset_group ~ comparison_name, scales = "free_y") +
@@ -1184,8 +1215,9 @@ plot_loading_histograms <- function(load_df, title_text) {
       trans = scales::pseudo_log_trans(base = 10),
       labels = function(x) format_compact_number(x, digits = 3)
     ) +
-    scale_color_manual(values = c(All = "#7570B3", Control = control_color, Treatment = treatment_color), drop = FALSE, name = NULL) +
-    scale_fill_manual(values = c(All = "#7570B3", Control = control_color, Treatment = treatment_color), drop = FALSE, name = NULL) +
+    scale_color_manual(values = c(All = "#7570B3", Control = control_color, Treatment = treatment_color), breaks = c("All", "Control", "Treatment"), drop = FALSE, name = NULL) +
+    scale_fill_manual(values = c(All = "#7570B3", Control = control_color, Treatment = treatment_color), breaks = c("All", "Control", "Treatment"), drop = FALSE, name = NULL) +
+    guides(color = guide_legend(override.aes = list(fill = c("#7570B3", control_color, treatment_color), alpha = 0.85, linewidth = 0.8)), fill = "none") +
     labs(
       title = title_text,
       x = "Per-feature contribution to PC1 score variance",
@@ -1457,13 +1489,26 @@ plot_pca_support <- function(fit_obj, title) {
 # SIMULATION VALIDATION
 # =============================================================================
 
-simulate_sequence_counts <- function(n_features, n_samples, base_mean, disp_null, de_fraction, lfc_magnitude, disp_de) {
+simulate_sequence_counts <- function(n_features, n_samples, base_mean, disp_null,
+                                     de_fraction, lfc_magnitude, disp_de,
+                                     lfc_profile = c("fixed", "weak_mixture")) {
+  lfc_profile <- match.arg(lfc_profile)
   n_de <- round(n_features * de_fraction)
   n_null <- n_features - n_de
 
+  if (n_de < 2L) stop("Simulation needs at least two DE features.")
+
   de_direction <- ifelse(seq_len(n_de) <= n_de / 2, 1, -1)
+  if (identical(lfc_profile, "weak_mixture")) {
+    lfc_abs <- stats::runif(n_de, min = simulation_weak_lfc_min, max = simulation_weak_lfc_max)
+  } else {
+    if (!is.finite(lfc_magnitude)) stop("Fixed-LFC simulation requires finite lfc_magnitude.")
+    lfc_abs <- rep(lfc_magnitude, n_de)
+  }
+  de_true_lfc <- lfc_abs * de_direction
+
   de_control_mean <- rep(base_mean, n_de)
-  de_treatment_mean <- base_mean * 2^(lfc_magnitude * de_direction)
+  de_treatment_mean <- base_mean * 2^de_true_lfc
 
   null_control_mean <- rep(base_mean, n_null)
   null_treatment_mean <- rep(base_mean, n_null)
@@ -1488,7 +1533,8 @@ simulate_sequence_counts <- function(n_features, n_samples, base_mean, disp_null
   truth <- data.frame(
     feature_id = rownames(counts),
     is_de = c(rep(TRUE, n_de), rep(FALSE, n_null)),
-    true_lfc = c(lfc_magnitude * de_direction, rep(0, n_null)),
+    true_lfc = c(de_true_lfc, rep(0, n_null)),
+    simulation_profile = lfc_profile,
     stringsAsFactors = FALSE
   )
 
@@ -1610,58 +1656,92 @@ simulation_metrics <- function(predicted, actual) {
   data.frame(tp = tp, fp = fp, fn = fn, tn = tn, precision = precision, recall = recall, f1 = f1, fdr = fdr)
 }
 
-simulation_method_summary <- function(results_df, metric) {
-  rows <- list(
-    data.frame(
-      de_fraction = results_df$de_fraction,
-      lfc_magnitude = results_df$lfc_magnitude,
-      null_inflation = results_df$null_inflation,
-      method = "DESeq2 BH",
-      value = results_df[[paste0("standard_", metric)]]
-    ),
-    data.frame(
-      de_fraction = results_df$de_fraction,
-      lfc_magnitude = results_df$lfc_magnitude,
-      null_inflation = results_df$null_inflation,
-      method = "Empirical BH",
-      value = results_df[[paste0("empirical_bh_", metric)]]
-    ),
-    data.frame(
-      de_fraction = results_df$de_fraction,
-      lfc_magnitude = results_df$lfc_magnitude,
-      null_inflation = results_df$null_inflation,
-      method = "HBFSS",
-      value = results_df[[paste0("hbfss_", metric)]]
-    )
+simulation_lfc_label <- function(lfc_magnitude, simulation_profile) {
+  profile <- as.character(simulation_profile)
+  lfc <- suppressWarnings(as.numeric(lfc_magnitude))
+  out <- ifelse(
+    profile == "weak_mixture",
+    paste0("Weak mix\nLFC ", simulation_weak_lfc_min, "-", simulation_weak_lfc_max),
+    paste0("Fixed LFC\n", lfc)
   )
-  bind_rows(rows) %>%
-    group_by(de_fraction, lfc_magnitude, null_inflation, method) %>%
-    summarise(mean = mean(value, na.rm = TRUE), sd = sd(value, na.rm = TRUE), .groups = "drop") %>%
+  out
+}
+
+simulation_lfc_levels <- function() {
+  c(
+    paste0("Fixed LFC\n", simulation_lfc_magnitudes),
+    paste0("Weak mix\nLFC ", simulation_weak_lfc_min, "-", simulation_weak_lfc_max)
+  )
+}
+
+simulation_long_metric_rows <- function(results_df, metric) {
+  bind_rows(
+    data.frame(
+      de_fraction = results_df$de_fraction,
+      lfc_magnitude = results_df$lfc_magnitude,
+      simulation_profile = results_df$simulation_profile,
+      null_inflation = results_df$null_inflation,
+      replicate = results_df$replicate,
+      method = "DESeq2 BH",
+      value = results_df[[paste0("standard_", metric)]],
+      stringsAsFactors = FALSE
+    ),
+    data.frame(
+      de_fraction = results_df$de_fraction,
+      lfc_magnitude = results_df$lfc_magnitude,
+      simulation_profile = results_df$simulation_profile,
+      null_inflation = results_df$null_inflation,
+      replicate = results_df$replicate,
+      method = "Empirical BH",
+      value = results_df[[paste0("empirical_bh_", metric)]],
+      stringsAsFactors = FALSE
+    ),
+    data.frame(
+      de_fraction = results_df$de_fraction,
+      lfc_magnitude = results_df$lfc_magnitude,
+      simulation_profile = results_df$simulation_profile,
+      null_inflation = results_df$null_inflation,
+      replicate = results_df$replicate,
+      method = "HBFSS",
+      value = results_df[[paste0("hbfss_", metric)]],
+      stringsAsFactors = FALSE
+    )
+  ) %>%
     mutate(
-      lfc_label = factor(paste0("LFC ", lfc_magnitude), levels = paste0("LFC ", simulation_lfc_magnitudes)),
+      method = factor(method, levels = c("DESeq2 BH", "Empirical BH", "HBFSS")),
+      lfc_label = factor(simulation_lfc_label(lfc_magnitude, simulation_profile), levels = simulation_lfc_levels()),
       de_label = paste0(de_fraction * 100, "% DE"),
-      inflation_label = paste0(null_inflation * 100, "% inflation"),
-      method = factor(method, levels = c("DESeq2 BH", "Empirical BH", "HBFSS"))
+      inflation_label = paste0(null_inflation * 100, "% null inflation")
     )
 }
 
-plot_simulation_metric <- function(summary_df, title, y_label, alpha_line = FALSE) {
+simulation_method_summary <- function(results_df, metric) {
+  simulation_long_metric_rows(results_df, metric) %>%
+    group_by(de_fraction, lfc_magnitude, simulation_profile, null_inflation, method, lfc_label, de_label, inflation_label) %>%
+    summarise(
+      mean = mean(value, na.rm = TRUE),
+      median = median(value, na.rm = TRUE),
+      sd = sd(value, na.rm = TRUE),
+      .groups = "drop"
+    )
+}
+
+plot_simulation_metric_boxplot <- function(results_df, metric, title, y_label, alpha_line = FALSE) {
+  long <- simulation_long_metric_rows(results_df, metric)
   method_colors <- c("DESeq2 BH" = "#999999", "Empirical BH" = treatment_color, "HBFSS" = class_colors[["HBFSS"]])
 
-  p <- ggplot(summary_df, aes(lfc_label, mean, color = method, group = method)) +
-    geom_line(linewidth = 0.55, position = position_dodge(width = 0.30)) +
-    geom_point(size = 1.6, position = position_dodge(width = 0.30)) +
-    geom_errorbar(
-      aes(ymin = pmax(mean - sd, 0), ymax = mean + sd),
-      width = 0.12,
-      linewidth = 0.25,
-      position = position_dodge(width = 0.30)
-    ) +
-    facet_grid(inflation_label ~ de_label) +
-    scale_color_manual(values = method_colors, drop = FALSE, name = NULL) +
+  p <- ggplot(long, aes(method, value, fill = method)) +
+    geom_boxplot(outlier.size = 0.35, width = 0.62, linewidth = 0.22, na.rm = TRUE) +
+    facet_grid(inflation_label + de_label ~ lfc_label) +
+    scale_fill_manual(values = method_colors, breaks = names(method_colors), drop = FALSE, name = NULL) +
     labs(title = title, x = NULL, y = y_label, caption = NULL) +
     manuscript_theme() +
-    theme(axis.text.x = element_text(angle = 35, hjust = 1))
+    theme(
+      axis.text.x = element_blank(),
+      axis.ticks.x = element_blank(),
+      strip.text = element_text(size = base_theme_size - 1.0),
+      legend.position = "bottom"
+    )
 
   if (alpha_line) {
     p <- p + geom_hline(yintercept = alpha_level, linetype = "dashed", linewidth = 0.30, color = "grey35")
@@ -1670,38 +1750,106 @@ plot_simulation_metric <- function(summary_df, title, y_label, alpha_line = FALS
   p
 }
 
+plot_simulation_delta_heatmap <- function(results_df, metric, title, fill_label) {
+  summary <- results_df %>%
+    group_by(de_fraction, lfc_magnitude, simulation_profile, null_inflation) %>%
+    summarise(
+      standard_mean = mean(.data[[paste0("standard_", metric)]], na.rm = TRUE),
+      hbfss_mean = mean(.data[[paste0("hbfss_", metric)]], na.rm = TRUE),
+      delta = hbfss_mean - standard_mean,
+      .groups = "drop"
+    ) %>%
+    mutate(
+      lfc_label = factor(simulation_lfc_label(lfc_magnitude, simulation_profile), levels = simulation_lfc_levels()),
+      de_label = paste0(de_fraction * 100, "% DE"),
+      inflation_label = paste0(null_inflation * 100, "% null inflation"),
+      label = sprintf("H %.2f\nD %.2f\nΔ %.2f", hbfss_mean, standard_mean, delta)
+    )
+
+  ggplot(summary, aes(lfc_label, de_label, fill = delta)) +
+    geom_tile(color = "white", linewidth = 0.35) +
+    geom_text(aes(label = label), size = 2.05, lineheight = 0.88) +
+    facet_wrap(~ inflation_label) +
+    scale_fill_gradient2(low = "#B2182B", mid = "white", high = "#2166AC", midpoint = 0, name = fill_label) +
+    labs(
+      title = title,
+      x = "Simulated effect profile",
+      y = "True DE fraction",
+      caption = "Tile text: H = HBFSS mean, D = DESeq2 BH mean, Δ = HBFSS - DESeq2. Positive Δ favors HBFSS."
+    ) +
+    manuscript_theme() +
+    theme(axis.text.x = element_text(angle = 30, hjust = 1))
+}
+
+plot_simulation_fdr_heatmap <- function(results_df) {
+  summary <- simulation_method_summary(results_df, "fdr") %>%
+    mutate(label = sprintf("%.2f", mean))
+
+  ggplot(summary, aes(lfc_label, de_label, fill = mean)) +
+    geom_tile(color = "white", linewidth = 0.35) +
+    geom_text(aes(label = label), size = 2.15) +
+    facet_grid(method ~ inflation_label) +
+    scale_fill_gradient(low = "white", high = "#B2182B", name = "Mean FDR") +
+    labs(
+      title = "Simulation observed FDR by method",
+      x = "Simulated effect profile",
+      y = "True DE fraction",
+      caption = paste0("Nominal alpha = ", alpha_level, ". Values above alpha require interpretation rather than being described as FDR-controlled.")
+    ) +
+    manuscript_theme() +
+    theme(axis.text.x = element_text(angle = 30, hjust = 1))
+}
+
 plot_simulation_weak_recall <- function(results_df) {
-  weak_df <- results_df[results_df$lfc_magnitude < lfc_boundary, , drop = FALSE]
+  weak_df <- results_df[results_df$simulation_profile == "weak_mixture" | results_df$lfc_magnitude < lfc_boundary, , drop = FALSE]
   if (nrow(weak_df) == 0L) return(NULL)
 
   long <- bind_rows(
     data.frame(
       de_fraction = weak_df$de_fraction,
+      lfc_magnitude = weak_df$lfc_magnitude,
+      simulation_profile = weak_df$simulation_profile,
       null_inflation = weak_df$null_inflation,
       method = "DESeq2 BH",
       recall = weak_df$standard_weak_recall
     ),
     data.frame(
       de_fraction = weak_df$de_fraction,
+      lfc_magnitude = weak_df$lfc_magnitude,
+      simulation_profile = weak_df$simulation_profile,
       null_inflation = weak_df$null_inflation,
       method = "HBFSS weak-region",
       recall = weak_df$hbfss_weak_recall
     )
   ) %>%
     mutate(
+      lfc_label = factor(simulation_lfc_label(lfc_magnitude, simulation_profile), levels = simulation_lfc_levels()),
       de_label = paste0(de_fraction * 100, "% DE"),
-      inflation_label = paste0(null_inflation * 100, "% inflation"),
+      inflation_label = paste0(null_inflation * 100, "% null inflation"),
       method = factor(method, levels = c("DESeq2 BH", "HBFSS weak-region"))
     )
 
-  ggplot(long, aes(de_label, recall, color = method, group = method)) +
-    geom_point(size = 1.7, position = position_dodge(width = 0.25)) +
-    geom_line(linewidth = 0.55, position = position_dodge(width = 0.25)) +
-    facet_wrap(~ inflation_label) +
-    scale_color_manual(values = c("DESeq2 BH" = "#999999", "HBFSS weak-region" = class_colors[["Weak"]]), drop = FALSE, name = NULL) +
-    labs(title = "Weak-effect recall", x = NULL, y = "Recall", caption = NULL) +
-    manuscript_theme()
+  summary <- long %>%
+    group_by(de_label, lfc_label, inflation_label, method) %>%
+    summarise(mean_recall = mean(recall, na.rm = TRUE), sd_recall = sd(recall, na.rm = TRUE), .groups = "drop")
+
+  ggplot(summary, aes(lfc_label, mean_recall, color = method, group = method)) +
+    geom_line(linewidth = 0.60, position = position_dodge(width = 0.28)) +
+    geom_point(size = 1.85, position = position_dodge(width = 0.28)) +
+    geom_errorbar(aes(ymin = pmax(mean_recall - sd_recall, 0), ymax = pmin(mean_recall + sd_recall, 1)), width = 0.14, linewidth = 0.28, position = position_dodge(width = 0.28)) +
+    facet_grid(inflation_label ~ de_label) +
+    scale_color_manual(values = c("DESeq2 BH" = "#999999", "HBFSS weak-region" = class_colors[["Weak"]]), breaks = c("DESeq2 BH", "HBFSS weak-region"), drop = FALSE, name = NULL) +
+    scale_y_continuous(limits = c(0, NA), expand = expansion(mult = c(0.02, 0.12))) +
+    labs(
+      title = "Weak-effect recall",
+      x = "Sub-boundary simulated effect profile",
+      y = "Recall",
+      caption = "Dedicated weak-mixture simulations draw true |LFC| from 0.20-0.80 with n = 8 per group."
+    ) +
+    manuscript_theme() +
+    theme(axis.text.x = element_text(angle = 30, hjust = 1))
 }
+
 
 plot_simulation_cutoffs <- function(results_df) {
   plot_df <- results_df[is.finite(results_df$hbfss_cutoff) & !is.na(results_df$hbfss_cutoff), , drop = FALSE]
@@ -1709,7 +1857,7 @@ plot_simulation_cutoffs <- function(results_df) {
 
   plot_df <- plot_df %>%
     mutate(
-      lfc_label = factor(paste0("LFC ", lfc_magnitude), levels = paste0("LFC ", simulation_lfc_magnitudes)),
+      lfc_label = factor(simulation_lfc_label(lfc_magnitude, simulation_profile), levels = simulation_lfc_levels()),
       de_label = paste0(de_fraction * 100, "% DE")
     )
 
@@ -1723,70 +1871,6 @@ plot_simulation_cutoffs <- function(results_df) {
 }
 
 
-simulation_long_metric_rows <- function(results_df, metric) {
-  bind_rows(
-    data.frame(
-      de_fraction = results_df$de_fraction,
-      lfc_magnitude = results_df$lfc_magnitude,
-      null_inflation = results_df$null_inflation,
-      replicate = results_df$replicate,
-      method = "DESeq2 BH",
-      value = results_df[[paste0("standard_", metric)]],
-      stringsAsFactors = FALSE
-    ),
-    data.frame(
-      de_fraction = results_df$de_fraction,
-      lfc_magnitude = results_df$lfc_magnitude,
-      null_inflation = results_df$null_inflation,
-      replicate = results_df$replicate,
-      method = "Empirical BH",
-      value = results_df[[paste0("empirical_bh_", metric)]],
-      stringsAsFactors = FALSE
-    ),
-    data.frame(
-      de_fraction = results_df$de_fraction,
-      lfc_magnitude = results_df$lfc_magnitude,
-      null_inflation = results_df$null_inflation,
-      replicate = results_df$replicate,
-      method = "HBFSS",
-      value = results_df[[paste0("hbfss_", metric)]],
-      stringsAsFactors = FALSE
-    )
-  ) %>%
-    mutate(
-      method = factor(method, levels = c("DESeq2 BH", "Empirical BH", "HBFSS")),
-      lfc_label = factor(
-        paste0("LFC = ", lfc_magnitude),
-        levels = paste0("LFC = ", simulation_lfc_magnitudes)
-      ),
-      de_label = paste0(de_fraction * 100, "% DE"),
-      inflation_label = paste0(null_inflation * 100, "% null inflation")
-    )
-}
-
-plot_simulation_metric_boxplot <- function(results_df, metric, title, y_label, alpha_line = FALSE) {
-  long <- simulation_long_metric_rows(results_df, metric)
-  method_colors <- c("DESeq2 BH" = "#999999", "Empirical BH" = treatment_color, "HBFSS" = class_colors[["HBFSS"]])
-
-  p <- ggplot(long, aes(method, value, fill = method)) +
-    geom_boxplot(outlier.size = 0.45, width = 0.62, linewidth = 0.22, na.rm = TRUE) +
-    facet_grid(inflation_label + de_label ~ lfc_label) +
-    scale_fill_manual(values = method_colors, drop = FALSE, name = NULL) +
-    labs(title = title, x = NULL, y = y_label, caption = NULL) +
-    manuscript_theme() +
-    theme(
-      axis.text.x = element_blank(),
-      axis.ticks.x = element_blank(),
-      strip.text = element_text(size = base_theme_size - 0.8),
-      legend.position = "bottom"
-    )
-
-  if (alpha_line) {
-    p <- p + geom_hline(yintercept = alpha_level, linetype = "dashed", linewidth = 0.30, color = "grey35")
-  }
-
-  p
-}
 
 run_sequence_simulation_validation <- function() {
   set.seed(simulation_seed)
@@ -1795,12 +1879,21 @@ run_sequence_simulation_validation <- function() {
   old_sim_files <- list.files(simulation_dir, full.names = TRUE)
   if (length(old_sim_files) > 0L) unlink(old_sim_files, recursive = TRUE, force = TRUE)
 
-  sim_grid <- expand.grid(
+  fixed_grid <- expand.grid(
     de_fraction = simulation_de_fractions,
     lfc_magnitude = simulation_lfc_magnitudes,
     null_inflation = simulation_null_inflation,
+    simulation_profile = "fixed",
     stringsAsFactors = FALSE
   )
+  weak_grid <- expand.grid(
+    de_fraction = simulation_de_fractions,
+    lfc_magnitude = NA_real_,
+    null_inflation = simulation_null_inflation,
+    simulation_profile = "weak_mixture",
+    stringsAsFactors = FALSE
+  )
+  sim_grid <- bind_rows(fixed_grid, weak_grid)
 
   total_runs <- nrow(sim_grid) * simulation_n_reps
   message("Running simulation validation: ", total_runs, " runs")
@@ -1822,7 +1915,8 @@ run_sequence_simulation_validation <- function() {
         disp_null = simulation_dispersion_null,
         de_fraction = grid_row$de_fraction,
         lfc_magnitude = grid_row$lfc_magnitude,
-        disp_de = simulation_dispersion_de
+        disp_de = simulation_dispersion_de,
+        lfc_profile = grid_row$simulation_profile
       )
 
       out <- tryCatch(
@@ -1847,6 +1941,7 @@ run_sequence_simulation_validation <- function() {
       result_rows[[length(result_rows) + 1L]] <- data.frame(
         de_fraction = grid_row$de_fraction,
         lfc_magnitude = grid_row$lfc_magnitude,
+        simulation_profile = grid_row$simulation_profile,
         null_inflation = grid_row$null_inflation,
         replicate = rep_i,
         hc_p_threshold = out$hc_p,
@@ -1875,7 +1970,7 @@ run_sequence_simulation_validation <- function() {
   save_csv(simulation_results, file.path(simulation_dir, "Simulation_Raw.csv"))
 
   simulation_summary <- simulation_results %>%
-    group_by(de_fraction, lfc_magnitude, null_inflation) %>%
+    group_by(de_fraction, lfc_magnitude, simulation_profile, null_inflation) %>%
     summarise(
       n_replicates = n(),
       standard_f1_mean = mean(standard_f1, na.rm = TRUE),
@@ -1892,6 +1987,8 @@ run_sequence_simulation_validation <- function() {
     )
 
   save_csv(simulation_summary, file.path(simulation_dir, "Simulation_Summary.csv"))
+  save_csv(simulation_method_summary(simulation_results, "f1"), file.path(simulation_dir, "Simulation_F1_MethodSummary.csv"))
+  save_csv(simulation_method_summary(simulation_results, "fdr"), file.path(simulation_dir, "Simulation_FDR_MethodSummary.csv"))
 
   save_csv(simulation_long_metric_rows(simulation_results, "f1"), file.path(simulation_dir, "Simulation_F1_Long.csv"))
   save_csv(simulation_long_metric_rows(simulation_results, "fdr"), file.path(simulation_dir, "Simulation_FDR_Long.csv"))
@@ -1908,6 +2005,20 @@ run_sequence_simulation_validation <- function() {
     file.path(simulation_dir, "Simulation_FDR_Boxplot.png"),
     width = 11.8,
     height = 9.2
+  )
+
+  save_plot(
+    plot_simulation_delta_heatmap(simulation_results, "f1", "Simulation F1 gain: HBFSS vs DESeq2 BH", "Δ F1"),
+    file.path(simulation_dir, "Simulation_F1_DeltaHeatmap.png"),
+    width = 11.8,
+    height = 6.4
+  )
+
+  save_plot(
+    plot_simulation_fdr_heatmap(simulation_results),
+    file.path(simulation_dir, "Simulation_FDR_Heatmap.png"),
+    width = 12.8,
+    height = 7.2
   )
 
   weak_plot <- plot_simulation_weak_recall(simulation_results)
@@ -1930,23 +2041,36 @@ write_sequence_methods <- function() {
   methods_lines <- c(
     "# SEQUENCE methods summary",
     "",
+    "## Parameters used in this run",
+    paste0("- alpha_level: ", alpha_level),
+    paste0("- strong_alpha_level: ", strong_alpha_level),
+    paste0("- weak_alpha_level: ", weak_alpha_level),
+    paste0("- LFC boundary: ", lfc_boundary),
+    paste0("- EVS top-N target: ", top_n_target),
+    paste0("- HC invalid threshold: ", hc_invalid_at_or_above),
+    paste0("- Calculation probability floor: ", format(calculation_probability_floor, scientific = TRUE)),
+    paste0("- Plot probability floor: ", plot_probability_floor),
+    paste0("- Comparisons: ", paste(comparison_table$comparison_name, collapse = ", ")),
+    paste0("- Analysis tracks: ", paste(analysis_tracks, collapse = ", ")),
+    paste0("- Figure DPI: ", figure_dpi, " with parallel PDF export"),
+    "",
     "## Input and preprocessing",
-    "Raw read-count matrices are imported for each RT/ZT comparison. Raw integer counts are retained for DESeq2 differential testing. PCA/EVS calculations are performed on variance-stabilized expression for NormEVS, with log2(normalized counts + 1) used only as a fallback if VST fails. RawEVS uses log2(raw counts + 1).",
+    "Raw read-count matrices are imported for each RT/ZT comparison. Raw integer counts are retained for DESeq2 differential testing. NormEVS uses DESeq2 variance-stabilized expression with log2(normalized counts + 1) fallback. RawEVS uses log2(raw counts + 1).",
     "",
     "## Eigenvector splitting",
-    sprintf("For each comparison and EVS mode, PC1 is calculated separately in treatment and control samples. Features are ranked by absolute PC1 loading. The leading edge is the union of the top %s treatment-ranked and top %s control-ranked features. The remainder is every feature not in that union. No AIC/BIC or legacy changepoint fallback is used.", top_n_target, top_n_target),
+    paste0("PC1 is calculated separately in treatment and control samples. Features are ranked by absolute PC1 loading. The leading edge is the union of the top-", top_n_target, " treatment-ranked and top-", top_n_target, " control-ranked features. The remainder is every feature not in that union. No AIC/BIC or changepoint fallback is used."),
     "",
     "## Differential expression",
-    sprintf("DESeq2 is run with design ~ condition and reference level untrt. Standard effects are BH-adjusted Wald results with padj < %.3f and |apeglm-shrunken log2 fold-change| >= %.2f. Strong effects are DESeq2 greaterAbs alternative-hypothesis calls at the same LFC boundary and BH alpha %.3f. Weak HBFSS-region effects require DESeq2 lessAbs support at BH alpha %.3f, |shrunken LFC| < %.2f, and HBFSS significance.", alpha_level, lfc_boundary, strong_alpha_level, weak_alpha_level, lfc_boundary),
+    paste0("DESeq2 is run with design ~ condition, reference level untrt. Standard effects: BH-adjusted Wald padj < ", alpha_level, " and |apeglm-shrunken LFC| >= ", lfc_boundary, ". Strong effects: greaterAbs alternative hypothesis at the same boundary. Weak HBFSS-region effects: lessAbs support, |shrunken LFC| < ", lfc_boundary, ", and HBFSS significance."),
     "",
     "## Empirical null and HBFSS",
-    sprintf("The Wald statistic distribution is passed to fdrtool using statistic = normal. The fndr cutoff method is attempted first; pct0 with pct0 = 0.75 is used only if fndr fails or returns an invalid eta0. Empirical p-values are clipped only for numerical stability. Higher criticism supplies the dataset-specific empirical-p threshold unless the returned threshold is invalid or >= %.2f. The HBFSS cutoff is -log10(HC p-threshold) multiplied by the LFC boundary. HBFSS is reported as a superset of standard DESeq2 calls so hbfss_total = standard_effect + hbfss_only by construction.", hc_invalid_at_or_above),
+    "Wald statistics are passed to fdrtool (statistic = normal). fndr cutoff.method is attempted first; pct0 with pct0 = 0.75 is used only if fndr fails or returns invalid eta0. Higher criticism supplies the dataset-specific empirical-p threshold unless invalid. HBFSS cutoff = -log10(HC threshold) x LFC boundary. HBFSS is reported as a superset of standard DESeq2: hbfss_total = standard_effect + hbfss_only.",
     "",
-    "## PCA variance figures",
-    "The PCA variance figure uses PC1 score variance only. It directly compares Original, Lead, and Remainder datasets on an absolute pseudo-log scale, avoiding the prior percent-of-original plot that compressed the remainder to near zero. The PC1 variance-distribution figure shows per-feature contribution to PC1 score variance for All samples, Control samples, and Treatment samples, with dashed treatment/control EVS top-N cutoff lines.",
+    "## PCA and EVS figures",
+    "PC1_Variance_EVS compares absolute PC1 score variance across Original, Lead, and Remainder datasets. PC1_Variance_Distributions shows per-feature contribution to PC1 score variance for All samples, Control samples, and Treatment samples, with treatment/control EVS cutoff lines. The deprecated loading-rank line plot is not exported.",
     "",
     "## Simulation validation",
-    sprintf("Simulation regeneration is disabled by default for manuscript reruns. If run_simulation_validation is set TRUE, the validation generates negative-binomial count data across DE fractions (%s), LFC magnitudes (%s), null-inflation settings (%s), and %s replicate(s) per condition, then runs the same DESeq2/apeglm/fdrtool/HC/HBFSS logic and exports raw results, summary metrics, F1, FDR, weak-effect recall, and cutoff-stability figures.", paste(simulation_de_fractions, collapse = ", "), paste(simulation_lfc_magnitudes, collapse = ", "), paste(simulation_null_inflation, collapse = ", "), simulation_n_reps)
+    paste0("Simulation regeneration is disabled by default for manuscript reruns. If run_simulation_validation is TRUE, negative-binomial counts are simulated across DE fractions (", paste(simulation_de_fractions, collapse = ", "), "), fixed LFC magnitudes (", paste(simulation_lfc_magnitudes, collapse = ", "), "), a dedicated weak-mixture profile with |LFC| drawn from ", simulation_weak_lfc_min, " to ", simulation_weak_lfc_max, ", null-inflation settings (", paste(simulation_null_inflation, collapse = ", "), "), n = ", simulation_n_samples_per_group, " samples per group, and ", simulation_n_reps, " replicates per condition. Seed: ", simulation_seed, ".")
   )
   writeLines(methods_lines, file.path(output_dir, "METHODS_SEQUENCE_PIPELINE.md"))
 }
@@ -1959,12 +2083,14 @@ write_run_session_info <- function() {
 
 fail_pipeline <- function(message_text, status = 1L) {
   try(write_run_session_info(), silent = TRUE)
+  try(cleanup_rplots_pdf(), silent = TRUE)
   message(message_text)
   quit(save = "no", status = status, runLast = FALSE)
 }
 
 options(error = function() {
   try(write_run_session_info(), silent = TRUE)
+  try(cleanup_rplots_pdf(), silent = TRUE)
   traceback(2)
   quit(save = "no", status = 1L, runLast = FALSE)
 })
@@ -2178,7 +2304,7 @@ if (nrow(summary_df) > 0L) {
 
     pc1_var_plot <- plot_pc1_evs_variance_absolute(pca_var_df)
     if (!is.null(pc1_var_plot)) {
-      save_plot(pc1_var_plot, file.path(figure_dir, "PCA_Variance.png"), width = 15.8, height = 8.8)
+      save_plot(pc1_var_plot, file.path(figure_dir, "PC1_Variance_EVS.png"), width = 15.8, height = 8.8)
     }
   }
 
@@ -2258,6 +2384,7 @@ if (isTRUE(run_simulation_validation)) {
 
 write_sequence_methods()
 write_run_session_info()
+cleanup_rplots_pdf()
 
 exported_files <- list.files(output_dir, recursive = TRUE, full.names = TRUE)
 exported_files <- exported_files[file.info(exported_files)$isdir %in% FALSE]
