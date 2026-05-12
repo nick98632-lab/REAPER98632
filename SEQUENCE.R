@@ -80,6 +80,19 @@ n_top_labels_per_class <- 2L
 reset_output_dir <- FALSE
 run_simulation_validation <- FALSE
 
+# GitHub integration.
+# If TRUE, the script commits and pushes only after the complete pipeline succeeds
+# and Manifest.csv has been written. This intentionally fails loudly on Git errors.
+git_push_after_success <- TRUE
+git_remote_name <- "origin"
+git_branch_name <- NA_character_
+git_commit_message <- paste0("Update SEQUENCE manuscript exports ", format(Sys.time(), "%Y-%m-%d %H:%M:%S"))
+git_pull_rebase_before_push <- TRUE
+git_retry_push_after_rebase <- TRUE
+git_stage_pipeline_script <- TRUE
+git_allow_no_change_success <- TRUE
+git_fail_if_preexisting_staged_changes <- TRUE
+
 simulation_seed <- 42L
 simulation_n_features <- 10000L
 simulation_n_samples_per_group <- 8L
@@ -2476,6 +2489,8 @@ write_sequence_methods <- function() {
     paste0("- Comparisons: ", paste(comparison_table$comparison_name, collapse = ", ")),
     paste0("- Analysis tracks: ", paste(analysis_tracks, collapse = ", ")),
     paste0("- Figure DPI: ", figure_dpi, " with parallel PDF export"),
+    paste0("- Git push after success: ", git_push_after_success),
+    paste0("- Git remote: ", git_remote_name),
     "",
     "## Input and preprocessing",
     "Raw read-count matrices are imported for each RT/ZT comparison. Raw integer counts are retained for DESeq2 differential testing. NormEVS uses DESeq2 variance-stabilized expression with log2(normalized counts + 1) fallback. RawEVS uses log2(raw counts + 1).",
@@ -2515,6 +2530,182 @@ write_manifest <- function() {
 
   save_csv(manifest, file.path(output_dir, "Manifest.csv"))
   manifest
+}
+
+
+# =============================================================================
+# GITHUB INTEGRATION
+# =============================================================================
+
+path_relative_to_repo <- function(path) {
+  root <- normalizePath(repo_root, winslash = "/", mustWork = TRUE)
+  abs <- normalizePath(path, winslash = "/", mustWork = FALSE)
+
+  prefix <- paste0(root, "/")
+  if (startsWith(abs, prefix)) {
+    return(substr(abs, nchar(prefix) + 1L, nchar(abs)))
+  }
+
+  abs
+}
+
+git_command <- function(args, allow_failure = FALSE, echo_output = TRUE) {
+  if (Sys.which("git") == "") {
+    stop("Git executable was not found on PATH.", call. = FALSE)
+  }
+
+  cmd_display <- paste("git", paste(args, collapse = " "))
+  message("$ ", cmd_display)
+
+  out <- suppressWarnings(system2("git", args = args, stdout = TRUE, stderr = TRUE))
+  status <- attr(out, "status")
+  if (is.null(status)) status <- 0L
+  status <- as.integer(status)
+
+  if (isTRUE(echo_output) && length(out) > 0L) {
+    message(paste(out, collapse = "\n"))
+  }
+
+  if (!isTRUE(allow_failure) && status != 0L) {
+    stop(
+      "Git command failed with status ", status, ": ", cmd_display,
+      if (length(out) > 0L) paste0("\n", paste(out, collapse = "\n")) else "",
+      call. = FALSE
+    )
+  }
+
+  list(status = status, output = out)
+}
+
+git_output_first_line <- function(args, allow_failure = FALSE) {
+  res <- git_command(args, allow_failure = allow_failure, echo_output = FALSE)
+  if (res$status != 0L || length(res$output) == 0L) return(NA_character_)
+  trimws(res$output[1])
+}
+
+git_has_staged_changes <- function() {
+  res <- git_command(c("diff", "--cached", "--quiet"), allow_failure = TRUE, echo_output = FALSE)
+  if (res$status == 0L) return(FALSE)
+  if (res$status == 1L) return(TRUE)
+  stop("Unable to inspect staged Git changes.", call. = FALSE)
+}
+
+git_has_cached_changes_after_add <- git_has_staged_changes
+
+git_commit_and_push <- function() {
+  if (!isTRUE(git_push_after_success)) {
+    message("GitHub push disabled: git_push_after_success is FALSE.")
+    return(invisible(FALSE))
+  }
+
+  git_root <- git_output_first_line(c("rev-parse", "--show-toplevel"), allow_failure = TRUE)
+  if (is.na(git_root) || !nzchar(git_root)) {
+    stop("GitHub push requested, but this run is not inside a Git repository.", call. = FALSE)
+  }
+
+  git_root <- normalizePath(git_root, winslash = "/", mustWork = TRUE)
+  expected_root <- normalizePath(repo_root, winslash = "/", mustWork = TRUE)
+
+  if (!identical(git_root, expected_root)) {
+    stop(
+      "Git root mismatch. repo_root is ", expected_root,
+      " but git root is ", git_root,
+      ". Run from the repository root or fix find_repo_root().",
+      call. = FALSE
+    )
+  }
+
+  if (isTRUE(git_fail_if_preexisting_staged_changes) && git_has_staged_changes()) {
+    stop(
+      "Git index already contains staged changes before the SEQUENCE push step. ",
+      "Commit or unstage them first so this script does not accidentally include unrelated files.",
+      call. = FALSE
+    )
+  }
+
+  remote_url <- git_output_first_line(c("remote", "get-url", git_remote_name), allow_failure = TRUE)
+  if (is.na(remote_url) || !nzchar(remote_url)) {
+    stop("Git remote '", git_remote_name, "' is not configured.", call. = FALSE)
+  }
+
+  current_branch <- git_output_first_line(c("rev-parse", "--abbrev-ref", "HEAD"), allow_failure = FALSE)
+  if (identical(current_branch, "HEAD") || is.na(current_branch) || !nzchar(current_branch)) {
+    stop("Git is in detached HEAD state. Checkout a branch before pushing.", call. = FALSE)
+  }
+
+  target_branch <- if (!is.na(git_branch_name) && nzchar(git_branch_name)) git_branch_name else current_branch
+
+  message("\n=====================================================")
+  message("GitHub integration")
+  message("Repository: ", git_root)
+  message("Remote: ", git_remote_name, " -> ", remote_url)
+  message("Branch: ", current_branch)
+  message("Target branch: ", target_branch)
+  message("=====================================================\n")
+
+  git_command(c("fetch", git_remote_name), allow_failure = FALSE)
+
+  upstream <- git_output_first_line(c("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"), allow_failure = TRUE)
+
+  if (isTRUE(git_pull_rebase_before_push)) {
+    if (!is.na(upstream) && nzchar(upstream)) {
+      git_command(c("pull", "--rebase", "--autostash"), allow_failure = FALSE)
+    } else {
+      message("No upstream branch is configured. The first push will set upstream.")
+    }
+  }
+
+  stage_paths <- c(output_dir)
+
+  if (isTRUE(git_stage_pipeline_script)) {
+    sp <- script_path()
+    if (!is.na(sp) && file.exists(sp)) {
+      stage_paths <- c(sp, stage_paths)
+    } else if (file.exists(file.path(repo_root, "sequence.R"))) {
+      stage_paths <- c(file.path(repo_root, "sequence.R"), stage_paths)
+    } else {
+      warning("Could not identify the active R script path for git staging. Staging output directory only.", call. = FALSE)
+    }
+  }
+
+  stage_paths <- unique(vapply(stage_paths, path_relative_to_repo, character(1)))
+  git_command(c("add", "--", stage_paths), allow_failure = FALSE)
+
+  if (!git_has_cached_changes_after_add()) {
+    message("No changed SEQUENCE files to commit.")
+    if (isTRUE(git_allow_no_change_success)) return(invisible(FALSE))
+    stop("No changed files to commit and git_allow_no_change_success is FALSE.", call. = FALSE)
+  }
+
+  git_command(c("status", "--short"), allow_failure = FALSE)
+  git_command(c("commit", "-m", git_commit_message), allow_failure = FALSE)
+
+  push_args <- if (!is.na(upstream) && nzchar(upstream) && identical(target_branch, current_branch)) {
+    c("push")
+  } else {
+    c("push", "-u", git_remote_name, paste0("HEAD:", target_branch))
+  }
+
+  push_result <- git_command(push_args, allow_failure = TRUE)
+
+  if (push_result$status != 0L) {
+    if (!isTRUE(git_retry_push_after_rebase)) {
+      stop("Git push failed and retry is disabled.", call. = FALSE)
+    }
+
+    message("Initial git push failed. Retrying once after pull --rebase --autostash.")
+
+    if (!is.na(upstream) && nzchar(upstream) && identical(target_branch, current_branch)) {
+      git_command(c("pull", "--rebase", "--autostash"), allow_failure = FALSE)
+      git_command(c("push"), allow_failure = FALSE)
+    } else {
+      git_command(c("pull", "--rebase", "--autostash", git_remote_name, target_branch), allow_failure = FALSE)
+      git_command(c("push", "-u", git_remote_name, paste0("HEAD:", target_branch)), allow_failure = FALSE)
+    }
+  }
+
+  message("GitHub push complete.")
+  invisible(TRUE)
 }
 
 # =============================================================================
@@ -2811,6 +3002,8 @@ write_run_session_info()
 cleanup_rplots_pdf()
 
 manifest <- write_manifest()
+
+git_commit_and_push()
 
 cat("\n=====================================================\n")
 cat("SEQUENCE pipeline complete.\n")
