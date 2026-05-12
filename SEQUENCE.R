@@ -2,13 +2,25 @@
 
 # =============================================================================
 # SEQUENCE FINAL SUBMISSION PIPELINE
-# DESeq2 + Eigenvector Splitting + empirical-null HC/HBFSS
-# Final manuscript version. Complete rewrite, not a patch.
-# No legacy changepoint logic and no hidden cutoff fallback.
-# PCA score-variance figures compare Original vs Leading Edge vs Remainder using PC1 score variance only; EVS histograms show per-feature PC1 variance contributions with explicit All/Control/Treatment legends.
-# Standard effects use DESeq2 Wald BH < 10% with |shrunken LFC| >= 1.
-# Strong effects are DESeq2 greaterAbs alternative-hypothesis calls: BH < 10% with |shrunken LFC| >= 1.
-# Weak class requires DESeq2 lessAbs support plus |shrunken LFC| < 1 plus HBFSS passage.
+# Clean rewrite: DESeq2 + fixed top-N EVS + empirical-null HC/HBFSS
+#
+# This script intentionally keeps only the essential manuscript workflow:
+#   1. import raw WTTS-Seq counts
+#   2. run original/raw DESeq2 analysis
+#   3. run NormEVS and RawEVS fixed top-N eigenvector splitting
+#   4. run DESeq2 + empirical-null HC/HBFSS on Original, Leading Edge, Remainder
+#   5. export tables, volcanoes, PCA plots, PC1 variance figures, counts, manifest
+#   6. optionally regenerate simulation validation outputs
+#
+# No legacy changepoint logic.
+# No hidden cutoff fallback.
+# EVS cutoff is explicitly fixed top-N per treatment and control PCA rank.
+# =============================================================================
+
+options(stringsAsFactors = FALSE)
+
+# =============================================================================
+# PACKAGES
 # =============================================================================
 
 required_packages <- c(
@@ -21,7 +33,7 @@ missing_packages <- required_packages[
 ]
 
 if (length(missing_packages) > 0L) {
-  stop("Install missing package(s): ", paste(missing_packages, collapse = ", "))
+  stop("Install missing package(s): ", paste(missing_packages, collapse = ", "), call. = FALSE)
 }
 
 suppressPackageStartupMessages({
@@ -38,8 +50,6 @@ suppressPackageStartupMessages({
   library(SummarizedExperiment)
 })
 
-options(stringsAsFactors = FALSE)
-
 # =============================================================================
 # SETTINGS
 # =============================================================================
@@ -53,26 +63,23 @@ alpha_level <- 0.10
 strong_alpha_level <- 0.10
 weak_alpha_level <- 0.10
 lfc_boundary <- 1.0
+
+evs_cutoff_mode <- "fixed_top_n"
 top_n_target <- 5000L
+analysis_tracks <- c("NormEVS", "RawEVS")
+
 hc_invalid_at_or_above <- 0.95
 calculation_probability_floor <- .Machine$double.xmin
 plot_probability_floor <- 1e-16
+
 figure_dpi <- 600
 base_theme_size <- 9
 n_top_labels <- 6L
 n_top_labels_per_class <- 2L
 
-# =============================================================================
-# SUBMISSION FLAGS -- READ BEFORE RUNNING
-# reset_output_dir: TRUE wipes the entire output directory. Use only when
-#   intentionally starting fresh. FALSE preserves existing outputs and is safe
-#   for repeated manuscript reruns.
-# run_simulation_validation: TRUE re-runs all simulation replicates. For
-#   submission, commit the precomputed simulation_validation/ CSVs and keep this
-#   FALSE unless simulation parameters changed.
-# =============================================================================
-run_simulation_validation <- FALSE
 reset_output_dir <- FALSE
+run_simulation_validation <- FALSE
+
 simulation_seed <- 42L
 simulation_n_features <- 10000L
 simulation_n_samples_per_group <- 8L
@@ -87,6 +94,7 @@ simulation_null_inflation <- c(0.0, 0.10)
 simulation_n_reps <- 20L
 
 class_levels <- c("BG", "Weak", "Strong", "Std", "HBFSS")
+
 class_colors <- c(
   BG = "#BDBDBD",
   Weak = "#0072B2",
@@ -94,6 +102,7 @@ class_colors <- c(
   Std = "#33A02C",
   HBFSS = "#6A3D9A"
 )
+
 class_labels <- c(
   BG = "Background",
   Weak = "Weak effect",
@@ -101,6 +110,7 @@ class_labels <- c(
   Std = "Standard DESeq2",
   HBFSS = "HBFSS-only"
 )
+
 class_shapes <- c(BG = 21, Weak = 24, Strong = 22, Std = 23, HBFSS = 25)
 class_sizes <- c(BG = 0.55, Weak = 1.10, Strong = 1.15, Std = 1.10, HBFSS = 1.15)
 class_alphas <- c(BG = 0.24, Weak = 0.92, Strong = 0.95, Std = 0.90, HBFSS = 0.95)
@@ -125,7 +135,8 @@ sample_metadata <- data.frame(
     rep("trt", 5), rep("untrt", 5),
     rep("trt", 5), rep("untrt", 5),
     rep("trt", 5), rep("untrt", 5)
-  )
+  ),
+  stringsAsFactors = FALSE
 )
 rownames(sample_metadata) <- sample_metadata$id
 sample_metadata$condition <- factor(sample_metadata$condition, levels = c("untrt", "trt"))
@@ -133,13 +144,12 @@ sample_metadata$condition <- factor(sample_metadata$condition, levels = c("untrt
 comparison_table <- data.frame(
   comparison_name = c("RT0_ZT6", "RT2_ZT8", "RT4_ZT10", "RT8_ZT14"),
   treatment_prefix = c("R0", "R2", "R4", "R8"),
-  control_prefix = c("ZT6", "ZT8", "ZT10", "ZT14")
+  control_prefix = c("ZT6", "ZT8", "ZT10", "ZT14"),
+  stringsAsFactors = FALSE
 )
 
-analysis_tracks <- c("NormEVS", "RawEVS")
-
 # =============================================================================
-# BASIC HELPERS
+# PATHS AND BASIC HELPERS
 # =============================================================================
 
 script_path <- function() {
@@ -150,16 +160,15 @@ script_path <- function() {
 }
 
 find_repo_root <- function() {
-  start_points <- unique(c(dirname(script_path()), getwd()))
-  start_points <- start_points[!is.na(start_points) & dir.exists(start_points)]
+  starts <- unique(c(dirname(script_path()), getwd()))
+  starts <- starts[!is.na(starts) & dir.exists(starts)]
 
-  check_upward <- function(start) {
+  walk_up <- function(start) {
     current <- normalizePath(start, winslash = "/", mustWork = TRUE)
     repeat {
-      if (dir.exists(file.path(current, ".git")) ||
-          file.exists(file.path(current, "data", "WTTS-Seq_2022.2_DE_raw_read_numbers.csv"))) {
-        return(current)
-      }
+      has_git <- dir.exists(file.path(current, ".git"))
+      has_data <- file.exists(file.path(current, "data", "WTTS-Seq_2022.2_DE_raw_read_numbers.csv"))
+      if (has_git || has_data) return(current)
       parent <- dirname(current)
       if (identical(parent, current)) break
       current <- parent
@@ -167,10 +176,9 @@ find_repo_root <- function() {
     NA_character_
   }
 
-  hits <- vapply(start_points, check_upward, character(1))
+  hits <- vapply(starts, walk_up, character(1))
   hits <- hits[!is.na(hits)]
   if (length(hits) > 0L) return(hits[1])
-
   normalizePath(getwd(), winslash = "/", mustWork = TRUE)
 }
 
@@ -191,13 +199,12 @@ cleanup_rplots_pdf <- function() {
   stray <- file.path(repo_root, "Rplots.pdf")
   if (file.exists(stray)) unlink(stray, force = TRUE)
 }
-cleanup_rplots_pdf()
 
 resolve_file <- function(candidates, label) {
-  candidates <- c(file.path(repo_root, candidates), candidates)
-  hits <- unique(candidates[file.exists(candidates)])
+  candidates <- unique(c(file.path(repo_root, candidates), candidates))
+  hits <- candidates[file.exists(candidates)]
   if (length(hits) == 0L) {
-    stop("Could not find ", label, ". Tried: ", paste(unique(candidates), collapse = " | "))
+    stop("Could not find ", label, ". Tried: ", paste(candidates, collapse = " | "), call. = FALSE)
   }
   normalizePath(hits[1], winslash = "/", mustWork = TRUE)
 }
@@ -205,7 +212,7 @@ resolve_file <- function(candidates, label) {
 stop_missing_columns <- function(df, required, label) {
   missing <- setdiff(required, colnames(df))
   if (length(missing) > 0L) {
-    stop(label, " missing column(s): ", paste(missing, collapse = ", "))
+    stop(label, " missing column(s): ", paste(missing, collapse = ", "), call. = FALSE)
   }
 }
 
@@ -219,12 +226,12 @@ as_integer_count_matrix <- function(x, label) {
   x <- as.matrix(x)
   suppressWarnings(storage.mode(x) <- "numeric")
 
-  if (any(!is.finite(x) | is.na(x))) stop(label, " has NA or non-finite count values.")
-  if (any(x < 0)) stop(label, " has negative count values.")
+  if (any(is.na(x) | !is.finite(x))) stop(label, " has NA or non-finite count values.", call. = FALSE)
+  if (any(x < 0)) stop(label, " has negative count values.", call. = FALSE)
 
   rounded <- round(x)
   if (any(abs(x - rounded) > 1e-6)) {
-    warning(label, " had non-integer values; rounded for DESeq2.")
+    warning(label, " had non-integer values; rounded before DESeq2.", call. = FALSE)
   }
 
   storage.mode(rounded) <- "integer"
@@ -243,7 +250,7 @@ clip_probability <- function(x, floor = calculation_probability_floor) {
 
 format_compact_number <- function(x, digits = 3) {
   x <- suppressWarnings(as.numeric(x))
-  out <- rep(NA_character_, length(x))
+  out <- rep("NA", length(x))
   finite <- is.finite(x) & !is.na(x)
   ax <- abs(x[finite])
   val <- x[finite]
@@ -257,98 +264,17 @@ format_compact_number <- function(x, digits = 3) {
       )
     )
   )
-  out[!finite] <- "NA"
   out
 }
 
+safe_csv_name <- function(...) {
+  paste0(gsub("[^A-Za-z0-9_.-]+", "_", paste(..., sep = "_")), ".csv")
+}
 
 save_csv <- function(df, path) {
   dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
   write.csv(df, path, row.names = FALSE)
   invisible(path)
-}
-
-rename_columns_existing <- function(df, map) {
-  # map is named old_column = "new_column". Missing old columns are ignored.
-  # This avoids dplyr::rename identity/new=old failures across dplyr versions.
-  old_names <- names(map)
-  hit <- old_names[old_names %in% names(df)]
-  if (length(hit) > 0L) {
-    names(df)[match(hit, names(df))] <- unname(map[hit])
-  }
-  df
-}
-
-concise_analysis_summary <- function(df) {
-  out <- df
-  map <- c(
-    comparison_name = "comparison",
-    analysis_label = "analysis",
-    dataset_key = "dataset",
-    n_features = "n_features",
-    n_lessAbs_alt = "lessAbs_significant",
-    n_weak = "weak_effect_hbfss_region",
-    n_strong_alt = "greaterAbs_significant",
-    n_strong = "strong_effect",
-    n_standard = "standard_effect",
-    n_hbfss_raw = "hbfss_raw_geometric",
-    n_hbfss_total = "hbfss_total",
-    n_hbfss_overlap_standard = "hbfss_overlap_standard",
-    n_hbfss_only = "hbfss_only",
-    n_hbfss_display_only = "hbfss_display_only",
-    hc_p_threshold = "hc_p_threshold",
-    hbfss_threshold = "hbfss_cutoff",
-    alpha_level = "wald_bh_alpha",
-    strong_alpha_level = "greaterAbs_bh_alpha",
-    weak_alpha_level = "lessAbs_bh_alpha",
-    lfc_boundary = "lfc_boundary"
-  )
-  hit <- intersect(names(map), names(out))
-  names(out)[match(hit, names(out))] <- unname(map[hit])
-
-  keep <- c(
-    "comparison", "analysis", "dataset", "n_features",
-    "lessAbs_significant", "weak_effect_hbfss_region",
-    "greaterAbs_significant", "strong_effect",
-    "standard_effect", "hbfss_raw_geometric", "hbfss_total",
-    "hbfss_overlap_standard", "hbfss_only", "hbfss_display_only",
-    "hc_p_threshold", "hbfss_cutoff",
-    "wald_bh_alpha", "greaterAbs_bh_alpha", "lessAbs_bh_alpha",
-    "lfc_boundary"
-  )
-  keep <- intersect(keep, names(out))
-  out[, keep, drop = FALSE]
-}
-
-concise_evs_summary <- function(df) {
-  out <- df
-  map <- c(
-    comparison_name = "comparison",
-    track = "evs_mode",
-    top_n_target = "top_n_target",
-    treatment_top_n_used = "treatment_top_n",
-    control_top_n_used = "control_top_n",
-    treatment_loading_cutoff = "treatment_loading_cutoff",
-    control_loading_cutoff = "control_loading_cutoff",
-    leading_edge_n = "leading_edge_features",
-    remainder_n = "remainder_features",
-    evs_input = "input_matrix"
-  )
-  hit <- intersect(names(map), names(out))
-  names(out)[match(hit, names(out))] <- unname(map[hit])
-
-  keep <- c(
-    "comparison", "evs_mode", "top_n_target",
-    "treatment_top_n", "control_top_n",
-    "treatment_loading_cutoff", "control_loading_cutoff",
-    "leading_edge_features", "remainder_features", "input_matrix"
-  )
-  keep <- intersect(keep, names(out))
-  out[, keep, drop = FALSE]
-}
-
-safe_csv_name <- function(...) {
-  paste0(gsub("[^A-Za-z0-9_.-]+", "_", paste(..., sep = "_")), ".csv")
 }
 
 analysis_table_path <- function(comparison_name, analysis_label, table_label) {
@@ -357,7 +283,17 @@ analysis_table_path <- function(comparison_name, analysis_label, table_label) {
   file.path(path, safe_csv_name("Table", comparison_name, analysis_label, table_label))
 }
 
+rename_columns_existing <- function(df, map) {
+  old_names <- names(map)
+  hit <- old_names[old_names %in% names(df)]
+  if (length(hit) > 0L) {
+    names(df)[match(hit, names(df))] <- unname(map[hit])
+  }
+  df
+}
+
 save_plot <- function(plot_obj, path, width, height, export_pdf = TRUE) {
+  if (is.null(plot_obj)) return(invisible(NULL))
   dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
 
   ggplot2::ggsave(
@@ -427,57 +363,85 @@ arrange_with_one_legend <- function(plot_list, title, ncol) {
   )
   title_grob <- grid::textGrob(title, gp = grid::gpar(fontface = "bold", cex = 1.00))
 
-  if (is.null(legend)) return(gridExtra::arrangeGrob(body, ncol = 1, top = title_grob))
+  if (is.null(legend)) {
+    return(gridExtra::arrangeGrob(body, ncol = 1, top = title_grob))
+  }
+
   gridExtra::arrangeGrob(body, legend, ncol = 1, heights = c(12, 0.95), top = title_grob)
 }
+
+write_run_session_info <- function() {
+  writeLines(capture.output(sessionInfo()), file.path(output_dir, "SessionInfo.txt"))
+  invisible(TRUE)
+}
+
+fail_pipeline <- function(message_text, status = 1L) {
+  try(write_run_session_info(), silent = TRUE)
+  try(cleanup_rplots_pdf(), silent = TRUE)
+  message(message_text)
+  quit(save = "no", status = status, runLast = FALSE)
+}
+
+options(error = function() {
+  try(write_run_session_info(), silent = TRUE)
+  try(cleanup_rplots_pdf(), silent = TRUE)
+  traceback(2)
+  quit(save = "no", status = 1L, runLast = FALSE)
+})
 
 # =============================================================================
 # DATA IMPORT
 # =============================================================================
 
-count_file <- resolve_file(count_file_candidates, "WTTS count matrix")
-message("Using count file: ", count_file)
-message("Output directory: ", output_dir)
+read_count_data <- function() {
+  count_file <- resolve_file(count_file_candidates, "WTTS count matrix")
+  message("Using count file: ", count_file)
+  message("Output directory: ", output_dir)
 
-count_df <- read.csv(count_file, header = TRUE, stringsAsFactors = FALSE, check.names = FALSE)
-count_df <- as.data.frame(count_df, stringsAsFactors = FALSE)
+  df <- read.csv(count_file, header = TRUE, stringsAsFactors = FALSE, check.names = FALSE)
+  df <- as.data.frame(df, stringsAsFactors = FALSE)
 
-stop_missing_columns(count_df, c("OrigID", "Symbol"), "Count matrix")
-stop_missing_columns(count_df, sample_metadata$id, "Count matrix")
+  stop_missing_columns(df, c("OrigID", "Symbol"), "Count matrix")
+  stop_missing_columns(df, sample_metadata$id, "Count matrix")
 
-count_df$OrigID <- trimws(as.character(count_df$OrigID))
-count_df$Symbol <- trimws(as.character(count_df$Symbol))
+  df$OrigID <- trimws(as.character(df$OrigID))
+  df$Symbol <- trimws(as.character(df$Symbol))
 
-for (sample_id in sample_metadata$id) {
-  count_df[[sample_id]] <- clean_count_column(count_df[[sample_id]])
+  for (sample_id in sample_metadata$id) {
+    df[[sample_id]] <- clean_count_column(df[[sample_id]])
+  }
+
+  valid <- !is.na(df$OrigID) & nzchar(df$OrigID)
+  valid <- valid & rowSums(is.na(df[, sample_metadata$id, drop = FALSE])) == 0L
+  df <- df[valid, , drop = FALSE]
+
+  df$feature_id <- make.unique(df$OrigID, sep = "_dup")
+  rownames(df) <- df$feature_id
+
+  annotation <- data.frame(
+    feature_id = df$feature_id,
+    orig_id = df$OrigID,
+    gene_symbol = ifelse(nzchar(df$Symbol), df$Symbol, NA_character_),
+    stringsAsFactors = FALSE
+  ) %>%
+    distinct(feature_id, .keep_all = TRUE)
+
+  list(count_df = df, annotation_df = annotation)
 }
 
-valid_rows <- !is.na(count_df$OrigID) & nzchar(count_df$OrigID)
-valid_rows <- valid_rows & rowSums(is.na(count_df[, sample_metadata$id, drop = FALSE])) == 0L
-count_df <- count_df[valid_rows, , drop = FALSE]
-
-count_df$feature_id <- make.unique(count_df$OrigID, sep = "_dup")
-rownames(count_df) <- count_df$feature_id
-
-annotation_df <- data.frame(
-  feature_id = count_df$feature_id,
-  orig_id = count_df$OrigID,
-  gene_symbol = ifelse(nzchar(count_df$Symbol), count_df$Symbol, NA_character_)
-) %>%
-  distinct(feature_id, .keep_all = TRUE)
-
-# =============================================================================
-# COMPARISON DATA
-# =============================================================================
+input_data <- read_count_data()
+count_df <- input_data$count_df
+annotation_df <- input_data$annotation_df
 
 prepare_comparison <- function(i) {
   row <- comparison_table[i, , drop = FALSE]
+
   treatment_ids <- sample_metadata$id[grepl(paste0("^", row$treatment_prefix, "_"), sample_metadata$id)]
   control_ids <- sample_metadata$id[grepl(paste0("^", row$control_prefix, "_"), sample_metadata$id)]
   sample_ids <- c(treatment_ids, control_ids)
 
   if (length(treatment_ids) < 2L || length(control_ids) < 2L) {
-    stop("Comparison ", row$comparison_name, " does not have enough samples.")
+    stop("Comparison ", row$comparison_name, " does not have enough samples.", call. = FALSE)
   }
 
   coldata <- sample_metadata[sample_ids, "condition", drop = FALSE]
@@ -486,7 +450,7 @@ prepare_comparison <- function(i) {
   counts <- as_integer_count_matrix(counts, paste0(row$comparison_name, " count matrix"))
 
   if (!identical(colnames(counts), rownames(coldata))) {
-    stop("Sample order mismatch for ", row$comparison_name)
+    stop("Sample order mismatch for ", row$comparison_name, call. = FALSE)
   }
 
   list(
@@ -497,7 +461,7 @@ prepare_comparison <- function(i) {
 }
 
 # =============================================================================
-# EIGENVECTOR SPLITTING
+# EVS
 # =============================================================================
 
 make_norm_evs_matrix <- function(count_matrix, coldata) {
@@ -519,38 +483,42 @@ make_norm_evs_matrix <- function(count_matrix, coldata) {
 }
 
 get_evs_matrix <- function(count_matrix, coldata, track) {
-  if (track == "RawEVS") {
+  if (identical(track, "RawEVS")) {
     x <- matrix(as.numeric(count_matrix), nrow = nrow(count_matrix), dimnames = dimnames(count_matrix))
     return(log2(x + 1))
   }
 
-  if (track == "NormEVS") {
+  if (identical(track, "NormEVS")) {
     return(make_norm_evs_matrix(count_matrix, coldata))
   }
 
-  stop("Unknown EVS track: ", track)
+  stop("Unknown EVS track: ", track, call. = FALSE)
 }
 
-condition_pc1_rank <- function(evs_matrix, sample_ids, condition_name) {
+condition_pc1_rank <- function(evs_matrix, sample_ids, condition_label) {
   x <- evs_matrix[, sample_ids, drop = FALSE]
   storage.mode(x) <- "numeric"
 
-  variable_feature <- apply(x, 1, stats::var, na.rm = TRUE) > 0
-  if (!any(variable_feature)) stop("No variable features for EVS PCA in ", condition_name)
+  keep <- rowSums(is.finite(x) & !is.na(x)) == ncol(x)
+  keep <- keep & apply(x, 1, stats::var, na.rm = TRUE) > 0
 
-  x <- x[variable_feature, , drop = FALSE]
+  if (!any(keep)) stop("No variable features for EVS PCA in ", condition_label, call. = FALSE)
+
+  x <- x[keep, , drop = FALSE]
   pca <- stats::prcomp(t(x), center = TRUE, scale. = FALSE)
+
   loading <- pca$rotation[, 1]
   pc1_score_variance <- as.numeric(pca$sdev[1]^2)
-  pc1_variance_contribution <- (as.numeric(loading)^2) * pc1_score_variance
 
   rank_df <- data.frame(
     feature_id = names(loading),
     pc1_loading = as.numeric(loading),
     pc1_loading_abs = abs(as.numeric(loading)),
     pc1_score_variance = pc1_score_variance,
-    pc1_variance_contribution = pc1_variance_contribution
+    pc1_variance_contribution = (as.numeric(loading)^2) * pc1_score_variance,
+    stringsAsFactors = FALSE
   )
+
   rank_df <- rank_df[order(rank_df$pc1_loading_abs, decreasing = TRUE), , drop = FALSE]
   rank_df$evs_rank <- seq_len(nrow(rank_df))
 
@@ -564,30 +532,40 @@ condition_pc1_rank <- function(evs_matrix, sample_ids, condition_name) {
 }
 
 build_evs_split <- function(count_matrix, coldata, comparison_name, track) {
+  if (!identical(evs_cutoff_mode, "fixed_top_n")) {
+    stop("Unsupported evs_cutoff_mode. This clean submission script only implements fixed_top_n.", call. = FALSE)
+  }
+
   evs_matrix <- get_evs_matrix(count_matrix, coldata, track)
-  all_features <- rownames(count_matrix)
+
   treatment_samples <- rownames(coldata)[coldata$condition == "trt"]
   control_samples <- rownames(coldata)[coldata$condition == "untrt"]
+  all_features <- rownames(count_matrix)
 
-  treatment_rank <- condition_pc1_rank(evs_matrix, treatment_samples, "treatment")
-  control_rank <- condition_pc1_rank(evs_matrix, control_samples, "control")
+  treatment_rank <- condition_pc1_rank(evs_matrix, treatment_samples, "Treatment")
+  control_rank <- condition_pc1_rank(evs_matrix, control_samples, "Control")
 
   treatment_top <- treatment_rank$rank_df$feature_id[treatment_rank$rank_df$evs_selected]
   control_top <- control_rank$rank_df$feature_id[control_rank$rank_df$evs_selected]
+
   leading_ids <- intersect(union(treatment_top, control_top), all_features)
   remainder_ids <- setdiff(all_features, leading_ids)
 
-  if (length(leading_ids) == 0L) stop("EVS leading edge empty for ", comparison_name, " ", track)
+  if (length(leading_ids) == 0L) {
+    stop("EVS leading edge is empty for ", comparison_name, " ", track, call. = FALSE)
+  }
+
   if (length(remainder_ids) == 0L) {
-    stop("EVS remainder empty for ", comparison_name, " ", track, ". Reduce top_n_target.")
+    stop("EVS remainder is empty for ", comparison_name, " ", track, ". Reduce top_n_target.", call. = FALSE)
   }
 
   trt_rank <- treatment_rank$rank_df
   ctl_rank <- control_rank$rank_df
+
   names(trt_rank)[names(trt_rank) != "feature_id"] <- paste0("trt_", names(trt_rank)[names(trt_rank) != "feature_id"])
   names(ctl_rank)[names(ctl_rank) != "feature_id"] <- paste0("ctl_", names(ctl_rank)[names(ctl_rank) != "feature_id"])
 
-  joint_rank <- data.frame(feature_id = all_features) %>%
+  joint_rank <- data.frame(feature_id = all_features, stringsAsFactors = FALSE) %>%
     left_join(trt_rank, by = "feature_id") %>%
     left_join(ctl_rank, by = "feature_id") %>%
     mutate(
@@ -599,6 +577,7 @@ build_evs_split <- function(count_matrix, coldata, comparison_name, track) {
   summary <- data.frame(
     comparison_name = comparison_name,
     track = track,
+    evs_cutoff_mode = evs_cutoff_mode,
     top_n_target = top_n_target,
     treatment_top_n_used = treatment_rank$top_n_used,
     control_top_n_used = control_rank$top_n_used,
@@ -606,7 +585,12 @@ build_evs_split <- function(count_matrix, coldata, comparison_name, track) {
     control_loading_cutoff = control_rank$rank_df$loading_cutoff_at_top_n[1],
     leading_edge_n = length(leading_ids),
     remainder_n = length(remainder_ids),
-    evs_input = ifelse(track == "NormEVS", "DESeq2 VST counts for PCA/EVS; log2 normalized-count fallback", "log2 raw counts + 1 for RawEVS PCA/EVS")
+    evs_input = ifelse(
+      track == "NormEVS",
+      "DESeq2 VST counts for PCA/EVS; log2 normalized-count fallback",
+      "log2 raw counts + 1 for PCA/EVS"
+    ),
+    stringsAsFactors = FALSE
   )
 
   list(
@@ -628,84 +612,97 @@ build_evs_split <- function(count_matrix, coldata, comparison_name, track) {
 # =============================================================================
 
 condition_coef_name <- function(dds) {
-  names <- resultsNames(dds)
-  if ("condition_trt_vs_untrt" %in% names) return("condition_trt_vs_untrt")
-  hit <- grep("condition.*trt.*vs.*untrt", names, value = TRUE)
+  nm <- resultsNames(dds)
+  if ("condition_trt_vs_untrt" %in% nm) return("condition_trt_vs_untrt")
+  hit <- grep("condition.*trt.*vs.*untrt", nm, value = TRUE)
   if (length(hit) > 0L) return(hit[1])
-  stop("Could not find trt-vs-untrt coefficient. Available: ", paste(names, collapse = ", "))
+  stop("Could not find trt-vs-untrt coefficient. Available: ", paste(nm, collapse = ", "), call. = FALSE)
 }
 
-empirical_null <- function(statistic, label) {
-  valid <- is.finite(statistic) & !is.na(statistic)
-  if (sum(valid) < 5L) stop(label, " has fewer than five finite Wald statistics.")
+extract_eta0 <- function(fit) {
+  if (is.null(fit) || is.null(fit$param)) return(NA_real_)
+  param <- fit$param
 
-  valid_stats <- statistic[valid]
-
-  get_eta0 <- function(fit) {
-    if (is.null(fit) || is.null(fit$param)) return(NA_real_)
-    param <- fit$param
-    eta0 <- NA_real_
-    if (is.matrix(param) || is.data.frame(param)) {
-      if ("eta0" %in% colnames(param)) eta0 <- suppressWarnings(as.numeric(param[, "eta0"][1]))
-      if (!is.finite(eta0) && "eta0" %in% rownames(param)) eta0 <- suppressWarnings(as.numeric(param["eta0", ][1]))
-    } else {
-      if ("eta0" %in% names(param)) eta0 <- suppressWarnings(as.numeric(param[["eta0"]][1]))
-    }
-    eta0
+  if (is.matrix(param) || is.data.frame(param)) {
+    if ("eta0" %in% colnames(param)) return(suppressWarnings(as.numeric(param[1, "eta0"])))
+    if ("eta0" %in% rownames(param)) return(suppressWarnings(as.numeric(param["eta0", 1])))
   }
 
-  run_fdrtool <- function(method) {
+  if ("eta0" %in% names(param)) return(suppressWarnings(as.numeric(param[["eta0"]][1])))
+  NA_real_
+}
+
+fit_empirical_null <- function(statistic, label) {
+  valid <- is.finite(statistic) & !is.na(statistic)
+  if (sum(valid) < 5L) stop(label, " has fewer than five finite Wald statistics.", call. = FALSE)
+
+  z <- statistic[valid]
+
+  run_one <- function(method) {
     fit <- tryCatch(
       fdrtool::fdrtool(
-        valid_stats,
+        z,
         statistic = "normal",
         plot = FALSE,
         verbose = FALSE,
         cutoff.method = method,
         pct0 = 0.75
       ),
-      error = function(e) {
-        warning(label, " fdrtool ", method, " failed: ", conditionMessage(e), call. = FALSE)
-        NULL
-      }
+      error = function(e) NULL
     )
+
     if (is.null(fit)) return(NULL)
-    if (is.null(fit$pval) || length(fit$pval) != length(valid_stats)) return(NULL)
-    eta0 <- get_eta0(fit)
+    if (is.null(fit$pval) || length(fit$pval) != length(z)) return(NULL)
+
+    eta0 <- extract_eta0(fit)
     if (!is.finite(eta0) || eta0 <= 0) return(NULL)
+
     fit
   }
 
-  fit <- run_fdrtool("fndr")
+  fit <- run_one("fndr")
   if (is.null(fit)) {
-    message(label, ": fndr failed or returned degenerate eta0; retrying empirical-null fit with pct0.")
-    fit <- run_fdrtool("pct0")
+    message(label, ": empirical-null fndr fit failed; retrying pct0.")
+    fit <- run_one("pct0")
   }
-  if (is.null(fit)) stop(label, ": fdrtool failed with both fndr and pct0.")
+  if (is.null(fit)) stop(label, ": fdrtool failed with fndr and pct0.", call. = FALSE)
 
-  p <- rep(NA_real_, length(statistic))
-  q <- rep(NA_real_, length(statistic))
-  lfdr <- rep(NA_real_, length(statistic))
-  p[valid] <- clip_probability(fit$pval)
-  q[valid] <- clip_probability(fit$qval)
-  lfdr[valid] <- suppressWarnings(as.numeric(fit$lfdr))
+  n <- length(statistic)
+  empirical_p <- rep(NA_real_, n)
+  empirical_q <- rep(NA_real_, n)
+  empirical_lfdr <- rep(NA_real_, n)
 
-  bh <- rep(NA_real_, length(statistic))
-  ok <- !is.na(p) & is.finite(p)
-  bh[ok] <- p.adjust(p[ok], method = "BH")
+  qval <- if (!is.null(fit$qval) && length(fit$qval) == length(z)) fit$qval else rep(NA_real_, length(z))
+  lfdr <- if (!is.null(fit$lfdr) && length(fit$lfdr) == length(z)) fit$lfdr else rep(NA_real_, length(z))
 
-  list(empirical_p = p, empirical_q = q, empirical_lfdr = lfdr, empirical_bh = bh)
+  empirical_p[valid] <- clip_probability(fit$pval)
+  empirical_q[valid] <- clip_probability(qval)
+  empirical_lfdr[valid] <- suppressWarnings(as.numeric(lfdr))
+
+  empirical_bh <- rep(NA_real_, n)
+  ok <- !is.na(empirical_p) & is.finite(empirical_p)
+  empirical_bh[ok] <- p.adjust(empirical_p[ok], method = "BH")
+
+  list(
+    empirical_p = empirical_p,
+    empirical_q = empirical_q,
+    empirical_lfdr = empirical_lfdr,
+    empirical_bh = empirical_bh
+  )
 }
 
 hc_threshold <- function(empirical_p) {
   p <- sort(clip_probability(empirical_p), decreasing = FALSE, na.last = NA)
   if (length(p) < 5L) return(NA_real_)
 
-  threshold <- suppressWarnings(tryCatch(fdrtool::hc.thresh(p), error = function(e) NA_real_))
-  threshold <- as.numeric(threshold[1])
+  threshold <- tryCatch(
+    suppressWarnings(as.numeric(fdrtool::hc.thresh(p)[1])),
+    error = function(e) NA_real_
+  )
 
   if (!is.finite(threshold) || is.na(threshold) || threshold <= 0 || threshold >= 1) return(NA_real_)
   if (threshold >= hc_invalid_at_or_above) return(NA_real_)
+
   threshold
 }
 
@@ -740,13 +737,11 @@ classify_results <- function(df, hc_p, hbfss_cutoff) {
     df$HBFSS >= hbfss_cutoff &
     df$hc_pass
 
-  # HBFSS is reported as a superset of the ordinary DESeq2 standard calls.
-  # This makes the summary arithmetic explicit:
-  # hbfss_total = standard_effect + hbfss_only.
   df$hbfss_flag <- df$standard_flag | df$hbfss_raw_flag
 
-  df$weak_region_hbfss_flag <- df$lessAbs_alt_flag & df$hbfss_flag
+  df$weak_region_hbfss_flag <- df$lessAbs_alt_flag & df$hbfss_raw_flag
   df$weak_flag <- df$weak_region_hbfss_flag
+
   df$display_strong <- df$strong_flag
   df$display_standard <- df$standard_flag & !df$display_strong
   df$display_weak <- df$weak_flag & !df$display_strong & !df$display_standard
@@ -770,12 +765,14 @@ run_deseq2_hbfss <- function(count_matrix, coldata, comparison_name, analysis_la
     colData = coldata,
     design = ~ condition
   )
+
   dds <- dds[rowSums(counts(dds)) > 0, ]
   dds <- DESeq(dds, betaPrior = FALSE)
 
   coef_name <- condition_coef_name(dds)
 
   standard <- results(dds, contrast = c("condition", "trt", "untrt"), alpha = alpha_level)
+
   strong <- results(
     dds,
     contrast = c("condition", "trt", "untrt"),
@@ -783,6 +780,7 @@ run_deseq2_hbfss <- function(count_matrix, coldata, comparison_name, analysis_la
     altHypothesis = "greaterAbs",
     alpha = strong_alpha_level
   )
+
   weak <- results(
     dds,
     contrast = c("condition", "trt", "untrt"),
@@ -790,44 +788,43 @@ run_deseq2_hbfss <- function(count_matrix, coldata, comparison_name, analysis_la
     altHypothesis = "lessAbs",
     alpha = weak_alpha_level
   )
+
   shrunk <- lfcShrink(dds, coef = coef_name, type = "apeglm")
 
   df <- as.data.frame(standard)
   df$feature_id <- rownames(df)
 
-  strong_df <- data.frame(
-    feature_id = rownames(strong),
-    greaterAbs_pvalue = strong$pvalue,
-    greaterAbs_padj = strong$padj
-  )
-
-  weak_df <- data.frame(
-    feature_id = rownames(weak),
-    lessAbs_pvalue = weak$pvalue,
-    lessAbs_padj = weak$padj
-  )
-
-  shrink_df <- data.frame(
-    feature_id = rownames(shrunk),
-    lfc_shrunk = as.data.frame(shrunk)$log2FoldChange
-  )
-
-  empirical <- empirical_null(df$stat, label)
+  empirical <- fit_empirical_null(df$stat, label)
   df$empirical_p <- empirical$empirical_p
   df$empirical_q <- empirical$empirical_q
   df$empirical_lfdr <- empirical$empirical_lfdr
   df$empirical_bh <- empirical$empirical_bh
 
-  # Separate numerical floors:
-  # calculation floor protects HBFSS from zero p-values without changing thresholds.
-  # plot floor prevents extreme p-values from stretching figures.
-  # The dataset-specific HC threshold is used for hc_pass, the HC line, and the HBFSS cutoff;
-  # it is not used as a p-value floor because that would flatten all more-significant points.
   df$empirical_p_calc <- clip_probability(df$empirical_p, floor = calculation_probability_floor)
   df$empirical_p_plot <- clip_probability(df$empirical_p, floor = plot_probability_floor)
   df$neglog10_empirical_p_calc <- -log10(df$empirical_p_calc)
   df$neglog10_empirical_p_plot <- -log10(df$empirical_p_plot)
   df$neglog10_empirical_p <- df$neglog10_empirical_p_plot
+
+  strong_df <- data.frame(
+    feature_id = rownames(strong),
+    greaterAbs_pvalue = strong$pvalue,
+    greaterAbs_padj = strong$padj,
+    stringsAsFactors = FALSE
+  )
+
+  weak_df <- data.frame(
+    feature_id = rownames(weak),
+    lessAbs_pvalue = weak$pvalue,
+    lessAbs_padj = weak$padj,
+    stringsAsFactors = FALSE
+  )
+
+  shrink_df <- data.frame(
+    feature_id = rownames(shrunk),
+    lfc_shrunk = as.data.frame(shrunk)$log2FoldChange,
+    stringsAsFactors = FALSE
+  )
 
   df <- df %>%
     left_join(strong_df, by = "feature_id") %>%
@@ -837,6 +834,7 @@ run_deseq2_hbfss <- function(count_matrix, coldata, comparison_name, analysis_la
 
   hc_p <- hc_threshold(df$empirical_p)
   hbfss_cutoff <- if (is.na(hc_p)) NA_real_ else -log10(hc_p) * lfc_boundary
+
   df <- classify_results(df, hc_p, hbfss_cutoff)
 
   normalized_counts <- as.data.frame(counts(dds, normalized = TRUE))
@@ -844,11 +842,11 @@ run_deseq2_hbfss <- function(count_matrix, coldata, comparison_name, analysis_la
 
   dispersion_df <- as.data.frame(S4Vectors::mcols(dds))
   dispersion_df$feature_id <- rownames(dispersion_df)
-  keep_disp_cols <- intersect(
+  dispersion_keep <- intersect(
     c("feature_id", "dispGeneEst", "dispFit", "dispersion", "dispIter", "dispOutlier"),
     colnames(dispersion_df)
   )
-  dispersion_df <- dispersion_df[, keep_disp_cols, drop = FALSE]
+  dispersion_df <- dispersion_df[, dispersion_keep, drop = FALSE]
 
   df <- df %>%
     left_join(normalized_counts, by = "feature_id") %>%
@@ -872,11 +870,13 @@ run_deseq2_hbfss <- function(count_matrix, coldata, comparison_name, analysis_la
     "stat", "pvalue", "padj",
     "greaterAbs_pvalue", "greaterAbs_padj",
     "lessAbs_pvalue", "lessAbs_padj",
-    "empirical_p", "empirical_p_calc", "empirical_p_plot", "empirical_bh", "empirical_q", "empirical_lfdr",
-    "neglog10_empirical_p_calc", "neglog10_empirical_p_plot", "neglog10_empirical_p", "HBFSS",
-    "hc_p_threshold_dataset", "hbfss_threshold_dataset",
+    "empirical_p", "empirical_p_calc", "empirical_p_plot",
+    "empirical_bh", "empirical_q", "empirical_lfdr",
+    "neglog10_empirical_p_calc", "neglog10_empirical_p_plot", "neglog10_empirical_p",
+    "HBFSS", "hc_p_threshold_dataset", "hbfss_threshold_dataset",
     "hc_pass", "standard_flag", "strong_alt_flag", "strong_flag",
-    "lessAbs_alt_flag", "weak_region_hbfss_flag", "weak_flag", "hbfss_raw_flag", "hbfss_flag",
+    "lessAbs_alt_flag", "weak_region_hbfss_flag", "weak_flag",
+    "hbfss_raw_flag", "hbfss_flag",
     "display_standard", "display_strong", "display_weak", "display_hbfss",
     "final_class"
   )
@@ -902,10 +902,76 @@ run_deseq2_hbfss <- function(count_matrix, coldata, comparison_name, analysis_la
     alpha_level = alpha_level,
     strong_alpha_level = strong_alpha_level,
     weak_alpha_level = weak_alpha_level,
-    lfc_boundary = lfc_boundary
+    lfc_boundary = lfc_boundary,
+    stringsAsFactors = FALSE
   )
 
   list(dds = dds, results = df, summary = summary)
+}
+
+concise_analysis_summary <- function(df) {
+  map <- c(
+    comparison_name = "comparison",
+    analysis_label = "analysis",
+    dataset_key = "dataset",
+    n_features = "n_features",
+    n_lessAbs_alt = "lessAbs_significant",
+    n_weak = "weak_effect_hbfss_region",
+    n_strong_alt = "greaterAbs_significant",
+    n_strong = "strong_effect",
+    n_standard = "standard_effect",
+    n_hbfss_raw = "hbfss_raw_geometric",
+    n_hbfss_total = "hbfss_total",
+    n_hbfss_overlap_standard = "hbfss_overlap_standard",
+    n_hbfss_only = "hbfss_only",
+    n_hbfss_display_only = "hbfss_display_only",
+    hc_p_threshold = "hc_p_threshold",
+    hbfss_threshold = "hbfss_cutoff",
+    alpha_level = "wald_bh_alpha",
+    strong_alpha_level = "greaterAbs_bh_alpha",
+    weak_alpha_level = "lessAbs_bh_alpha",
+    lfc_boundary = "lfc_boundary"
+  )
+
+  out <- rename_columns_existing(df, map)
+
+  keep <- c(
+    "comparison", "analysis", "dataset", "n_features",
+    "lessAbs_significant", "weak_effect_hbfss_region",
+    "greaterAbs_significant", "strong_effect",
+    "standard_effect", "hbfss_raw_geometric", "hbfss_total",
+    "hbfss_overlap_standard", "hbfss_only", "hbfss_display_only",
+    "hc_p_threshold", "hbfss_cutoff",
+    "wald_bh_alpha", "greaterAbs_bh_alpha", "lessAbs_bh_alpha",
+    "lfc_boundary"
+  )
+  out[, intersect(keep, names(out)), drop = FALSE]
+}
+
+concise_evs_summary <- function(df) {
+  map <- c(
+    comparison_name = "comparison",
+    track = "evs_mode",
+    evs_cutoff_mode = "evs_cutoff_mode",
+    top_n_target = "top_n_target",
+    treatment_top_n_used = "treatment_top_n",
+    control_top_n_used = "control_top_n",
+    treatment_loading_cutoff = "treatment_loading_cutoff",
+    control_loading_cutoff = "control_loading_cutoff",
+    leading_edge_n = "leading_edge_features",
+    remainder_n = "remainder_features",
+    evs_input = "input_matrix"
+  )
+
+  out <- rename_columns_existing(df, map)
+
+  keep <- c(
+    "comparison", "evs_mode", "evs_cutoff_mode", "top_n_target",
+    "treatment_top_n", "control_top_n",
+    "treatment_loading_cutoff", "control_loading_cutoff",
+    "leading_edge_features", "remainder_features", "input_matrix"
+  )
+  out[, intersect(keep, names(out)), drop = FALSE]
 }
 
 # =============================================================================
@@ -925,13 +991,13 @@ volcano_data <- function(df) {
     trimws(plot_df$gene_symbol),
     as.character(plot_df$feature_id)
   )
+
   plot_df$final_class <- factor(as.character(plot_df$final_class), levels = class_levels)
 
   draw_order <- c(BG = 1, HBFSS = 2, Weak = 3, Std = 4, Strong = 5)
   plot_df$draw_order <- unname(draw_order[as.character(plot_df$final_class)])
   plot_df$draw_order[is.na(plot_df$draw_order)] <- 1
-  plot_df <- plot_df[order(plot_df$draw_order, plot_df$neglog10_empirical_p), , drop = FALSE]
-  plot_df
+  plot_df[order(plot_df$draw_order, plot_df$neglog10_empirical_p), , drop = FALSE]
 }
 
 volcano_labels <- function(plot_df) {
@@ -951,7 +1017,12 @@ volcano_labels <- function(plot_df) {
 
   labels <- if (length(picked) > 0L) do.call(rbind, picked) else labels[0, , drop = FALSE]
   if (nrow(labels) == 0L) return(labels)
-  labels <- labels[order(match(as.character(labels$final_class), class_priority), -labels$HBFSS, labels$empirical_p, -abs(labels$lfc_shrunk), na.last = TRUE), , drop = FALSE]
+
+  labels <- labels[
+    order(match(as.character(labels$final_class), class_priority), -labels$HBFSS, labels$empirical_p, -abs(labels$lfc_shrunk), na.last = TRUE),
+    ,
+    drop = FALSE
+  ]
   labels[seq_len(min(n_top_labels, nrow(labels))), , drop = FALSE]
 }
 
@@ -961,6 +1032,9 @@ hbfss_boundary <- function(plot_df, hc_p, hbfss_cutoff, y_limit) {
   hc_y <- if (!is.na(hc_p) && is.finite(hc_p) && hc_p > 0 && hc_p < 1) -log10(hc_p) else NA_real_
   x_limit <- max(abs(plot_df$lfc_shrunk), lfc_boundary * 1.1, na.rm = TRUE)
   x_start <- max(0.05, hbfss_cutoff / max(y_limit, 1e-6))
+
+  if (!is.finite(x_limit) || x_start >= x_limit) return(NULL)
+
   x_abs <- seq(x_start, x_limit, length.out = 600)
   y <- hbfss_cutoff / x_abs
 
@@ -972,34 +1046,41 @@ hbfss_boundary <- function(plot_df, hc_p, hbfss_cutoff, y_limit) {
   y <- y[keep]
 
   rbind(
-    data.frame(x = -rev(x_abs), y = rev(y)),
-    data.frame(x = x_abs, y = y)
+    data.frame(x = -rev(x_abs), y = rev(y), stringsAsFactors = FALSE),
+    data.frame(x = x_abs, y = y, stringsAsFactors = FALSE)
   )
 }
 
 plot_volcano <- function(df, title) {
   plot_df <- volcano_data(df)
-  if (nrow(plot_df) == 0L) stop("No finite rows for volcano plot: ", title)
+  if (nrow(plot_df) == 0L) stop("No finite rows for volcano plot: ", title, call. = FALSE)
 
   label_df <- volcano_labels(plot_df)
   hc_p <- suppressWarnings(as.numeric(plot_df$hc_p_threshold_dataset[1]))
   hbfss_cutoff <- suppressWarnings(as.numeric(plot_df$hbfss_threshold_dataset[1]))
   hc_y <- if (!is.na(hc_p) && is.finite(hc_p) && hc_p > 0 && hc_p < 1) -log10(hc_p) else NA_real_
+
   y_limit <- max(plot_df$neglog10_empirical_p, hc_y, na.rm = TRUE) * 1.06
+  if (!is.finite(y_limit) || y_limit <= 0) y_limit <- 1
+
   boundary <- hbfss_boundary(plot_df, hc_p, hbfss_cutoff, y_limit)
+
   x_min <- min(plot_df$lfc_shrunk, na.rm = TRUE)
   x_max <- max(plot_df$lfc_shrunk, na.rm = TRUE)
   x_span <- max(x_max - x_min, 1e-6)
-  threshold_label_y <- if (!is.na(hc_y) && is.finite(hc_y)) max(0.06 * y_limit, hc_y - 0.06 * y_limit) else 0.08 * y_limit
-  hc_label_x <- x_min + 0.03 * x_span
-  hbfss_label_x <- x_min + 0.34 * x_span
+
+  threshold_label_y <- if (!is.na(hc_y) && is.finite(hc_y)) {
+    max(0.06 * y_limit, hc_y - 0.06 * y_limit)
+  } else {
+    0.08 * y_limit
+  }
 
   caption <- paste0(
-    "W=", sum(df$weak_flag, na.rm = TRUE),
-    "  S=", sum(df$strong_flag, na.rm = TRUE),
+    "Weak=", sum(df$weak_flag, na.rm = TRUE),
+    "  Strong=", sum(df$strong_flag, na.rm = TRUE),
     "  Std=", sum(df$standard_flag, na.rm = TRUE),
-    "  H=", sum(df$hbfss_flag, na.rm = TRUE),
-    "  H+=", sum(df$display_hbfss, na.rm = TRUE)
+    "  HBFSS total=", sum(df$hbfss_flag, na.rm = TRUE),
+    "  HBFSS-only=", sum(df$display_hbfss, na.rm = TRUE)
   )
 
   p <- ggplot(
@@ -1047,36 +1128,33 @@ plot_volcano <- function(df, title) {
       caption = caption
     ) +
     coord_cartesian(ylim = c(0, y_limit), clip = "off") +
-    manuscript_theme() +
-    theme(plot.caption = element_text(size = base_theme_size - 4))
+    manuscript_theme()
 
   if (!is.na(hc_y) && is.finite(hc_y)) {
-    p <- p + geom_hline(yintercept = hc_y, linetype = "dotted", linewidth = 0.60, color = threshold_color)
+    p <- p +
+      geom_hline(yintercept = hc_y, linetype = "dotted", linewidth = 0.60, color = threshold_color) +
+      annotate(
+        "text",
+        x = x_min + 0.03 * x_span,
+        y = threshold_label_y,
+        label = paste0("HC p=", signif(hc_p, 3)),
+        hjust = 0,
+        vjust = 1,
+        size = 1.90,
+        color = threshold_color
+      )
   }
 
   if (!is.null(boundary)) {
     p <- p + geom_line(data = boundary, aes(x = x, y = y), inherit.aes = FALSE, color = class_colors[["HBFSS"]], linewidth = 0.75)
   }
 
-  if (!is.na(hc_p) && is.finite(hc_p) && !is.na(hc_y) && is.finite(hc_y)) {
-    p <- p + annotate(
-      "text",
-      x = hc_label_x,
-      y = threshold_label_y,
-      label = paste0("HC p=", signif(hc_p, 3)),
-      hjust = 0,
-      vjust = 1,
-      size = 1.90,
-      color = threshold_color
-    )
-  }
-
   if (!is.na(hbfss_cutoff) && is.finite(hbfss_cutoff)) {
     p <- p + annotate(
       "text",
-      x = hbfss_label_x,
+      x = x_min + 0.34 * x_span,
       y = threshold_label_y,
-      label = paste0("HBFSS \u03c4=", signif(hbfss_cutoff, 3)),
+      label = paste0("HBFSS cutoff=", signif(hbfss_cutoff, 3)),
       hjust = 0,
       vjust = 1,
       size = 1.90,
@@ -1106,9 +1184,201 @@ plot_volcano <- function(df, title) {
   p
 }
 
+pca_support_components <- function(fit_obj) {
+  dds <- fit_obj$dds
+  if (is.null(dds)) return(NULL)
+
+  x <- tryCatch(
+    as.matrix(SummarizedExperiment::assay(DESeq2::vst(dds, blind = TRUE))),
+    error = function(e) NULL
+  )
+
+  if (is.null(x)) {
+    x <- log2(as.matrix(DESeq2::counts(dds, normalized = TRUE)) + 1)
+  }
+
+  storage.mode(x) <- "numeric"
+
+  keep <- rowSums(is.finite(x) & !is.na(x)) == ncol(x)
+  keep <- keep & apply(x, 1, stats::var, na.rm = TRUE) > 0
+  x <- x[keep, , drop = FALSE]
+
+  if (nrow(x) < 2L || ncol(x) < 3L) return(NULL)
+
+  pca <- stats::prcomp(t(x), center = TRUE, scale. = FALSE, rank. = 2)
+  var_pct <- round((pca$sdev^2 / sum(pca$sdev^2)) * 100, 1)
+
+  pca_df <- data.frame(
+    sample_id = rownames(pca$x),
+    PC1 = pca$x[, 1],
+    PC2 = pca$x[, 2],
+    condition = as.character(SummarizedExperiment::colData(dds)[rownames(pca$x), "condition"]),
+    stringsAsFactors = FALSE
+  )
+
+  pca_df$condition <- factor(
+    ifelse(pca_df$condition == "trt", "Treatment", "Control"),
+    levels = c("Control", "Treatment")
+  )
+
+  list(
+    pca = pca,
+    var_pct = var_pct,
+    pca_df = pca_df,
+    score_variance = c(PC1 = stats::var(pca_df$PC1, na.rm = TRUE), PC2 = stats::var(pca_df$PC2, na.rm = TRUE))
+  )
+}
+
+plot_pca_support <- function(fit_obj, title) {
+  comp <- pca_support_components(fit_obj)
+  if (is.null(comp)) return(NULL)
+
+  pca_df <- comp$pca_df
+  var_pct <- comp$var_pct
+
+  ggplot(pca_df, aes(PC1, PC2, label = sample_id, shape = condition, fill = condition)) +
+    geom_hline(yintercept = 0, linewidth = 0.22, linetype = "dashed", color = "grey70") +
+    geom_vline(xintercept = 0, linewidth = 0.22, linetype = "dashed", color = "grey70") +
+    geom_point(size = 2.2, color = "white", stroke = 0.45) +
+    ggrepel::geom_text_repel(
+      size = 1.9,
+      max.overlaps = 12,
+      force = 0.7,
+      box.padding = 0.18,
+      point.padding = 0.10,
+      min.segment.length = 0,
+      segment.alpha = 0.42,
+      segment.size = 0.14
+    ) +
+    scale_shape_manual(values = c(Control = 21, Treatment = 24), drop = FALSE, name = NULL) +
+    scale_fill_manual(values = c(Control = control_color, Treatment = treatment_color), drop = FALSE, name = NULL) +
+    labs(
+      title = title,
+      x = paste0("PC1 ", var_pct[1], "%"),
+      y = paste0("PC2 ", var_pct[2], "%"),
+      caption = NULL
+    ) +
+    manuscript_theme()
+}
+
+analysis_label_pretty <- function(analysis_label) {
+  if (analysis_label == "Raw") return("Original")
+  if (grepl("^Lead_", analysis_label)) return(paste("Lead", sub("^Lead_", "", analysis_label)))
+  if (grepl("^Rem_", analysis_label)) return(paste("Remainder", sub("^Rem_", "", analysis_label)))
+  analysis_label
+}
+
+extract_pca_variance_rows <- function(fit_obj, comparison_name, analysis_label) {
+  comp <- pca_support_components(fit_obj)
+  if (is.null(comp)) return(NULL)
+
+  dataset_group <- if (analysis_label == "Raw") {
+    "Original"
+  } else if (grepl("^Lead_", analysis_label)) {
+    "Lead"
+  } else if (grepl("^Rem_", analysis_label)) {
+    "Remainder"
+  } else {
+    analysis_label
+  }
+
+  evs_mode <- if (analysis_label == "Raw") "Original" else sub("^[^_]+_", "", analysis_label)
+
+  data.frame(
+    comparison_name = comparison_name,
+    analysis_label = analysis_label,
+    analysis_pretty = analysis_label_pretty(analysis_label),
+    dataset_group = factor(dataset_group, levels = c("Original", "Lead", "Remainder")),
+    evs_mode = factor(evs_mode, levels = c("Original", "NormEVS", "RawEVS")),
+    component = factor(c("PC1", "PC2"), levels = c("PC1", "PC2")),
+    variance_explained_pct = as.numeric(comp$var_pct[c(1, 2)]),
+    score_variance = as.numeric(comp$score_variance[c("PC1", "PC2")]),
+    stringsAsFactors = FALSE
+  )
+}
+
+pca_pc1_evs_plot_df <- function(pca_var_df) {
+  if (nrow(pca_var_df) == 0L) return(data.frame())
+
+  pc1 <- pca_var_df[pca_var_df$component == "PC1", , drop = FALSE]
+  original_rows <- pc1[pc1$dataset_group == "Original" & pc1$evs_mode == "Original", , drop = FALSE]
+  split_rows <- pc1[pc1$dataset_group %in% c("Lead", "Remainder") & pc1$evs_mode %in% c("NormEVS", "RawEVS"), , drop = FALSE]
+
+  if (nrow(original_rows) == 0L || nrow(split_rows) == 0L) return(data.frame())
+
+  out_rows <- list()
+
+  for (mode_name in c("NormEVS", "RawEVS")) {
+    for (comparison_name in unique(split_rows$comparison_name)) {
+      original_one <- original_rows[original_rows$comparison_name == comparison_name, , drop = FALSE]
+      split_one <- split_rows[split_rows$comparison_name == comparison_name & split_rows$evs_mode == mode_name, , drop = FALSE]
+      if (nrow(original_one) == 0L || nrow(split_one) == 0L) next
+
+      original_one <- original_one[1, , drop = FALSE]
+      original_one$evs_mode <- mode_name
+      original_one$analysis_label <- paste0("Original_for_", mode_name)
+      original_one$analysis_pretty <- "Original"
+
+      block <- bind_rows(original_one, split_one)
+      original_variance <- suppressWarnings(as.numeric(original_one$score_variance[1]))
+      block$original_pc1_score_variance <- original_variance
+      block$pc1_score_variance <- suppressWarnings(as.numeric(block$score_variance))
+      block$pc1_score_variance_ratio_to_original <- if (is.finite(original_variance) && original_variance > 0) {
+        block$pc1_score_variance / original_variance
+      } else {
+        NA_real_
+      }
+      block$pc1_score_variance_percent_of_original <- 100 * block$pc1_score_variance_ratio_to_original
+      block$dataset_group <- factor(as.character(block$dataset_group), levels = c("Original", "Lead", "Remainder"))
+      block$evs_mode <- factor(as.character(block$evs_mode), levels = c("NormEVS", "RawEVS"))
+
+      out_rows[[length(out_rows) + 1L]] <- block
+    }
+  }
+
+  if (length(out_rows) == 0L) return(data.frame())
+  bind_rows(out_rows)
+}
+
+plot_pc1_evs_variance_absolute <- function(pca_var_df) {
+  plot_df <- pca_pc1_evs_plot_df(pca_var_df)
+  if (nrow(plot_df) == 0L) return(NULL)
+
+  plot_df$pc1_score_variance <- pmax(suppressWarnings(as.numeric(plot_df$pc1_score_variance)), 0)
+
+  ggplot(plot_df, aes(dataset_group, pc1_score_variance, fill = dataset_group)) +
+    geom_col(width = 0.70, color = "grey25", linewidth = 0.16) +
+    geom_text(
+      aes(label = format_compact_number(pc1_score_variance, digits = 3)),
+      vjust = -0.25,
+      size = 1.65,
+      color = "grey20"
+    ) +
+    facet_grid(evs_mode ~ comparison_name, scales = "free_y") +
+    scale_y_continuous(
+      trans = scales::pseudo_log_trans(base = 10),
+      labels = function(x) format_compact_number(x, digits = 3),
+      expand = expansion(mult = c(0.02, 0.18))
+    ) +
+    scale_fill_manual(values = c(Original = "#9E9E9E", Lead = "#E31A1C", Remainder = "#1F78B4"), drop = FALSE, name = NULL) +
+    labs(
+      title = "PC1 score variance by dataset after EVS",
+      x = NULL,
+      y = "PC1 score variance, absolute scale",
+      caption = "Original, EVS leading edge, and EVS remainder are compared directly. PC2 percent variance is not used."
+    ) +
+    manuscript_theme() +
+    theme(
+      strip.text = element_text(size = base_theme_size - 0.6),
+      axis.text.x = element_text(size = base_theme_size - 0.9),
+      legend.position = "bottom"
+    )
+}
+
 pc1_variance_contribution_rows <- function(expr_matrix, sample_ids, scope_label) {
   x <- expr_matrix[, sample_ids, drop = FALSE]
   storage.mode(x) <- "numeric"
+
   keep <- rowSums(is.finite(x) & !is.na(x)) == ncol(x)
   keep <- keep & apply(x, 1, stats::var, na.rm = TRUE) > 0
   x <- x[keep, , drop = FALSE]
@@ -1155,35 +1425,23 @@ evs_loading_distribution_rows <- function(full_count_matrix, evs_obj, coldata, c
     extract_one(evs_obj$remainder_matrix, "Remainder")
   )
 
-  cutoff_rows <- list()
-  if (!is.null(evs_obj$treatment_rank$pca)) {
-    cutoff_rows[[length(cutoff_rows) + 1L]] <- data.frame(
-      comparison_name = comparison_name,
-      track = track,
-      condition = "Treatment",
-      pc1_loading_cutoff = evs_obj$summary$treatment_loading_cutoff[1],
-      pc1_score_variance = as.numeric(evs_obj$treatment_rank$pca$sdev[1]^2),
-      stringsAsFactors = FALSE
-    )
-  }
-  if (!is.null(evs_obj$control_rank$pca)) {
-    cutoff_rows[[length(cutoff_rows) + 1L]] <- data.frame(
-      comparison_name = comparison_name,
-      track = track,
-      condition = "Control",
-      pc1_loading_cutoff = evs_obj$summary$control_loading_cutoff[1],
-      pc1_score_variance = as.numeric(evs_obj$control_rank$pca$sdev[1]^2),
-      stringsAsFactors = FALSE
-    )
-  }
-  cutoffs <- if (length(cutoff_rows) > 0L) bind_rows(cutoff_rows) else data.frame()
-  if (nrow(cutoffs) > 0L) {
-    cutoffs$pc1_variance_contribution_cutoff <- (cutoffs$pc1_loading_cutoff^2) * cutoffs$pc1_score_variance
-    cutoffs <- cutoffs[rep(seq_len(nrow(cutoffs)), each = 3), , drop = FALSE]
-    cutoffs$dataset_group <- rep(c("Original", "Lead", "Remainder"), times = nrow(cutoffs) / 3)
-    attr(out, "cutoffs") <- cutoffs
-  }
+  cutoff_rows <- data.frame(
+    comparison_name = comparison_name,
+    track = track,
+    condition = c("Treatment", "Control"),
+    pc1_loading_cutoff = c(evs_obj$summary$treatment_loading_cutoff[1], evs_obj$summary$control_loading_cutoff[1]),
+    pc1_score_variance = c(
+      as.numeric(evs_obj$treatment_rank$pca$sdev[1]^2),
+      as.numeric(evs_obj$control_rank$pca$sdev[1]^2)
+    ),
+    stringsAsFactors = FALSE
+  )
 
+  cutoff_rows$pc1_variance_contribution_cutoff <- (cutoff_rows$pc1_loading_cutoff^2) * cutoff_rows$pc1_score_variance
+  cutoff_rows <- cutoff_rows[rep(seq_len(nrow(cutoff_rows)), each = 3), , drop = FALSE]
+  cutoff_rows$dataset_group <- rep(c("Original", "Lead", "Remainder"), times = 2L)
+
+  attr(out, "cutoffs") <- cutoff_rows
   out
 }
 
@@ -1222,7 +1480,7 @@ plot_loading_histograms <- function(load_df, title_text) {
       title = title_text,
       x = "Per-feature contribution to PC1 score variance",
       y = "Feature frequency",
-      caption = "Dashed vertical lines mark the treatment/control top-N EVS cutoff projected onto PC1 variance contribution. Original, leading-edge, and remainder distributions are shown directly; no percent-of-original scaling is used."
+      caption = "Dashed vertical lines mark fixed top-N treatment/control EVS loading cutoffs projected onto PC1 variance contribution."
     ) +
     manuscript_theme() +
     theme(
@@ -1245,99 +1503,6 @@ plot_loading_histograms <- function(load_df, title_text) {
   p
 }
 
-pca_pc1_evs_plot_df <- function(pca_var_df) {
-  if (nrow(pca_var_df) == 0L) return(data.frame())
-
-  pc1 <- pca_var_df[pca_var_df$component == "PC1", , drop = FALSE]
-  if (nrow(pc1) == 0L) return(data.frame())
-
-  pc1$dataset_group <- as.character(pc1$dataset_group)
-  pc1$evs_mode <- as.character(pc1$evs_mode)
-
-  original_rows <- pc1[pc1$dataset_group == "Original" & pc1$evs_mode == "Original", , drop = FALSE]
-  split_rows <- pc1[pc1$dataset_group %in% c("Lead", "Remainder") & pc1$evs_mode %in% c("NormEVS", "RawEVS"), , drop = FALSE]
-  if (nrow(split_rows) == 0L || nrow(original_rows) == 0L) return(data.frame())
-
-  out_rows <- list()
-  idx <- 0L
-  for (mode_name in c("NormEVS", "RawEVS")) {
-    mode_split <- split_rows[split_rows$evs_mode == mode_name, , drop = FALSE]
-    if (nrow(mode_split) == 0L) next
-
-    for (comparison_name in unique(mode_split$comparison_name)) {
-      original_one <- original_rows[original_rows$comparison_name == comparison_name, , drop = FALSE]
-      split_one <- mode_split[mode_split$comparison_name == comparison_name, , drop = FALSE]
-      if (nrow(original_one) == 0L || nrow(split_one) == 0L) next
-
-      original_one <- original_one[1, , drop = FALSE]
-      original_one$evs_mode <- mode_name
-      original_one$analysis_label <- paste0("Original_for_", mode_name)
-      original_one$analysis_pretty <- "Original"
-
-      block <- bind_rows(original_one, split_one)
-      original_variance <- suppressWarnings(as.numeric(original_one$score_variance[1]))
-      block$original_pc1_score_variance <- original_variance
-      block$pc1_score_variance <- suppressWarnings(as.numeric(block$score_variance))
-      block$pc1_score_variance_ratio_to_original <- if (is.finite(original_variance) && original_variance > 0) {
-        block$pc1_score_variance / original_variance
-      } else {
-        NA_real_
-      }
-      block$pc1_score_variance_percent_of_original <- 100 * block$pc1_score_variance_ratio_to_original
-      block$pc1_score_variance_log10 <- log10(pmax(block$pc1_score_variance, 0) + 1)
-      block$dataset_group <- factor(as.character(block$dataset_group), levels = c("Original", "Lead", "Remainder"))
-      block$evs_mode <- factor(as.character(block$evs_mode), levels = c("NormEVS", "RawEVS"))
-      idx <- idx + 1L
-      out_rows[[idx]] <- block
-    }
-  }
-
-  if (length(out_rows) == 0L) return(data.frame())
-  bind_rows(out_rows)
-}
-
-plot_pc1_evs_variance_absolute <- function(pca_var_df) {
-  plot_df <- pca_pc1_evs_plot_df(pca_var_df)
-  if (nrow(plot_df) == 0L) return(NULL)
-
-  plot_df$dataset_group <- factor(as.character(plot_df$dataset_group), levels = c("Original", "Lead", "Remainder"))
-  plot_df$evs_mode <- factor(as.character(plot_df$evs_mode), levels = c("NormEVS", "RawEVS"))
-  plot_df$pc1_score_variance <- pmax(suppressWarnings(as.numeric(plot_df$pc1_score_variance)), 0)
-
-  ggplot(plot_df, aes(dataset_group, pc1_score_variance, fill = dataset_group)) +
-    geom_col(width = 0.70, color = "grey25", linewidth = 0.16) +
-    geom_text(
-      aes(label = format_compact_number(pc1_score_variance, digits = 3)),
-      vjust = -0.25,
-      size = 1.65,
-      color = "grey20"
-    ) +
-    facet_grid(evs_mode ~ comparison_name, scales = "free_y") +
-    scale_y_continuous(
-      trans = scales::pseudo_log_trans(base = 10),
-      labels = function(x) format_compact_number(x, digits = 3),
-      expand = expansion(mult = c(0.02, 0.18))
-    ) +
-    scale_fill_manual(
-      values = c(Original = "#9E9E9E", Lead = "#E31A1C", Remainder = "#1F78B4"),
-      drop = FALSE,
-      name = NULL
-    ) +
-    labs(
-      title = "PC1 score variance by dataset after EVS",
-      x = NULL,
-      y = "PC1 score variance, absolute scale",
-      caption = "Bars compare the original dataset, EVS leading edge, and EVS remainder directly. PC2 percent-variance is not used in this figure."
-    ) +
-    manuscript_theme() +
-    theme(
-      strip.text = element_text(size = base_theme_size - 0.6),
-      axis.text.x = element_text(size = base_theme_size - 0.9),
-      legend.position = "bottom"
-    )
-}
-
-
 plot_discovery_counts <- function(summary_df) {
   long_df <- bind_rows(lapply(seq_len(nrow(summary_df)), function(i) {
     row <- summary_df[i, , drop = FALSE]
@@ -1346,15 +1511,18 @@ plot_discovery_counts <- function(summary_df) {
       analysis_label = row$analysis_label,
       dataset_key = row$dataset_key,
       Class = factor(c("Weak", "Strong", "Std", "HBFSS"), levels = c("Weak", "Strong", "Std", "HBFSS")),
-      Count = as.numeric(c(row$n_weak, row$n_strong, row$n_standard, row$n_hbfss_display_only))
+      Count = as.numeric(c(row$n_weak, row$n_strong, row$n_standard, row$n_hbfss_display_only)),
+      stringsAsFactors = FALSE
     )
   }))
 
-  counts_long_export <- rename_columns_existing(
-    long_df,
-    c(comparison_name = "comparison", analysis_label = "analysis", dataset_key = "dataset", Class = "class", Count = "count")
+  save_csv(
+    rename_columns_existing(
+      long_df,
+      c(comparison_name = "comparison", analysis_label = "analysis", dataset_key = "dataset", Class = "class", Count = "count")
+    ),
+    file.path(output_dir, "Counts_Long.csv")
   )
-  save_csv(counts_long_export, file.path(output_dir, "Counts_Long.csv"))
 
   ggplot(long_df, aes(comparison_name, Count, fill = Class)) +
     geom_col(position = position_dodge(width = 0.82), width = 0.74, color = "grey25", linewidth = 0.15) +
@@ -1366,124 +1534,10 @@ plot_discovery_counts <- function(summary_df) {
       drop = FALSE,
       name = NULL
     ) +
-    labs(
-      title = "Significant feature counts",
-      x = NULL,
-      y = "Count",
-      caption = NULL
-    ) +
+    labs(title = "Significant feature counts", x = NULL, y = "Count", caption = NULL) +
     manuscript_theme() +
     theme(axis.text.x = element_text(angle = 35, hjust = 1))
 }
-
-
-pca_support_components <- function(fit_obj) {
-  dds <- fit_obj$dds
-  if (is.null(dds)) return(NULL)
-
-  x <- tryCatch(
-    as.matrix(SummarizedExperiment::assay(DESeq2::vst(dds, blind = TRUE))),
-    error = function(e) NULL
-  )
-  if (is.null(x)) {
-    x <- log2(as.matrix(DESeq2::counts(dds, normalized = TRUE)) + 1)
-  }
-  storage.mode(x) <- "numeric"
-
-  keep <- rowSums(is.finite(x) & !is.na(x)) == ncol(x)
-  keep <- keep & apply(x, 1, stats::var, na.rm = TRUE) > 0
-  x <- x[keep, , drop = FALSE]
-
-  if (nrow(x) < 2L || ncol(x) < 3L) return(NULL)
-
-  pca <- stats::prcomp(t(x), center = TRUE, scale. = FALSE, rank. = 2)
-  var_pct <- round((pca$sdev^2 / sum(pca$sdev^2)) * 100, 1)
-
-  pca_df <- data.frame(
-    sample_id = rownames(pca$x),
-    PC1 = pca$x[, 1],
-    PC2 = pca$x[, 2],
-    condition = as.character(SummarizedExperiment::colData(dds)[rownames(pca$x), "condition"]),
-    stringsAsFactors = FALSE
-  )
-  pca_df$condition <- factor(
-    ifelse(pca_df$condition == "trt", "Treatment", "Control"),
-    levels = c("Control", "Treatment")
-  )
-
-  list(
-    pca = pca,
-    var_pct = var_pct,
-    pca_df = pca_df,
-    score_variance = c(PC1 = stats::var(pca_df$PC1, na.rm = TRUE), PC2 = stats::var(pca_df$PC2, na.rm = TRUE))
-  )
-}
-
-analysis_label_pretty <- function(analysis_label) {
-  if (analysis_label == "Raw") return("Original")
-  if (grepl("^Lead_", analysis_label)) return(paste("Lead", sub("^Lead_", "", analysis_label)))
-  if (grepl("^Rem_", analysis_label)) return(paste("Remainder", sub("^Rem_", "", analysis_label)))
-  analysis_label
-}
-
-extract_pca_variance_rows <- function(fit_obj, comparison_name, analysis_label) {
-  comp <- pca_support_components(fit_obj)
-  if (is.null(comp)) return(NULL)
-
-  dataset_group <- if (analysis_label == "Raw") "Original" else if (grepl("^Lead_", analysis_label)) "Lead" else if (grepl("^Rem_", analysis_label)) "Remainder" else analysis_label
-  evs_mode <- if (analysis_label == "Raw") "Original" else sub("^[^_]+_", "", analysis_label)
-
-  data.frame(
-    comparison_name = comparison_name,
-    analysis_label = analysis_label,
-    analysis_pretty = analysis_label_pretty(analysis_label),
-    dataset_group = factor(dataset_group, levels = c("Original", "Lead", "Remainder")),
-    evs_mode = factor(evs_mode, levels = c("Original", "NormEVS", "RawEVS")),
-    component = factor(c("PC1", "PC2"), levels = c("PC1", "PC2")),
-    variance_explained_pct = as.numeric(comp$var_pct[c(1, 2)]),
-    score_variance = as.numeric(comp$score_variance[c("PC1", "PC2")]),
-    stringsAsFactors = FALSE
-  )
-}
-
-plot_pca_support <- function(fit_obj, title) {
-  comp <- pca_support_components(fit_obj)
-  if (is.null(comp)) return(NULL)
-
-  pca_df <- comp$pca_df
-  var_pct <- comp$var_pct
-
-  ggplot(pca_df, aes(PC1, PC2, label = sample_id, shape = condition, fill = condition)) +
-    geom_hline(yintercept = 0, linewidth = 0.22, linetype = "dashed", color = "grey70") +
-    geom_vline(xintercept = 0, linewidth = 0.22, linetype = "dashed", color = "grey70") +
-    geom_point(size = 2.2, color = "white", stroke = 0.45) +
-    ggrepel::geom_text_repel(
-      size = 1.9,
-      max.overlaps = 12,
-      force = 0.7,
-      box.padding = 0.18,
-      point.padding = 0.10,
-      min.segment.length = 0,
-      segment.alpha = 0.42,
-      segment.size = 0.14
-    ) +
-    scale_shape_manual(values = c(Control = 21, Treatment = 24), drop = FALSE, name = NULL) +
-    scale_fill_manual(values = c(Control = control_color, Treatment = treatment_color), drop = FALSE, name = NULL) +
-    labs(
-      title = title,
-      x = paste0("PC1 ", var_pct[1], "%"),
-      y = paste0("PC2 ", var_pct[2], "%"),
-      caption = NULL
-    ) +
-    manuscript_theme()
-}
-
-
-
-
-
-
-
 
 # =============================================================================
 # SIMULATION VALIDATION
@@ -1493,25 +1547,20 @@ simulate_sequence_counts <- function(n_features, n_samples, base_mean, disp_null
                                      de_fraction, lfc_magnitude, disp_de,
                                      lfc_profile = c("fixed", "weak_mixture")) {
   lfc_profile <- match.arg(lfc_profile)
+
   n_de <- round(n_features * de_fraction)
   n_null <- n_features - n_de
-
-  if (n_de < 2L) stop("Simulation needs at least two DE features.")
+  if (n_de < 2L) stop("Simulation needs at least two DE features.", call. = FALSE)
 
   de_direction <- ifelse(seq_len(n_de) <= n_de / 2, 1, -1)
-  if (identical(lfc_profile, "weak_mixture")) {
-    lfc_abs <- stats::runif(n_de, min = simulation_weak_lfc_min, max = simulation_weak_lfc_max)
+
+  lfc_abs <- if (identical(lfc_profile, "weak_mixture")) {
+    stats::runif(n_de, min = simulation_weak_lfc_min, max = simulation_weak_lfc_max)
   } else {
-    if (!is.finite(lfc_magnitude)) stop("Fixed-LFC simulation requires finite lfc_magnitude.")
-    lfc_abs <- rep(lfc_magnitude, n_de)
+    rep(lfc_magnitude, n_de)
   }
+
   de_true_lfc <- lfc_abs * de_direction
-
-  de_control_mean <- rep(base_mean, n_de)
-  de_treatment_mean <- base_mean * 2^de_true_lfc
-
-  null_control_mean <- rep(base_mean, n_null)
-  null_treatment_mean <- rep(base_mean, n_null)
 
   generate_nb <- function(mu, dispersion) {
     out <- matrix(0L, nrow = length(mu), ncol = n_samples)
@@ -1521,12 +1570,16 @@ simulate_sequence_counts <- function(n_features, n_samples, base_mean, disp_null
     out
   }
 
+  de_control_mean <- rep(base_mean, n_de)
+  de_treatment_mean <- base_mean * 2^de_true_lfc
+  null_mean <- rep(base_mean, n_null)
+
   counts <- rbind(
     cbind(generate_nb(de_control_mean, disp_de), generate_nb(de_treatment_mean, disp_de)),
-    cbind(generate_nb(null_control_mean, disp_null), generate_nb(null_treatment_mean, disp_null))
+    cbind(generate_nb(null_mean, disp_null), generate_nb(null_mean, disp_null))
   )
-  storage.mode(counts) <- "integer"
 
+  storage.mode(counts) <- "integer"
   colnames(counts) <- c(paste0("ctrl_", seq_len(n_samples)), paste0("trt_", seq_len(n_samples)))
   rownames(counts) <- paste0("sim_feature_", seq_len(n_features))
 
@@ -1553,90 +1606,6 @@ inflate_null_wald_statistics <- function(wald, is_de, inflation_fraction, inflat
   wald
 }
 
-sequence_simulation_analysis <- function(sim_obj, null_inflation) {
-  counts <- sim_obj$counts
-  n_samp <- ncol(counts) / 2
-
-  coldata <- data.frame(
-    condition = factor(c(rep("untrt", n_samp), rep("trt", n_samp)), levels = c("untrt", "trt")),
-    row.names = colnames(counts)
-  )
-
-  dds <- DESeqDataSetFromMatrix(countData = counts, colData = coldata, design = ~ condition)
-  dds <- dds[rowSums(counts(dds)) > 0, ]
-  dds <- DESeq(dds, betaPrior = FALSE, quiet = TRUE)
-
-  coef_name <- condition_coef_name(dds)
-
-  standard <- results(dds, contrast = c("condition", "trt", "untrt"), alpha = alpha_level)
-  strong <- results(
-    dds,
-    contrast = c("condition", "trt", "untrt"),
-    lfcThreshold = lfc_boundary,
-    altHypothesis = "greaterAbs",
-    alpha = strong_alpha_level
-  )
-  weak <- results(
-    dds,
-    contrast = c("condition", "trt", "untrt"),
-    lfcThreshold = lfc_boundary,
-    altHypothesis = "lessAbs",
-    alpha = weak_alpha_level
-  )
-  shrunk <- lfcShrink(dds, coef = coef_name, type = "apeglm", quiet = TRUE)
-
-  df <- as.data.frame(standard)
-  df$feature_id <- rownames(df)
-  df$lfc_shrunk <- as.data.frame(shrunk)$log2FoldChange
-  df$greaterAbs_padj <- as.data.frame(strong)$padj
-  df$lessAbs_padj <- as.data.frame(weak)$padj
-  df <- left_join(df, sim_obj$truth, by = "feature_id")
-
-  wald <- inflate_null_wald_statistics(df$stat, df$is_de, null_inflation)
-  empirical <- empirical_null(wald, "simulation")
-  df$empirical_p <- empirical$empirical_p
-  df$empirical_bh <- empirical$empirical_bh
-
-  df$empirical_p_calc <- clip_probability(df$empirical_p, floor = calculation_probability_floor)
-  df$neglog10_empirical_p_calc <- -log10(df$empirical_p_calc)
-
-  hc_p <- hc_threshold(df$empirical_p)
-  hbfss_cutoff <- if (is.na(hc_p)) NA_real_ else -log10(hc_p) * lfc_boundary
-
-  df$hc_pass <- !is.na(hc_p) &
-    !is.na(df$empirical_p) &
-    is.finite(df$empirical_p) &
-    df$empirical_p <= hc_p
-
-  df$HBFSS <- abs(df$lfc_shrunk) * df$neglog10_empirical_p_calc
-  df$hbfss_raw_sig <- !is.na(hbfss_cutoff) &
-    !is.na(df$HBFSS) &
-    is.finite(df$HBFSS) &
-    df$HBFSS >= hbfss_cutoff &
-    df$hc_pass
-
-  df$standard_sig <- !is.na(df$padj) &
-    df$padj < alpha_level &
-    !is.na(df$lfc_shrunk) &
-    abs(df$lfc_shrunk) >= lfc_boundary
-
-  df$empirical_bh_sig <- !is.na(df$empirical_bh) &
-    df$empirical_bh < alpha_level &
-    !is.na(df$lfc_shrunk) &
-    abs(df$lfc_shrunk) >= lfc_boundary
-
-  df$hbfss_sig <- df$standard_sig | df$hbfss_raw_sig
-
-  df$lessAbs_sig <- !is.na(df$lessAbs_padj) &
-    df$lessAbs_padj < weak_alpha_level &
-    !is.na(df$lfc_shrunk) &
-    abs(df$lfc_shrunk) < lfc_boundary
-
-  df$weak_region_hbfss_sig <- df$lessAbs_sig & df$hbfss_sig
-
-  list(results = df, hc_p = hc_p, hbfss_cutoff = hbfss_cutoff)
-}
-
 simulation_metrics <- function(predicted, actual) {
   predicted <- !is.na(predicted) & predicted
   actual <- !is.na(actual) & actual
@@ -1656,15 +1625,66 @@ simulation_metrics <- function(predicted, actual) {
   data.frame(tp = tp, fp = fp, fn = fn, tn = tn, precision = precision, recall = recall, f1 = f1, fdr = fdr)
 }
 
+sequence_simulation_analysis <- function(sim_obj, null_inflation) {
+  counts <- sim_obj$counts
+  n_samp <- ncol(counts) / 2
+
+  coldata <- data.frame(
+    condition = factor(c(rep("untrt", n_samp), rep("trt", n_samp)), levels = c("untrt", "trt")),
+    row.names = colnames(counts)
+  )
+
+  dds <- DESeqDataSetFromMatrix(countData = counts, colData = coldata, design = ~ condition)
+  dds <- dds[rowSums(counts(dds)) > 0, ]
+  dds <- DESeq(dds, betaPrior = FALSE, quiet = TRUE)
+
+  coef_name <- condition_coef_name(dds)
+
+  standard <- results(dds, contrast = c("condition", "trt", "untrt"), alpha = alpha_level)
+  strong <- results(dds, contrast = c("condition", "trt", "untrt"), lfcThreshold = lfc_boundary, altHypothesis = "greaterAbs", alpha = strong_alpha_level)
+  weak <- results(dds, contrast = c("condition", "trt", "untrt"), lfcThreshold = lfc_boundary, altHypothesis = "lessAbs", alpha = weak_alpha_level)
+  shrunk <- lfcShrink(dds, coef = coef_name, type = "apeglm", quiet = TRUE)
+
+  df <- as.data.frame(standard)
+  df$feature_id <- rownames(df)
+  df$lfc_shrunk <- as.data.frame(shrunk)$log2FoldChange
+  df$greaterAbs_padj <- as.data.frame(strong)$padj
+  df$lessAbs_padj <- as.data.frame(weak)$padj
+  df <- left_join(df, sim_obj$truth, by = "feature_id")
+
+  wald <- inflate_null_wald_statistics(df$stat, df$is_de, null_inflation)
+  empirical <- fit_empirical_null(wald, "simulation")
+
+  df$empirical_p <- empirical$empirical_p
+  df$empirical_bh <- empirical$empirical_bh
+  df$empirical_p_calc <- clip_probability(df$empirical_p, floor = calculation_probability_floor)
+  df$neglog10_empirical_p_calc <- -log10(df$empirical_p_calc)
+
+  hc_p <- hc_threshold(df$empirical_p)
+  hbfss_cutoff <- if (is.na(hc_p)) NA_real_ else -log10(hc_p) * lfc_boundary
+
+  df$hc_pass <- !is.na(hc_p) & !is.na(df$empirical_p) & is.finite(df$empirical_p) & df$empirical_p <= hc_p
+  df$HBFSS <- abs(df$lfc_shrunk) * df$neglog10_empirical_p_calc
+
+  df$standard_sig <- !is.na(df$padj) & df$padj < alpha_level & !is.na(df$lfc_shrunk) & abs(df$lfc_shrunk) >= lfc_boundary
+  df$empirical_bh_sig <- !is.na(df$empirical_bh) & df$empirical_bh < alpha_level & !is.na(df$lfc_shrunk) & abs(df$lfc_shrunk) >= lfc_boundary
+  df$hbfss_raw_sig <- !is.na(hbfss_cutoff) & !is.na(df$HBFSS) & is.finite(df$HBFSS) & df$HBFSS >= hbfss_cutoff & df$hc_pass
+  df$hbfss_sig <- df$standard_sig | df$hbfss_raw_sig
+
+  df$lessAbs_sig <- !is.na(df$lessAbs_padj) & df$lessAbs_padj < weak_alpha_level & !is.na(df$lfc_shrunk) & abs(df$lfc_shrunk) < lfc_boundary
+  df$weak_region_hbfss_sig <- df$lessAbs_sig & df$hbfss_raw_sig
+
+  list(results = df, hc_p = hc_p, hbfss_cutoff = hbfss_cutoff)
+}
+
 simulation_lfc_label <- function(lfc_magnitude, simulation_profile) {
   profile <- as.character(simulation_profile)
   lfc <- suppressWarnings(as.numeric(lfc_magnitude))
-  out <- ifelse(
+  ifelse(
     profile == "weak_mixture",
     paste0("Weak mix\nLFC ", simulation_weak_lfc_min, "-", simulation_weak_lfc_max),
     paste0("Fixed LFC\n", lfc)
   )
-  out
 }
 
 simulation_lfc_levels <- function() {
@@ -1676,36 +1696,9 @@ simulation_lfc_levels <- function() {
 
 simulation_long_metric_rows <- function(results_df, metric) {
   bind_rows(
-    data.frame(
-      de_fraction = results_df$de_fraction,
-      lfc_magnitude = results_df$lfc_magnitude,
-      simulation_profile = results_df$simulation_profile,
-      null_inflation = results_df$null_inflation,
-      replicate = results_df$replicate,
-      method = "DESeq2 BH",
-      value = results_df[[paste0("standard_", metric)]],
-      stringsAsFactors = FALSE
-    ),
-    data.frame(
-      de_fraction = results_df$de_fraction,
-      lfc_magnitude = results_df$lfc_magnitude,
-      simulation_profile = results_df$simulation_profile,
-      null_inflation = results_df$null_inflation,
-      replicate = results_df$replicate,
-      method = "Empirical BH",
-      value = results_df[[paste0("empirical_bh_", metric)]],
-      stringsAsFactors = FALSE
-    ),
-    data.frame(
-      de_fraction = results_df$de_fraction,
-      lfc_magnitude = results_df$lfc_magnitude,
-      simulation_profile = results_df$simulation_profile,
-      null_inflation = results_df$null_inflation,
-      replicate = results_df$replicate,
-      method = "HBFSS",
-      value = results_df[[paste0("hbfss_", metric)]],
-      stringsAsFactors = FALSE
-    )
+    data.frame(de_fraction = results_df$de_fraction, lfc_magnitude = results_df$lfc_magnitude, simulation_profile = results_df$simulation_profile, null_inflation = results_df$null_inflation, replicate = results_df$replicate, method = "DESeq2 BH", value = results_df[[paste0("standard_", metric)]], stringsAsFactors = FALSE),
+    data.frame(de_fraction = results_df$de_fraction, lfc_magnitude = results_df$lfc_magnitude, simulation_profile = results_df$simulation_profile, null_inflation = results_df$null_inflation, replicate = results_df$replicate, method = "Empirical BH", value = results_df[[paste0("empirical_bh_", metric)]], stringsAsFactors = FALSE),
+    data.frame(de_fraction = results_df$de_fraction, lfc_magnitude = results_df$lfc_magnitude, simulation_profile = results_df$simulation_profile, null_inflation = results_df$null_inflation, replicate = results_df$replicate, method = "HBFSS", value = results_df[[paste0("hbfss_", metric)]], stringsAsFactors = FALSE)
   ) %>%
     mutate(
       method = factor(method, levels = c("DESeq2 BH", "Empirical BH", "HBFSS")),
@@ -1763,7 +1756,7 @@ plot_simulation_delta_heatmap <- function(results_df, metric, title, fill_label)
       lfc_label = factor(simulation_lfc_label(lfc_magnitude, simulation_profile), levels = simulation_lfc_levels()),
       de_label = paste0(de_fraction * 100, "% DE"),
       inflation_label = paste0(null_inflation * 100, "% null inflation"),
-      label = sprintf("H %.2f\nD %.2f\nΔ %.2f", hbfss_mean, standard_mean, delta)
+      label = sprintf("H %.2f\nD %.2f\nDelta %.2f", hbfss_mean, standard_mean, delta)
     )
 
   ggplot(summary, aes(lfc_label, de_label, fill = delta)) +
@@ -1775,26 +1768,7 @@ plot_simulation_delta_heatmap <- function(results_df, metric, title, fill_label)
       title = title,
       x = "Simulated effect profile",
       y = "True DE fraction",
-      caption = "Tile text: H = HBFSS mean, D = DESeq2 BH mean, Δ = HBFSS - DESeq2. Positive Δ favors HBFSS."
-    ) +
-    manuscript_theme() +
-    theme(axis.text.x = element_text(angle = 30, hjust = 1))
-}
-
-plot_simulation_fdr_heatmap <- function(results_df) {
-  summary <- simulation_method_summary(results_df, "fdr") %>%
-    mutate(label = sprintf("%.2f", mean))
-
-  ggplot(summary, aes(lfc_label, de_label, fill = mean)) +
-    geom_tile(color = "white", linewidth = 0.35) +
-    geom_text(aes(label = label), size = 2.15) +
-    facet_grid(method ~ inflation_label) +
-    scale_fill_gradient(low = "white", high = "#B2182B", name = "Mean FDR") +
-    labs(
-      title = "Simulation observed FDR by method",
-      x = "Simulated effect profile",
-      y = "True DE fraction",
-      caption = paste0("Nominal alpha = ", alpha_level, ". Values above alpha require interpretation rather than being described as FDR-controlled.")
+      caption = "Tile text: H = HBFSS mean, D = DESeq2 BH mean, Delta = HBFSS - DESeq2."
     ) +
     manuscript_theme() +
     theme(axis.text.x = element_text(angle = 30, hjust = 1))
@@ -1805,22 +1779,8 @@ plot_simulation_weak_recall <- function(results_df) {
   if (nrow(weak_df) == 0L) return(NULL)
 
   long <- bind_rows(
-    data.frame(
-      de_fraction = weak_df$de_fraction,
-      lfc_magnitude = weak_df$lfc_magnitude,
-      simulation_profile = weak_df$simulation_profile,
-      null_inflation = weak_df$null_inflation,
-      method = "DESeq2 BH",
-      recall = weak_df$standard_weak_recall
-    ),
-    data.frame(
-      de_fraction = weak_df$de_fraction,
-      lfc_magnitude = weak_df$lfc_magnitude,
-      simulation_profile = weak_df$simulation_profile,
-      null_inflation = weak_df$null_inflation,
-      method = "HBFSS weak-region",
-      recall = weak_df$hbfss_weak_recall
-    )
+    data.frame(de_fraction = weak_df$de_fraction, lfc_magnitude = weak_df$lfc_magnitude, simulation_profile = weak_df$simulation_profile, null_inflation = weak_df$null_inflation, method = "DESeq2 BH", recall = weak_df$standard_weak_recall, stringsAsFactors = FALSE),
+    data.frame(de_fraction = weak_df$de_fraction, lfc_magnitude = weak_df$lfc_magnitude, simulation_profile = weak_df$simulation_profile, null_inflation = weak_df$null_inflation, method = "HBFSS weak-region", recall = weak_df$hbfss_weak_recall, stringsAsFactors = FALSE)
   ) %>%
     mutate(
       lfc_label = factor(simulation_lfc_label(lfc_magnitude, simulation_profile), levels = simulation_lfc_levels()),
@@ -1844,40 +1804,18 @@ plot_simulation_weak_recall <- function(results_df) {
       title = "Weak-effect recall",
       x = "Sub-boundary simulated effect profile",
       y = "Recall",
-      caption = "Dedicated weak-mixture simulations draw true |LFC| from 0.20-0.80 with n = 8 per group."
+      caption = paste0("Weak-mixture simulations draw true absolute LFC from ", simulation_weak_lfc_min, " to ", simulation_weak_lfc_max, " with n = ", simulation_n_samples_per_group, " per group.")
     ) +
     manuscript_theme() +
     theme(axis.text.x = element_text(angle = 30, hjust = 1))
 }
 
-
-plot_simulation_cutoffs <- function(results_df) {
-  plot_df <- results_df[is.finite(results_df$hbfss_cutoff) & !is.na(results_df$hbfss_cutoff), , drop = FALSE]
-  if (nrow(plot_df) == 0L) return(NULL)
-
-  plot_df <- plot_df %>%
-    mutate(
-      lfc_label = factor(simulation_lfc_label(lfc_magnitude, simulation_profile), levels = simulation_lfc_levels()),
-      de_label = paste0(de_fraction * 100, "% DE")
-    )
-
-  ggplot(plot_df, aes(de_label, hbfss_cutoff, fill = de_label)) +
-    geom_boxplot(outlier.size = 0.35, linewidth = 0.25) +
-    facet_wrap(~ lfc_label) +
-    scale_fill_manual(values = scales::grey_pal(start = 0.35, end = 0.75)(length(unique(plot_df$de_label))), name = NULL) +
-    labs(title = "HBFSS cutoff stability", x = NULL, y = "HBFSS cutoff", caption = NULL) +
-    manuscript_theme() +
-    theme(legend.position = "none")
-}
-
-
-
 run_sequence_simulation_validation <- function() {
   set.seed(simulation_seed)
   dir.create(simulation_dir, recursive = TRUE, showWarnings = FALSE)
 
-  old_sim_files <- list.files(simulation_dir, full.names = TRUE)
-  if (length(old_sim_files) > 0L) unlink(old_sim_files, recursive = TRUE, force = TRUE)
+  old_files <- list.files(simulation_dir, full.names = TRUE)
+  if (length(old_files) > 0L) unlink(old_files, recursive = TRUE, force = TRUE)
 
   fixed_grid <- expand.grid(
     de_fraction = simulation_de_fractions,
@@ -1886,6 +1824,7 @@ run_sequence_simulation_validation <- function() {
     simulation_profile = "fixed",
     stringsAsFactors = FALSE
   )
+
   weak_grid <- expand.grid(
     de_fraction = simulation_de_fractions,
     lfc_magnitude = NA_real_,
@@ -1893,8 +1832,8 @@ run_sequence_simulation_validation <- function() {
     simulation_profile = "weak_mixture",
     stringsAsFactors = FALSE
   )
-  sim_grid <- bind_rows(fixed_grid, weak_grid)
 
+  sim_grid <- bind_rows(fixed_grid, weak_grid)
   total_runs <- nrow(sim_grid) * simulation_n_reps
   message("Running simulation validation: ", total_runs, " runs")
 
@@ -1959,13 +1898,14 @@ run_sequence_simulation_validation <- function() {
         hbfss_f1 = hbfss_all$f1,
         hbfss_fdr = hbfss_all$fdr,
         standard_weak_recall = standard_weak$recall,
-        hbfss_weak_recall = hbfss_weak$recall
+        hbfss_weak_recall = hbfss_weak$recall,
+        stringsAsFactors = FALSE
       )
     }
   }
 
   simulation_results <- if (length(result_rows) > 0L) bind_rows(result_rows) else data.frame()
-  if (nrow(simulation_results) == 0L) stop("Simulation validation produced no successful runs.")
+  if (nrow(simulation_results) == 0L) stop("Simulation validation produced no successful runs.", call. = FALSE)
 
   save_csv(simulation_results, file.path(simulation_dir, "Simulation_Raw.csv"))
 
@@ -1989,53 +1929,25 @@ run_sequence_simulation_validation <- function() {
   save_csv(simulation_summary, file.path(simulation_dir, "Simulation_Summary.csv"))
   save_csv(simulation_method_summary(simulation_results, "f1"), file.path(simulation_dir, "Simulation_F1_MethodSummary.csv"))
   save_csv(simulation_method_summary(simulation_results, "fdr"), file.path(simulation_dir, "Simulation_FDR_MethodSummary.csv"))
-
   save_csv(simulation_long_metric_rows(simulation_results, "f1"), file.path(simulation_dir, "Simulation_F1_Long.csv"))
   save_csv(simulation_long_metric_rows(simulation_results, "fdr"), file.path(simulation_dir, "Simulation_FDR_Long.csv"))
 
-  save_plot(
-    plot_simulation_metric_boxplot(simulation_results, "f1", "Simulation F1 score by method", "F1", alpha_line = FALSE),
-    file.path(simulation_dir, "Simulation_F1_Boxplot.png"),
-    width = 11.8,
-    height = 9.2
-  )
-
-  save_plot(
-    plot_simulation_metric_boxplot(simulation_results, "fdr", "Simulation observed FDR by method", "FDR", alpha_line = TRUE),
-    file.path(simulation_dir, "Simulation_FDR_Boxplot.png"),
-    width = 11.8,
-    height = 9.2
-  )
-
-  save_plot(
-    plot_simulation_delta_heatmap(simulation_results, "f1", "Simulation F1 gain: HBFSS vs DESeq2 BH", "Δ F1"),
-    file.path(simulation_dir, "Simulation_F1_DeltaHeatmap.png"),
-    width = 11.8,
-    height = 6.4
-  )
-
-  save_plot(
-    plot_simulation_fdr_heatmap(simulation_results),
-    file.path(simulation_dir, "Simulation_FDR_Heatmap.png"),
-    width = 12.8,
-    height = 7.2
-  )
+  save_plot(plot_simulation_metric_boxplot(simulation_results, "f1", "Simulation F1 score by method", "F1"), file.path(simulation_dir, "Simulation_F1_Boxplot.png"), width = 11.8, height = 9.2)
+  save_plot(plot_simulation_metric_boxplot(simulation_results, "fdr", "Simulation observed FDR by method", "FDR", alpha_line = TRUE), file.path(simulation_dir, "Simulation_FDR_Boxplot.png"), width = 11.8, height = 9.2)
+  save_plot(plot_simulation_delta_heatmap(simulation_results, "f1", "Simulation F1 gain: HBFSS vs DESeq2 BH", "Delta F1"), file.path(simulation_dir, "Simulation_F1_DeltaHeatmap.png"), width = 11.8, height = 6.4)
 
   weak_plot <- plot_simulation_weak_recall(simulation_results)
   if (!is.null(weak_plot)) {
     save_plot(weak_plot, file.path(simulation_dir, "Simulation_WeakRecall.png"), width = 8.6, height = 5.4)
   }
 
-  cutoff_plot <- plot_simulation_cutoffs(simulation_results)
-  if (!is.null(cutoff_plot)) {
-    save_plot(cutoff_plot, file.path(simulation_dir, "Simulation_Cutoffs.png"), width = 9.0, height = 5.4)
-  }
-
   writeLines(capture.output(sessionInfo()), file.path(simulation_dir, "SessionInfo_Simulation.txt"))
   invisible(simulation_summary)
 }
 
-
+# =============================================================================
+# METHODS AND MANIFEST
+# =============================================================================
 
 write_sequence_methods <- function() {
   methods_lines <- c(
@@ -2046,6 +1958,7 @@ write_sequence_methods <- function() {
     paste0("- strong_alpha_level: ", strong_alpha_level),
     paste0("- weak_alpha_level: ", weak_alpha_level),
     paste0("- LFC boundary: ", lfc_boundary),
+    paste0("- EVS cutoff mode: ", evs_cutoff_mode),
     paste0("- EVS top-N target: ", top_n_target),
     paste0("- HC invalid threshold: ", hc_invalid_at_or_above),
     paste0("- Calculation probability floor: ", format(calculation_probability_floor, scientific = TRUE)),
@@ -2058,46 +1971,47 @@ write_sequence_methods <- function() {
     "Raw read-count matrices are imported for each RT/ZT comparison. Raw integer counts are retained for DESeq2 differential testing. NormEVS uses DESeq2 variance-stabilized expression with log2(normalized counts + 1) fallback. RawEVS uses log2(raw counts + 1).",
     "",
     "## Eigenvector splitting",
-    paste0("PC1 is calculated separately in treatment and control samples. Features are ranked by absolute PC1 loading. The leading edge is the union of the top-", top_n_target, " treatment-ranked and top-", top_n_target, " control-ranked features. The remainder is every feature not in that union. No AIC/BIC or changepoint fallback is used."),
+    paste0("PC1 is calculated separately in treatment and control samples. Features are ranked by absolute PC1 loading. The leading edge is the union of the top-", top_n_target, " treatment-ranked and top-", top_n_target, " control-ranked features. The remainder is every feature not in that union. This is fixed top-N EVS; no changepoint, AIC/BIC, or hidden fallback is used."),
     "",
     "## Differential expression",
-    paste0("DESeq2 is run with design ~ condition, reference level untrt. Standard effects: BH-adjusted Wald padj < ", alpha_level, " and |apeglm-shrunken LFC| >= ", lfc_boundary, ". Strong effects: greaterAbs alternative hypothesis at the same boundary. Weak HBFSS-region effects: lessAbs support, |shrunken LFC| < ", lfc_boundary, ", and HBFSS significance."),
+    paste0("DESeq2 is run with design ~ condition, reference level untrt. Standard effects: BH-adjusted Wald padj < ", alpha_level, " and |apeglm-shrunken LFC| >= ", lfc_boundary, ". Strong effects: greaterAbs alternative-hypothesis calls at the same LFC boundary. Weak effects: lessAbs support, |shrunken LFC| < ", lfc_boundary, ", and HBFSS raw significance."),
     "",
     "## Empirical null and HBFSS",
-    "Wald statistics are passed to fdrtool (statistic = normal). fndr cutoff.method is attempted first; pct0 with pct0 = 0.75 is used only if fndr fails or returns invalid eta0. Higher criticism supplies the dataset-specific empirical-p threshold unless invalid. HBFSS cutoff = -log10(HC threshold) x LFC boundary. HBFSS is reported as a superset of standard DESeq2: hbfss_total = standard_effect + hbfss_only.",
+    "Wald statistics are passed to fdrtool using statistic = normal. fndr is attempted first; pct0 with pct0 = 0.75 is used only if fndr fails or returns invalid eta0. Higher criticism supplies the dataset-specific empirical-p threshold unless invalid. HBFSS cutoff = -log10(HC threshold) x LFC boundary. HBFSS total is reported as standard DESeq2 plus HBFSS-only calls.",
     "",
     "## PCA and EVS figures",
-    "PC1_Variance_EVS compares absolute PC1 score variance across Original, Lead, and Remainder datasets. PC1_Variance_Distributions shows per-feature contribution to PC1 score variance for All samples, Control samples, and Treatment samples, with treatment/control EVS cutoff lines. The deprecated loading-rank line plot is not exported.",
+    "PC1_Variance_EVS compares absolute PC1 score variance across Original, Lead, and Remainder datasets. PC1_Variance_Distributions shows per-feature contribution to PC1 score variance for All samples, Control samples, and Treatment samples, with treatment/control EVS cutoff lines.",
     "",
     "## Simulation validation",
-    paste0("Simulation regeneration is disabled by default for manuscript reruns. If run_simulation_validation is TRUE, negative-binomial counts are simulated across DE fractions (", paste(simulation_de_fractions, collapse = ", "), "), fixed LFC magnitudes (", paste(simulation_lfc_magnitudes, collapse = ", "), "), a dedicated weak-mixture profile with |LFC| drawn from ", simulation_weak_lfc_min, " to ", simulation_weak_lfc_max, ", null-inflation settings (", paste(simulation_null_inflation, collapse = ", "), "), n = ", simulation_n_samples_per_group, " samples per group, and ", simulation_n_reps, " replicates per condition. Seed: ", simulation_seed, ".")
+    paste0("Simulation regeneration is disabled by default. If run_simulation_validation is TRUE, negative-binomial counts are simulated across DE fractions (", paste(simulation_de_fractions, collapse = ", "), "), fixed LFC magnitudes (", paste(simulation_lfc_magnitudes, collapse = ", "), "), a weak-mixture profile with |LFC| drawn from ", simulation_weak_lfc_min, " to ", simulation_weak_lfc_max, ", null-inflation settings (", paste(simulation_null_inflation, collapse = ", "), "), n = ", simulation_n_samples_per_group, " samples per group, and ", simulation_n_reps, " replicates per condition. Seed: ", simulation_seed, ".")
   )
+
   writeLines(methods_lines, file.path(output_dir, "METHODS_SEQUENCE_PIPELINE.md"))
 }
 
-write_run_session_info <- function() {
-  dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
-  writeLines(capture.output(sessionInfo()), file.path(output_dir, "SessionInfo.txt"))
-  invisible(TRUE)
-}
+write_manifest <- function() {
+  exported_files <- list.files(output_dir, recursive = TRUE, full.names = TRUE)
+  exported_files <- exported_files[file.info(exported_files)$isdir %in% FALSE]
 
-fail_pipeline <- function(message_text, status = 1L) {
-  try(write_run_session_info(), silent = TRUE)
-  try(cleanup_rplots_pdf(), silent = TRUE)
-  message(message_text)
-  quit(save = "no", status = status, runLast = FALSE)
-}
+  manifest <- data.frame(
+    file = sub(
+      paste0("^", normalizePath(output_dir, winslash = "/", mustWork = FALSE), "/?"),
+      "",
+      normalizePath(exported_files, winslash = "/", mustWork = FALSE)
+    ),
+    size_bytes = file.info(exported_files)$size,
+    stringsAsFactors = FALSE
+  )
 
-options(error = function() {
-  try(write_run_session_info(), silent = TRUE)
-  try(cleanup_rplots_pdf(), silent = TRUE)
-  traceback(2)
-  quit(save = "no", status = 1L, runLast = FALSE)
-})
+  save_csv(manifest, file.path(output_dir, "Manifest.csv"))
+  manifest
+}
 
 # =============================================================================
 # PIPELINE EXECUTION
 # =============================================================================
+
+cleanup_rplots_pdf()
 
 analysis_store <- list()
 evs_store <- list()
@@ -2107,12 +2021,14 @@ failure_rows <- list()
 
 run_store_save <- function(count_matrix, coldata, comparison_name, analysis_label, dataset_key) {
   fit <- run_deseq2_hbfss(count_matrix, coldata, comparison_name, analysis_label, dataset_key)
+
   save_csv(fit$results, analysis_table_path(comparison_name, analysis_label, "Results"))
   save_csv(concise_analysis_summary(fit$summary), analysis_table_path(comparison_name, analysis_label, "Summary"))
 
   key <- paste(comparison_name, analysis_label, sep = "__")
   analysis_store[[key]] <<- fit
   summary_rows[[key]] <<- fit$summary
+
   invisible(fit)
 }
 
@@ -2126,13 +2042,7 @@ for (i in seq_len(nrow(comparison_table))) {
   message("=====================================================")
 
   tryCatch({
-    run_store_save(
-      comparison$count_matrix,
-      comparison$coldata,
-      comparison_name,
-      "Raw",
-      "Raw"
-    )
+    run_store_save(comparison$count_matrix, comparison$coldata, comparison_name, "Raw", "Raw")
 
     for (track in analysis_tracks) {
       evs <- build_evs_split(comparison$count_matrix, comparison$coldata, comparison_name, track)
@@ -2142,37 +2052,27 @@ for (i in seq_len(nrow(comparison_table))) {
       save_csv(evs$joint_rank, analysis_table_path(comparison_name, track, "EVS_Rank_Table"))
       save_csv(concise_evs_summary(evs$summary), analysis_table_path(comparison_name, track, "EVS_Summary"))
 
-      run_store_save(
-        evs$leading_matrix,
-        comparison$coldata,
-        comparison_name,
-        paste0("Lead_", track),
-        "Lead"
-      )
-
-      run_store_save(
-        evs$remainder_matrix,
-        comparison$coldata,
-        comparison_name,
-        paste0("Rem_", track),
-        "Rem"
-      )
+      run_store_save(evs$leading_matrix, comparison$coldata, comparison_name, paste0("Lead_", track), "Lead")
+      run_store_save(evs$remainder_matrix, comparison$coldata, comparison_name, paste0("Rem_", track), "Rem")
     }
   }, error = function(e) {
     failure_rows[[comparison_name]] <<- data.frame(
       comparison_name = comparison_name,
-      error_message = conditionMessage(e)
+      error_message = conditionMessage(e),
+      stringsAsFactors = FALSE
     )
     message("FAILED: ", comparison_name, ": ", conditionMessage(e))
   })
 }
 
 summary_df <- if (length(summary_rows) > 0L) bind_rows(summary_rows) else data.frame()
-if (nrow(summary_df) > 0L) save_csv(concise_analysis_summary(summary_df), file.path(output_dir, "Summary_Overall.csv"))
+
+if (nrow(summary_df) > 0L) {
+  save_csv(concise_analysis_summary(summary_df), file.path(output_dir, "Summary_Overall.csv"))
+}
 
 if (length(failure_rows) > 0L) {
-  failure_df <- bind_rows(failure_rows)
-  save_csv(failure_df, file.path(output_dir, "Failures.csv"))
+  save_csv(bind_rows(failure_rows), file.path(output_dir, "Failures.csv"))
   fail_pipeline("One or more comparisons failed. See Failures.csv. Manifest was not written because the run is incomplete.")
 }
 
@@ -2186,189 +2086,205 @@ if (nrow(summary_df) == 0L) {
 
 comparison_order <- comparison_table$comparison_name
 
-if (nrow(summary_df) > 0L) {
-  raw_plots <- list()
-  for (comparison_name in comparison_order) {
-    key <- paste(comparison_name, "Raw", sep = "__")
-    if (!is.null(analysis_store[[key]])) {
-      raw_plots[[comparison_name]] <- plot_volcano(analysis_store[[key]]$results, comparison_name)
-    }
+raw_plots <- list()
+for (comparison_name in comparison_order) {
+  key <- paste(comparison_name, "Raw", sep = "__")
+  if (!is.null(analysis_store[[key]])) {
+    raw_plots[[comparison_name]] <- plot_volcano(analysis_store[[key]]$results, comparison_name)
   }
-  raw_panel <- arrange_with_one_legend(raw_plots, "Volcano: Raw", ncol = length(comparison_order))
-  if (!is.null(raw_panel)) save_plot(raw_panel, file.path(figure_dir, "Volcano_Raw.png"), width = 18.0, height = 5.8)
+}
+raw_panel <- arrange_with_one_legend(raw_plots, "Volcano: Raw", ncol = length(comparison_order))
+save_plot(raw_panel, file.path(figure_dir, "Volcano_Raw.png"), width = 18.0, height = 5.8)
 
-  for (dataset_prefix in c("Lead", "Rem")) {
-    plots <- list()
-    for (track in analysis_tracks) {
-      for (comparison_name in comparison_order) {
-        analysis_label <- paste0(dataset_prefix, "_", track)
-        key <- paste(comparison_name, analysis_label, sep = "__")
-        if (!is.null(analysis_store[[key]])) {
-          plots[[paste(comparison_name, track, sep = "_")]] <- plot_volcano(
-            analysis_store[[key]]$results,
-            paste0(comparison_name, "\n", track)
-          )
-        }
-      }
-    }
+for (dataset_prefix in c("Lead", "Rem")) {
+  plots <- list()
 
-    panel_title <- if (dataset_prefix == "Lead") "Volcano: Lead" else "Volcano: Rem"
-    panel_file <- if (dataset_prefix == "Lead") "Volcano_Lead.png" else "Volcano_Rem.png"
-    panel <- arrange_with_one_legend(plots, panel_title, ncol = length(comparison_order))
-    if (!is.null(panel)) save_plot(panel, file.path(figure_dir, panel_file), width = 18.0, height = 9.6)
-  }
-
-  count_plot <- plot_discovery_counts(summary_df)
-  if (!is.null(count_plot)) save_plot(count_plot, file.path(figure_dir, "Counts.png"), width = 14.0, height = 8.0)
-
-  pca_raw_plots <- list()
-  for (comparison_name in comparison_order) {
-    key <- paste(comparison_name, "Raw", sep = "__")
-    if (!is.null(analysis_store[[key]])) {
-      pca_raw_plots[[comparison_name]] <- plot_pca_support(analysis_store[[key]], comparison_name)
-    }
-  }
-  pca_raw_panel <- arrange_with_one_legend(pca_raw_plots, "PCA: Raw", ncol = length(comparison_order))
-  if (!is.null(pca_raw_panel)) save_plot(pca_raw_panel, file.path(figure_dir, "PCA_Raw.png"), width = 18.0, height = 5.8)
-
-  for (dataset_prefix in c("Lead", "Rem")) {
-    pca_plots <- list()
-    for (track in analysis_tracks) {
-      for (comparison_name in comparison_order) {
-        analysis_label <- paste0(dataset_prefix, "_", track)
-        key <- paste(comparison_name, analysis_label, sep = "__")
-        if (!is.null(analysis_store[[key]])) {
-          pca_plots[[paste(comparison_name, track, sep = "_")]] <- plot_pca_support(
-            analysis_store[[key]],
-            paste0(comparison_name, "\n", track)
-          )
-        }
-      }
-    }
-
-    panel_title <- if (dataset_prefix == "Lead") "PCA: Lead" else "PCA: Rem"
-    panel_file <- if (dataset_prefix == "Lead") "PCA_Lead.png" else "PCA_Rem.png"
-    pca_panel <- arrange_with_one_legend(pca_plots, panel_title, ncol = length(comparison_order))
-    if (!is.null(pca_panel)) save_plot(pca_panel, file.path(figure_dir, panel_file), width = 18.0, height = 9.4)
-  }
-
-  pca_var_rows <- list()
-  for (comparison_name in comparison_order) {
-    for (analysis_label in c("Raw", "Lead_NormEVS", "Lead_RawEVS", "Rem_NormEVS", "Rem_RawEVS")) {
+  for (track in analysis_tracks) {
+    for (comparison_name in comparison_order) {
+      analysis_label <- paste0(dataset_prefix, "_", track)
       key <- paste(comparison_name, analysis_label, sep = "__")
+
       if (!is.null(analysis_store[[key]])) {
-        pca_var_rows[[key]] <- extract_pca_variance_rows(analysis_store[[key]], comparison_name, analysis_label)
+        plots[[paste(comparison_name, track, sep = "_")]] <- plot_volcano(
+          analysis_store[[key]]$results,
+          paste0(comparison_name, "\n", track)
+        )
       }
     }
   }
 
-  pca_var_df <- if (length(pca_var_rows) > 0L) bind_rows(pca_var_rows) else data.frame()
-  if (nrow(pca_var_df) > 0L) {
+  panel_title <- if (dataset_prefix == "Lead") "Volcano: Lead" else "Volcano: Remainder"
+  panel_file <- if (dataset_prefix == "Lead") "Volcano_Lead.png" else "Volcano_Rem.png"
+  panel <- arrange_with_one_legend(plots, panel_title, ncol = length(comparison_order))
+  save_plot(panel, file.path(figure_dir, panel_file), width = 18.0, height = 9.6)
+}
+
+count_plot <- plot_discovery_counts(summary_df)
+save_plot(count_plot, file.path(figure_dir, "Counts.png"), width = 14.0, height = 8.0)
+
+pca_raw_plots <- list()
+for (comparison_name in comparison_order) {
+  key <- paste(comparison_name, "Raw", sep = "__")
+  if (!is.null(analysis_store[[key]])) {
+    pca_raw_plots[[comparison_name]] <- plot_pca_support(analysis_store[[key]], comparison_name)
+  }
+}
+pca_raw_panel <- arrange_with_one_legend(pca_raw_plots, "PCA: Raw", ncol = length(comparison_order))
+save_plot(pca_raw_panel, file.path(figure_dir, "PCA_Raw.png"), width = 18.0, height = 5.8)
+
+for (dataset_prefix in c("Lead", "Rem")) {
+  pca_plots <- list()
+
+  for (track in analysis_tracks) {
+    for (comparison_name in comparison_order) {
+      analysis_label <- paste0(dataset_prefix, "_", track)
+      key <- paste(comparison_name, analysis_label, sep = "__")
+
+      if (!is.null(analysis_store[[key]])) {
+        pca_plots[[paste(comparison_name, track, sep = "_")]] <- plot_pca_support(
+          analysis_store[[key]],
+          paste0(comparison_name, "\n", track)
+        )
+      }
+    }
+  }
+
+  panel_title <- if (dataset_prefix == "Lead") "PCA: Lead" else "PCA: Remainder"
+  panel_file <- if (dataset_prefix == "Lead") "PCA_Lead.png" else "PCA_Rem.png"
+  pca_panel <- arrange_with_one_legend(pca_plots, panel_title, ncol = length(comparison_order))
+  save_plot(pca_panel, file.path(figure_dir, panel_file), width = 18.0, height = 9.4)
+}
+
+pca_var_rows <- list()
+for (comparison_name in comparison_order) {
+  for (analysis_label in c("Raw", "Lead_NormEVS", "Lead_RawEVS", "Rem_NormEVS", "Rem_RawEVS")) {
+    key <- paste(comparison_name, analysis_label, sep = "__")
+    if (!is.null(analysis_store[[key]])) {
+      pca_var_rows[[key]] <- extract_pca_variance_rows(analysis_store[[key]], comparison_name, analysis_label)
+    }
+  }
+}
+
+pca_var_df <- if (length(pca_var_rows) > 0L) bind_rows(pca_var_rows) else data.frame()
+
+if (nrow(pca_var_df) > 0L) {
+  save_csv(
+    rename_columns_existing(
+      pca_var_df,
+      c(
+        comparison_name = "comparison",
+        analysis_label = "analysis",
+        analysis_pretty = "panel",
+        dataset_group = "dataset",
+        evs_mode = "evs_mode",
+        component = "component",
+        variance_explained_pct = "variance_explained_pct",
+        score_variance = "score_variance"
+      )
+    ),
+    file.path(output_dir, "Summary_PCA.csv")
+  )
+
+  pca_pc1_compare_df <- pca_pc1_evs_plot_df(pca_var_df)
+
+  if (nrow(pca_pc1_compare_df) > 0L) {
     save_csv(
       rename_columns_existing(
-        pca_var_df,
+        pca_pc1_compare_df,
         c(
           comparison_name = "comparison",
           analysis_label = "analysis",
           analysis_pretty = "panel",
           dataset_group = "dataset",
           evs_mode = "evs_mode",
-          component = "component",
-          variance_explained_pct = "variance_explained_pct",
-          score_variance = "score_variance"
+          pc1_score_variance = "pc1_score_variance",
+          original_pc1_score_variance = "original_pc1_score_variance",
+          pc1_score_variance_ratio_to_original = "pc1_score_variance_ratio_to_original",
+          pc1_score_variance_percent_of_original = "pc1_score_variance_percent_of_original"
         )
       ),
-      file.path(output_dir, "Summary_PCA.csv")
+      file.path(output_dir, "Summary_PCA_PC1_ScoreVariance_EVS.csv")
     )
+  }
 
-    pca_pc1_compare_df <- pca_pc1_evs_plot_df(pca_var_df)
-    if (nrow(pca_pc1_compare_df) > 0L) {
-      save_csv(
-        rename_columns_existing(
-          pca_pc1_compare_df,
-          c(
-            comparison_name = "comparison",
-            analysis_label = "analysis",
-            analysis_pretty = "panel",
-            dataset_group = "dataset",
-            evs_mode = "evs_mode",
-            pc1_score_variance = "pc1_score_variance",
-            original_pc1_score_variance = "original_pc1_score_variance",
-            pc1_score_variance_ratio_to_original = "pc1_score_variance_ratio_to_original",
-            pc1_score_variance_percent_of_original = "pc1_score_variance_percent_of_original"
-          )
-        ),
-        file.path(output_dir, "Summary_PCA_PC1_ScoreVariance_EVS.csv")
+  save_plot(
+    plot_pc1_evs_variance_absolute(pca_var_df),
+    file.path(figure_dir, "PC1_Variance_EVS.png"),
+    width = 15.8,
+    height = 8.8
+  )
+}
+
+load_rows <- list()
+cutoff_rows <- list()
+
+for (track in analysis_tracks) {
+  for (comparison_name in comparison_order) {
+    key <- paste(comparison_name, track, sep = "__")
+    comp_obj <- comparison_store[[comparison_name]]
+
+    if (!is.null(evs_store[[key]]) && !is.null(comp_obj)) {
+      tmp <- evs_loading_distribution_rows(
+        full_count_matrix = comp_obj$count_matrix,
+        evs_obj = evs_store[[key]],
+        coldata = comp_obj$coldata,
+        comparison_name = comparison_name,
+        track = track
       )
-    }
 
-    pc1_var_plot <- plot_pc1_evs_variance_absolute(pca_var_df)
-    if (!is.null(pc1_var_plot)) {
-      save_plot(pc1_var_plot, file.path(figure_dir, "PC1_Variance_EVS.png"), width = 15.8, height = 8.8)
+      load_rows[[key]] <- tmp
+      cut <- attr(tmp, "cutoffs")
+      if (!is.null(cut) && nrow(cut) > 0L) cutoff_rows[[key]] <- cut
     }
   }
+}
 
-  load_rows <- list()
-  cutoff_rows <- list()
-  for (track in analysis_tracks) {
-    for (comparison_name in comparison_order) {
-      key <- paste(comparison_name, track, sep = "__")
-      comp_obj <- comparison_store[[comparison_name]]
-      if (!is.null(evs_store[[key]]) && !is.null(comp_obj)) {
-        tmp <- evs_loading_distribution_rows(
-          full_count_matrix = comp_obj$count_matrix,
-          evs_obj = evs_store[[key]],
-          coldata = comp_obj$coldata,
-          comparison_name = comparison_name,
-          track = track
-        )
-        load_rows[[paste(comparison_name, track, sep = "__")]] <- tmp
-        cut <- attr(tmp, "cutoffs")
-        if (!is.null(cut) && nrow(cut) > 0L) cutoff_rows[[paste(comparison_name, track, sep = "__")]] <- cut
-      }
-    }
-  }
-  load_df <- if (length(load_rows) > 0L) bind_rows(load_rows) else data.frame()
-  cutoff_df <- if (length(cutoff_rows) > 0L) bind_rows(cutoff_rows) else data.frame()
-  if (nrow(load_df) > 0L) {
-    attr(load_df, "cutoffs") <- cutoff_df
+load_df <- if (length(load_rows) > 0L) bind_rows(load_rows) else data.frame()
+cutoff_df <- if (length(cutoff_rows) > 0L) bind_rows(cutoff_rows) else data.frame()
+
+if (nrow(load_df) > 0L) {
+  attr(load_df, "cutoffs") <- cutoff_df
+
+  save_csv(
+    rename_columns_existing(
+      load_df,
+      c(
+        comparison_name = "comparison",
+        track = "evs_mode",
+        dataset_group = "dataset",
+        condition = "scope",
+        pc1_loading_abs = "abs_pc1_loading",
+        pc1_score_variance = "pc1_score_variance",
+        pc1_variance_contribution = "pc1_variance_contribution"
+      )
+    ),
+    file.path(output_dir, "Summary_PC1VarianceDistributions.csv")
+  )
+
+  if (nrow(cutoff_df) > 0L) {
     save_csv(
       rename_columns_existing(
-        load_df,
+        cutoff_df,
         c(
           comparison_name = "comparison",
           track = "evs_mode",
           dataset_group = "dataset",
           condition = "scope",
-          pc1_loading_abs = "abs_pc1_loading",
+          pc1_loading_cutoff = "pc1_loading_cutoff",
           pc1_score_variance = "pc1_score_variance",
-          pc1_variance_contribution = "pc1_variance_contribution"
+          pc1_variance_contribution_cutoff = "pc1_variance_contribution_cutoff"
         )
       ),
-      file.path(output_dir, "Summary_PC1VarianceDistributions.csv")
+      file.path(output_dir, "Summary_PC1VarianceCutoffs.csv")
     )
-    if (nrow(cutoff_df) > 0L) {
-      save_csv(
-        rename_columns_existing(
-          cutoff_df,
-          c(
-            comparison_name = "comparison",
-            track = "evs_mode",
-            dataset_group = "dataset",
-            condition = "scope",
-            pc1_loading_cutoff = "pc1_loading_cutoff",
-            pc1_score_variance = "pc1_score_variance",
-            pc1_variance_contribution_cutoff = "pc1_variance_contribution_cutoff"
-          )
-        ),
-        file.path(output_dir, "Summary_PC1VarianceCutoffs.csv")
-      )
-    }
-    load_plot <- plot_loading_histograms(load_df, "PC1 variance-contribution frequency after EVS")
-    if (!is.null(load_plot)) {
-      save_plot(load_plot, file.path(figure_dir, "PC1_Variance_Distributions.png"), width = 15.8, height = 10.4)
-    }
   }
+
+  save_plot(
+    plot_loading_histograms(load_df, "PC1 variance-contribution frequency after EVS"),
+    file.path(figure_dir, "PC1_Variance_Distributions.png"),
+    width = 15.8,
+    height = 10.4
+  )
 }
 
 if (isTRUE(run_simulation_validation)) {
@@ -2376,29 +2292,20 @@ if (isTRUE(run_simulation_validation)) {
   print(simulation_summary)
 }
 
-
-
 # =============================================================================
-# MANIFEST AND COMPLETION
+# COMPLETION
 # =============================================================================
 
 write_sequence_methods()
 write_run_session_info()
 cleanup_rplots_pdf()
 
-exported_files <- list.files(output_dir, recursive = TRUE, full.names = TRUE)
-exported_files <- exported_files[file.info(exported_files)$isdir %in% FALSE]
-manifest <- data.frame(
-  file = sub(paste0("^", normalizePath(output_dir, winslash = "/", mustWork = FALSE), "/?"), "", normalizePath(exported_files, winslash = "/", mustWork = FALSE)),
-  size_bytes = file.info(exported_files)$size
-)
-save_csv(manifest, file.path(output_dir, "Manifest.csv"))
+manifest <- write_manifest()
 
 cat("\n=====================================================\n")
 cat("SEQUENCE pipeline complete.\n")
 cat("Output directory: ", output_dir, "\n", sep = "")
 cat("Exported files: ", nrow(manifest), "\n", sep = "")
 cat("=====================================================\n\n")
-
 
 print(summary_df)
