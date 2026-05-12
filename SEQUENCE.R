@@ -910,6 +910,10 @@ run_deseq2_hbfss <- function(count_matrix, coldata, comparison_name, analysis_la
     n_hbfss_overlap_standard = sum(df$hbfss_flag & df$standard_flag, na.rm = TRUE),
     n_hbfss_only = sum(df$hbfss_flag & !df$standard_flag, na.rm = TRUE),
     n_hbfss_display_only = sum(df$display_hbfss, na.rm = TRUE),
+    n_display_weak = sum(df$display_weak, na.rm = TRUE),
+    n_display_strong = sum(df$display_strong, na.rm = TRUE),
+    n_display_standard = sum(df$display_standard, na.rm = TRUE),
+    n_display_hbfss = sum(df$display_hbfss, na.rm = TRUE),
     hc_p_threshold = hc_p,
     hbfss_threshold = hbfss_cutoff,
     alpha_level = alpha_level,
@@ -938,6 +942,10 @@ concise_analysis_summary <- function(df) {
     n_hbfss_overlap_standard = "hbfss_overlap_standard",
     n_hbfss_only = "hbfss_only",
     n_hbfss_display_only = "hbfss_display_only",
+    n_display_weak = "display_weak_effect",
+    n_display_strong = "display_strong_effect",
+    n_display_standard = "display_standard_only",
+    n_display_hbfss = "display_hbfss_only",
     hc_p_threshold = "hc_p_threshold",
     hbfss_threshold = "hbfss_cutoff",
     alpha_level = "wald_bh_alpha",
@@ -954,6 +962,7 @@ concise_analysis_summary <- function(df) {
     "greaterAbs_significant", "strong_effect",
     "standard_effect", "hbfss_raw_geometric", "hbfss_total",
     "hbfss_overlap_standard", "hbfss_only", "hbfss_display_only",
+    "display_weak_effect", "display_strong_effect", "display_standard_only", "display_hbfss_only",
     "hc_p_threshold", "hbfss_cutoff",
     "wald_bh_alpha", "greaterAbs_bh_alpha", "lessAbs_bh_alpha",
     "lfc_boundary"
@@ -1517,6 +1526,24 @@ plot_loading_histograms <- function(load_df, title_text) {
 }
 
 plot_discovery_counts <- function(summary_df) {
+  analysis_levels <- c("Raw", "Lead_NormEVS", "Lead_RawEVS", "Rem_NormEVS", "Rem_RawEVS")
+  analysis_labels <- c(
+    Raw = "Original",
+    Lead_NormEVS = "Lead NormEVS",
+    Lead_RawEVS = "Lead RawEVS",
+    Rem_NormEVS = "Remainder NormEVS",
+    Rem_RawEVS = "Remainder RawEVS"
+  )
+
+  required <- c(
+    "comparison_name", "analysis_label", "dataset_key",
+    "n_display_weak", "n_display_strong", "n_display_standard", "n_display_hbfss"
+  )
+  missing <- setdiff(required, names(summary_df))
+  if (length(missing) > 0L) {
+    stop("Discovery-count plot missing summary column(s): ", paste(missing, collapse = ", "), call. = FALSE)
+  }
+
   long_df <- bind_rows(lapply(seq_len(nrow(summary_df)), function(i) {
     row <- summary_df[i, , drop = FALSE]
     data.frame(
@@ -1524,10 +1551,18 @@ plot_discovery_counts <- function(summary_df) {
       analysis_label = row$analysis_label,
       dataset_key = row$dataset_key,
       Class = factor(c("Weak", "Strong", "Std", "HBFSS"), levels = c("Weak", "Strong", "Std", "HBFSS")),
-      Count = as.numeric(c(row$n_weak, row$n_strong, row$n_standard, row$n_hbfss_display_only)),
+      Count = as.numeric(c(
+        row$n_display_weak,
+        row$n_display_strong,
+        row$n_display_standard,
+        row$n_display_hbfss
+      )),
       stringsAsFactors = FALSE
     )
   }))
+
+  long_df$comparison_name <- factor(long_df$comparison_name, levels = comparison_table$comparison_name)
+  long_df$analysis_label <- factor(long_df$analysis_label, levels = analysis_levels, labels = analysis_labels[analysis_levels])
 
   save_csv(
     rename_columns_existing(
@@ -1537,19 +1572,37 @@ plot_discovery_counts <- function(summary_df) {
     file.path(output_dir, "Counts_Long.csv")
   )
 
-  ggplot(long_df, aes(comparison_name, Count, fill = Class)) +
-    geom_col(position = position_dodge(width = 0.82), width = 0.74, color = "grey25", linewidth = 0.15) +
-    facet_wrap(~ analysis_label, scales = "free_y", ncol = 3) +
+  count_breaks <- c(0, 1, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000)
+  count_breaks <- count_breaks[count_breaks <= max(long_df$Count, na.rm = TRUE) * 1.15 | count_breaks <= 10]
+
+  ggplot(long_df, aes(analysis_label, Count, fill = Class)) +
+    geom_col(position = position_dodge(width = 0.82), width = 0.72, color = "grey25", linewidth = 0.14) +
+    facet_wrap(~ comparison_name, ncol = length(comparison_table$comparison_name)) +
+    scale_y_continuous(
+      trans = scales::pseudo_log_trans(base = 10),
+      breaks = count_breaks,
+      labels = function(x) format_compact_number(x, digits = 3),
+      expand = expansion(mult = c(0.02, 0.15))
+    ) +
     scale_fill_manual(
       values = class_colors[c("Weak", "Strong", "Std", "HBFSS")],
       breaks = c("Weak", "Strong", "Std", "HBFSS"),
-      labels = class_labels[c("Weak", "Strong", "Std", "HBFSS")],
+      labels = c(Weak = "Weak effect", Strong = "Strong effect", Std = "Standard-only", HBFSS = "HBFSS-only"),
       drop = FALSE,
       name = NULL
     ) +
-    labs(title = "Significant feature counts", x = NULL, y = "Count", caption = NULL) +
+    labs(
+      title = "Significant feature counts",
+      x = NULL,
+      y = "Final display-class count, pseudo-log scale",
+      caption = "Counts are mutually exclusive final display classes matching the volcano legend. Standard-only excludes strong effects; HBFSS-only excludes ordinary DESeq2 standard calls."
+    ) +
     manuscript_theme() +
-    theme(axis.text.x = element_text(angle = 35, hjust = 1))
+    theme(
+      axis.text.x = element_text(angle = 35, hjust = 1, size = base_theme_size - 1.5),
+      strip.text = element_text(size = base_theme_size - 0.7),
+      plot.caption = element_text(size = base_theme_size - 3.3)
+    )
 }
 
 # =============================================================================
@@ -2590,7 +2643,6 @@ git_has_staged_changes <- function() {
   stop("Unable to inspect staged Git changes.", call. = FALSE)
 }
 
-git_has_cached_changes_after_add <- git_has_staged_changes
 
 git_commit_and_push <- function() {
   if (!isTRUE(git_push_after_success)) {
@@ -2671,7 +2723,7 @@ git_commit_and_push <- function() {
   stage_paths <- unique(vapply(stage_paths, path_relative_to_repo, character(1)))
   git_command(c("add", "--", stage_paths), allow_failure = FALSE)
 
-  if (!git_has_cached_changes_after_add()) {
+  if (!git_has_staged_changes()) {
     message("No changed SEQUENCE files to commit.")
     if (isTRUE(git_allow_no_change_success)) return(invisible(FALSE))
     stop("No changed files to commit and git_allow_no_change_success is FALSE.", call. = FALSE)
@@ -2821,7 +2873,7 @@ for (dataset_prefix in c("Lead", "Rem")) {
 }
 
 count_plot <- plot_discovery_counts(summary_df)
-save_plot(count_plot, file.path(figure_dir, "Counts.png"), width = 14.0, height = 8.0)
+save_plot(count_plot, file.path(figure_dir, "Counts.png"), width = 18.0, height = 6.2)
 
 pca_raw_plots <- list()
 for (comparison_name in comparison_order) {
