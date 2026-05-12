@@ -1543,139 +1543,17 @@ plot_discovery_counts <- function(summary_df) {
 # SIMULATION VALIDATION
 # =============================================================================
 
-simulate_sequence_counts <- function(n_features, n_samples, base_mean, disp_null,
-                                     de_fraction, lfc_magnitude, disp_de,
-                                     lfc_profile = c("fixed", "weak_mixture")) {
-  lfc_profile <- match.arg(lfc_profile)
+# Simulation design:
+# - Truth is known at the feature level.
+# - Counts are generated from a negative-binomial model with heterogeneous means,
+#   heterogeneous dispersions, sample-specific library factors, bidirectional DE,
+#   and optional null-statistic inflation.
+# - Every successful replicate exports method-level confusion matrices.
+# - Every failed replicate exports the parameter combination and error message.
+# - HBFSS is never silently rescued with a hidden cutoff. If HC is invalid,
+#   HBFSS raw calls are zero for that replicate and the invalid threshold is recorded.
 
-  n_de <- round(n_features * de_fraction)
-  n_null <- n_features - n_de
-  if (n_de < 2L) stop("Simulation needs at least two DE features.", call. = FALSE)
-
-  de_direction <- ifelse(seq_len(n_de) <= n_de / 2, 1, -1)
-
-  lfc_abs <- if (identical(lfc_profile, "weak_mixture")) {
-    stats::runif(n_de, min = simulation_weak_lfc_min, max = simulation_weak_lfc_max)
-  } else {
-    rep(lfc_magnitude, n_de)
-  }
-
-  de_true_lfc <- lfc_abs * de_direction
-
-  generate_nb <- function(mu, dispersion) {
-    out <- matrix(0L, nrow = length(mu), ncol = n_samples)
-    for (j in seq_len(n_samples)) {
-      out[, j] <- rnbinom(length(mu), mu = mu, size = 1 / dispersion)
-    }
-    out
-  }
-
-  de_control_mean <- rep(base_mean, n_de)
-  de_treatment_mean <- base_mean * 2^de_true_lfc
-  null_mean <- rep(base_mean, n_null)
-
-  counts <- rbind(
-    cbind(generate_nb(de_control_mean, disp_de), generate_nb(de_treatment_mean, disp_de)),
-    cbind(generate_nb(null_mean, disp_null), generate_nb(null_mean, disp_null))
-  )
-
-  storage.mode(counts) <- "integer"
-  colnames(counts) <- c(paste0("ctrl_", seq_len(n_samples)), paste0("trt_", seq_len(n_samples)))
-  rownames(counts) <- paste0("sim_feature_", seq_len(n_features))
-
-  truth <- data.frame(
-    feature_id = rownames(counts),
-    is_de = c(rep(TRUE, n_de), rep(FALSE, n_null)),
-    true_lfc = c(de_true_lfc, rep(0, n_null)),
-    simulation_profile = lfc_profile,
-    stringsAsFactors = FALSE
-  )
-
-  list(counts = counts, truth = truth)
-}
-
-inflate_null_wald_statistics <- function(wald, is_de, inflation_fraction, inflation_sd = 1.5) {
-  if (inflation_fraction <= 0) return(wald)
-
-  null_idx <- which(!is_de & is.finite(wald) & !is.na(wald))
-  n_inflate <- round(length(null_idx) * inflation_fraction)
-  if (n_inflate <= 0L) return(wald)
-
-  target <- sample(null_idx, n_inflate, replace = FALSE)
-  wald[target] <- rnorm(n_inflate, mean = 0, sd = inflation_sd)
-  wald
-}
-
-simulation_metrics <- function(predicted, actual) {
-  predicted <- !is.na(predicted) & predicted
-  actual <- !is.na(actual) & actual
-
-  tp <- sum(predicted & actual)
-  fp <- sum(predicted & !actual)
-  fn <- sum(!predicted & actual)
-  tn <- sum(!predicted & !actual)
-
-  precision <- if ((tp + fp) == 0) NA_real_ else tp / (tp + fp)
-  recall <- if ((tp + fn) == 0) NA_real_ else tp / (tp + fn)
-  fdr <- if ((tp + fp) == 0) NA_real_ else fp / (tp + fp)
-  f1 <- if (is.na(precision) || is.na(recall) || (precision + recall) == 0) NA_real_ else {
-    2 * precision * recall / (precision + recall)
-  }
-
-  data.frame(tp = tp, fp = fp, fn = fn, tn = tn, precision = precision, recall = recall, f1 = f1, fdr = fdr)
-}
-
-sequence_simulation_analysis <- function(sim_obj, null_inflation) {
-  counts <- sim_obj$counts
-  n_samp <- ncol(counts) / 2
-
-  coldata <- data.frame(
-    condition = factor(c(rep("untrt", n_samp), rep("trt", n_samp)), levels = c("untrt", "trt")),
-    row.names = colnames(counts)
-  )
-
-  dds <- DESeqDataSetFromMatrix(countData = counts, colData = coldata, design = ~ condition)
-  dds <- dds[rowSums(counts(dds)) > 0, ]
-  dds <- DESeq(dds, betaPrior = FALSE, quiet = TRUE)
-
-  coef_name <- condition_coef_name(dds)
-
-  standard <- results(dds, contrast = c("condition", "trt", "untrt"), alpha = alpha_level)
-  strong <- results(dds, contrast = c("condition", "trt", "untrt"), lfcThreshold = lfc_boundary, altHypothesis = "greaterAbs", alpha = strong_alpha_level)
-  weak <- results(dds, contrast = c("condition", "trt", "untrt"), lfcThreshold = lfc_boundary, altHypothesis = "lessAbs", alpha = weak_alpha_level)
-  shrunk <- lfcShrink(dds, coef = coef_name, type = "apeglm", quiet = TRUE)
-
-  df <- as.data.frame(standard)
-  df$feature_id <- rownames(df)
-  df$lfc_shrunk <- as.data.frame(shrunk)$log2FoldChange
-  df$greaterAbs_padj <- as.data.frame(strong)$padj
-  df$lessAbs_padj <- as.data.frame(weak)$padj
-  df <- left_join(df, sim_obj$truth, by = "feature_id")
-
-  wald <- inflate_null_wald_statistics(df$stat, df$is_de, null_inflation)
-  empirical <- fit_empirical_null(wald, "simulation")
-
-  df$empirical_p <- empirical$empirical_p
-  df$empirical_bh <- empirical$empirical_bh
-  df$empirical_p_calc <- clip_probability(df$empirical_p, floor = calculation_probability_floor)
-  df$neglog10_empirical_p_calc <- -log10(df$empirical_p_calc)
-
-  hc_p <- hc_threshold(df$empirical_p)
-  hbfss_cutoff <- if (is.na(hc_p)) NA_real_ else -log10(hc_p) * lfc_boundary
-
-  df$hc_pass <- !is.na(hc_p) & !is.na(df$empirical_p) & is.finite(df$empirical_p) & df$empirical_p <= hc_p
-  df$HBFSS <- abs(df$lfc_shrunk) * df$neglog10_empirical_p_calc
-
-  df$standard_sig <- !is.na(df$padj) & df$padj < alpha_level & !is.na(df$lfc_shrunk) & abs(df$lfc_shrunk) >= lfc_boundary
-  df$empirical_bh_sig <- !is.na(df$empirical_bh) & df$empirical_bh < alpha_level & !is.na(df$lfc_shrunk) & abs(df$lfc_shrunk) >= lfc_boundary
-  df$hbfss_raw_sig <- !is.na(hbfss_cutoff) & !is.na(df$HBFSS) & is.finite(df$HBFSS) & df$HBFSS >= hbfss_cutoff & df$hc_pass
-  df$hbfss_sig <- df$standard_sig | df$hbfss_raw_sig
-
-  df$lessAbs_sig <- !is.na(df$lessAbs_padj) & df$lessAbs_padj < weak_alpha_level & !is.na(df$lfc_shrunk) & abs(df$lfc_shrunk) < lfc_boundary
-  df$weak_region_hbfss_sig <- df$lessAbs_sig & df$hbfss_raw_sig
-
-  list(results = df, hc_p = hc_p, hbfss_cutoff = hbfss_cutoff)
-}
+export_simulation_feature_results <- FALSE
 
 simulation_lfc_label <- function(lfc_magnitude, simulation_profile) {
   profile <- as.character(simulation_profile)
@@ -1694,39 +1572,461 @@ simulation_lfc_levels <- function() {
   )
 }
 
-simulation_long_metric_rows <- function(results_df, metric) {
-  bind_rows(
-    data.frame(de_fraction = results_df$de_fraction, lfc_magnitude = results_df$lfc_magnitude, simulation_profile = results_df$simulation_profile, null_inflation = results_df$null_inflation, replicate = results_df$replicate, method = "DESeq2 BH", value = results_df[[paste0("standard_", metric)]], stringsAsFactors = FALSE),
-    data.frame(de_fraction = results_df$de_fraction, lfc_magnitude = results_df$lfc_magnitude, simulation_profile = results_df$simulation_profile, null_inflation = results_df$null_inflation, replicate = results_df$replicate, method = "Empirical BH", value = results_df[[paste0("empirical_bh_", metric)]], stringsAsFactors = FALSE),
-    data.frame(de_fraction = results_df$de_fraction, lfc_magnitude = results_df$lfc_magnitude, simulation_profile = results_df$simulation_profile, null_inflation = results_df$null_inflation, replicate = results_df$replicate, method = "HBFSS", value = results_df[[paste0("hbfss_", metric)]], stringsAsFactors = FALSE)
-  ) %>%
-    mutate(
-      method = factor(method, levels = c("DESeq2 BH", "Empirical BH", "HBFSS")),
-      lfc_label = factor(simulation_lfc_label(lfc_magnitude, simulation_profile), levels = simulation_lfc_levels()),
-      de_label = paste0(de_fraction * 100, "% DE"),
-      inflation_label = paste0(null_inflation * 100, "% null inflation")
-    )
+simulate_sequence_counts <- function(n_features, n_samples, base_mean, disp_null,
+                                     de_fraction, lfc_magnitude, disp_de,
+                                     lfc_profile = c("fixed", "weak_mixture")) {
+  lfc_profile <- match.arg(lfc_profile)
+
+  n_de <- round(n_features * de_fraction)
+  n_de <- max(2L, min(n_de, n_features - 2L))
+  n_null <- n_features - n_de
+
+  feature_id <- paste0("sim_feature_", seq_len(n_features))
+  de_id <- seq_len(n_de)
+  null_id <- seq.int(n_de + 1L, n_features)
+
+  # Heterogeneous baseline expression prevents the simulation from being an
+  # unrealistically single-mean test. The median remains near simulation_base_mean.
+  base_mu <- stats::rgamma(
+    n_features,
+    shape = 2.5,
+    scale = base_mean / 2.5
+  )
+  base_mu <- pmax(base_mu, 2)
+
+  # Feature-level dispersion heterogeneity around null/DE dispersion targets.
+  dispersion <- rep(disp_null, n_features)
+  dispersion[de_id] <- disp_de
+  dispersion <- dispersion * exp(stats::rnorm(n_features, mean = 0, sd = 0.25))
+  dispersion <- pmin(pmax(dispersion, 0.01), 1.50)
+
+  de_direction <- sample(c(-1, 1), n_de, replace = TRUE)
+
+  if (identical(lfc_profile, "weak_mixture")) {
+    lfc_abs <- stats::runif(n_de, min = simulation_weak_lfc_min, max = simulation_weak_lfc_max)
+  } else {
+    if (!is.finite(lfc_magnitude)) {
+      stop("Fixed-LFC simulation requires finite lfc_magnitude.", call. = FALSE)
+    }
+    lfc_abs <- rep(lfc_magnitude, n_de)
+  }
+
+  true_lfc <- rep(0, n_features)
+  true_lfc[de_id] <- lfc_abs * de_direction
+
+  control_mu <- base_mu
+  treatment_mu <- base_mu * 2^true_lfc
+
+  # Mild sample-level library factors create realistic normalization work.
+  control_lib <- exp(stats::rnorm(n_samples, mean = 0, sd = 0.12))
+  treatment_lib <- exp(stats::rnorm(n_samples, mean = 0, sd = 0.12))
+  control_lib <- control_lib / exp(mean(log(control_lib)))
+  treatment_lib <- treatment_lib / exp(mean(log(treatment_lib)))
+
+  generate_group <- function(mu, lib_factor, dispersion_vector) {
+    out <- matrix(0L, nrow = length(mu), ncol = length(lib_factor))
+    for (j in seq_along(lib_factor)) {
+      sample_mu <- pmax(mu * lib_factor[j], 1e-3)
+      out[, j] <- stats::rnbinom(
+        n = length(sample_mu),
+        mu = sample_mu,
+        size = 1 / dispersion_vector
+      )
+    }
+    out
+  }
+
+  counts <- cbind(
+    generate_group(control_mu, control_lib, dispersion),
+    generate_group(treatment_mu, treatment_lib, dispersion)
+  )
+  storage.mode(counts) <- "integer"
+  rownames(counts) <- feature_id
+  colnames(counts) <- c(paste0("ctrl_", seq_len(n_samples)), paste0("trt_", seq_len(n_samples)))
+
+  truth <- data.frame(
+    feature_id = feature_id,
+    is_de = seq_len(n_features) %in% de_id,
+    is_null = seq_len(n_features) %in% null_id,
+    true_lfc = true_lfc,
+    true_abs_lfc = abs(true_lfc),
+    true_direction = ifelse(true_lfc > 0, "up", ifelse(true_lfc < 0, "down", "null")),
+    true_weak = seq_len(n_features) %in% de_id & abs(true_lfc) < lfc_boundary,
+    true_strong = seq_len(n_features) %in% de_id & abs(true_lfc) >= lfc_boundary,
+    base_mean = base_mu,
+    dispersion = dispersion,
+    simulation_profile = lfc_profile,
+    stringsAsFactors = FALSE
+  )
+
+  list(counts = counts, truth = truth)
 }
 
-simulation_method_summary <- function(results_df, metric) {
-  simulation_long_metric_rows(results_df, metric) %>%
-    group_by(de_fraction, lfc_magnitude, simulation_profile, null_inflation, method, lfc_label, de_label, inflation_label) %>%
+inflate_null_wald_statistics <- function(wald, is_de, inflation_fraction, inflation_sd = 1.75) {
+  if (!is.finite(inflation_fraction) || inflation_fraction <= 0) return(wald)
+
+  out <- wald
+  null_idx <- which(!is_de & is.finite(out) & !is.na(out))
+  n_inflate <- round(length(null_idx) * inflation_fraction)
+  if (n_inflate <= 0L) return(out)
+
+  target <- sample(null_idx, n_inflate, replace = FALSE)
+  out[target] <- stats::rnorm(n_inflate, mean = 0, sd = inflation_sd)
+  out
+}
+
+simulation_metrics <- function(predicted, actual) {
+  predicted <- !is.na(predicted) & predicted
+  actual <- !is.na(actual) & actual
+
+  tp <- sum(predicted & actual)
+  fp <- sum(predicted & !actual)
+  fn <- sum(!predicted & actual)
+  tn <- sum(!predicted & !actual)
+
+  precision <- if ((tp + fp) == 0) NA_real_ else tp / (tp + fp)
+  recall <- if ((tp + fn) == 0) NA_real_ else tp / (tp + fn)
+  specificity <- if ((tn + fp) == 0) NA_real_ else tn / (tn + fp)
+  fdr <- if ((tp + fp) == 0) NA_real_ else fp / (tp + fp)
+  f1 <- if (is.na(precision) || is.na(recall) || (precision + recall) == 0) NA_real_ else {
+    2 * precision * recall / (precision + recall)
+  }
+
+  data.frame(
+    tp = tp,
+    fp = fp,
+    fn = fn,
+    tn = tn,
+    precision = precision,
+    recall = recall,
+    specificity = specificity,
+    f1 = f1,
+    fdr = fdr,
+    discovery_count = sum(predicted),
+    truth_count = sum(actual),
+    stringsAsFactors = FALSE
+  )
+}
+
+simulation_metric_row <- function(template, method, truth_target, predicted, actual,
+                                  hc_p, hbfss_cutoff, diagnostics) {
+  met <- simulation_metrics(predicted, actual)
+
+  cbind(
+    template,
+    data.frame(
+      method = method,
+      truth_target = truth_target,
+      hc_p_threshold = hc_p,
+      hbfss_cutoff = hbfss_cutoff,
+      hc_valid = is.finite(hc_p) & !is.na(hc_p),
+      n_hc_pass = diagnostics$n_hc_pass,
+      n_standard = diagnostics$n_standard,
+      n_empirical_bh = diagnostics$n_empirical_bh,
+      n_lessAbs = diagnostics$n_lessAbs,
+      n_greaterAbs = diagnostics$n_greaterAbs,
+      n_hbfss_raw = diagnostics$n_hbfss_raw,
+      n_hbfss_total = diagnostics$n_hbfss_total,
+      n_weak_hbfss = diagnostics$n_weak_hbfss,
+      stringsAsFactors = FALSE
+    ),
+    met
+  )
+}
+
+sequence_simulation_analysis <- function(sim_obj, null_inflation) {
+  counts <- sim_obj$counts
+  n_samp <- ncol(counts) / 2L
+
+  coldata <- data.frame(
+    condition = factor(c(rep("untrt", n_samp), rep("trt", n_samp)), levels = c("untrt", "trt")),
+    row.names = colnames(counts)
+  )
+
+  dds <- DESeqDataSetFromMatrix(countData = counts, colData = coldata, design = ~ condition)
+  dds <- dds[rowSums(counts(dds)) > 0, ]
+  dds <- DESeq(dds, betaPrior = FALSE, quiet = TRUE)
+
+  coef_name <- condition_coef_name(dds)
+
+  standard <- results(dds, contrast = c("condition", "trt", "untrt"), alpha = alpha_level)
+
+  greater_abs <- results(
+    dds,
+    contrast = c("condition", "trt", "untrt"),
+    lfcThreshold = lfc_boundary,
+    altHypothesis = "greaterAbs",
+    alpha = strong_alpha_level
+  )
+
+  less_abs <- results(
+    dds,
+    contrast = c("condition", "trt", "untrt"),
+    lfcThreshold = lfc_boundary,
+    altHypothesis = "lessAbs",
+    alpha = weak_alpha_level
+  )
+
+  shrunk <- lfcShrink(dds, coef = coef_name, type = "apeglm", quiet = TRUE)
+
+  df <- as.data.frame(standard)
+  df$feature_id <- rownames(df)
+
+  df <- df %>%
+    left_join(
+      data.frame(
+        feature_id = rownames(shrunk),
+        lfc_shrunk = as.data.frame(shrunk)$log2FoldChange,
+        stringsAsFactors = FALSE
+      ),
+      by = "feature_id"
+    ) %>%
+    left_join(
+      data.frame(
+        feature_id = rownames(greater_abs),
+        greaterAbs_pvalue = greater_abs$pvalue,
+        greaterAbs_padj = greater_abs$padj,
+        stringsAsFactors = FALSE
+      ),
+      by = "feature_id"
+    ) %>%
+    left_join(
+      data.frame(
+        feature_id = rownames(less_abs),
+        lessAbs_pvalue = less_abs$pvalue,
+        lessAbs_padj = less_abs$padj,
+        stringsAsFactors = FALSE
+      ),
+      by = "feature_id"
+    ) %>%
+    left_join(sim_obj$truth, by = "feature_id")
+
+  wald_for_empirical_null <- inflate_null_wald_statistics(
+    wald = df$stat,
+    is_de = df$is_de,
+    inflation_fraction = null_inflation
+  )
+
+  empirical <- fit_empirical_null(wald_for_empirical_null, "simulation")
+  df$wald_for_empirical_null <- wald_for_empirical_null
+  df$empirical_p <- empirical$empirical_p
+  df$empirical_bh <- empirical$empirical_bh
+  df$empirical_q <- empirical$empirical_q
+  df$empirical_lfdr <- empirical$empirical_lfdr
+  df$empirical_p_calc <- clip_probability(df$empirical_p, floor = calculation_probability_floor)
+  df$neglog10_empirical_p_calc <- -log10(df$empirical_p_calc)
+
+  hc_p <- hc_threshold(df$empirical_p)
+  hbfss_cutoff <- if (is.na(hc_p)) NA_real_ else -log10(hc_p) * lfc_boundary
+
+  df$hc_pass <- !is.na(hc_p) &
+    !is.na(df$empirical_p) &
+    is.finite(df$empirical_p) &
+    df$empirical_p <= hc_p
+
+  df$HBFSS <- abs(df$lfc_shrunk) * df$neglog10_empirical_p_calc
+
+  df$standard_sig <- !is.na(df$padj) &
+    df$padj < alpha_level &
+    !is.na(df$lfc_shrunk) &
+    abs(df$lfc_shrunk) >= lfc_boundary
+
+  df$greaterAbs_sig <- !is.na(df$greaterAbs_padj) &
+    df$greaterAbs_padj < strong_alpha_level &
+    !is.na(df$lfc_shrunk) &
+    abs(df$lfc_shrunk) >= lfc_boundary
+
+  df$lessAbs_sig <- !is.na(df$lessAbs_padj) &
+    df$lessAbs_padj < weak_alpha_level &
+    !is.na(df$lfc_shrunk) &
+    abs(df$lfc_shrunk) < lfc_boundary
+
+  df$empirical_bh_sig <- !is.na(df$empirical_bh) &
+    df$empirical_bh < alpha_level &
+    !is.na(df$lfc_shrunk) &
+    abs(df$lfc_shrunk) >= lfc_boundary
+
+  df$hbfss_raw_sig <- !is.na(hbfss_cutoff) &
+    !is.na(df$HBFSS) &
+    is.finite(df$HBFSS) &
+    df$HBFSS >= hbfss_cutoff &
+    df$hc_pass
+
+  df$hbfss_total_sig <- df$standard_sig | df$hbfss_raw_sig
+  df$weak_region_hbfss_sig <- df$lessAbs_sig & df$hbfss_raw_sig
+
+  diagnostics <- list(
+    n_hc_pass = sum(df$hc_pass, na.rm = TRUE),
+    n_standard = sum(df$standard_sig, na.rm = TRUE),
+    n_empirical_bh = sum(df$empirical_bh_sig, na.rm = TRUE),
+    n_lessAbs = sum(df$lessAbs_sig, na.rm = TRUE),
+    n_greaterAbs = sum(df$greaterAbs_sig, na.rm = TRUE),
+    n_hbfss_raw = sum(df$hbfss_raw_sig, na.rm = TRUE),
+    n_hbfss_total = sum(df$hbfss_total_sig, na.rm = TRUE),
+    n_weak_hbfss = sum(df$weak_region_hbfss_sig, na.rm = TRUE)
+  )
+
+  list(
+    results = df,
+    hc_p = hc_p,
+    hbfss_cutoff = hbfss_cutoff,
+    diagnostics = diagnostics
+  )
+}
+
+build_simulation_metric_rows <- function(out, template) {
+  df <- out$results
+
+  all_de <- df$is_de
+  weak_de <- df$true_weak
+  strong_de <- df$true_strong
+  null_truth <- df$is_null
+
+  bind_rows(
+    simulation_metric_row(template, "DESeq2_BH", "all_de", df$standard_sig, all_de, out$hc_p, out$hbfss_cutoff, out$diagnostics),
+    simulation_metric_row(template, "Empirical_BH", "all_de", df$empirical_bh_sig, all_de, out$hc_p, out$hbfss_cutoff, out$diagnostics),
+    simulation_metric_row(template, "GreaterAbs", "strong_de", df$greaterAbs_sig, strong_de, out$hc_p, out$hbfss_cutoff, out$diagnostics),
+    simulation_metric_row(template, "HBFSS_total", "all_de", df$hbfss_total_sig, all_de, out$hc_p, out$hbfss_cutoff, out$diagnostics),
+    simulation_metric_row(template, "HBFSS_raw", "all_de", df$hbfss_raw_sig, all_de, out$hc_p, out$hbfss_cutoff, out$diagnostics),
+    simulation_metric_row(template, "DESeq2_BH", "weak_de", df$standard_sig, weak_de, out$hc_p, out$hbfss_cutoff, out$diagnostics),
+    simulation_metric_row(template, "LessAbs", "weak_de", df$lessAbs_sig, weak_de, out$hc_p, out$hbfss_cutoff, out$diagnostics),
+    simulation_metric_row(template, "HBFSS_weak_region", "weak_de", df$weak_region_hbfss_sig, weak_de, out$hc_p, out$hbfss_cutoff, out$diagnostics),
+    simulation_metric_row(template, "HBFSS_raw", "weak_de", df$hbfss_raw_sig, weak_de, out$hc_p, out$hbfss_cutoff, out$diagnostics),
+    simulation_metric_row(template, "DESeq2_BH", "null_false_positive", df$standard_sig, null_truth, out$hc_p, out$hbfss_cutoff, out$diagnostics),
+    simulation_metric_row(template, "HBFSS_raw", "null_false_positive", df$hbfss_raw_sig, null_truth, out$hc_p, out$hbfss_cutoff, out$diagnostics)
+  )
+}
+
+simulation_wide_from_long <- function(metric_long) {
+  if (nrow(metric_long) == 0L) return(data.frame())
+
+  key_cols <- c(
+    "de_fraction", "lfc_magnitude", "simulation_profile", "null_inflation",
+    "replicate", "lfc_label", "de_label", "inflation_label",
+    "hc_p_threshold", "hbfss_cutoff", "hc_valid",
+    "n_hc_pass", "n_standard", "n_empirical_bh", "n_lessAbs",
+    "n_greaterAbs", "n_hbfss_raw", "n_hbfss_total", "n_weak_hbfss"
+  )
+
+  base <- metric_long[!duplicated(metric_long[, key_cols]), key_cols, drop = FALSE]
+
+  make_metric <- function(method_name, target_name, metric_name, output_name) {
+    sub <- metric_long[
+      metric_long$method == method_name & metric_long$truth_target == target_name,
+      c(key_cols, metric_name),
+      drop = FALSE
+    ]
+    names(sub)[names(sub) == metric_name] <- output_name
+    sub
+  }
+
+  pieces <- list(
+    make_metric("DESeq2_BH", "all_de", "precision", "standard_precision"),
+    make_metric("DESeq2_BH", "all_de", "recall", "standard_recall"),
+    make_metric("DESeq2_BH", "all_de", "f1", "standard_f1"),
+    make_metric("DESeq2_BH", "all_de", "fdr", "standard_fdr"),
+    make_metric("Empirical_BH", "all_de", "precision", "empirical_bh_precision"),
+    make_metric("Empirical_BH", "all_de", "recall", "empirical_bh_recall"),
+    make_metric("Empirical_BH", "all_de", "f1", "empirical_bh_f1"),
+    make_metric("Empirical_BH", "all_de", "fdr", "empirical_bh_fdr"),
+    make_metric("HBFSS_total", "all_de", "precision", "hbfss_precision"),
+    make_metric("HBFSS_total", "all_de", "recall", "hbfss_recall"),
+    make_metric("HBFSS_total", "all_de", "f1", "hbfss_f1"),
+    make_metric("HBFSS_total", "all_de", "fdr", "hbfss_fdr"),
+    make_metric("DESeq2_BH", "weak_de", "recall", "standard_weak_recall"),
+    make_metric("LessAbs", "weak_de", "recall", "lessAbs_weak_recall"),
+    make_metric("HBFSS_weak_region", "weak_de", "recall", "hbfss_weak_recall")
+  )
+
+  out <- base
+  for (piece in pieces) {
+    out <- left_join(out, piece, by = key_cols)
+  }
+  out
+}
+
+simulation_method_summary <- function(metric_long) {
+  metric_long %>%
+    group_by(
+      de_fraction, lfc_magnitude, simulation_profile, null_inflation,
+      lfc_label, de_label, inflation_label, method, truth_target
+    ) %>%
     summarise(
-      mean = mean(value, na.rm = TRUE),
-      median = median(value, na.rm = TRUE),
-      sd = sd(value, na.rm = TRUE),
+      n_replicates = n(),
+      precision_mean = mean(precision, na.rm = TRUE),
+      precision_median = median(precision, na.rm = TRUE),
+      recall_mean = mean(recall, na.rm = TRUE),
+      recall_median = median(recall, na.rm = TRUE),
+      f1_mean = mean(f1, na.rm = TRUE),
+      f1_median = median(f1, na.rm = TRUE),
+      fdr_mean = mean(fdr, na.rm = TRUE),
+      fdr_median = median(fdr, na.rm = TRUE),
+      discovery_count_mean = mean(discovery_count, na.rm = TRUE),
+      truth_count_mean = mean(truth_count, na.rm = TRUE),
+      hc_valid_fraction = mean(hc_valid, na.rm = TRUE),
+      hbfss_cutoff_median = median(hbfss_cutoff, na.rm = TRUE),
       .groups = "drop"
     )
 }
 
-plot_simulation_metric_boxplot <- function(results_df, metric, title, y_label, alpha_line = FALSE) {
-  long <- simulation_long_metric_rows(results_df, metric)
-  method_colors <- c("DESeq2 BH" = "#999999", "Empirical BH" = treatment_color, "HBFSS" = class_colors[["HBFSS"]])
+finite_summary <- function(x, fun) {
+  x <- suppressWarnings(as.numeric(x))
+  x <- x[is.finite(x) & !is.na(x)]
+  if (length(x) == 0L) return(NA_real_)
+  fun(x)
+}
 
-  p <- ggplot(long, aes(method, value, fill = method)) +
+simulation_threshold_summary <- function(metric_wide) {
+  if (nrow(metric_wide) == 0L) return(data.frame())
+
+  metric_wide %>%
+    group_by(de_fraction, lfc_magnitude, simulation_profile, null_inflation, lfc_label, de_label, inflation_label) %>%
+    summarise(
+      n_replicates = n(),
+      hc_valid_fraction = mean(hc_valid, na.rm = TRUE),
+      hc_p_threshold_median = median(hc_p_threshold, na.rm = TRUE),
+      hc_p_threshold_min = finite_summary(hc_p_threshold, min),
+      hc_p_threshold_max = finite_summary(hc_p_threshold, max),
+      hbfss_cutoff_median = median(hbfss_cutoff, na.rm = TRUE),
+      hbfss_cutoff_min = finite_summary(hbfss_cutoff, min),
+      hbfss_cutoff_max = finite_summary(hbfss_cutoff, max),
+      n_hc_pass_mean = mean(n_hc_pass, na.rm = TRUE),
+      n_standard_mean = mean(n_standard, na.rm = TRUE),
+      n_empirical_bh_mean = mean(n_empirical_bh, na.rm = TRUE),
+      n_lessAbs_mean = mean(n_lessAbs, na.rm = TRUE),
+      n_greaterAbs_mean = mean(n_greaterAbs, na.rm = TRUE),
+      n_hbfss_raw_mean = mean(n_hbfss_raw, na.rm = TRUE),
+      n_hbfss_total_mean = mean(n_hbfss_total, na.rm = TRUE),
+      n_weak_hbfss_mean = mean(n_weak_hbfss, na.rm = TRUE),
+      .groups = "drop"
+    )
+}
+
+plot_simulation_metric_boxplot <- function(metric_long, metric, title, y_label,
+                                           methods, target, alpha_line = FALSE) {
+  plot_df <- metric_long[
+    metric_long$method %in% methods & metric_long$truth_target == target,
+    ,
+    drop = FALSE
+  ]
+  if (nrow(plot_df) == 0L) return(NULL)
+
+  plot_df$method <- factor(plot_df$method, levels = methods)
+
+  method_colors <- c(
+    DESeq2_BH = "#999999",
+    Empirical_BH = treatment_color,
+    GreaterAbs = class_colors[["Strong"]],
+    LessAbs = class_colors[["Weak"]],
+    HBFSS_total = class_colors[["HBFSS"]],
+    HBFSS_raw = "#54278F",
+    HBFSS_weak_region = class_colors[["Weak"]]
+  )
+
+  p <- ggplot(plot_df, aes(method, .data[[metric]], fill = method)) +
     geom_boxplot(outlier.size = 0.35, width = 0.62, linewidth = 0.22, na.rm = TRUE) +
     facet_grid(inflation_label + de_label ~ lfc_label) +
-    scale_fill_manual(values = method_colors, breaks = names(method_colors), drop = FALSE, name = NULL) +
+    scale_fill_manual(values = method_colors[methods], breaks = methods, drop = FALSE, name = NULL) +
     labs(title = title, x = NULL, y = y_label, caption = NULL) +
     manuscript_theme() +
     theme(
@@ -1743,21 +2043,41 @@ plot_simulation_metric_boxplot <- function(results_df, metric, title, y_label, a
   p
 }
 
-plot_simulation_delta_heatmap <- function(results_df, metric, title, fill_label) {
-  summary <- results_df %>%
-    group_by(de_fraction, lfc_magnitude, simulation_profile, null_inflation) %>%
-    summarise(
-      standard_mean = mean(.data[[paste0("standard_", metric)]], na.rm = TRUE),
-      hbfss_mean = mean(.data[[paste0("hbfss_", metric)]], na.rm = TRUE),
-      delta = hbfss_mean - standard_mean,
-      .groups = "drop"
-    ) %>%
-    mutate(
-      lfc_label = factor(simulation_lfc_label(lfc_magnitude, simulation_profile), levels = simulation_lfc_levels()),
-      de_label = paste0(de_fraction * 100, "% DE"),
-      inflation_label = paste0(null_inflation * 100, "% null inflation"),
-      label = sprintf("H %.2f\nD %.2f\nDelta %.2f", hbfss_mean, standard_mean, delta)
-    )
+plot_simulation_delta_heatmap <- function(metric_long, metric, title, fill_label,
+                                          hbfss_method = "HBFSS_total",
+                                          baseline_method = "DESeq2_BH",
+                                          target = "all_de") {
+  plot_df <- metric_long[metric_long$truth_target == target & metric_long$method %in% c(hbfss_method, baseline_method), , drop = FALSE]
+  if (nrow(plot_df) == 0L) return(NULL)
+
+  scenario_cols <- c(
+    "de_fraction", "lfc_magnitude", "simulation_profile", "null_inflation",
+    "lfc_label", "de_label", "inflation_label"
+  )
+
+  summary_long <- plot_df %>%
+    group_by(de_fraction, lfc_magnitude, simulation_profile, null_inflation, lfc_label, de_label, inflation_label, method) %>%
+    summarise(mean_value = mean(.data[[metric]], na.rm = TRUE), .groups = "drop")
+
+  hbfss_df <- summary_long[summary_long$method == hbfss_method, c(scenario_cols, "mean_value"), drop = FALSE]
+  base_df <- summary_long[summary_long$method == baseline_method, c(scenario_cols, "mean_value"), drop = FALSE]
+
+  if (nrow(hbfss_df) == 0L || nrow(base_df) == 0L) return(NULL)
+
+  names(hbfss_df)[names(hbfss_df) == "mean_value"] <- "hbfss_mean"
+  names(base_df)[names(base_df) == "mean_value"] <- "baseline_mean"
+
+  summary <- left_join(hbfss_df, base_df, by = scenario_cols)
+  summary <- summary[is.finite(summary$hbfss_mean) & is.finite(summary$baseline_mean), , drop = FALSE]
+  if (nrow(summary) == 0L) return(NULL)
+
+  summary$delta <- summary$hbfss_mean - summary$baseline_mean
+  summary$label <- sprintf(
+    "H %.2f\nD %.2f\nDelta %.2f",
+    summary$hbfss_mean,
+    summary$baseline_mean,
+    summary$delta
+  )
 
   ggplot(summary, aes(lfc_label, de_label, fill = delta)) +
     geom_tile(color = "white", linewidth = 0.35) +
@@ -1774,31 +2094,67 @@ plot_simulation_delta_heatmap <- function(results_df, metric, title, fill_label)
     theme(axis.text.x = element_text(angle = 30, hjust = 1))
 }
 
-plot_simulation_weak_recall <- function(results_df) {
-  weak_df <- results_df[results_df$simulation_profile == "weak_mixture" | results_df$lfc_magnitude < lfc_boundary, , drop = FALSE]
-  if (nrow(weak_df) == 0L) return(NULL)
+plot_simulation_fdr_heatmap <- function(metric_long, target = "all_de") {
+  methods <- c("DESeq2_BH", "Empirical_BH", "HBFSS_total", "HBFSS_raw")
+  plot_df <- metric_long[metric_long$truth_target == target & metric_long$method %in% methods, , drop = FALSE]
+  if (nrow(plot_df) == 0L) return(NULL)
 
-  long <- bind_rows(
-    data.frame(de_fraction = weak_df$de_fraction, lfc_magnitude = weak_df$lfc_magnitude, simulation_profile = weak_df$simulation_profile, null_inflation = weak_df$null_inflation, method = "DESeq2 BH", recall = weak_df$standard_weak_recall, stringsAsFactors = FALSE),
-    data.frame(de_fraction = weak_df$de_fraction, lfc_magnitude = weak_df$lfc_magnitude, simulation_profile = weak_df$simulation_profile, null_inflation = weak_df$null_inflation, method = "HBFSS weak-region", recall = weak_df$hbfss_weak_recall, stringsAsFactors = FALSE)
-  ) %>%
+  summary <- plot_df %>%
+    group_by(method, de_label, lfc_label, inflation_label) %>%
+    summarise(mean_fdr = mean(fdr, na.rm = TRUE), .groups = "drop") %>%
     mutate(
-      lfc_label = factor(simulation_lfc_label(lfc_magnitude, simulation_profile), levels = simulation_lfc_levels()),
-      de_label = paste0(de_fraction * 100, "% DE"),
-      inflation_label = paste0(null_inflation * 100, "% null inflation"),
-      method = factor(method, levels = c("DESeq2 BH", "HBFSS weak-region"))
+      method = factor(method, levels = methods),
+      label = sprintf("%.2f", mean_fdr)
     )
 
-  summary <- long %>%
+  ggplot(summary, aes(lfc_label, de_label, fill = mean_fdr)) +
+    geom_tile(color = "white", linewidth = 0.35) +
+    geom_text(aes(label = label), size = 2.15) +
+    facet_grid(method ~ inflation_label) +
+    scale_fill_gradient(low = "white", high = "#B2182B", name = "Mean FDR") +
+    labs(
+      title = "Simulation observed FDR by method",
+      x = "Simulated effect profile",
+      y = "True DE fraction",
+      caption = paste0("Nominal alpha = ", alpha_level, ". Observed FDR is descriptive and should not be called formal FDR control unless supported by the setting.")
+    ) +
+    manuscript_theme() +
+    theme(axis.text.x = element_text(angle = 30, hjust = 1))
+}
+
+plot_simulation_weak_recall <- function(metric_long) {
+  methods <- c("DESeq2_BH", "LessAbs", "HBFSS_weak_region", "HBFSS_raw")
+  plot_df <- metric_long[metric_long$truth_target == "weak_de" & metric_long$method %in% methods, , drop = FALSE]
+  if (nrow(plot_df) == 0L) return(NULL)
+
+  summary <- plot_df %>%
     group_by(de_label, lfc_label, inflation_label, method) %>%
-    summarise(mean_recall = mean(recall, na.rm = TRUE), sd_recall = sd(recall, na.rm = TRUE), .groups = "drop")
+    summarise(
+      mean_recall = mean(recall, na.rm = TRUE),
+      sd_recall = sd(recall, na.rm = TRUE),
+      .groups = "drop"
+    )
+
+  summary$method <- factor(summary$method, levels = methods)
+
+  method_colors <- c(
+    DESeq2_BH = "#999999",
+    LessAbs = "#56B4E9",
+    HBFSS_weak_region = class_colors[["Weak"]],
+    HBFSS_raw = class_colors[["HBFSS"]]
+  )
 
   ggplot(summary, aes(lfc_label, mean_recall, color = method, group = method)) +
     geom_line(linewidth = 0.60, position = position_dodge(width = 0.28)) +
     geom_point(size = 1.85, position = position_dodge(width = 0.28)) +
-    geom_errorbar(aes(ymin = pmax(mean_recall - sd_recall, 0), ymax = pmin(mean_recall + sd_recall, 1)), width = 0.14, linewidth = 0.28, position = position_dodge(width = 0.28)) +
+    geom_errorbar(
+      aes(ymin = pmax(mean_recall - sd_recall, 0), ymax = pmin(mean_recall + sd_recall, 1)),
+      width = 0.14,
+      linewidth = 0.28,
+      position = position_dodge(width = 0.28)
+    ) +
     facet_grid(inflation_label ~ de_label) +
-    scale_color_manual(values = c("DESeq2 BH" = "#999999", "HBFSS weak-region" = class_colors[["Weak"]]), breaks = c("DESeq2 BH", "HBFSS weak-region"), drop = FALSE, name = NULL) +
+    scale_color_manual(values = method_colors[methods], breaks = methods, drop = FALSE, name = NULL) +
     scale_y_continuous(limits = c(0, NA), expand = expansion(mult = c(0.02, 0.12))) +
     labs(
       title = "Weak-effect recall",
@@ -1808,6 +2164,70 @@ plot_simulation_weak_recall <- function(results_df) {
     ) +
     manuscript_theme() +
     theme(axis.text.x = element_text(angle = 30, hjust = 1))
+}
+
+plot_simulation_threshold_stability <- function(metric_wide) {
+  if (nrow(metric_wide) == 0L) return(NULL)
+
+  plot_df <- metric_wide[is.finite(metric_wide$hbfss_cutoff) & !is.na(metric_wide$hbfss_cutoff), , drop = FALSE]
+  if (nrow(plot_df) == 0L) return(NULL)
+
+  ggplot(plot_df, aes(de_label, hbfss_cutoff, fill = de_label)) +
+    geom_boxplot(outlier.size = 0.35, linewidth = 0.25, na.rm = TRUE) +
+    facet_grid(inflation_label ~ lfc_label, scales = "free_y") +
+    scale_fill_manual(values = scales::grey_pal(start = 0.35, end = 0.75)(length(unique(plot_df$de_label))), name = NULL) +
+    labs(
+      title = "HBFSS cutoff stability across simulation replicates",
+      x = NULL,
+      y = "HBFSS cutoff",
+      caption = "Only replicates with valid HC thresholds are shown."
+    ) +
+    manuscript_theme() +
+    theme(
+      legend.position = "none",
+      axis.text.x = element_text(angle = 30, hjust = 1),
+      strip.text = element_text(size = base_theme_size - 1.0)
+    )
+}
+
+plot_simulation_discovery_counts <- function(metric_wide) {
+  if (nrow(metric_wide) == 0L) return(NULL)
+
+  long <- bind_rows(
+    data.frame(metric_wide[, c("de_fraction", "lfc_magnitude", "simulation_profile", "null_inflation", "lfc_label", "de_label", "inflation_label")], method = "DESeq2_BH", count = metric_wide$n_standard),
+    data.frame(metric_wide[, c("de_fraction", "lfc_magnitude", "simulation_profile", "null_inflation", "lfc_label", "de_label", "inflation_label")], method = "Empirical_BH", count = metric_wide$n_empirical_bh),
+    data.frame(metric_wide[, c("de_fraction", "lfc_magnitude", "simulation_profile", "null_inflation", "lfc_label", "de_label", "inflation_label")], method = "HBFSS_raw", count = metric_wide$n_hbfss_raw),
+    data.frame(metric_wide[, c("de_fraction", "lfc_magnitude", "simulation_profile", "null_inflation", "lfc_label", "de_label", "inflation_label")], method = "HBFSS_total", count = metric_wide$n_hbfss_total),
+    data.frame(metric_wide[, c("de_fraction", "lfc_magnitude", "simulation_profile", "null_inflation", "lfc_label", "de_label", "inflation_label")], method = "HBFSS_weak_region", count = metric_wide$n_weak_hbfss)
+  )
+
+  long$method <- factor(long$method, levels = c("DESeq2_BH", "Empirical_BH", "HBFSS_raw", "HBFSS_total", "HBFSS_weak_region"))
+
+  ggplot(long, aes(method, count, fill = method)) +
+    geom_boxplot(outlier.size = 0.35, linewidth = 0.25, na.rm = TRUE) +
+    facet_grid(inflation_label + de_label ~ lfc_label, scales = "free_y") +
+    scale_fill_manual(
+      values = c(
+        DESeq2_BH = "#999999",
+        Empirical_BH = treatment_color,
+        HBFSS_raw = "#54278F",
+        HBFSS_total = class_colors[["HBFSS"]],
+        HBFSS_weak_region = class_colors[["Weak"]]
+      ),
+      name = NULL
+    ) +
+    labs(
+      title = "Simulation discovery counts by method",
+      x = NULL,
+      y = "Discovered features",
+      caption = NULL
+    ) +
+    manuscript_theme() +
+    theme(
+      axis.text.x = element_blank(),
+      axis.ticks.x = element_blank(),
+      strip.text = element_text(size = base_theme_size - 1.0)
+    )
 }
 
 run_sequence_simulation_validation <- function() {
@@ -1835,9 +2255,12 @@ run_sequence_simulation_validation <- function() {
 
   sim_grid <- bind_rows(fixed_grid, weak_grid)
   total_runs <- nrow(sim_grid) * simulation_n_reps
-  message("Running simulation validation: ", total_runs, " runs")
 
-  result_rows <- list()
+  message("Running simulation validation: ", total_runs, " planned replicates")
+
+  metric_rows <- list()
+  failure_rows <- list()
+  feature_rows <- list()
   run_index <- 0L
 
   for (grid_i in seq_len(nrow(sim_grid))) {
@@ -1845,105 +2268,192 @@ run_sequence_simulation_validation <- function() {
 
     for (rep_i in seq_len(simulation_n_reps)) {
       run_index <- run_index + 1L
-      if (run_index %% 10L == 0L) message("Simulation progress: ", run_index, "/", total_runs)
 
-      sim_obj <- simulate_sequence_counts(
-        n_features = simulation_n_features,
-        n_samples = simulation_n_samples_per_group,
-        base_mean = simulation_base_mean,
-        disp_null = simulation_dispersion_null,
-        de_fraction = grid_row$de_fraction,
-        lfc_magnitude = grid_row$lfc_magnitude,
-        disp_de = simulation_dispersion_de,
-        lfc_profile = grid_row$simulation_profile
-      )
+      if (run_index %% 10L == 0L || run_index == 1L || run_index == total_runs) {
+        message("Simulation progress: ", run_index, "/", total_runs)
+      }
 
-      out <- tryCatch(
-        sequence_simulation_analysis(sim_obj, null_inflation = grid_row$null_inflation),
-        error = function(e) {
-          message("Simulation failed: ", conditionMessage(e))
-          NULL
-        }
-      )
-      if (is.null(out)) next
-
-      df <- out$results
-      true_de <- df$is_de
-      true_weak <- df$is_de & abs(df$true_lfc) < lfc_boundary
-
-      standard_all <- simulation_metrics(df$standard_sig, true_de)
-      empirical_bh_all <- simulation_metrics(df$empirical_bh_sig, true_de)
-      hbfss_all <- simulation_metrics(df$hbfss_sig, true_de)
-      standard_weak <- simulation_metrics(df$standard_sig, true_weak)
-      hbfss_weak <- simulation_metrics(df$weak_region_hbfss_sig, true_weak)
-
-      result_rows[[length(result_rows) + 1L]] <- data.frame(
+      template <- data.frame(
         de_fraction = grid_row$de_fraction,
         lfc_magnitude = grid_row$lfc_magnitude,
         simulation_profile = grid_row$simulation_profile,
         null_inflation = grid_row$null_inflation,
         replicate = rep_i,
-        hc_p_threshold = out$hc_p,
-        hbfss_cutoff = out$hbfss_cutoff,
-        standard_precision = standard_all$precision,
-        standard_recall = standard_all$recall,
-        standard_f1 = standard_all$f1,
-        standard_fdr = standard_all$fdr,
-        empirical_bh_precision = empirical_bh_all$precision,
-        empirical_bh_recall = empirical_bh_all$recall,
-        empirical_bh_f1 = empirical_bh_all$f1,
-        empirical_bh_fdr = empirical_bh_all$fdr,
-        hbfss_precision = hbfss_all$precision,
-        hbfss_recall = hbfss_all$recall,
-        hbfss_f1 = hbfss_all$f1,
-        hbfss_fdr = hbfss_all$fdr,
-        standard_weak_recall = standard_weak$recall,
-        hbfss_weak_recall = hbfss_weak$recall,
         stringsAsFactors = FALSE
       )
+      template$lfc_label <- simulation_lfc_label(template$lfc_magnitude, template$simulation_profile)
+      template$de_label <- paste0(template$de_fraction * 100, "% DE")
+      template$inflation_label <- paste0(template$null_inflation * 100, "% null inflation")
+
+      out <- tryCatch({
+        sim_obj <- simulate_sequence_counts(
+          n_features = simulation_n_features,
+          n_samples = simulation_n_samples_per_group,
+          base_mean = simulation_base_mean,
+          disp_null = simulation_dispersion_null,
+          de_fraction = grid_row$de_fraction,
+          lfc_magnitude = grid_row$lfc_magnitude,
+          disp_de = simulation_dispersion_de,
+          lfc_profile = grid_row$simulation_profile
+        )
+
+        sequence_simulation_analysis(sim_obj, null_inflation = grid_row$null_inflation)
+      }, error = function(e) {
+        failure_rows[[length(failure_rows) + 1L]] <<- cbind(
+          template,
+          data.frame(error_message = conditionMessage(e), stringsAsFactors = FALSE)
+        )
+        NULL
+      })
+
+      if (is.null(out)) next
+
+      metric_rows[[length(metric_rows) + 1L]] <- build_simulation_metric_rows(out, template)
+
+      if (isTRUE(export_simulation_feature_results)) {
+        feature_export <- out$results
+        feature_export$de_fraction <- grid_row$de_fraction
+        feature_export$lfc_magnitude <- grid_row$lfc_magnitude
+        feature_export$simulation_profile <- grid_row$simulation_profile
+        feature_export$null_inflation <- grid_row$null_inflation
+        feature_export$replicate <- rep_i
+        feature_rows[[length(feature_rows) + 1L]] <- feature_export
+      }
     }
   }
 
-  simulation_results <- if (length(result_rows) > 0L) bind_rows(result_rows) else data.frame()
-  if (nrow(simulation_results) == 0L) stop("Simulation validation produced no successful runs.", call. = FALSE)
+  failures <- if (length(failure_rows) > 0L) bind_rows(failure_rows) else data.frame()
+  save_csv(failures, file.path(simulation_dir, "Simulation_Failures.csv"))
 
-  save_csv(simulation_results, file.path(simulation_dir, "Simulation_Raw.csv"))
-
-  simulation_summary <- simulation_results %>%
-    group_by(de_fraction, lfc_magnitude, simulation_profile, null_inflation) %>%
-    summarise(
-      n_replicates = n(),
-      standard_f1_mean = mean(standard_f1, na.rm = TRUE),
-      empirical_bh_f1_mean = mean(empirical_bh_f1, na.rm = TRUE),
-      hbfss_f1_mean = mean(hbfss_f1, na.rm = TRUE),
-      standard_fdr_mean = mean(standard_fdr, na.rm = TRUE),
-      empirical_bh_fdr_mean = mean(empirical_bh_fdr, na.rm = TRUE),
-      hbfss_fdr_mean = mean(hbfss_fdr, na.rm = TRUE),
-      standard_weak_recall_mean = mean(standard_weak_recall, na.rm = TRUE),
-      hbfss_weak_recall_mean = mean(hbfss_weak_recall, na.rm = TRUE),
-      hc_p_threshold_median = median(hc_p_threshold, na.rm = TRUE),
-      hbfss_cutoff_median = median(hbfss_cutoff, na.rm = TRUE),
-      .groups = "drop"
-    )
-
-  save_csv(simulation_summary, file.path(simulation_dir, "Simulation_Summary.csv"))
-  save_csv(simulation_method_summary(simulation_results, "f1"), file.path(simulation_dir, "Simulation_F1_MethodSummary.csv"))
-  save_csv(simulation_method_summary(simulation_results, "fdr"), file.path(simulation_dir, "Simulation_FDR_MethodSummary.csv"))
-  save_csv(simulation_long_metric_rows(simulation_results, "f1"), file.path(simulation_dir, "Simulation_F1_Long.csv"))
-  save_csv(simulation_long_metric_rows(simulation_results, "fdr"), file.path(simulation_dir, "Simulation_FDR_Long.csv"))
-
-  save_plot(plot_simulation_metric_boxplot(simulation_results, "f1", "Simulation F1 score by method", "F1"), file.path(simulation_dir, "Simulation_F1_Boxplot.png"), width = 11.8, height = 9.2)
-  save_plot(plot_simulation_metric_boxplot(simulation_results, "fdr", "Simulation observed FDR by method", "FDR", alpha_line = TRUE), file.path(simulation_dir, "Simulation_FDR_Boxplot.png"), width = 11.8, height = 9.2)
-  save_plot(plot_simulation_delta_heatmap(simulation_results, "f1", "Simulation F1 gain: HBFSS vs DESeq2 BH", "Delta F1"), file.path(simulation_dir, "Simulation_F1_DeltaHeatmap.png"), width = 11.8, height = 6.4)
-
-  weak_plot <- plot_simulation_weak_recall(simulation_results)
-  if (!is.null(weak_plot)) {
-    save_plot(weak_plot, file.path(simulation_dir, "Simulation_WeakRecall.png"), width = 8.6, height = 5.4)
+  metric_long <- if (length(metric_rows) > 0L) bind_rows(metric_rows) else data.frame()
+  if (nrow(metric_long) == 0L) {
+    stop("Simulation validation produced no successful replicates. See Simulation_Failures.csv.", call. = FALSE)
   }
 
+  metric_long$lfc_label <- factor(metric_long$lfc_label, levels = simulation_lfc_levels())
+  metric_long$method <- factor(
+    metric_long$method,
+    levels = c("DESeq2_BH", "Empirical_BH", "GreaterAbs", "LessAbs", "HBFSS_raw", "HBFSS_total", "HBFSS_weak_region")
+  )
+
+  metric_wide <- simulation_wide_from_long(metric_long)
+  metric_summary <- simulation_method_summary(metric_long)
+  threshold_summary <- simulation_threshold_summary(metric_wide)
+
+  save_csv(metric_long, file.path(simulation_dir, "Simulation_RunMetrics_Long.csv"))
+  save_csv(metric_wide, file.path(simulation_dir, "Simulation_Raw_Wide.csv"))
+  save_csv(metric_summary, file.path(simulation_dir, "Simulation_MethodSummary.csv"))
+  save_csv(threshold_summary, file.path(simulation_dir, "Simulation_ThresholdSummary.csv"))
+
+  # Backward-compatible filenames from the older draft.
+  save_csv(metric_wide, file.path(simulation_dir, "Simulation_Raw.csv"))
+  save_csv(
+    metric_wide %>%
+      group_by(de_fraction, lfc_magnitude, simulation_profile, null_inflation, lfc_label, de_label, inflation_label) %>%
+      summarise(
+        n_replicates = n(),
+        standard_f1_mean = mean(standard_f1, na.rm = TRUE),
+        empirical_bh_f1_mean = mean(empirical_bh_f1, na.rm = TRUE),
+        hbfss_f1_mean = mean(hbfss_f1, na.rm = TRUE),
+        standard_fdr_mean = mean(standard_fdr, na.rm = TRUE),
+        empirical_bh_fdr_mean = mean(empirical_bh_fdr, na.rm = TRUE),
+        hbfss_fdr_mean = mean(hbfss_fdr, na.rm = TRUE),
+        standard_weak_recall_mean = mean(standard_weak_recall, na.rm = TRUE),
+        lessAbs_weak_recall_mean = mean(lessAbs_weak_recall, na.rm = TRUE),
+        hbfss_weak_recall_mean = mean(hbfss_weak_recall, na.rm = TRUE),
+        hc_valid_fraction = mean(hc_valid, na.rm = TRUE),
+        hc_p_threshold_median = median(hc_p_threshold, na.rm = TRUE),
+        hbfss_cutoff_median = median(hbfss_cutoff, na.rm = TRUE),
+        .groups = "drop"
+      ),
+    file.path(simulation_dir, "Simulation_Summary.csv")
+  )
+
+  if (isTRUE(export_simulation_feature_results) && length(feature_rows) > 0L) {
+    save_csv(bind_rows(feature_rows), file.path(simulation_dir, "Simulation_FeatureResults.csv"))
+  }
+
+  save_plot(
+    plot_simulation_metric_boxplot(
+      metric_long,
+      metric = "f1",
+      title = "Simulation F1 score by method",
+      y_label = "F1",
+      methods = c("DESeq2_BH", "Empirical_BH", "HBFSS_total", "HBFSS_raw"),
+      target = "all_de"
+    ),
+    file.path(simulation_dir, "Simulation_F1_Boxplot.png"),
+    width = 11.8,
+    height = 9.2
+  )
+
+  save_plot(
+    plot_simulation_metric_boxplot(
+      metric_long,
+      metric = "fdr",
+      title = "Simulation observed FDR by method",
+      y_label = "FDR",
+      methods = c("DESeq2_BH", "Empirical_BH", "HBFSS_total", "HBFSS_raw"),
+      target = "all_de",
+      alpha_line = TRUE
+    ),
+    file.path(simulation_dir, "Simulation_FDR_Boxplot.png"),
+    width = 11.8,
+    height = 9.2
+  )
+
+  save_plot(
+    plot_simulation_delta_heatmap(
+      metric_long,
+      metric = "f1",
+      title = "Simulation F1 gain: HBFSS vs DESeq2 BH",
+      fill_label = "Delta F1",
+      hbfss_method = "HBFSS_total",
+      baseline_method = "DESeq2_BH",
+      target = "all_de"
+    ),
+    file.path(simulation_dir, "Simulation_F1_DeltaHeatmap.png"),
+    width = 11.8,
+    height = 6.4
+  )
+
+  save_plot(
+    plot_simulation_fdr_heatmap(metric_long, target = "all_de"),
+    file.path(simulation_dir, "Simulation_FDR_Heatmap.png"),
+    width = 12.8,
+    height = 7.2
+  )
+
+  save_plot(
+    plot_simulation_weak_recall(metric_long),
+    file.path(simulation_dir, "Simulation_WeakRecall.png"),
+    width = 10.8,
+    height = 6.2
+  )
+
+  save_plot(
+    plot_simulation_threshold_stability(metric_wide),
+    file.path(simulation_dir, "Simulation_CutoffStability.png"),
+    width = 12.8,
+    height = 7.2
+  )
+
+  save_plot(
+    plot_simulation_discovery_counts(metric_wide),
+    file.path(simulation_dir, "Simulation_DiscoveryCounts.png"),
+    width = 12.8,
+    height = 8.6
+  )
+
   writeLines(capture.output(sessionInfo()), file.path(simulation_dir, "SessionInfo_Simulation.txt"))
-  invisible(simulation_summary)
+
+  message("Simulation successful replicates: ", length(unique(paste(metric_long$de_fraction, metric_long$lfc_magnitude, metric_long$simulation_profile, metric_long$null_inflation, metric_long$replicate))))
+  message("Simulation failures: ", nrow(failures))
+
+  invisible(metric_summary)
 }
+
+
 
 # =============================================================================
 # METHODS AND MANIFEST
@@ -1983,7 +2493,7 @@ write_sequence_methods <- function() {
     "PC1_Variance_EVS compares absolute PC1 score variance across Original, Lead, and Remainder datasets. PC1_Variance_Distributions shows per-feature contribution to PC1 score variance for All samples, Control samples, and Treatment samples, with treatment/control EVS cutoff lines.",
     "",
     "## Simulation validation",
-    paste0("Simulation regeneration is disabled by default. If run_simulation_validation is TRUE, negative-binomial counts are simulated across DE fractions (", paste(simulation_de_fractions, collapse = ", "), "), fixed LFC magnitudes (", paste(simulation_lfc_magnitudes, collapse = ", "), "), a weak-mixture profile with |LFC| drawn from ", simulation_weak_lfc_min, " to ", simulation_weak_lfc_max, ", null-inflation settings (", paste(simulation_null_inflation, collapse = ", "), "), n = ", simulation_n_samples_per_group, " samples per group, and ", simulation_n_reps, " replicates per condition. Seed: ", simulation_seed, ".")
+    paste0("Simulation regeneration is disabled by default. If run_simulation_validation is TRUE, heterogeneous negative-binomial counts are simulated with feature-level mean and dispersion variation, sample-level library factors, known weak/strong truth labels, explicit replicate failure logging, and method-level confusion matrices across DE fractions (", paste(simulation_de_fractions, collapse = ", "), "), fixed LFC magnitudes (", paste(simulation_lfc_magnitudes, collapse = ", "), "), a weak-mixture profile with |LFC| drawn from ", simulation_weak_lfc_min, " to ", simulation_weak_lfc_max, ", null-inflation settings (", paste(simulation_null_inflation, collapse = ", "), "), n = ", simulation_n_samples_per_group, " samples per group, and ", simulation_n_reps, " replicates per condition. Seed: ", simulation_seed, ".")
   )
 
   writeLines(methods_lines, file.path(output_dir, "METHODS_SEQUENCE_PIPELINE.md"))
