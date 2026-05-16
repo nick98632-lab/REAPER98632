@@ -53,7 +53,7 @@ label_top_n_total <- 8L
 label_top_n_per_class <- 2L
 
 # Optional simulation and Git behavior. These are deliberately disabled by default.
-run_simulation_validation <- FALSE
+run_simulation_validation <- TRUE
 export_simulation_feature_results <- FALSE
 simulation_seed <- 42L
 simulation_n_features <- 10000L
@@ -69,7 +69,7 @@ simulation_null_inflation <- c(0.00, 0.10)
 simulation_n_reps <- 20L
 
 # Optional Git push. Keep FALSE during analysis/debugging; set TRUE only after outputs are confirmed.
-git_push_after_success <- FALSE
+git_push_after_success <- TRUE
 git_remote_name <- "origin"
 git_branch_name <- NA_character_
 git_commit_message <- paste0("Update SEQUENCE manuscript outputs ", format(Sys.time(), "%Y-%m-%d %H:%M:%S"))
@@ -1589,46 +1589,182 @@ simulation_metric_row <- function(template, method, truth_target, predicted, act
 
 sequence_simulation_analysis <- function(sim_obj, null_inflation) {
   counts_mat <- sim_obj$counts
-  n_samp <- ncol(counts_mat) / 2L
-  coldata <- data.frame(condition = factor(c(rep("untrt", n_samp), rep("trt", n_samp)), levels = c("untrt", "trt")), row.names = colnames(counts_mat))
+  n_samp <- as.integer(ncol(counts_mat) / 2L)
 
-  dds <- DESeqDataSetFromMatrix(countData = counts_mat, colData = coldata, design = ~ condition)
+  if (!is.matrix(counts_mat) && !is.data.frame(counts_mat)) {
+    stop("Simulation counts must be a matrix-like object.", call. = FALSE)
+  }
+  if (ncol(counts_mat) %% 2L != 0L) {
+    stop("Simulation count matrix must contain paired control/treatment sample columns.", call. = FALSE)
+  }
+  if (n_samp < 2L) {
+    stop("Simulation requires at least two samples per group.", call. = FALSE)
+  }
+
+  counts_mat <- as_integer_count_matrix(counts_mat, "simulation DESeq2 input")
+
+  coldata <- data.frame(
+    condition = factor(
+      c(rep("untrt", n_samp), rep("trt", n_samp)),
+      levels = c("untrt", "trt")
+    ),
+    row.names = colnames(counts_mat)
+  )
+
+  dds <- DESeqDataSetFromMatrix(
+    countData = counts_mat,
+    colData = coldata,
+    design = ~ condition
+  )
+
   dds <- dds[rowSums(counts(dds)) > 0, ]
+  if (nrow(dds) < 5L) {
+    stop("Simulation DESeq2 object has fewer than five nonzero features after filtering.", call. = FALSE)
+  }
+
   dds <- DESeq(dds, betaPrior = FALSE, quiet = TRUE)
   coef_name <- condition_coef_name(dds)
 
-  standard <- results(dds, contrast = c("condition", "trt", "untrt"), alpha = alpha_standard)
-  greater_abs <- results(dds, contrast = c("condition", "trt", "untrt"), lfcThreshold = lfc_boundary, altHypothesis = "greaterAbs", alpha = alpha_strong)
-  less_abs <- results(dds, contrast = c("condition", "trt", "untrt"), lfcThreshold = lfc_boundary, altHypothesis = "lessAbs", alpha = alpha_weak)
+  standard <- results(
+    dds,
+    contrast = c("condition", "trt", "untrt"),
+    alpha = alpha_standard
+  )
+
+  greater_abs <- results(
+    dds,
+    contrast = c("condition", "trt", "untrt"),
+    lfcThreshold = lfc_boundary,
+    altHypothesis = "greaterAbs",
+    alpha = alpha_strong
+  )
+
+  less_abs <- results(
+    dds,
+    contrast = c("condition", "trt", "untrt"),
+    lfcThreshold = lfc_boundary,
+    altHypothesis = "lessAbs",
+    alpha = alpha_weak
+  )
+
   shrunk <- lfcShrink(dds, coef = coef_name, type = "apeglm", quiet = TRUE)
 
   df <- as.data.frame(standard)
   df$feature_id <- rownames(df)
+
   df <- df %>%
-    left_join(data.frame(feature_id = rownames(shrunk), lfc_shrunk = as.data.frame(shrunk)$log2FoldChange, stringsAsFactors = FALSE), by = "feature_id") %>%
-    left_join(data.frame(feature_id = rownames(greater_abs), greaterAbs_padj = greater_abs$padj, stringsAsFactors = FALSE), by = "feature_id") %>%
-    left_join(data.frame(feature_id = rownames(less_abs), lessAbs_padj = less_abs$padj, stringsAsFactors = FALSE), by = "feature_id") %>%
+    left_join(
+      data.frame(
+        feature_id = rownames(shrunk),
+        lfc_shrunk = as.data.frame(shrunk)$log2FoldChange,
+        stringsAsFactors = FALSE
+      ),
+      by = "feature_id"
+    ) %>%
+    left_join(
+      data.frame(
+        feature_id = rownames(greater_abs),
+        greaterAbs_padj = greater_abs$padj,
+        stringsAsFactors = FALSE
+      ),
+      by = "feature_id"
+    ) %>%
+    left_join(
+      data.frame(
+        feature_id = rownames(less_abs),
+        lessAbs_padj = less_abs$padj,
+        stringsAsFactors = FALSE
+      ),
+      by = "feature_id"
+    ) %>%
     left_join(sim_obj$truth, by = "feature_id")
 
-  wald_for_empirical_null <- inflate_null_wald_statistics(df$stat, df$is_de, null_inflation)
-  empirical <- fit_empirical_null(wald_for_empirical_null, "simulation")
+  df$is_de[is.na(df$is_de)] <- FALSE
+  df$true_weak[is.na(df$true_weak)] <- FALSE
+  df$true_strong[is.na(df$true_strong)] <- FALSE
+
+  wald_for_empirical_null <- inflate_null_wald_statistics(
+    wald = df$stat,
+    is_de = df$is_de,
+    inflation_fraction = null_inflation
+  )
+
+  empirical <- tryCatch(
+    fit_empirical_null(wald_for_empirical_null, "simulation"),
+    error = function(e) {
+      log_message("Simulation empirical-null fallback used: ", conditionMessage(e))
+
+      p_raw <- rep(NA_real_, length(wald_for_empirical_null))
+      ok <- is.finite(wald_for_empirical_null) & !is.na(wald_for_empirical_null)
+      p_raw[ok] <- 2 * stats::pnorm(-abs(wald_for_empirical_null[ok]))
+      p_raw <- clip_probability(p_raw)
+
+      empirical_bh <- rep(NA_real_, length(p_raw))
+      ok_p <- is.finite(p_raw) & !is.na(p_raw)
+      empirical_bh[ok_p] <- p.adjust(p_raw[ok_p], method = "BH")
+
+      list(
+        empirical_p = p_raw,
+        empirical_q = empirical_bh,
+        empirical_lfdr = rep(NA_real_, length(p_raw)),
+        empirical_bh = empirical_bh,
+        empirical_null_method = "theoretical_normal_simulation_fallback"
+      )
+    }
+  )
+
   df$empirical_p <- empirical$empirical_p
   df$empirical_bh <- empirical$empirical_bh
-  df$neglog10_empirical_p_calc <- safe_neglog10(df$empirical_p, floor_value = calculation_p_floor)
+  df$empirical_null_method <- empirical$empirical_null_method
+  df$neglog10_empirical_p_calc <- safe_neglog10(
+    df$empirical_p,
+    floor_value = calculation_p_floor
+  )
+
   hc_p <- hc_threshold(df$empirical_p)
   hbfss_cutoff <- if (is.na(hc_p)) NA_real_ else -log10(hc_p) * lfc_boundary
 
-  df$hc_pass <- !is.na(hc_p) & !is.na(df$empirical_p) & is.finite(df$empirical_p) & df$empirical_p <= hc_p
+  df$hc_pass <- !is.na(hc_p) &
+    !is.na(df$empirical_p) &
+    is.finite(df$empirical_p) &
+    df$empirical_p <= hc_p
+
   df$HBFSS <- abs(df$lfc_shrunk) * df$neglog10_empirical_p_calc
-  df$standard_sig <- !is.na(df$padj) & df$padj < alpha_standard & !is.na(df$lfc_shrunk) & abs(df$lfc_shrunk) >= lfc_boundary
-  df$greaterAbs_sig <- !is.na(df$greaterAbs_padj) & df$greaterAbs_padj < alpha_strong & !is.na(df$lfc_shrunk) & abs(df$lfc_shrunk) >= lfc_boundary
-  df$lessAbs_sig <- !is.na(df$lessAbs_padj) & df$lessAbs_padj < alpha_weak & !is.na(df$lfc_shrunk) & abs(df$lfc_shrunk) < lfc_boundary
-  df$empirical_bh_sig <- !is.na(df$empirical_bh) & df$empirical_bh < alpha_standard & !is.na(df$lfc_shrunk) & abs(df$lfc_shrunk) >= lfc_boundary
-  df$hbfss_raw_sig <- !is.na(hbfss_cutoff) & !is.na(df$HBFSS) & is.finite(df$HBFSS) & df$HBFSS >= hbfss_cutoff & df$hc_pass
+
+  df$standard_sig <- !is.na(df$padj) &
+    df$padj < alpha_standard &
+    !is.na(df$lfc_shrunk) &
+    abs(df$lfc_shrunk) >= lfc_boundary
+
+  df$greaterAbs_sig <- !is.na(df$greaterAbs_padj) &
+    df$greaterAbs_padj < alpha_strong &
+    !is.na(df$lfc_shrunk) &
+    abs(df$lfc_shrunk) >= lfc_boundary
+
+  df$lessAbs_sig <- !is.na(df$lessAbs_padj) &
+    df$lessAbs_padj < alpha_weak &
+    !is.na(df$lfc_shrunk) &
+    abs(df$lfc_shrunk) < lfc_boundary
+
+  df$empirical_bh_sig <- !is.na(df$empirical_bh) &
+    df$empirical_bh < alpha_standard &
+    !is.na(df$lfc_shrunk) &
+    abs(df$lfc_shrunk) >= lfc_boundary
+
+  df$hbfss_raw_sig <- !is.na(hbfss_cutoff) &
+    !is.na(df$HBFSS) &
+    is.finite(df$HBFSS) &
+    df$HBFSS >= hbfss_cutoff &
+    df$hc_pass
+
   df$hbfss_total_sig <- df$standard_sig | df$hbfss_raw_sig
   df$weak_region_hbfss_sig <- df$lessAbs_sig & df$hbfss_raw_sig
 
-  list(results = df, hc_p = hc_p, hbfss_cutoff = hbfss_cutoff)
+  list(
+    results = df,
+    hc_p = hc_p,
+    hbfss_cutoff = hbfss_cutoff
+  )
 }
 
 build_simulation_metric_rows <- function(out, template) {
