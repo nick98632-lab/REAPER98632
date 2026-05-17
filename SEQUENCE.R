@@ -53,23 +53,29 @@ label_top_n_total <- 8L
 label_top_n_per_class <- 2L
 
 # Optional simulation and Git behavior. These are deliberately disabled by default.
-run_simulation_validation <- TRUE
+run_simulation_validation <- FALSE
 export_simulation_feature_results <- FALSE
 simulation_seed <- 42L
-simulation_n_features <- 10000L
-simulation_n_samples_per_group <- 8L
+
+# Simulation is OFF by default so manuscript figure generation cannot stall.
+# For a quick diagnostic run, set run_simulation_validation <- TRUE and keep these defaults.
+# For a full validation run, increase n_features, n_reps, and the grids explicitly.
+simulation_n_features <- 2500L
+simulation_n_samples_per_group <- 6L
 simulation_base_mean <- 200
 simulation_dispersion_null <- 0.10
 simulation_dispersion_de <- 0.15
-simulation_de_fractions <- c(0.05, 0.10, 0.20)
-simulation_lfc_magnitudes <- c(0.25, 0.50, 1.00, 2.00)
+simulation_de_fractions <- c(0.05, 0.10)
+simulation_lfc_magnitudes <- c(0.50, 1.00)
 simulation_weak_lfc_min <- 0.20
 simulation_weak_lfc_max <- 0.80
 simulation_null_inflation <- c(0.00, 0.10)
-simulation_n_reps <- 20L
+simulation_n_reps <- 3L
+simulation_progress_every <- 1L
+simulation_checkpoint_every <- 5L
 
 # Optional Git push. Keep FALSE during analysis/debugging; set TRUE only after outputs are confirmed.
-git_push_after_success <- TRUE
+git_push_after_success <- FALSE
 git_remote_name <- "origin"
 git_branch_name <- NA_character_
 git_commit_message <- paste0("Update SEQUENCE manuscript outputs ", format(Sys.time(), "%Y-%m-%d %H:%M:%S"))
@@ -301,6 +307,20 @@ format_compact_number <- function(x, digits = 3) {
   out
 }
 
+mean_finite <- function(x) {
+  y <- suppressWarnings(as.numeric(x))
+  y <- y[is.finite(y) & !is.na(y)]
+  if (length(y) == 0L) return(NA_real_)
+  mean(y)
+}
+
+median_finite <- function(x) {
+  y <- suppressWarnings(as.numeric(x))
+  y <- y[is.finite(y) & !is.na(y)]
+  if (length(y) == 0L) return(NA_real_)
+  stats::median(y)
+}
+
 safe_csv_name <- function(...) {
   paste0(gsub("[^A-Za-z0-9_.-]+", "_", paste(..., sep = "_")), ".csv")
 }
@@ -423,6 +443,13 @@ get_shared_legend <- function(p) {
   idx <- which(vapply(grob$grobs, function(x) x$name, character(1)) == "guide-box")
   if (length(idx) == 0L) return(NULL)
   grob$grobs[[idx[1]]]
+}
+
+with_panel_mode <- function(expr) {
+  old <- getOption("sequence.panel.mode", FALSE)
+  options(sequence.panel.mode = TRUE)
+  on.exit(options(sequence.panel.mode = old), add = TRUE)
+  force(expr)
 }
 
 arrange_with_one_legend <- function(plot_list, title, ncol) {
@@ -1057,8 +1084,8 @@ hbfss_boundary <- function(plot_df, hc_p, hbfss_cutoff, y_limit) {
   x_abs <- x_abs[keep]
   y <- y[keep]
   rbind(
-    data.frame(x = -rev(x_abs), y = rev(y), stringsAsFactors = FALSE),
-    data.frame(x = x_abs, y = y, stringsAsFactors = FALSE)
+    data.frame(x = -rev(x_abs), y = rev(y), side = "negative", stringsAsFactors = FALSE),
+    data.frame(x = x_abs, y = y, side = "positive", stringsAsFactors = FALSE)
   )
 }
 
@@ -1086,6 +1113,10 @@ plot_volcano <- function(df, title) {
     "  HBFSS total=", sum(df$hbfss_flag, na.rm = TRUE),
     "  HBFSS-only=", sum(df$display_hbfss, na.rm = TRUE)
   )
+  in_panel_mode <- isTRUE(getOption("sequence.panel.mode", FALSE))
+  show_caption <- !in_panel_mode
+  show_gene_labels <- !in_panel_mode
+  show_threshold_labels <- !in_panel_mode
 
   p <- ggplot(
     plot_df,
@@ -1122,25 +1153,32 @@ plot_volcano <- function(df, title) {
       ),
       fill = "none", shape = "none", size = "none", alpha = "none"
     ) +
-    labs(title = title, x = "Shrunken log2 fold change", y = expression(-log[10]("empirical p")), caption = caption) +
+    labs(title = title, x = "Shrunken log2 fold change", y = expression(-log[10]("empirical p")), caption = if (show_caption) caption else NULL) +
     coord_cartesian(ylim = c(0, y_limit), clip = "off") +
     manuscript_theme()
 
   if (!is.na(hc_y) && is.finite(hc_y)) {
-    p <- p +
-      geom_hline(yintercept = hc_y, linetype = "dotted", linewidth = 0.60, color = threshold_color) +
-      annotate(
+    p <- p + geom_hline(yintercept = hc_y, linetype = "dotted", linewidth = 0.60, color = threshold_color)
+    if (show_threshold_labels) {
+      p <- p + annotate(
         "text", x = x_min + 0.03 * x_span, y = threshold_label_y,
         label = paste0("HC p=", signif(hc_p, 3)), hjust = 0, vjust = 1,
         size = 1.90, color = threshold_color
       )
+    }
   }
 
   if (!is.null(boundary)) {
-    p <- p + geom_line(data = boundary, aes(x = x, y = y), inherit.aes = FALSE, color = class_colors[["HBFSS"]], linewidth = 0.75)
+    p <- p + geom_line(
+      data = boundary,
+      aes(x = x, y = y, group = side),
+      inherit.aes = FALSE,
+      color = class_colors[["HBFSS"]],
+      linewidth = 0.75
+    )
   }
 
-  if (!is.na(hbfss_cutoff) && is.finite(hbfss_cutoff)) {
+  if (show_threshold_labels && !is.na(hbfss_cutoff) && is.finite(hbfss_cutoff)) {
     p <- p + annotate(
       "text", x = x_min + 0.34 * x_span, y = threshold_label_y,
       label = paste0("HBFSS cutoff=", signif(hbfss_cutoff, 3)), hjust = 0, vjust = 1,
@@ -1148,7 +1186,7 @@ plot_volcano <- function(df, title) {
     )
   }
 
-  if (nrow(label_df) > 0L) {
+  if (show_gene_labels && nrow(label_df) > 0L) {
     p <- p + ggrepel::geom_text_repel(
       data = label_df,
       aes(x = lfc_shrunk, y = neglog10_empirical_p, label = gene_label, color = final_class),
@@ -1221,7 +1259,7 @@ plot_pca_support <- function(fit_obj, title) {
   ggplot(pca_df, aes(PC1, PC2, label = sample_id, shape = condition, fill = condition)) +
     geom_hline(yintercept = 0, linewidth = 0.22, linetype = "dashed", color = "grey70") +
     geom_vline(xintercept = 0, linewidth = 0.22, linetype = "dashed", color = "grey70") +
-    geom_point(size = 2.2, color = "white", stroke = 0.45) +
+    geom_point(size = 2.35, color = "grey15", stroke = 0.35) +
     ggrepel::geom_text_repel(
       size = 1.9,
       max.overlaps = 12,
@@ -1808,6 +1846,10 @@ run_sequence_simulation_validation <- function() {
   sim_grid <- bind_rows(fixed_grid, weak_grid)
   total_runs <- nrow(sim_grid) * simulation_n_reps
   log_message("Running simulation validation: ", total_runs, " planned replicates")
+  simulation_progress_every <<- max(1L, suppressWarnings(as.integer(simulation_progress_every)), na.rm = TRUE)
+  simulation_checkpoint_every <<- max(1L, suppressWarnings(as.integer(simulation_checkpoint_every)), na.rm = TRUE)
+  log_message("Simulation config: features=", simulation_n_features, ", samples/group=", simulation_n_samples_per_group, ", reps/grid=", simulation_n_reps)
+  simulation_start <- Sys.time()
 
   metric_rows <- list()
   failure_rows <- list()
@@ -1818,7 +1860,15 @@ run_sequence_simulation_validation <- function() {
     grid_row <- sim_grid[grid_i, , drop = FALSE]
     for (rep_i in seq_len(simulation_n_reps)) {
       run_index <- run_index + 1L
-      if (run_index %% 10L == 0L || run_index == 1L || run_index == total_runs) log_message("Simulation progress: ", run_index, "/", total_runs)
+      if (run_index %% simulation_progress_every == 0L || run_index == 1L || run_index == total_runs) {
+        elapsed_min <- as.numeric(difftime(Sys.time(), simulation_start, units = "mins"))
+        eta_min <- if (run_index > 0L) elapsed_min * (total_runs - run_index) / run_index else NA_real_
+        log_message(
+          "Simulation progress: ", run_index, "/", total_runs,
+          " | elapsed=", signif(elapsed_min, 3), " min",
+          " | ETA=", signif(eta_min, 3), " min"
+        )
+      }
 
       template <- data.frame(de_fraction = grid_row$de_fraction, lfc_magnitude = grid_row$lfc_magnitude, simulation_profile = grid_row$simulation_profile, null_inflation = grid_row$null_inflation, replicate = rep_i, stringsAsFactors = FALSE)
       template$lfc_label <- simulation_lfc_label(template$lfc_magnitude, template$simulation_profile)
@@ -1844,6 +1894,10 @@ run_sequence_simulation_validation <- function() {
 
       if (is.null(out)) next
       metric_rows[[length(metric_rows) + 1L]] <- build_simulation_metric_rows(out, template)
+      if (length(metric_rows) > 0L && (length(metric_rows) %% simulation_checkpoint_every == 0L || run_index == total_runs)) {
+        save_csv(bind_rows(metric_rows), file.path(simulation_dir, "Simulation_RunMetrics_Checkpoint.csv"))
+      }
+
       if (isTRUE(export_simulation_feature_results)) {
         feature_export <- out$results
         feature_export$de_fraction <- grid_row$de_fraction
@@ -1868,14 +1922,14 @@ run_sequence_simulation_validation <- function() {
     group_by(de_fraction, lfc_magnitude, simulation_profile, null_inflation, lfc_label, de_label, inflation_label, method, truth_target) %>%
     summarise(
       n_replicates = n(),
-      precision_mean = mean(precision, na.rm = TRUE),
-      recall_mean = mean(recall, na.rm = TRUE),
-      f1_mean = mean(f1, na.rm = TRUE),
-      fdr_mean = mean(fdr, na.rm = TRUE),
-      discovery_count_mean = mean(discovery_count, na.rm = TRUE),
-      truth_count_mean = mean(truth_count, na.rm = TRUE),
-      hc_valid_fraction = mean(hc_valid, na.rm = TRUE),
-      hbfss_cutoff_median = median(hbfss_cutoff, na.rm = TRUE),
+      precision_mean = mean_finite(precision),
+      recall_mean = mean_finite(recall),
+      f1_mean = mean_finite(f1),
+      fdr_mean = mean_finite(fdr),
+      discovery_count_mean = mean_finite(discovery_count),
+      truth_count_mean = mean_finite(truth_count),
+      hc_valid_fraction = mean(as.numeric(hc_valid), na.rm = TRUE),
+      hbfss_cutoff_median = median_finite(hbfss_cutoff),
       .groups = "drop"
     )
 
@@ -1922,7 +1976,10 @@ write_sequence_methods <- function() {
     paste0("DESeq2 design is ~ condition with untrt as the reference. Standard effects use BH padj < ", alpha_standard, " and |apeglm-shrunken LFC| >= ", lfc_boundary, ". Strong effects use greaterAbs. Weak effects use lessAbs, |shrunken LFC| < boundary, and HBFSS raw significance. HBFSS = |shrunken LFC| x -log10(empirical p). The HBFSS cutoff is -log10(HC p threshold) x LFC boundary."),
     "",
     "## Figure export",
-    "Figures are exported as PNG and PDF. Panel grobs are rendered through explicit grid devices so arranged multi-panel figures are saved reliably."
+    "Figures are exported as PNG and PDF. Panel grobs are rendered through explicit grid devices so arranged multi-panel figures are saved reliably. Combined panel figures suppress repeated per-plot captions, gene labels, and threshold text while retaining threshold lines and one shared legend.",
+    "",
+    "## Simulation validation",
+    paste0("Simulation validation is optional and disabled by default for manuscript figure runs. Current defaults when enabled: n_features=", simulation_n_features, ", n_samples_per_group=", simulation_n_samples_per_group, ", n_reps=", simulation_n_reps, ".")
   )
   writeLines(methods_lines, file.path(output_dir, "METHODS_SEQUENCE_PIPELINE.md"))
 }
@@ -2108,23 +2165,29 @@ if (isTRUE(save_individual_figures)) {
   }
 }
 
-raw_plots <- list()
-for (comparison_name in comparison_order) {
-  key <- paste(comparison_name, "Raw", sep = "__")
-  if (!is.null(analysis_store[[key]])) raw_plots[[comparison_name]] <- plot_volcano(analysis_store[[key]]$results, comparison_name)
-}
+raw_plots <- with_panel_mode({
+  plots <- list()
+  for (comparison_name in comparison_order) {
+    key <- paste(comparison_name, "Raw", sep = "__")
+    if (!is.null(analysis_store[[key]])) plots[[comparison_name]] <- plot_volcano(analysis_store[[key]]$results, comparison_name)
+  }
+  plots
+})
 raw_panel <- arrange_with_one_legend(raw_plots, "Volcano: Original", ncol = length(comparison_order))
 figure_status_rows[[length(figure_status_rows) + 1L]] <- safe_save_figure(raw_panel, file.path(figure_dir, "Volcano_Original.png"), 18.0, 5.8)
 
 for (dataset_prefix in c("Lead", "Rem")) {
-  plots <- list()
-  for (mode in evs_modes) {
-    for (comparison_name in comparison_order) {
-      analysis_label <- paste0(dataset_prefix, "_", mode)
-      key <- paste(comparison_name, analysis_label, sep = "__")
-      if (!is.null(analysis_store[[key]])) plots[[paste(comparison_name, mode, sep = "_")]] <- plot_volcano(analysis_store[[key]]$results, paste0(comparison_name, "\n", mode))
+  plots <- with_panel_mode({
+    tmp <- list()
+    for (mode in evs_modes) {
+      for (comparison_name in comparison_order) {
+        analysis_label <- paste0(dataset_prefix, "_", mode)
+        key <- paste(comparison_name, analysis_label, sep = "__")
+        if (!is.null(analysis_store[[key]])) tmp[[paste(comparison_name, mode, sep = "_")]] <- plot_volcano(analysis_store[[key]]$results, paste0(comparison_name, "\n", mode))
+      }
     }
-  }
+    tmp
+  })
   panel_title <- if (dataset_prefix == "Lead") "Volcano: Leading Edge" else "Volcano: Remainder"
   panel_file <- if (dataset_prefix == "Lead") "Volcano_Lead.png" else "Volcano_Remainder.png"
   panel <- arrange_with_one_legend(plots, panel_title, ncol = length(comparison_order))
