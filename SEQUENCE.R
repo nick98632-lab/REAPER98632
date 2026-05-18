@@ -54,7 +54,7 @@ export_simulation_feature_results <- FALSE
 git_push_after_success <- TRUE
 git_remote_name <- "origin"
 git_branch_name <- NA_character_
-git_commit_message <- paste0("Update SEQUENCE simulation validation ", format(Sys.time(), "%Y-%m-%d %H:%M:%S"))
+git_commit_message <- paste0("Update SEQUENCE simulation validation outputs ", format(Sys.time(), "%Y-%m-%d %H:%M:%S"))
 git_pull_rebase_before_push <- TRUE
 git_stage_pipeline_script <- TRUE
 git_allow_no_change_success <- TRUE
@@ -1053,6 +1053,166 @@ write_simulation_methods <- function() {
   invisible(TRUE)
 }
 
+
+fmt_number <- function(x, digits = 3) {
+  x <- suppressWarnings(as.numeric(x[1]))
+  if (!is.finite(x) || is.na(x)) return("NA")
+  formatC(x, format = "f", digits = digits)
+}
+
+fmt_delta <- function(x, digits = 3) {
+  x <- suppressWarnings(as.numeric(x[1]))
+  if (!is.finite(x) || is.na(x)) return("NA")
+  paste0(ifelse(x >= 0, "+", ""), formatC(x, format = "f", digits = digits))
+}
+
+fmt_pct <- function(x, digits = 1) {
+  x <- suppressWarnings(as.numeric(x[1]))
+  if (!is.finite(x) || is.na(x)) return("NA")
+  paste0(formatC(100 * x, format = "f", digits = digits), "%")
+}
+
+lookup_overall <- function(overall, method_name, target_name) {
+  row <- overall[as.character(overall$method) == method_name & as.character(overall$truth_target) == target_name, , drop = FALSE]
+  if (nrow(row) == 0L) return(NULL)
+  row[1, , drop = FALSE]
+}
+
+delta_metric <- function(overall, method_a, method_b, target_name, metric_col) {
+  a <- lookup_overall(overall, method_a, target_name)
+  b <- lookup_overall(overall, method_b, target_name)
+  if (is.null(a) || is.null(b)) return(NA_real_)
+  suppressWarnings(as.numeric(a[[metric_col]][1]) - as.numeric(b[[metric_col]][1]))
+}
+
+markdown_table <- function(df, columns, headers) {
+  if (is.null(df) || nrow(df) == 0L) return(character(0))
+  out <- c(
+    paste0("|", paste(headers, collapse = "|"), "|"),
+    paste0("|", paste(rep("---", length(headers)), collapse = "|"), "|")
+  )
+  for (i in seq_len(nrow(df))) {
+    values <- vapply(columns, function(col) as.character(df[[col]][i]), character(1))
+    out <- c(out, paste0("|", paste(values, collapse = "|"), "|"))
+  }
+  out
+}
+
+write_simulation_interpretation <- function(simulation_result) {
+  metric_summary <- simulation_result$metric_summary
+  qc_summary <- simulation_result$qc_summary
+  metric_long <- simulation_result$metric_long
+
+  if (is.null(metric_summary) || nrow(metric_summary) == 0L) {
+    stop("Cannot write interpretation because Simulation_MethodSummary is empty.", call. = FALSE)
+  }
+
+  overall <- metric_summary %>%
+    group_by(method, truth_target) %>%
+    summarise(
+      n_grid_cells = n(),
+      precision_mean = mean_finite(precision_mean),
+      recall_mean = mean_finite(recall_mean),
+      f1_mean = mean_finite(f1_mean),
+      fdr_mean = mean_finite(fdr_mean),
+      discovery_count_mean = mean_finite(discovery_count_mean),
+      truth_count_mean = mean_finite(truth_count_mean),
+      hc_valid_fraction = mean_finite(hc_valid_fraction),
+      .groups = "drop"
+    ) %>%
+    arrange(truth_target, desc(f1_mean), method)
+
+  overall_print <- overall %>%
+    mutate(
+      precision = vapply(precision_mean, fmt_number, character(1), digits = 3),
+      recall = vapply(recall_mean, fmt_number, character(1), digits = 3),
+      F1 = vapply(f1_mean, fmt_number, character(1), digits = 3),
+      FDR = vapply(fdr_mean, fmt_number, character(1), digits = 3),
+      discoveries = vapply(discovery_count_mean, fmt_number, character(1), digits = 1),
+      truth = vapply(truth_count_mean, fmt_number, character(1), digits = 1)
+    ) %>%
+    select(method, truth_target, precision, recall, F1, FDR, discoveries, truth)
+
+  save_csv(overall, file.path(simulation_dir, "Simulation_Interpretation_OverallMetrics.csv"))
+
+  best_all <- overall[overall$truth_target == "all_de" & is.finite(overall$f1_mean), , drop = FALSE]
+  best_all <- best_all[order(-best_all$f1_mean), , drop = FALSE]
+  best_all_method <- if (nrow(best_all) > 0L) as.character(best_all$method[1]) else "NA"
+
+  hbfss_total <- lookup_overall(overall, "HBFSS_total", "all_de")
+  deseq2 <- lookup_overall(overall, "DESeq2_BH", "all_de")
+  empirical_bh <- lookup_overall(overall, "Empirical_BH", "all_de")
+  hbfss_raw <- lookup_overall(overall, "HBFSS_raw", "all_de")
+
+  strong_hbfss <- lookup_overall(overall, "HBFSS_raw", "strong_de")
+  strong_greater <- lookup_overall(overall, "GreaterAbs", "strong_de")
+  weak_hbfss <- lookup_overall(overall, "HBFSS_weak_region", "weak_de")
+  weak_less <- lookup_overall(overall, "LessAbs", "weak_de")
+
+  hc_overall_fraction <- mean_finite(qc_summary$hc_valid_fraction)
+  hc_min_fraction <- min_finite(qc_summary$hc_valid_fraction)
+  hc_median_threshold <- median_finite(qc_summary$hc_p_threshold_median)
+  hc_median_cutoff <- median_finite(qc_summary$hbfss_cutoff_median)
+
+  failed_path <- file.path(simulation_dir, "Simulation_Failures.csv")
+  failures <- if (file.exists(failed_path)) tryCatch(read.csv(failed_path), error = function(e) data.frame()) else data.frame()
+  failed_count <- if (is.data.frame(failures)) nrow(failures) else 0L
+  total_success <- length(unique(paste(metric_long$de_fraction, metric_long$lfc_magnitude, metric_long$simulation_profile, metric_long$null_inflation, metric_long$replicate, sep = "|")))
+
+  lines <- c(
+    "# SEQUENCE simulation validation interpretation",
+    "",
+    "## What this simulation tests",
+    "This standalone simulation asks whether the SEQUENCE HBFSS framework behaves as intended when the truth is known. It generates negative-binomial count data, randomly assigns true differential features, runs DESeq2, estimates empirical-null p-values from Wald statistics, applies higher criticism, calculates HBFSS exactly as `abs(apeglm-shrunken log2 fold change) * -log10(empirical p)`, and compares calls against the known simulated truth.",
+    "",
+    "## How to read the metrics",
+    "Precision is the fraction of called features that are truly differential. Recall is the fraction of true differential features recovered. F1 is the harmonic mean of precision and recall, so it rewards methods that balance both. FDR is the observed false-discovery proportion among called features; lower is better. Discovery count shows how many features each method calls. The HC valid-fraction figure shows how often higher criticism produced a usable threshold under each simulation condition.",
+    "",
+    "## Main automated summary",
+    paste0("Successful simulation grid/replicate runs represented in the metric table: ", total_success, "."),
+    paste0("Failed replicate records: ", failed_count, "."),
+    paste0("Best average all-DE F1 method across exported grid summaries: ", best_all_method, "."),
+    paste0("Mean HC valid-threshold fraction across conditions: ", fmt_pct(hc_overall_fraction), "; minimum condition-level HC valid fraction: ", fmt_pct(hc_min_fraction), "."),
+    paste0("Median condition-level HC p-threshold: ", fmt_number(hc_median_threshold, 4), "; median HBFSS cutoff: ", fmt_number(hc_median_cutoff, 4), "."),
+    "",
+    "## Direct all-DE comparison: HBFSS_total versus DESeq2_BH",
+    paste0("Delta F1: ", fmt_delta(delta_metric(overall, "HBFSS_total", "DESeq2_BH", "all_de", "f1_mean")), "."),
+    paste0("Delta recall: ", fmt_delta(delta_metric(overall, "HBFSS_total", "DESeq2_BH", "all_de", "recall_mean")), "."),
+    paste0("Delta precision: ", fmt_delta(delta_metric(overall, "HBFSS_total", "DESeq2_BH", "all_de", "precision_mean")), "."),
+    paste0("Delta FDR: ", fmt_delta(delta_metric(overall, "HBFSS_total", "DESeq2_BH", "all_de", "fdr_mean")), "."),
+    paste0("Delta mean discovery count: ", fmt_delta(delta_metric(overall, "HBFSS_total", "DESeq2_BH", "all_de", "discovery_count_mean"), digits = 1), "."),
+    "",
+    "Interpretation: positive delta F1 or recall means HBFSS_total improved balance or sensitivity compared with the standard DESeq2 BH workflow. A positive delta FDR means that gain came with more false discoveries; a negative delta FDR means HBFSS_total was cleaner on average.",
+    "",
+    "## Strong-effect comparison",
+    paste0("GreaterAbs average F1: ", if (is.null(strong_greater)) "NA" else fmt_number(strong_greater$f1_mean), "; HBFSS_raw strong-effect average F1: ", if (is.null(strong_hbfss)) "NA" else fmt_number(strong_hbfss$f1_mean), "."),
+    paste0("GreaterAbs average recall: ", if (is.null(strong_greater)) "NA" else fmt_number(strong_greater$recall_mean), "; HBFSS_raw strong-effect average recall: ", if (is.null(strong_hbfss)) "NA" else fmt_number(strong_hbfss$recall_mean), "."),
+    "",
+    "Interpretation: this is the validation arm for large-effect discoveries. It directly tests whether the HBFSS boundary recovers strong effects compared with DESeq2's `greaterAbs` alternative-hypothesis test.",
+    "",
+    "## Weak-region comparison",
+    paste0("LessAbs average F1: ", if (is.null(weak_less)) "NA" else fmt_number(weak_less$f1_mean), "; HBFSS_weak_region average F1: ", if (is.null(weak_hbfss)) "NA" else fmt_number(weak_hbfss$f1_mean), "."),
+    paste0("LessAbs average recall: ", if (is.null(weak_less)) "NA" else fmt_number(weak_less$recall_mean), "; HBFSS_weak_region average recall: ", if (is.null(weak_hbfss)) "NA" else fmt_number(weak_hbfss$recall_mean), "."),
+    "",
+    "Interpretation: this is the validation arm for sub-boundary effects. The weak-mixture grid intentionally creates true effects below the log2 fold-change boundary, so strong-effect truth counts are zero there by design and strong-effect boxes are omitted for those cells.",
+    "",
+    "## Overall method table",
+    markdown_table(overall_print, c("method", "truth_target", "precision", "recall", "F1", "FDR", "discoveries", "truth"), c("Method", "Truth target", "Precision", "Recall", "F1", "FDR", "Mean discoveries", "Mean truth count")),
+    "",
+    "## Figure guide",
+    "`Simulation_F1_Boxplot` shows the overall balance of precision and recall. `Simulation_Precision_Boxplot` shows how clean the calls are. `Simulation_Recall_Boxplot` shows sensitivity. `Simulation_FDR_Boxplot` shows observed false-discovery burden, with the dashed line at the nominal alpha. `Simulation_DiscoveryCount_Boxplot` shows how aggressively each method calls features. The weak-region figures validate sub-boundary effects; the strong-effect figures validate above-boundary effects; `Simulation_HC_ValidFraction` confirms whether higher criticism is producing usable thresholds across the grid.",
+    "",
+    "## Submission note",
+    "For manuscript reporting, cite the method summary table and the F1/precision/recall/FDR figures together. Do not interpret F1 alone. If HBFSS improves recall but also increases FDR, describe it as a sensitivity-oriented gain. If HBFSS improves F1 without increasing FDR, describe it as improved balance under the simulated conditions."
+  )
+
+  writeLines(lines, file.path(simulation_dir, "Interpretation_Simulation.md"))
+  writeLines(lines, file.path(simulation_dir, "Interpretation_Simulation.txt"))
+  log_message("Simulation interpretation written: ", file.path(simulation_dir, "Interpretation_Simulation.md"))
+  invisible(TRUE)
+}
+
+
 write_manifest <- function() {
   exported_files <- list.files(simulation_dir, recursive = TRUE, full.names = TRUE, all.files = FALSE)
   exported_files <- exported_files[file.exists(exported_files)]
@@ -1239,6 +1399,7 @@ main <- function() {
 
   simulation_result <- run_sequence_simulation_validation()
   write_simulation_methods()
+  write_simulation_interpretation(simulation_result)
   manifest <- write_manifest()
   cleanup_rplots_pdf()
   git_commit_and_push()
