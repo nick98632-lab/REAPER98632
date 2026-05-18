@@ -52,15 +52,20 @@ save_individual_figures <- TRUE
 label_top_n_total <- 8L
 label_top_n_per_class <- 2L
 
-# Optional simulation and Git behavior. These are deliberately disabled by default.
+# Large raw per-feature PC1 variance export. Keep FALSE for GitHub-safe runs.
+# The PC1 variance figure and cutoff summary still generate from in-memory data.
+export_full_pc1_variance_distributions <- FALSE
+remove_skipped_large_exports_from_disk <- TRUE
+
+# Optional simulation and Git behavior.
+# Simulation is ON, but configured as a fast validation run that should complete instead of stalling.
 run_simulation_validation <- TRUE
-export_simulation_feature_results <- TRUE
+export_simulation_feature_results <- FALSE
+simulation_use_apeglm_shrinkage <- FALSE
 simulation_seed <- 42L
 
-# Simulation is OFF by default so manuscript figure generation cannot stall.
-# For a quick diagnostic run, set run_simulation_validation <- TRUE and keep these defaults.
-# For a full validation run, increase n_features, n_reps, and the grids explicitly.
-simulation_n_features <- 2500L
+# For a deeper validation run, increase n_features, n_reps, and the grids explicitly.
+simulation_n_features <- 1000L
 simulation_n_samples_per_group <- 6L
 simulation_base_mean <- 200
 simulation_dispersion_null <- 0.10
@@ -70,20 +75,27 @@ simulation_lfc_magnitudes <- c(0.50, 1.00)
 simulation_weak_lfc_min <- 0.20
 simulation_weak_lfc_max <- 0.80
 simulation_null_inflation <- c(0.00, 0.10)
-simulation_n_reps <- 3L
+simulation_n_reps <- 1L
 simulation_progress_every <- 1L
-simulation_checkpoint_every <- 5L
+simulation_checkpoint_every <- 1L
 
-# Optional Git push. Keep FALSE during analysis/debugging; set TRUE only after outputs are confirmed.
+# Optional Git push. This is GitHub-safe by default: no force-adding ignored exports.
 git_push_after_success <- TRUE
 git_remote_name <- "origin"
 git_branch_name <- NA_character_
 git_commit_message <- paste0("Update SEQUENCE manuscript outputs ", format(Sys.time(), "%Y-%m-%d %H:%M:%S"))
 git_pull_rebase_before_push <- TRUE
 git_stage_pipeline_script <- TRUE
-git_force_add_outputs <- TRUE
+git_force_add_outputs <- FALSE
 git_allow_no_change_success <- TRUE
-git_fail_if_preexisting_staged_changes <- TRUE
+git_fail_if_preexisting_staged_changes <- FALSE
+git_max_file_size_bytes <- 95 * 1024^2
+git_rewrite_unpushed_large_export_commits <- TRUE
+git_exclude_large_export_patterns <- c(
+  "exports/manuscript_final_clean/Summary_PC1VarianceDistributions.csv",
+  "exports/manuscript_final_clean/Summary_PC1VarianceDistributions*.csv",
+  "exports/manuscript_final_clean/simulation_validation/Simulation_FeatureResults.csv"
+)
 
 # =============================================================================
 # STUDY DESIGN
@@ -1685,20 +1697,26 @@ sequence_simulation_analysis <- function(sim_obj, null_inflation) {
     alpha = alpha_weak
   )
 
-  shrunk <- lfcShrink(dds, coef = coef_name, type = "apeglm", quiet = TRUE)
-
   df <- as.data.frame(standard)
   df$feature_id <- rownames(df)
 
+  if (isTRUE(simulation_use_apeglm_shrinkage)) {
+    shrunk <- lfcShrink(dds, coef = coef_name, type = "apeglm", quiet = TRUE)
+    shrink_df <- data.frame(
+      feature_id = rownames(shrunk),
+      lfc_shrunk = as.data.frame(shrunk)$log2FoldChange,
+      stringsAsFactors = FALSE
+    )
+  } else {
+    shrink_df <- data.frame(
+      feature_id = rownames(df),
+      lfc_shrunk = df$log2FoldChange,
+      stringsAsFactors = FALSE
+    )
+  }
+
   df <- df %>%
-    left_join(
-      data.frame(
-        feature_id = rownames(shrunk),
-        lfc_shrunk = as.data.frame(shrunk)$log2FoldChange,
-        stringsAsFactors = FALSE
-      ),
-      by = "feature_id"
-    ) %>%
+    left_join(shrink_df, by = "feature_id") %>%
     left_join(
       data.frame(
         feature_id = rownames(greater_abs),
@@ -1979,7 +1997,7 @@ write_sequence_methods <- function() {
     "Figures are exported as PNG and PDF. Panel grobs are rendered through explicit grid devices so arranged multi-panel figures are saved reliably. Combined panel figures suppress repeated per-plot captions, gene labels, and threshold text while retaining threshold lines and one shared legend.",
     "",
     "## Simulation validation",
-    paste0("Simulation validation is optional and disabled by default for manuscript figure runs. Current defaults when enabled: n_features=", simulation_n_features, ", n_samples_per_group=", simulation_n_samples_per_group, ", n_reps=", simulation_n_reps, ".")
+    paste0("Simulation validation is enabled as a fast validation run by default: n_features=", simulation_n_features, ", n_samples_per_group=", simulation_n_samples_per_group, ", n_reps=", simulation_n_reps, ", simulation_use_apeglm_shrinkage=", simulation_use_apeglm_shrinkage, ".")
   )
   writeLines(methods_lines, file.path(output_dir, "METHODS_SEQUENCE_PIPELINE.md"))
 }
@@ -2014,7 +2032,9 @@ git_command <- function(args, allow_failure = FALSE, echo_output = TRUE) {
   if (is.null(status)) status <- 0L
   status <- as.integer(status)
   if (isTRUE(echo_output) && length(out) > 0L) log_message(paste(out, collapse = "\n"))
-  if (!isTRUE(allow_failure) && status != 0L) stop("Git command failed with status ", status, ": ", cmd_display, "\n", paste(out, collapse = "\n"), call. = FALSE)
+  if (!isTRUE(allow_failure) && status != 0L) {
+    stop("Git command failed with status ", status, ": ", cmd_display, "\n", paste(out, collapse = "\n"), call. = FALSE)
+  }
   list(status = status, output = out)
 }
 
@@ -2031,6 +2051,117 @@ git_has_staged_changes <- function() {
   stop("Unable to inspect staged Git changes.", call. = FALSE)
 }
 
+ensure_gitignore_patterns <- function(patterns) {
+  patterns <- unique(patterns[nzchar(patterns)])
+  if (length(patterns) == 0L) return(invisible(FALSE))
+  ignore_path <- file.path(repo_root, ".gitignore")
+  existing <- if (file.exists(ignore_path)) readLines(ignore_path, warn = FALSE) else character(0)
+  missing <- setdiff(patterns, existing)
+  if (length(missing) > 0L) {
+    cat(paste0(missing, collapse = "\n"), "\n", file = ignore_path, append = TRUE, sep = "")
+    log_message("Updated .gitignore with GitHub-safe export exclusions: ", paste(missing, collapse = ", "))
+  }
+  invisible(length(missing) > 0L)
+}
+
+remove_skipped_large_export_files <- function() {
+  if (!isTRUE(remove_skipped_large_exports_from_disk)) return(invisible(FALSE))
+  targets <- c(
+    file.path(output_dir, "Summary_PC1VarianceDistributions.csv"),
+    file.path(simulation_dir, "Simulation_FeatureResults.csv")
+  )
+  removed <- character(0)
+  for (target in targets) {
+    if (file.exists(target)) {
+      unlink(target, force = TRUE)
+      removed <- c(removed, path_relative_to_repo(target))
+    }
+  }
+  if (length(removed) > 0L) log_message("Removed large skipped export file(s) from disk: ", paste(removed, collapse = ", "))
+  invisible(length(removed) > 0L)
+}
+
+git_remove_cached_excluded_exports <- function() {
+  patterns <- unique(git_exclude_large_export_patterns)
+  patterns <- patterns[nzchar(patterns)]
+  if (length(patterns) == 0L) return(invisible(FALSE))
+  git_command(c("rm", "-r", "--cached", "--ignore-unmatch", "--", patterns), allow_failure = TRUE)
+  invisible(TRUE)
+}
+
+git_staged_paths <- function() {
+  res <- git_command(c("diff", "--cached", "--name-only"), allow_failure = TRUE, echo_output = FALSE)
+  if (res$status != 0L || length(res$output) == 0L) return(character(0))
+  unique(trimws(res$output[nzchar(res$output)]))
+}
+
+git_unstage_oversized_files <- function(max_bytes = git_max_file_size_bytes) {
+  staged <- git_staged_paths()
+  if (length(staged) == 0L) return(invisible(character(0)))
+  oversized <- character(0)
+  for (rel in staged) {
+    abs_path <- file.path(repo_root, rel)
+    if (file.exists(abs_path)) {
+      sz <- suppressWarnings(file.info(abs_path)$size)
+      if (is.finite(sz) && !is.na(sz) && sz > max_bytes) oversized <- c(oversized, rel)
+    }
+  }
+  oversized <- unique(oversized)
+  if (length(oversized) > 0L) {
+    git_command(c("reset", "-q", "HEAD", "--", oversized), allow_failure = FALSE)
+    log_message("Unstaged oversized file(s) to protect GitHub push: ", paste(oversized, collapse = ", "))
+  }
+  invisible(oversized)
+}
+
+git_unpushed_large_blobs <- function(upstream_ref, max_bytes = git_max_file_size_bytes) {
+  if (is.na(upstream_ref) || !nzchar(upstream_ref)) return(data.frame())
+  rev_range <- paste0(upstream_ref, "..HEAD")
+  revs <- git_command(c("rev-list", "--objects", rev_range), allow_failure = TRUE, echo_output = FALSE)
+  if (revs$status != 0L || length(revs$output) == 0L) return(data.frame())
+
+  rows <- list()
+  for (line in revs$output) {
+    line <- trimws(line)
+    if (!nzchar(line)) next
+    parts <- strsplit(line, " ", fixed = TRUE)[[1]]
+    sha <- parts[1]
+    rel <- if (length(parts) > 1L) paste(parts[-1], collapse = " ") else NA_character_
+    if (is.na(rel) || !nzchar(rel)) next
+    sz <- git_command(c("cat-file", "-s", sha), allow_failure = TRUE, echo_output = FALSE)
+    if (sz$status != 0L || length(sz$output) == 0L) next
+    bytes <- suppressWarnings(as.numeric(trimws(sz$output[1])))
+    if (is.finite(bytes) && !is.na(bytes) && bytes > max_bytes) {
+      rows[[length(rows) + 1L]] <- data.frame(object = sha, file = rel, size_bytes = bytes, stringsAsFactors = FALSE)
+    }
+  }
+  if (length(rows) == 0L) return(data.frame())
+  bind_rows(rows)
+}
+
+git_rewrite_unpushed_large_export_history <- function(upstream_ref) {
+  if (!isTRUE(git_rewrite_unpushed_large_export_commits)) return(invisible(FALSE))
+  large <- git_unpushed_large_blobs(upstream_ref)
+  if (nrow(large) == 0L) return(invisible(FALSE))
+
+  export_large <- large[grepl("^exports/", large$file), , drop = FALSE]
+  if (nrow(export_large) == 0L) {
+    stop(
+      "Unpushed commit history contains oversized non-export file(s), so automatic rewrite was not attempted: ",
+      paste(large$file, collapse = ", "),
+      call. = FALSE
+    )
+  }
+
+  log_message(
+    "Oversized export blob(s) found in unpushed commit history: ",
+    paste(paste0(export_large$file, " (", round(export_large$size_bytes / 1024^2, 1), " MB)"), collapse = ", ")
+  )
+  log_message("Rewriting unpushed export commits with git reset --mixed ", upstream_ref, " so the large blobs are removed before push.")
+  git_command(c("reset", "--mixed", upstream_ref), allow_failure = FALSE)
+  invisible(TRUE)
+}
+
 git_commit_and_push <- function() {
   if (!isTRUE(git_push_after_success)) {
     log_message("Git push disabled: git_push_after_success is FALSE.")
@@ -2042,6 +2173,9 @@ git_commit_and_push <- function() {
   git_root <- normalizePath(git_root, winslash = "/", mustWork = TRUE)
   expected_root <- normalizePath(repo_root, winslash = "/", mustWork = TRUE)
   if (!identical(git_root, expected_root)) stop("Git root mismatch. repo_root is ", expected_root, " but git root is ", git_root, call. = FALSE)
+
+  ensure_gitignore_patterns(git_exclude_large_export_patterns)
+  remove_skipped_large_export_files()
 
   if (isTRUE(git_fail_if_preexisting_staged_changes) && git_has_staged_changes()) {
     stop("Git index already contains staged changes before the SEQUENCE push step. Commit or unstage them first.", call. = FALSE)
@@ -2056,9 +2190,20 @@ git_commit_and_push <- function() {
 
   git_command(c("fetch", git_remote_name), allow_failure = FALSE)
   upstream <- git_output_first_line(c("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"), allow_failure = TRUE)
-  if (isTRUE(git_pull_rebase_before_push) && !is.na(upstream) && nzchar(upstream)) git_command(c("pull", "--rebase", "--autostash"), allow_failure = FALSE)
+  if (is.na(upstream) || !nzchar(upstream)) {
+    remote_branch_ref <- paste0(git_remote_name, "/", target_branch)
+    remote_branch_sha <- git_output_first_line(c("rev-parse", "--verify", remote_branch_ref), allow_failure = TRUE)
+    if (!is.na(remote_branch_sha) && nzchar(remote_branch_sha)) upstream <- remote_branch_ref
+  }
+  if (isTRUE(git_pull_rebase_before_push) && !is.na(upstream) && nzchar(upstream)) git_command(c("pull", "--rebase", "--autostash", git_remote_name, target_branch), allow_failure = FALSE)
 
-  stage_paths <- c(output_dir)
+  upstream_after_pull <- git_output_first_line(c("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"), allow_failure = TRUE)
+  if (is.na(upstream_after_pull) || !nzchar(upstream_after_pull)) upstream_after_pull <- upstream
+  if (!is.na(upstream_after_pull) && nzchar(upstream_after_pull)) git_rewrite_unpushed_large_export_history(upstream_after_pull)
+
+  git_remove_cached_excluded_exports()
+
+  stage_paths <- c(".gitignore", output_dir)
   if (isTRUE(git_stage_pipeline_script)) {
     sp <- script_path()
     if (!is.na(sp) && file.exists(sp)) stage_paths <- c(sp, stage_paths)
@@ -2066,6 +2211,13 @@ git_commit_and_push <- function() {
   stage_paths <- unique(vapply(stage_paths, path_relative_to_repo, character(1)))
   git_add_args <- if (isTRUE(git_force_add_outputs)) c("add", "-f", "--", stage_paths) else c("add", "--", stage_paths)
   git_command(git_add_args, allow_failure = FALSE)
+
+  git_remove_cached_excluded_exports()
+  oversized <- git_unstage_oversized_files()
+  if (length(oversized) > 0L) {
+    ensure_gitignore_patterns(oversized)
+    git_command(c("add", "--", ".gitignore"), allow_failure = FALSE)
+  }
 
   if (!git_has_staged_changes()) {
     log_message("No changed SEQUENCE files to commit.")
@@ -2075,7 +2227,25 @@ git_commit_and_push <- function() {
 
   git_command(c("status", "--short"), allow_failure = FALSE)
   git_command(c("commit", "-m", git_commit_message), allow_failure = FALSE)
-  if (!is.na(upstream) && nzchar(upstream) && identical(target_branch, current_branch)) {
+
+  final_upstream <- git_output_first_line(c("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"), allow_failure = TRUE)
+  if (is.na(final_upstream) || !nzchar(final_upstream)) {
+    remote_branch_ref <- paste0(git_remote_name, "/", target_branch)
+    remote_branch_sha <- git_output_first_line(c("rev-parse", "--verify", remote_branch_ref), allow_failure = TRUE)
+    if (!is.na(remote_branch_sha) && nzchar(remote_branch_sha)) final_upstream <- remote_branch_ref
+  }
+  if (!is.na(final_upstream) && nzchar(final_upstream)) {
+    large_after_commit <- git_unpushed_large_blobs(final_upstream)
+    if (nrow(large_after_commit) > 0L) {
+      stop(
+        "Refusing to push because unpushed history still contains oversized file(s): ",
+        paste(paste0(large_after_commit$file, " (", round(large_after_commit$size_bytes / 1024^2, 1), " MB)"), collapse = ", "),
+        call. = FALSE
+      )
+    }
+  }
+
+  if (!is.na(final_upstream) && nzchar(final_upstream) && identical(target_branch, current_branch)) {
     git_command(c("push"), allow_failure = FALSE)
   } else {
     git_command(c("push", "-u", git_remote_name, paste0("HEAD:", target_branch)), allow_failure = FALSE)
@@ -2266,7 +2436,13 @@ load_df <- if (length(load_rows) > 0L) bind_rows(load_rows) else data.frame()
 cutoff_df <- if (length(cutoff_rows) > 0L) bind_rows(cutoff_rows) else data.frame()
 if (nrow(load_df) > 0L) {
   attr(load_df, "cutoffs") <- cutoff_df
-  save_csv(rename_columns_existing(load_df, c(comparison_name = "comparison", evs_mode = "evs_mode", dataset_group = "dataset", scope = "scope", pc1_loading_abs = "abs_pc1_loading", pc1_score_variance = "pc1_score_variance", pc1_variance_contribution = "pc1_variance_contribution")), file.path(output_dir, "Summary_PC1VarianceDistributions.csv"))
+  pc1_distribution_path <- file.path(output_dir, "Summary_PC1VarianceDistributions.csv")
+  if (isTRUE(export_full_pc1_variance_distributions)) {
+    save_csv(rename_columns_existing(load_df, c(comparison_name = "comparison", evs_mode = "evs_mode", dataset_group = "dataset", scope = "scope", pc1_loading_abs = "abs_pc1_loading", pc1_score_variance = "pc1_score_variance", pc1_variance_contribution = "pc1_variance_contribution")), pc1_distribution_path)
+  } else {
+    if (isTRUE(remove_skipped_large_exports_from_disk) && file.exists(pc1_distribution_path)) unlink(pc1_distribution_path, force = TRUE)
+    log_message("Skipped Summary_PC1VarianceDistributions.csv because export_full_pc1_variance_distributions is FALSE.")
+  }
   if (nrow(cutoff_df) > 0L) save_csv(rename_columns_existing(cutoff_df, c(comparison_name = "comparison", evs_mode = "evs_mode", dataset_group = "dataset", scope = "scope", pc1_loading_cutoff = "pc1_loading_cutoff", pc1_score_variance = "pc1_score_variance", pc1_variance_contribution_cutoff = "pc1_variance_contribution_cutoff")), file.path(output_dir, "Summary_PC1VarianceCutoffs.csv"))
   figure_status_rows[[length(figure_status_rows) + 1L]] <- safe_save_figure(plot_loading_histograms(load_df, "PC1 variance-contribution frequency after EVS"), file.path(figure_dir, "PC1_Variance_Distributions.png"), 15.8, 12.0)
 }
@@ -2290,6 +2466,7 @@ if (isTRUE(run_simulation_validation)) {
 write_sequence_methods()
 write_run_session_info()
 cleanup_rplots_pdf()
+remove_skipped_large_export_files()
 manifest <- write_manifest()
 git_commit_and_push()
 
