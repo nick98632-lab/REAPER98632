@@ -53,8 +53,8 @@ label_top_n_total <- 8L
 label_top_n_per_class <- 2L
 
 # Optional simulation and Git behavior. These are deliberately disabled by default.
-run_simulation_validation <- FALSE
-export_simulation_feature_results <- FALSE
+run_simulation_validation <- TRUE
+export_simulation_feature_results <- TRUE
 simulation_seed <- 42L
 
 # Simulation is OFF by default so manuscript figure generation cannot stall.
