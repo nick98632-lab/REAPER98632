@@ -23,6 +23,7 @@ lfc_boundary <- 1.0
 
 strict_empirical_null <- FALSE
 hc_invalid_at_or_above <- 0.95
+hc_invalid_below <- 0.001
 calculation_p_floor <- .Machine$double.xmin
 plot_p_floor <- 1e-16
 
@@ -45,7 +46,7 @@ simulation_lfc_magnitudes <- c(0.50, 1.00)
 simulation_weak_lfc_min <- 0.20
 simulation_weak_lfc_max <- 0.80
 simulation_null_inflation <- c(0.00, 0.10)
-simulation_use_apeglm_shrinkage <- FALSE
+simulation_use_apeglm_shrinkage <- TRUE
 simulation_fail_on_failed_replicates <- TRUE
 export_simulation_feature_results <- FALSE
 
@@ -126,6 +127,11 @@ if (isTRUE(reset_simulation_dir) && dir.exists(simulation_dir)) {
   unlink(simulation_dir, recursive = TRUE, force = TRUE)
 }
 dir.create(simulation_dir, recursive = TRUE, showWarnings = FALSE)
+figures_dir <- file.path(simulation_dir, "figures")
+figures_png_dir <- file.path(figures_dir, "png")
+figures_pdf_dir <- file.path(figures_dir, "pdf")
+dir.create(figures_png_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(figures_pdf_dir, recursive = TRUE, showWarnings = FALSE)
 
 log_message <- function(...) {
   txt <- paste0(...)
@@ -251,12 +257,25 @@ draw_to_device <- function(plot_obj) {
   }
 }
 
-save_figure <- function(plot_obj, path, width, height, export_pdf = export_pdf_also) {
-  if (is.null(plot_obj)) return(invisible(NULL))
-  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
+check_nonempty_file <- function(path, label) {
+  if (!file.exists(path)) stop(label, " was not written: ", path, call. = FALSE)
+  file_size <- suppressWarnings(file.info(path)$size)
+  if (!is.finite(file_size) || is.na(file_size) || file_size <= 0) {
+    stop(label, " is empty: ", path, call. = FALSE)
+  }
+  invisible(TRUE)
+}
 
+save_figure <- function(plot_obj, figure_name, width, height, export_pdf = export_pdf_also) {
+  if (is.null(plot_obj)) stop("Figure object is NULL for ", figure_name, call. = FALSE)
+  if (!inherits(plot_obj, "ggplot")) stop("Figure object is not a ggplot for ", figure_name, call. = FALSE)
+
+  png_path <- file.path(figures_png_dir, paste0(figure_name, ".png"))
+  pdf_path <- file.path(figures_pdf_dir, paste0(figure_name, ".pdf"))
+
+  dir.create(dirname(png_path), recursive = TRUE, showWarnings = FALSE)
   ggplot2::ggsave(
-    filename = path,
+    filename = png_path,
     plot = plot_obj,
     width = width,
     height = height,
@@ -265,27 +284,50 @@ save_figure <- function(plot_obj, path, width, height, export_pdf = export_pdf_a
     bg = "white",
     limitsize = FALSE
   )
+  check_nonempty_file(png_path, "PNG figure")
 
   if (isTRUE(export_pdf)) {
-    pdf_path <- sub("\\.[^.]+$", ".pdf", path)
     grDevices::pdf(file = pdf_path, width = width, height = height, onefile = TRUE, useDingbats = FALSE)
-    on.exit(grDevices::dev.off(), add = TRUE)
-    draw_to_device(plot_obj)
-    grDevices::dev.off()
-    on.exit(NULL, add = FALSE)
+    tryCatch({
+      draw_to_device(plot_obj)
+    }, finally = {
+      grDevices::dev.off()
+    })
+    check_nonempty_file(pdf_path, "PDF figure")
+  } else {
+    pdf_path <- NA_character_
   }
 
-  log_message("Figure saved: ", path, if (isTRUE(export_pdf)) " + PDF" else "")
-  invisible(TRUE)
+  root_png_path <- file.path(simulation_dir, paste0(figure_name, ".png"))
+  file.copy(png_path, root_png_path, overwrite = TRUE)
+  check_nonempty_file(root_png_path, "Root PNG figure")
+
+  log_message("Figure saved: ", root_png_path, " | ", png_path, if (isTRUE(export_pdf)) paste0(" | ", pdf_path) else "")
+  data.frame(
+    figure = figure_name,
+    png_file = path_relative_to_repo(root_png_path),
+    png_archive_file = path_relative_to_repo(png_path),
+    pdf_file = if (isTRUE(export_pdf)) path_relative_to_repo(pdf_path) else NA_character_,
+    status = "saved",
+    error_message = NA_character_,
+    stringsAsFactors = FALSE
+  )
 }
 
-safe_save_figure <- function(plot_obj, path, width, height) {
+safe_save_figure <- function(plot_obj, figure_name, width, height) {
   tryCatch({
-    save_figure(plot_obj, path, width, height)
-    data.frame(file = basename(path), status = "saved", error_message = NA_character_, stringsAsFactors = FALSE)
+    save_figure(plot_obj, figure_name, width, height)
   }, error = function(e) {
-    log_message("FIGURE FAILED: ", basename(path), " | ", conditionMessage(e))
-    data.frame(file = basename(path), status = "failed", error_message = conditionMessage(e), stringsAsFactors = FALSE)
+    log_message("FIGURE FAILED: ", figure_name, " | ", conditionMessage(e))
+    data.frame(
+      figure = figure_name,
+      png_file = NA_character_,
+      png_archive_file = NA_character_,
+      pdf_file = NA_character_,
+      status = "failed",
+      error_message = conditionMessage(e),
+      stringsAsFactors = FALSE
+    )
   })
 }
 
@@ -387,6 +429,7 @@ hc_threshold <- function(empirical_p) {
   )
 
   if (!is.finite(threshold) || is.na(threshold) || threshold <= 0 || threshold >= 1) return(NA_real_)
+  if (threshold < hc_invalid_below) return(NA_real_)
   if (threshold >= hc_invalid_at_or_above) return(NA_real_)
   threshold
 }
@@ -417,7 +460,7 @@ simulate_sequence_counts <- function(n_features, n_samples, base_mean, disp_null
   n_de <- round(n_features * de_fraction)
   n_de <- max(2L, min(n_de, n_features - 2L))
   feature_id <- paste0("sim_feature_", seq_len(n_features))
-  de_id <- seq_len(n_de)
+  de_id <- sample(seq_len(n_features), n_de, replace = FALSE)
 
   base_mu <- stats::rgamma(n_features, shape = 2.5, scale = base_mean / 2.5)
   base_mu <- pmax(base_mu, 2)
@@ -646,12 +689,14 @@ build_simulation_metric_rows <- function(out, template) {
     simulation_metric_row(template, "LessAbs", "weak_de", df$lessAbs_sig, df$true_weak, out$hc_p, out$hbfss_cutoff, out$empirical_null_method),
     simulation_metric_row(template, "HBFSS_total", "all_de", df$hbfss_total_sig, df$is_de, out$hc_p, out$hbfss_cutoff, out$empirical_null_method),
     simulation_metric_row(template, "HBFSS_raw", "all_de", df$hbfss_raw_sig, df$is_de, out$hc_p, out$hbfss_cutoff, out$empirical_null_method),
+    simulation_metric_row(template, "HBFSS_raw", "strong_de", df$hbfss_raw_sig, df$true_strong, out$hc_p, out$hbfss_cutoff, out$empirical_null_method),
     simulation_metric_row(template, "HBFSS_weak_region", "weak_de", df$weak_region_hbfss_sig, df$true_weak, out$hc_p, out$hbfss_cutoff, out$empirical_null_method)
   )
 }
 
-plot_simulation_metric_boxplot <- function(metric_long, metric, title, y_label, methods, target, alpha_line = FALSE) {
+plot_simulation_metric_boxplot <- function(metric_long, metric, title, y_label, methods, target, alpha_line = FALSE, drop_zero_truth = FALSE) {
   plot_df <- metric_long[metric_long$method %in% methods & metric_long$truth_target == target, , drop = FALSE]
+  if (isTRUE(drop_zero_truth)) plot_df <- plot_df[!is.na(plot_df$truth_count) & plot_df$truth_count > 0, , drop = FALSE]
   if (nrow(plot_df) == 0L) return(NULL)
   plot_df$method <- factor(as.character(plot_df$method), levels = methods)
   plot_df$metric_value <- plot_df[[metric]]
@@ -677,6 +722,26 @@ plot_simulation_metric_boxplot <- function(metric_long, metric, title, y_label, 
   if (alpha_line) p <- p + geom_hline(yintercept = alpha_standard, linetype = "dashed", linewidth = 0.30, color = "grey35")
   p
 }
+
+plot_hc_valid_fraction <- function(qc_summary) {
+  plot_df <- qc_summary
+  if (nrow(plot_df) == 0L) return(NULL)
+  plot_df$lfc_label <- factor(as.character(plot_df$lfc_label), levels = simulation_lfc_levels())
+  plot_df$de_label <- factor(as.character(plot_df$de_label), levels = unique(as.character(plot_df$de_label)))
+
+  ggplot(plot_df, aes(x = de_label, y = hc_valid_fraction, fill = de_label)) +
+    geom_col(width = 0.62, linewidth = 0.20) +
+    facet_grid(inflation_label ~ lfc_label) +
+    scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, by = 0.25)) +
+    labs(
+      title = "Higher-criticism valid-threshold fraction",
+      x = "Differential-expression fraction",
+      y = "Valid HC fraction"
+    ) +
+    manuscript_theme() +
+    theme(legend.position = "none")
+}
+
 
 run_sequence_simulation_validation <- function() {
   set.seed(simulation_seed)
@@ -710,6 +775,7 @@ run_sequence_simulation_validation <- function() {
   metric_rows <- list()
   failure_rows <- list()
   feature_rows <- list()
+  checkpoint_path <- file.path(simulation_dir, "Simulation_RunMetrics_Checkpoint.csv")
   run_index <- 0L
 
   for (grid_i in seq_len(nrow(sim_grid))) {
@@ -763,7 +829,7 @@ run_sequence_simulation_validation <- function() {
 
       if (run_index %% simulation_checkpoint_every == 0L || run_index == total_runs) {
         if (length(metric_rows) > 0L) {
-          save_csv(bind_rows(metric_rows), file.path(simulation_dir, "Simulation_RunMetrics_Checkpoint.csv"))
+          save_csv(bind_rows(metric_rows), checkpoint_path)
         }
       }
 
@@ -782,8 +848,8 @@ run_sequence_simulation_validation <- function() {
   failures <- if (length(failure_rows) > 0L) bind_rows(failure_rows) else data.frame()
   save_csv(failures, file.path(simulation_dir, "Simulation_Failures.csv"))
 
-  if (nrow(failures) > 0L && isTRUE(simulation_fail_on_failed_replicates)) {
-    stop("Simulation validation had failed replicate(s). See Simulation_Failures.csv.", call. = FALSE)
+  if (nrow(failures) > 0L) {
+    log_message("Simulation replicate failure(s) recorded: ", nrow(failures), ". Figures will still be exported from successful replicates before final failure handling.")
   }
 
   metric_long <- if (length(metric_rows) > 0L) bind_rows(metric_rows) else data.frame()
@@ -834,39 +900,126 @@ run_sequence_simulation_validation <- function() {
   save_csv(metric_long, file.path(simulation_dir, "Simulation_RunMetrics_Long.csv"))
   save_csv(metric_summary, file.path(simulation_dir, "Simulation_MethodSummary.csv"))
   save_csv(qc_summary, file.path(simulation_dir, "Simulation_HC_QC_Summary.csv"))
+  if (file.exists(checkpoint_path)) unlink(checkpoint_path, force = TRUE)
 
   if (isTRUE(export_simulation_feature_results) && length(feature_rows) > 0L) {
     save_csv(bind_rows(feature_rows), file.path(simulation_dir, "Simulation_FeatureResults.csv"))
   }
 
+  all_de_methods <- c("DESeq2_BH", "Empirical_BH", "HBFSS_total", "HBFSS_raw")
+  strong_methods <- c("GreaterAbs", "HBFSS_raw")
+  weak_methods <- c("LessAbs", "HBFSS_weak_region")
+
   figure_status <- bind_rows(
     safe_save_figure(
-      plot_simulation_metric_boxplot(metric_long, "f1", "Simulation F1 score by method", "F1", c("DESeq2_BH", "Empirical_BH", "HBFSS_total", "HBFSS_raw"), "all_de"),
-      file.path(simulation_dir, "Simulation_F1_Boxplot.png"),
-      11.8,
+      plot_simulation_metric_boxplot(metric_long, "f1", "Simulation F1 score by method", "F1", all_de_methods, "all_de"),
+      "Simulation_F1_Boxplot",
+      14.0,
       9.2
     ),
     safe_save_figure(
-      plot_simulation_metric_boxplot(metric_long, "fdr", "Simulation observed FDR by method", "FDR", c("DESeq2_BH", "Empirical_BH", "HBFSS_total", "HBFSS_raw"), "all_de", alpha_line = TRUE),
-      file.path(simulation_dir, "Simulation_FDR_Boxplot.png"),
-      11.8,
+      plot_simulation_metric_boxplot(metric_long, "precision", "Simulation precision by method", "Precision", all_de_methods, "all_de"),
+      "Simulation_Precision_Boxplot",
+      14.0,
       9.2
     ),
     safe_save_figure(
-      plot_simulation_metric_boxplot(metric_long, "f1", "Weak-region simulation F1 score", "F1", c("LessAbs", "HBFSS_weak_region"), "weak_de"),
-      file.path(simulation_dir, "Simulation_WeakRegion_F1_Boxplot.png"),
-      11.8,
+      plot_simulation_metric_boxplot(metric_long, "recall", "Simulation recall by method", "Recall", all_de_methods, "all_de"),
+      "Simulation_Recall_Boxplot",
+      14.0,
       9.2
+    ),
+    safe_save_figure(
+      plot_simulation_metric_boxplot(metric_long, "fdr", "Simulation observed FDR by method", "FDR", all_de_methods, "all_de", alpha_line = TRUE),
+      "Simulation_FDR_Boxplot",
+      14.0,
+      9.2
+    ),
+    safe_save_figure(
+      plot_simulation_metric_boxplot(metric_long, "discovery_count", "Simulation discoveries by method", "Discovery count", all_de_methods, "all_de"),
+      "Simulation_DiscoveryCount_Boxplot",
+      14.0,
+      9.2
+    ),
+    safe_save_figure(
+      plot_simulation_metric_boxplot(metric_long, "f1", "Weak-region simulation F1 score", "F1", weak_methods, "weak_de"),
+      "Simulation_WeakRegion_F1_Boxplot",
+      14.0,
+      9.2
+    ),
+    safe_save_figure(
+      plot_simulation_metric_boxplot(metric_long, "precision", "Weak-region simulation precision", "Precision", weak_methods, "weak_de"),
+      "Simulation_WeakRegion_Precision_Boxplot",
+      14.0,
+      9.2
+    ),
+    safe_save_figure(
+      plot_simulation_metric_boxplot(metric_long, "recall", "Weak-region simulation recall", "Recall", weak_methods, "weak_de"),
+      "Simulation_WeakRegion_Recall_Boxplot",
+      14.0,
+      9.2
+    ),
+    safe_save_figure(
+      plot_simulation_metric_boxplot(metric_long, "f1", "Strong-effect simulation F1 score", "F1", strong_methods, "strong_de", drop_zero_truth = TRUE),
+      "Simulation_StrongEffect_F1_Boxplot",
+      14.0,
+      9.2
+    ),
+    safe_save_figure(
+      plot_simulation_metric_boxplot(metric_long, "precision", "Strong-effect simulation precision", "Precision", strong_methods, "strong_de", drop_zero_truth = TRUE),
+      "Simulation_StrongEffect_Precision_Boxplot",
+      14.0,
+      9.2
+    ),
+    safe_save_figure(
+      plot_simulation_metric_boxplot(metric_long, "recall", "Strong-effect simulation recall", "Recall", strong_methods, "strong_de", drop_zero_truth = TRUE),
+      "Simulation_StrongEffect_Recall_Boxplot",
+      14.0,
+      9.2
+    ),
+    safe_save_figure(
+      plot_simulation_metric_boxplot(metric_long, "fdr", "Strong-effect simulation observed FDR", "FDR", strong_methods, "strong_de", alpha_line = TRUE, drop_zero_truth = TRUE),
+      "Simulation_StrongEffect_FDR_Boxplot",
+      14.0,
+      9.2
+    ),
+    safe_save_figure(
+      plot_hc_valid_fraction(qc_summary),
+      "Simulation_HC_ValidFraction",
+      14.0,
+      7.0
     )
   )
   save_csv(figure_status, file.path(simulation_dir, "Figure_Export_Status.csv"))
 
-  if (nrow(figure_status) > 0L && any(figure_status$status == "failed")) {
-    save_csv(figure_status[figure_status$status == "failed", , drop = FALSE], file.path(simulation_dir, "Figure_Export_Failures.csv"))
+  if (nrow(figure_status) == 0L || any(figure_status$status != "saved")) {
+    save_csv(figure_status[figure_status$status != "saved", , drop = FALSE], file.path(simulation_dir, "Figure_Export_Failures.csv"))
     stop("One or more simulation figures failed. See Figure_Export_Failures.csv.", call. = FALSE)
   }
 
+  expected_png <- file.path(simulation_dir, paste0(figure_status$figure, ".png"))
+  missing_png <- expected_png[!file.exists(expected_png) | file.info(expected_png)$size <= 0]
+  if (length(missing_png) > 0L) {
+    stop("Simulation figure verification failed. Missing or empty PNG file(s): ", paste(missing_png, collapse = ", "), call. = FALSE)
+  }
+
+  writeLines(
+    c(
+      "SEQUENCE simulation figures",
+      paste0("Root figure folder: ", simulation_dir),
+      paste0("PNG archive folder: ", figures_png_dir),
+      paste0("PDF archive folder: ", figures_pdf_dir),
+      "",
+      paste0("PNG files: ", paste(basename(expected_png), collapse = "; "))
+    ),
+    file.path(simulation_dir, "README_FIGURES.txt")
+  )
+
   writeLines(capture.output(sessionInfo()), file.path(simulation_dir, "SessionInfo_Simulation.txt"))
+
+  if (nrow(failures) > 0L && isTRUE(simulation_fail_on_failed_replicates)) {
+    stop("Simulation validation had failed replicate(s). Figures were exported, but Git push was stopped. See Simulation_Failures.csv.", call. = FALSE)
+  }
   log_message("Simulation successful replicates: ", length(metric_rows), "/", total_runs)
   log_message("Simulation failed replicates: ", nrow(failures))
 
@@ -887,13 +1040,14 @@ write_simulation_methods <- function() {
     paste0("Null Wald statistic inflation fractions were ", paste(simulation_null_inflation, collapse = ", "), "."),
     paste0("Each grid cell was repeated ", simulation_n_reps, " times."),
     "",
-    "For each simulated count matrix, DESeq2 was run with design ~ condition. Standard DESeq2 calls used Benjamini-Hochberg adjusted p < alpha_standard and absolute log2 fold change >= lfc_boundary. GreaterAbs and LessAbs tests used the same lfc_boundary with alpha_strong and alpha_weak, respectively.",
+    "For each simulated count matrix, DESeq2 was run with design ~ condition. Simulated differential features were randomly sampled per replicate rather than assigned by row position. Standard DESeq2 calls used Benjamini-Hochberg adjusted p < alpha_standard and absolute apeglm-shrunken log2 fold change >= lfc_boundary. GreaterAbs and LessAbs tests used the same lfc_boundary with alpha_strong and alpha_weak, respectively.",
     "",
-    "Empirical-null p-values were fit from the DESeq2 Wald statistics using fdrtool. Higher criticism was applied to the empirical p-value distribution using fdrtool::hc.thresh. HC thresholds that were non-finite, outside (0,1), or >= hc_invalid_at_or_above were marked invalid.",
+    "Empirical-null p-values were fit from the DESeq2 Wald statistics using fdrtool. Higher criticism was applied to the empirical p-value distribution using fdrtool::hc.thresh. HC thresholds that were non-finite, outside (0,1), below hc_invalid_below, or >= hc_invalid_at_or_above were marked invalid.",
     "",
-    "HBFSS was calculated exactly as abs(log2 fold change) * -log10(empirical p). The HBFSS cutoff was calculated exactly as -log10(HC p-threshold) * lfc_boundary. No artificial minimum HBFSS floor was added.",
+    "HBFSS was calculated exactly as abs(apeglm-shrunken log2 fold change) * -log10(empirical p). The HBFSS cutoff was calculated exactly as -log10(HC p-threshold) * lfc_boundary. No artificial minimum HBFSS floor was added.",
+    "The weak-mixture grid contains true differential features below the lfc_boundary by design; therefore strong-effect metrics are exported only for grid cells with nonzero strong-effect truth counts.",
     "",
-    "Simulation outputs include per-run metric tables, method summary tables, HC quality-control summaries, F1 and FDR figures, figure export status, session info, and this methods note. Per-feature simulation results are optional and disabled by default to keep GitHub pushes small."
+    "Simulation outputs include per-run metric tables, method summary tables, HC quality-control summaries, F1, precision, recall, FDR, discovery-count, weak-region, strong-effect, and HC-valid-fraction figures in both root-level PNG form and archived PNG/PDF folders, figure export status, session info, and this methods note. Per-feature simulation results are optional and disabled by default to keep GitHub pushes small."
   )
   writeLines(lines, file.path(simulation_dir, "Methods_Simulation.txt"))
   invisible(TRUE)
