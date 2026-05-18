@@ -75,7 +75,7 @@ simulation_progress_every <- 1L
 simulation_checkpoint_every <- 5L
 
 # Optional Git push. Keep FALSE during analysis/debugging; set TRUE only after outputs are confirmed.
-git_push_after_success <- FALSE
+git_push_after_success <- TRUE
 git_remote_name <- "origin"
 git_branch_name <- NA_character_
 git_commit_message <- paste0("Update SEQUENCE manuscript outputs ", format(Sys.time(), "%Y-%m-%d %H:%M:%S"))
