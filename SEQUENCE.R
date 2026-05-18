@@ -11,7 +11,7 @@
 #      and RawEVS-Remainder DESeq2/HBFSS analyses for each comparison.
 #   3. Exports result tables, summaries, manuscript figures, session info,
 #      methods notes, and a manifest.
-#   4. Does not run Git commands or force-push anything.
+#   4. Does not run Git commands, run simulations, or force-push anything.
 # =============================================================================
 
 options(stringsAsFactors = FALSE)
@@ -40,7 +40,7 @@ evs_modes <- c("NormEVS", "RawEVS")
 
 # Empirical-null / HC behavior. If strict_empirical_null = TRUE, fdrtool failure stops the run.
 strict_empirical_null <- TRUE
-hc_invalid_at_or_above <- 0.50
+hc_invalid_at_or_above <- 0.95
 calculation_p_floor <- .Machine$double.xmin
 plot_p_floor <- 1e-16
 
@@ -57,9 +57,6 @@ label_top_n_per_class <- 2L
 export_full_pc1_variance_distributions <- FALSE
 remove_skipped_large_exports_from_disk <- TRUE
 
-# HBFSS guardrail. HC thresholds near 1 create near-zero geometric cutoffs;
-# this floor prevents broad, non-informative HBFSS calls from borderline HC output.
-hbfss_min_cutoff <- lfc_boundary
 
 # =============================================================================
 # STUDY DESIGN
@@ -866,7 +863,7 @@ run_deseq2_hbfss <- function(count_matrix, coldata, comparison_name, analysis_la
     left_join(annotation_df, by = "feature_id")
 
   hc_p <- hc_threshold(df$empirical_p)
-  hbfss_cutoff <- if (is.na(hc_p)) NA_real_ else max(-log10(hc_p) * lfc_boundary, hbfss_min_cutoff)
+  hbfss_cutoff <- if (is.na(hc_p)) NA_real_ else -log10(hc_p) * lfc_boundary
   df <- classify_results(df, hc_p, hbfss_cutoff)
 
   normalized_counts <- as.data.frame(counts(dds, normalized = TRUE))
@@ -1518,7 +1515,6 @@ write_sequence_methods <- function() {
     paste0("- LFC boundary: ", lfc_boundary),
     paste0("- EVS cutoff: fixed top-N union; N = ", evs_top_n),
     paste0("- HC invalid threshold: ", hc_invalid_at_or_above),
-    paste0("- HBFSS minimum cutoff: ", hbfss_min_cutoff),
     paste0("- Strict empirical null: ", strict_empirical_null),
     paste0("- Comparisons: ", paste(comparison_table$comparison_name, collapse = ", ")),
     paste0("- EVS modes: ", paste(evs_modes, collapse = ", ")),
@@ -1530,7 +1526,7 @@ write_sequence_methods <- function() {
     paste0("PC1 is calculated separately in treatment and control samples. Features are ranked by absolute PC1 loading. The leading edge is the union of the top-", evs_top_n, " treatment-ranked and top-", evs_top_n, " control-ranked features. The remainder contains all other features."),
     "",
     "## Differential expression and HBFSS",
-    paste0("DESeq2 design is ~ condition with untrt as the reference. Standard effects use BH padj < ", alpha_standard, " and |apeglm-shrunken LFC| >= ", lfc_boundary, ". Strong effects use greaterAbs. Weak effects use lessAbs, |shrunken LFC| < boundary, and HBFSS raw significance. HBFSS = |shrunken LFC| x -log10(empirical p). The HBFSS cutoff is max(-log10(HC p threshold) x LFC boundary, hbfss_min_cutoff)."),
+    paste0("DESeq2 design is ~ condition with untrt as the reference. Standard effects use BH padj < ", alpha_standard, " and |apeglm-shrunken LFC| >= ", lfc_boundary, ". Strong effects use greaterAbs. Weak effects use lessAbs, |shrunken LFC| < boundary, and HBFSS raw significance. HBFSS = |shrunken LFC| x -log10(empirical p). The HBFSS cutoff is -log10(HC p threshold) x LFC boundary."),
     "",
     "## Figure export",
     "Figures are exported as PNG and PDF. Combined panel figures suppress repeated per-plot captions, gene labels, and threshold text while retaining threshold lines and one shared legend."
