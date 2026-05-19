@@ -29,13 +29,13 @@ plot_p_floor <- 1e-16
 
 figure_dpi <- 600
 base_theme_size <- 9
-export_pdf_also <- tolower(Sys.getenv("SEQUENCE_EXPORT_PDF", "TRUE")) %in% c("1", "true", "yes", "y")
+export_pdf_also <- TRUE
 
 simulation_seed <- as.integer(Sys.getenv("SEQUENCE_SIM_SEED", "42"))
 simulation_n_features <- as.integer(Sys.getenv("SEQUENCE_SIM_FEATURES", "1000"))
 simulation_n_samples_per_group <- as.integer(Sys.getenv("SEQUENCE_SIM_SAMPLES_PER_GROUP", "6"))
-simulation_n_reps <- as.integer(Sys.getenv("SEQUENCE_SIM_REPS", "12"))
-simulation_progress_every <- as.integer(Sys.getenv("SEQUENCE_SIM_PROGRESS_EVERY", "1"))
+simulation_n_reps <- as.integer(Sys.getenv("SEQUENCE_SIM_REPS", "25"))
+simulation_progress_every <- as.integer(Sys.getenv("SEQUENCE_SIM_PROGRESS_EVERY", "5"))
 simulation_checkpoint_every <- as.integer(Sys.getenv("SEQUENCE_SIM_CHECKPOINT_EVERY", "5"))
 
 simulation_base_mean <- 200
@@ -59,7 +59,6 @@ git_pull_rebase_before_push <- TRUE
 git_stage_pipeline_script <- TRUE
 git_allow_no_change_success <- TRUE
 git_max_file_size_bytes <- 95 * 1024^2
-git_command_timeout_sec <- as.integer(Sys.getenv("SEQUENCE_GIT_TIMEOUT_SEC", "180"))
 git_exclude_patterns <- c(
   "exports/manuscript_final_clean/simulation_validation/Simulation_FeatureResults.csv"
 )
@@ -123,7 +122,6 @@ repo_root <- find_repo_root()
 output_dir <- file.path(repo_root, "exports", output_folder_name)
 simulation_dir <- file.path(output_dir, "simulation_validation")
 log_file <- file.path(simulation_dir, "Simulation_Log.txt")
-status_file <- file.path(simulation_dir, "Simulation_Status.txt")
 
 if (isTRUE(reset_simulation_dir) && dir.exists(simulation_dir)) {
   unlink(simulation_dir, recursive = TRUE, force = TRUE)
@@ -160,10 +158,9 @@ positive_integer <- function(x, default, label) {
 simulation_seed <- positive_integer(simulation_seed, 42L, "simulation_seed")
 simulation_n_features <- positive_integer(simulation_n_features, 1000L, "simulation_n_features")
 simulation_n_samples_per_group <- positive_integer(simulation_n_samples_per_group, 6L, "simulation_n_samples_per_group")
-simulation_n_reps <- positive_integer(simulation_n_reps, 12L, "simulation_n_reps")
-simulation_progress_every <- positive_integer(simulation_progress_every, 1L, "simulation_progress_every")
+simulation_n_reps <- positive_integer(simulation_n_reps, 25L, "simulation_n_reps")
+simulation_progress_every <- positive_integer(simulation_progress_every, 5L, "simulation_progress_every")
 simulation_checkpoint_every <- positive_integer(simulation_checkpoint_every, 5L, "simulation_checkpoint_every")
-git_command_timeout_sec <- positive_integer(git_command_timeout_sec, 180L, "git_command_timeout_sec")
 
 # =============================================================================
 # GENERAL HELPERS
@@ -604,7 +601,7 @@ sequence_simulation_analysis <- function(sim_obj, null_inflation) {
   dds <- dds[rowSums(counts(dds)) > 0, ]
   if (nrow(dds) < 5L) stop("Simulation DESeq2 object has fewer than five nonzero features after filtering.", call. = FALSE)
 
-  dds <- suppressWarnings(DESeq(dds, betaPrior = FALSE, quiet = TRUE))
+  dds <- DESeq(dds, betaPrior = FALSE, quiet = TRUE)
   coef_name <- condition_coef_name(dds)
 
   standard <- results(dds, contrast = c("condition", "trt", "untrt"), alpha = alpha_standard)
@@ -615,7 +612,7 @@ sequence_simulation_analysis <- function(sim_obj, null_inflation) {
   df$feature_id <- rownames(df)
 
   if (isTRUE(simulation_use_apeglm_shrinkage)) {
-    shrunk <- suppressMessages(suppressWarnings(lfcShrink(dds, coef = coef_name, type = "apeglm", quiet = TRUE)))
+    shrunk <- lfcShrink(dds, coef = coef_name, type = "apeglm", quiet = TRUE)
     shrink_df <- data.frame(
       feature_id = rownames(shrunk),
       lfc_shrunk = as.data.frame(shrunk)$log2FoldChange,
@@ -766,7 +763,6 @@ run_sequence_simulation_validation <- function() {
   sim_grid <- bind_rows(fixed_grid, weak_grid)
   total_runs <- nrow(sim_grid) * simulation_n_reps
 
-  write_status("running", paste0("planned_replicates=", total_runs))
   log_message("Running SEQUENCE simulation validation: ", total_runs, " planned replicates")
   log_message(
     "Simulation config: features=", simulation_n_features,
@@ -791,12 +787,6 @@ run_sequence_simulation_validation <- function() {
       if (run_index %% simulation_progress_every == 0L || run_index == 1L || run_index == total_runs) {
         elapsed_min <- as.numeric(difftime(Sys.time(), simulation_start, units = "mins"))
         eta_min <- if (run_index > 0L) elapsed_min * (total_runs - run_index) / run_index else NA_real_
-        progress_detail <- paste0(
-          "replicate=", run_index, "/", total_runs,
-          "; elapsed_min=", signif(elapsed_min, 3),
-          "; eta_min=", signif(eta_min, 3)
-        )
-        write_status("running", progress_detail)
         log_message(
           "Simulation progress: ", run_index, "/", total_runs,
           " | elapsed=", signif(elapsed_min, 3), " min",
@@ -873,8 +863,6 @@ run_sequence_simulation_validation <- function() {
     levels = c("DESeq2_BH", "Empirical_BH", "GreaterAbs", "LessAbs", "HBFSS_raw", "HBFSS_total", "HBFSS_weak_region")
   )
 
-  write_status("summarising", "building metric summaries")
-
   metric_summary <- metric_long %>%
     group_by(de_fraction, lfc_magnitude, simulation_profile, null_inflation, lfc_label, de_label, inflation_label, method, truth_target, empirical_null_method) %>%
     summarise(
@@ -921,8 +909,6 @@ run_sequence_simulation_validation <- function() {
   all_de_methods <- c("DESeq2_BH", "Empirical_BH", "HBFSS_total", "HBFSS_raw")
   strong_methods <- c("GreaterAbs", "HBFSS_raw")
   weak_methods <- c("LessAbs", "HBFSS_weak_region")
-
-  write_status("writing_figures", "exporting simulation figures")
 
   figure_status <- bind_rows(
     safe_save_figure(
@@ -1030,7 +1016,6 @@ run_sequence_simulation_validation <- function() {
   )
 
   writeLines(capture.output(sessionInfo()), file.path(simulation_dir, "SessionInfo_Simulation.txt"))
-  write_status("figures_complete", "all simulation figures exported and verified")
 
   if (nrow(failures) > 0L && isTRUE(simulation_fail_on_failed_replicates)) {
     stop("Simulation validation had failed replicate(s). Figures were exported, but Git push was stopped. See Simulation_Failures.csv.", call. = FALSE)
@@ -1259,7 +1244,7 @@ git_command <- function(args, allow_failure = FALSE, echo_output = TRUE) {
   if (Sys.which("git") == "") stop("Git executable was not found on PATH.", call. = FALSE)
   cmd_display <- paste("git", "-C", repo_root, paste(args, collapse = " "))
   if (isTRUE(echo_output)) log_message("$ ", cmd_display)
-  out <- suppressWarnings(system2("git", args = c("-C", repo_root, args), stdout = TRUE, stderr = TRUE, timeout = git_command_timeout_sec))
+  out <- suppressWarnings(system2("git", args = c("-C", repo_root, args), stdout = TRUE, stderr = TRUE))
   status <- attr(out, "status")
   if (is.null(status)) status <- 0L
   if (isTRUE(echo_output) && length(out) > 0L) log_message(paste(out, collapse = "\n"))
@@ -1408,7 +1393,6 @@ git_commit_and_push <- function() {
 # =============================================================================
 
 main <- function() {
-  write_status("starting", "initialising simulation")
   log_message("SEQUENCE standalone simulation started.")
   log_message("Repository root: ", repo_root)
   log_message("Simulation output directory: ", simulation_dir)
@@ -1418,7 +1402,6 @@ main <- function() {
   write_simulation_interpretation(simulation_result)
   manifest <- write_manifest()
   cleanup_rplots_pdf()
-  write_status("pushing", "committing and pushing simulation outputs if enabled")
   git_commit_and_push()
 
   cat("\n=====================================================\n")
@@ -1434,7 +1417,6 @@ main <- function() {
 tryCatch(
   main(),
   error = function(e) {
-    write_status("failed", conditionMessage(e))
     log_message("SIMULATION FAILED - DO NOT PUSH: ", conditionMessage(e))
     try(writeLines(capture.output(sessionInfo()), file.path(simulation_dir, "SessionInfo_Simulation_Failed.txt")), silent = TRUE)
     try(cleanup_rplots_pdf(), silent = TRUE)
