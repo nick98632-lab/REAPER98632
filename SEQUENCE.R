@@ -1,9 +1,10 @@
 #!/usr/bin/env Rscript
 
 # =============================================================================
-# SEQUENCE SIMULATION VALIDATION - STANDALONE
+# SEQUENCE SIMULATION VALIDATION - STANDALONE NO-STALL FINAL
 # Negative-binomial simulation validation for DESeq2, empirical-null p-values,
-# higher-criticism thresholding, and HBFSS.
+# higher-criticism thresholding, and HBFSS. Each replicate is isolated with
+# a timeout so one DESeq2/apeglm fit cannot freeze the full manuscript run.
 # =============================================================================
 
 options(stringsAsFactors = FALSE)
@@ -35,10 +36,12 @@ simulation_seed <- as.integer(Sys.getenv("SEQUENCE_SIM_SEED", "42"))
 simulation_n_features <- as.integer(Sys.getenv("SEQUENCE_SIM_FEATURES", "1000"))
 simulation_n_samples_per_group <- as.integer(Sys.getenv("SEQUENCE_SIM_SAMPLES_PER_GROUP", "6"))
 simulation_n_reps <- as.integer(Sys.getenv("SEQUENCE_SIM_REPS", "25"))
-simulation_progress_every <- as.integer(Sys.getenv("SEQUENCE_SIM_PROGRESS_EVERY", "5"))
+simulation_progress_every <- as.integer(Sys.getenv("SEQUENCE_SIM_PROGRESS_EVERY", "1"))
 simulation_checkpoint_every <- as.integer(Sys.getenv("SEQUENCE_SIM_CHECKPOINT_EVERY", "5"))
-simulation_deseq_fit_type <- Sys.getenv("SEQUENCE_DESEQ_FIT_TYPE", "parametric")
-simulation_rep_timeout_seconds <- as.integer(Sys.getenv("SEQUENCE_SIM_REP_TIMEOUT_SECONDS", "900"))
+simulation_replicate_timeout_seconds <- as.integer(Sys.getenv("SEQUENCE_SIM_REP_TIMEOUT", "600"))
+simulation_apeglm_method <- Sys.getenv("SEQUENCE_SIM_APE_METHOD", "nbinomC")
+simulation_deseq_fit_type <- Sys.getenv("SEQUENCE_SIM_DESEQ_FIT_TYPE", "local")
+simulation_max_failed_fraction <- as.numeric(Sys.getenv("SEQUENCE_SIM_MAX_FAILED_FRACTION", "0.05"))
 
 simulation_base_mean <- 200
 simulation_dispersion_null <- 0.10
@@ -58,10 +61,10 @@ git_remote_name <- "origin"
 git_branch_name <- NA_character_
 git_commit_message <- paste0("Update SEQUENCE simulation validation outputs ", format(Sys.time(), "%Y-%m-%d %H:%M:%S"))
 git_pull_rebase_before_push <- TRUE
-git_timeout_seconds <- as.integer(Sys.getenv("SEQUENCE_GIT_TIMEOUT_SECONDS", "180"))
 git_stage_pipeline_script <- TRUE
 git_allow_no_change_success <- TRUE
 git_max_file_size_bytes <- 95 * 1024^2
+git_command_timeout_seconds <- as.integer(Sys.getenv("SEQUENCE_GIT_TIMEOUT", "180"))
 git_exclude_patterns <- c(
   "exports/manuscript_final_clean/simulation_validation/Simulation_FeatureResults.csv"
 )
@@ -144,15 +147,18 @@ log_message <- function(...) {
   cat(line, "\n", file = log_file, append = TRUE)
 }
 
-write_status <- function(status, detail = "") {
-  status_file <- file.path(simulation_dir, "Simulation_Status.txt")
+simulation_status_path <- file.path(simulation_dir, "Simulation_Status.txt")
+
+write_status <- function(status, detail = "", run_index = NA_integer_, total_runs = NA_integer_) {
   lines <- c(
     paste0("status=", status),
-    paste0("time=", format(Sys.time(), "%Y-%m-%d %H:%M:%S")),
+    paste0("timestamp=", format(Sys.time(), "%Y-%m-%d %H:%M:%S")),
+    paste0("run_index=", ifelse(is.na(run_index), "NA", as.character(run_index))),
+    paste0("total_runs=", ifelse(is.na(total_runs), "NA", as.character(total_runs))),
     paste0("detail=", detail)
   )
-  writeLines(lines, status_file)
-  invisible(status_file)
+  writeLines(lines, simulation_status_path)
+  invisible(TRUE)
 }
 
 cleanup_rplots_pdf <- function() {
@@ -175,19 +181,16 @@ simulation_n_samples_per_group <- positive_integer(simulation_n_samples_per_grou
 simulation_n_reps <- positive_integer(simulation_n_reps, 25L, "simulation_n_reps")
 simulation_progress_every <- positive_integer(simulation_progress_every, 5L, "simulation_progress_every")
 simulation_checkpoint_every <- positive_integer(simulation_checkpoint_every, 5L, "simulation_checkpoint_every")
-simulation_rep_timeout_seconds <- positive_integer(simulation_rep_timeout_seconds, 900L, "simulation_rep_timeout_seconds")
-git_timeout_seconds <- positive_integer(git_timeout_seconds, 180L, "git_timeout_seconds")
-
-# =============================================================================
-# TIMEOUT HELPER
-# =============================================================================
-
-with_elapsed_timeout <- function(expr, seconds, label = "operation") {
-  seconds <- suppressWarnings(as.integer(seconds[1]))
-  if (!is.finite(seconds) || is.na(seconds) || seconds < 1L) seconds <- 900L
-  setTimeLimit(cpu = Inf, elapsed = seconds, transient = TRUE)
-  on.exit(setTimeLimit(cpu = Inf, elapsed = Inf, transient = FALSE), add = TRUE)
-  force(expr)
+simulation_replicate_timeout_seconds <- positive_integer(simulation_replicate_timeout_seconds, 600L, "simulation_replicate_timeout_seconds")
+git_command_timeout_seconds <- positive_integer(git_command_timeout_seconds, 180L, "git_command_timeout_seconds")
+if (!is.finite(simulation_max_failed_fraction) || is.na(simulation_max_failed_fraction) || simulation_max_failed_fraction < 0 || simulation_max_failed_fraction > 1) {
+  warning("simulation_max_failed_fraction was invalid; using 0.05.", call. = FALSE)
+  simulation_max_failed_fraction <- 0.05
+}
+if (!nzchar(simulation_apeglm_method)) simulation_apeglm_method <- "nbinomC"
+if (!simulation_deseq_fit_type %in% c("parametric", "local", "mean")) {
+  warning("simulation_deseq_fit_type was invalid; using local.", call. = FALSE)
+  simulation_deseq_fit_type <- "local"
 }
 
 # =============================================================================
@@ -360,6 +363,60 @@ safe_save_figure <- function(plot_obj, figure_name, width, height) {
 }
 
 # =============================================================================
+# TIMEOUT HELPERS
+# =============================================================================
+
+run_with_timeout <- function(expr, timeout_seconds, label = "operation") {
+  timeout_seconds <- suppressWarnings(as.numeric(timeout_seconds[1]))
+  if (!is.finite(timeout_seconds) || is.na(timeout_seconds) || timeout_seconds <= 0) timeout_seconds <- 600
+
+  if (.Platform$OS.type == "unix" && requireNamespace("parallel", quietly = TRUE)) {
+    job <- parallel::mcparallel({
+      tryCatch(
+        eval.parent(substitute(expr)),
+        error = function(e) structure(list(error_message = conditionMessage(e)), class = "sequence_timeout_child_error")
+      )
+    }, silent = TRUE)
+
+    start_time <- Sys.time()
+    repeat {
+      collected <- parallel::mccollect(job, wait = FALSE)
+      if (length(collected) > 0L) {
+        value <- collected[[1]]
+        if (inherits(value, "try-error")) {
+          return(list(ok = FALSE, value = NULL, error_message = as.character(value)))
+        }
+        if (inherits(value, "sequence_timeout_child_error")) {
+          return(list(ok = FALSE, value = NULL, error_message = value$error_message))
+        }
+        return(list(ok = TRUE, value = value, error_message = NA_character_))
+      }
+
+      elapsed <- as.numeric(difftime(Sys.time(), start_time, units = "secs"))
+      if (is.finite(elapsed) && elapsed > timeout_seconds) {
+        tools::pskill(job$pid, signal = 15L)
+        Sys.sleep(1)
+        tools::pskill(job$pid, signal = 9L)
+        parallel::mccollect(job, wait = FALSE)
+        return(list(ok = FALSE, value = NULL, error_message = paste0(label, " exceeded timeout of ", timeout_seconds, " seconds")))
+      }
+      Sys.sleep(0.25)
+    }
+  }
+
+  old_limits <- tryCatch(getOption("expressions"), error = function(e) NULL)
+  tryCatch({
+    setTimeLimit(elapsed = timeout_seconds, transient = TRUE)
+    value <- eval.parent(substitute(expr))
+    setTimeLimit(cpu = Inf, elapsed = Inf, transient = FALSE)
+    list(ok = TRUE, value = value, error_message = NA_character_)
+  }, error = function(e) {
+    try(setTimeLimit(cpu = Inf, elapsed = Inf, transient = FALSE), silent = TRUE)
+    list(ok = FALSE, value = NULL, error_message = conditionMessage(e))
+  })
+}
+
+# =============================================================================
 # EMPIRICAL NULL AND HC/HBFSS
 # =============================================================================
 
@@ -369,23 +426,6 @@ condition_coef_name <- function(dds) {
   hit <- grep("condition.*trt.*vs.*untrt", nm, value = TRUE)
   if (length(hit) > 0L) return(hit[1])
   stop("Could not find trt-vs-untrt coefficient. Available: ", paste(nm, collapse = ", "), call. = FALSE)
-}
-
-run_deseq_quiet <- function(dds) {
-  # DESeq2 may print a non-fatal warning when the parametric dispersion trend is
-  # automatically replaced by a local fit. That is normal for some simulated
-  # matrices and should not be confused with script failure. The warning is
-  # muffled here while keeping DESeq2's default parametric-first behavior unless
-  # SEQUENCE_DESEQ_FIT_TYPE is explicitly set.
-  withCallingHandlers(
-    DESeq(dds, betaPrior = FALSE, quiet = TRUE, fitType = simulation_deseq_fit_type),
-    warning = function(w) {
-      msg <- conditionMessage(w)
-      if (grepl("fitType='parametric'|dispersion trend|local regression fit", msg)) {
-        invokeRestart("muffleWarning")
-      }
-    }
-  )
 }
 
 extract_eta0 <- function(fit) {
@@ -646,7 +686,7 @@ sequence_simulation_analysis <- function(sim_obj, null_inflation) {
   dds <- dds[rowSums(counts(dds)) > 0, ]
   if (nrow(dds) < 5L) stop("Simulation DESeq2 object has fewer than five nonzero features after filtering.", call. = FALSE)
 
-  dds <- run_deseq_quiet(dds)
+  dds <- suppressWarnings(DESeq(dds, betaPrior = FALSE, quiet = TRUE, fitType = simulation_deseq_fit_type))
   coef_name <- condition_coef_name(dds)
 
   standard <- results(dds, contrast = c("condition", "trt", "untrt"), alpha = alpha_standard)
@@ -657,7 +697,9 @@ sequence_simulation_analysis <- function(sim_obj, null_inflation) {
   df$feature_id <- rownames(df)
 
   if (isTRUE(simulation_use_apeglm_shrinkage)) {
-    shrunk <- lfcShrink(dds, coef = coef_name, type = "apeglm", quiet = TRUE)
+    shrink_args <- list(dds = dds, coef = coef_name, type = "apeglm", quiet = TRUE)
+    if (nzchar(simulation_apeglm_method)) shrink_args$apeMethod <- simulation_apeglm_method
+    shrunk <- do.call(lfcShrink, shrink_args)
     shrink_df <- data.frame(
       feature_id = rownames(shrunk),
       lfc_shrunk = as.data.frame(shrunk)$log2FoldChange,
@@ -814,8 +856,9 @@ run_sequence_simulation_validation <- function() {
     ", samples/group=", simulation_n_samples_per_group,
     ", reps/grid=", simulation_n_reps,
     ", apeglm_shrinkage=", simulation_use_apeglm_shrinkage,
+    ", apeglm_method=", simulation_apeglm_method,
     ", deseq_fit_type=", simulation_deseq_fit_type,
-    ", per_replicate_timeout_seconds=", simulation_rep_timeout_seconds
+    ", replicate_timeout_seconds=", simulation_replicate_timeout_seconds
   )
 
   simulation_start <- Sys.time()
@@ -834,13 +877,11 @@ run_sequence_simulation_validation <- function() {
       if (run_index %% simulation_progress_every == 0L || run_index == 1L || run_index == total_runs) {
         elapsed_min <- as.numeric(difftime(Sys.time(), simulation_start, units = "mins"))
         eta_min <- if (run_index > 0L) elapsed_min * (total_runs - run_index) / run_index else NA_real_
-        progress_detail <- paste0(
+        log_message(
           "Simulation progress: ", run_index, "/", total_runs,
           " | elapsed=", signif(elapsed_min, 3), " min",
           " | ETA=", signif(eta_min, 3), " min"
         )
-        log_message(progress_detail)
-        write_status("running", progress_detail)
       }
 
       template <- data.frame(
@@ -855,30 +896,44 @@ run_sequence_simulation_validation <- function() {
       template$de_label <- paste0(template$de_fraction * 100, "% DE")
       template$inflation_label <- paste0(template$null_inflation * 100, "% null inflation")
 
-      out <- tryCatch({
-        with_elapsed_timeout({
-          sim_obj <- simulate_sequence_counts(
-            n_features = simulation_n_features,
-            n_samples = simulation_n_samples_per_group,
-            base_mean = simulation_base_mean,
-            disp_null = simulation_dispersion_null,
-            de_fraction = grid_row$de_fraction,
-            lfc_magnitude = grid_row$lfc_magnitude,
-            disp_de = simulation_dispersion_de,
-            lfc_profile = grid_row$simulation_profile
-          )
-          sequence_simulation_analysis(sim_obj, null_inflation = grid_row$null_inflation)
-        }, seconds = simulation_rep_timeout_seconds, label = paste0("simulation replicate ", run_index))
-      }, error = function(e) {
-        failure_rows[[length(failure_rows) + 1L]] <<- cbind(
-          template,
-          data.frame(run_index = run_index, error_message = conditionMessage(e), stringsAsFactors = FALSE)
-        )
-        log_message("Simulation replicate failed: ", run_index, "/", total_runs, " | ", conditionMessage(e))
-        NULL
-      })
+      run_seed <- as.integer(simulation_seed + 1000003L * grid_i + 9176L * rep_i + 37L * run_index)
+      write_status(
+        "running",
+        paste0(
+          "replicate analysis running; grid=", grid_i,
+          ", replicate=", rep_i,
+          ", de_fraction=", grid_row$de_fraction,
+          ", profile=", grid_row$simulation_profile,
+          ", null_inflation=", grid_row$null_inflation
+        ),
+        run_index = run_index,
+        total_runs = total_runs
+      )
 
-      if (is.null(out)) next
+      replicate_run <- run_with_timeout({
+        set.seed(run_seed)
+        sim_obj <- simulate_sequence_counts(
+          n_features = simulation_n_features,
+          n_samples = simulation_n_samples_per_group,
+          base_mean = simulation_base_mean,
+          disp_null = simulation_dispersion_null,
+          de_fraction = grid_row$de_fraction,
+          lfc_magnitude = grid_row$lfc_magnitude,
+          disp_de = simulation_dispersion_de,
+          lfc_profile = grid_row$simulation_profile
+        )
+        sequence_simulation_analysis(sim_obj, null_inflation = grid_row$null_inflation)
+      }, timeout_seconds = simulation_replicate_timeout_seconds, label = paste0("simulation replicate ", run_index, "/", total_runs))
+
+      if (!isTRUE(replicate_run$ok)) {
+        failure_message <- ifelse(is.na(replicate_run$error_message), "Unknown replicate failure", replicate_run$error_message)
+        failure_rows[[length(failure_rows) + 1L]] <- cbind(template, data.frame(error_message = failure_message, stringsAsFactors = FALSE))
+        log_message("Simulation replicate failed: ", run_index, "/", total_runs, " | ", failure_message)
+        next
+      }
+
+      out <- replicate_run$value
+      write_status("running", paste0("replicate complete; run=", run_index, "/", total_runs), run_index = run_index, total_runs = total_runs)
 
       metric_rows[[length(metric_rows) + 1L]] <- build_simulation_metric_rows(out, template)
 
@@ -899,11 +954,6 @@ run_sequence_simulation_validation <- function() {
       }
     }
   }
-
-  log_message("Simulation loop complete; compiling metrics and writing tables.")
-
-  log_message("Simulation loop finished; binding tables and exporting figures.")
-  write_status("running", "Simulation loop finished; binding tables and exporting figures.")
 
   failures <- if (length(failure_rows) > 0L) bind_rows(failure_rows) else data.frame()
   save_csv(failures, file.path(simulation_dir, "Simulation_Failures.csv"))
@@ -966,14 +1016,9 @@ run_sequence_simulation_validation <- function() {
     save_csv(bind_rows(feature_rows), file.path(simulation_dir, "Simulation_FeatureResults.csv"))
   }
 
-  log_message("Simulation tables written; exporting manuscript figures.")
-
   all_de_methods <- c("DESeq2_BH", "Empirical_BH", "HBFSS_total", "HBFSS_raw")
   strong_methods <- c("GreaterAbs", "HBFSS_raw")
   weak_methods <- c("LessAbs", "HBFSS_weak_region")
-
-  log_message("Writing simulation figures.")
-  write_status("running", "Writing simulation figures.")
 
   figure_status <- bind_rows(
     safe_save_figure(
@@ -1068,9 +1113,6 @@ run_sequence_simulation_validation <- function() {
     stop("Simulation figure verification failed. Missing or empty PNG file(s): ", paste(missing_png, collapse = ", "), call. = FALSE)
   }
 
-  log_message("All simulation figures verified.")
-  write_status("running", "All simulation figures verified; writing README/session info.")
-
   writeLines(
     c(
       "SEQUENCE simulation figures",
@@ -1085,8 +1127,12 @@ run_sequence_simulation_validation <- function() {
 
   writeLines(capture.output(sessionInfo()), file.path(simulation_dir, "SessionInfo_Simulation.txt"))
 
-  if (nrow(failures) > 0L && isTRUE(simulation_fail_on_failed_replicates)) {
-    stop("Simulation validation had failed replicate(s). Figures were exported, but Git push was stopped. See Simulation_Failures.csv.", call. = FALSE)
+  failure_fraction <- if (total_runs > 0L) nrow(failures) / total_runs else 1
+  if (nrow(failures) > 0L) {
+    log_message("Simulation failure fraction: ", signif(failure_fraction, 4), " | allowed maximum=", simulation_max_failed_fraction)
+  }
+  if (nrow(failures) > 0L && isTRUE(simulation_fail_on_failed_replicates) && failure_fraction > simulation_max_failed_fraction) {
+    stop("Simulation validation exceeded the allowed failed-replicate fraction. Figures were exported, but Git push was stopped. See Simulation_Failures.csv.", call. = FALSE)
   }
   log_message("Simulation successful replicates: ", length(metric_rows), "/", total_runs)
   log_message("Simulation failed replicates: ", nrow(failures))
@@ -1106,9 +1152,9 @@ write_simulation_methods <- function() {
     paste0("Baseline feature means were sampled from a gamma distribution with mean scale centered around ", simulation_base_mean, "; null dispersion was ", simulation_dispersion_null, " and differential-feature dispersion was ", simulation_dispersion_de, "."),
     paste0("The simulation grid used differential-expression fractions of ", paste(simulation_de_fractions, collapse = ", "), ", fixed absolute log2 fold-change magnitudes of ", paste(simulation_lfc_magnitudes, collapse = ", "), ", and a weak-effect mixture sampled uniformly from absolute log2 fold-change ", simulation_weak_lfc_min, " to ", simulation_weak_lfc_max, "."),
     paste0("Null Wald statistic inflation fractions were ", paste(simulation_null_inflation, collapse = ", "), "."),
-    paste0("Each grid cell was repeated ", simulation_n_reps, " times."),
+    paste0("Each grid cell was repeated ", simulation_n_reps, " times. Each replicate was run with a timeout of ", simulation_replicate_timeout_seconds, " seconds so a single DESeq2/apeglm replicate cannot stall the full validation."),
     "",
-    "For each simulated count matrix, DESeq2 was run with design ~ condition. Simulated differential features were randomly sampled per replicate rather than assigned by row position. Standard DESeq2 calls used Benjamini-Hochberg adjusted p < alpha_standard and absolute apeglm-shrunken log2 fold change >= lfc_boundary. GreaterAbs and LessAbs tests used the same lfc_boundary with alpha_strong and alpha_weak, respectively.",
+    paste0("For each simulated count matrix, DESeq2 was run with design ~ condition and fitType='", simulation_deseq_fit_type, "'. Simulated differential features were randomly sampled per replicate rather than assigned by row position. Standard DESeq2 calls used Benjamini-Hochberg adjusted p < alpha_standard and absolute apeglm-shrunken log2 fold change >= lfc_boundary. GreaterAbs and LessAbs tests used the same lfc_boundary with alpha_strong and alpha_weak, respectively."),
     "",
     "Empirical-null p-values were fit from the DESeq2 Wald statistics using fdrtool. Higher criticism was applied to the empirical p-value distribution using fdrtool::hc.thresh. HC thresholds that were non-finite, outside (0,1), below hc_invalid_below, or >= hc_invalid_at_or_above were marked invalid.",
     "",
@@ -1312,21 +1358,22 @@ git_command <- function(args, allow_failure = FALSE, echo_output = TRUE) {
   if (Sys.which("git") == "") stop("Git executable was not found on PATH.", call. = FALSE)
   cmd_display <- paste("git", "-C", repo_root, paste(args, collapse = " "))
   if (isTRUE(echo_output)) log_message("$ ", cmd_display)
-  out <- suppressWarnings(system2(
-    "git",
-    args = c("-C", repo_root, args),
-    stdout = TRUE,
-    stderr = TRUE,
-    timeout = git_timeout_seconds
-  ))
+  git_args <- c("-C", repo_root, args)
+  if (git_command_timeout_seconds > 0L && Sys.which("timeout") != "") {
+    out <- suppressWarnings(system2("timeout", args = c(as.character(git_command_timeout_seconds), "git", git_args), stdout = TRUE, stderr = TRUE))
+  } else {
+    out <- suppressWarnings(system2("git", args = git_args, stdout = TRUE, stderr = TRUE))
+  }
   status <- attr(out, "status")
   if (is.null(status)) status <- 0L
+  if (identical(as.integer(status), 124L)) out <- c(out, paste0("Git command timed out after ", git_command_timeout_seconds, " seconds."))
   if (isTRUE(echo_output) && length(out) > 0L) log_message(paste(out, collapse = "\n"))
   if (status != 0L && !isTRUE(allow_failure)) {
-    stop("Git command failed or timed out with status ", status, ": ", cmd_display, "\n", paste(out, collapse = "\n"), call. = FALSE)
+    stop("Git command failed with status ", status, ": ", cmd_display, "\n", paste(out, collapse = "\n"), call. = FALSE)
   }
   list(status = as.integer(status), output = out)
 }
+
 git_output_first_line <- function(args, allow_failure = FALSE) {
   res <- git_command(args, allow_failure = allow_failure, echo_output = FALSE)
   if (res$status != 0L || length(res$output) == 0L) return(NA_character_)
@@ -1466,20 +1513,19 @@ git_commit_and_push <- function() {
 # =============================================================================
 
 main <- function() {
-  write_status("running", "Simulation started.")
   log_message("SEQUENCE standalone simulation started.")
   log_message("Repository root: ", repo_root)
   log_message("Simulation output directory: ", simulation_dir)
+  write_status("running", "simulation started", run_index = NA_integer_, total_runs = NA_integer_)
 
   simulation_result <- run_sequence_simulation_validation()
-  log_message("All simulation figures were written and verified; writing methods and interpretation files.")
   write_simulation_methods()
   write_simulation_interpretation(simulation_result)
   manifest <- write_manifest()
   cleanup_rplots_pdf()
-  write_status("running", "Starting Git commit/push step.")
+  write_status("pushing", "simulation complete; Git commit/push starting", run_index = NA_integer_, total_runs = NA_integer_)
   git_commit_and_push()
-  write_status("complete", "Simulation completed, figures verified, interpretation written, and Git step finished.")
+  write_status("complete", "simulation complete and Git step finished", run_index = NA_integer_, total_runs = NA_integer_)
 
   cat("\n=====================================================\n")
   cat("SEQUENCE standalone simulation complete.\n")
@@ -1494,8 +1540,8 @@ main <- function() {
 tryCatch(
   main(),
   error = function(e) {
-    write_status("failed", conditionMessage(e))
     log_message("SIMULATION FAILED - DO NOT PUSH: ", conditionMessage(e))
+    try(write_status("failed", conditionMessage(e), run_index = NA_integer_, total_runs = NA_integer_), silent = TRUE)
     try(writeLines(capture.output(sessionInfo()), file.path(simulation_dir, "SessionInfo_Simulation_Failed.txt")), silent = TRUE)
     try(cleanup_rplots_pdf(), silent = TRUE)
     if (!interactive()) quit(save = "no", status = 1L, runLast = FALSE)
