@@ -1,96 +1,109 @@
 #!/usr/bin/env Rscript
 
-# =============================================================================
-# SEQUENCE SIMULATION VALIDATION - STANDALONE
-# Negative-binomial simulation validation for DESeq2, empirical-null p-values,
-# higher-criticism thresholding, and HBFSS.
-# =============================================================================
-
 options(stringsAsFactors = FALSE)
 options(width = 140)
+
+# =============================================================================
+# HBFSS COUNT-DATA SIMULATION ARM
+# Standalone manuscript simulation for DESeq2, empirical-null p-values,
+# higher-criticism thresholding, and HBFSS classification.
+# =============================================================================
+
+read_bool <- function(name, default) {
+  value <- Sys.getenv(name, unset = NA_character_)
+  if (is.na(value) || !nzchar(value)) return(default)
+  tolower(value) %in% c("1", "true", "t", "yes", "y")
+}
+
+read_int <- function(name, default, minimum = 1L) {
+  value <- suppressWarnings(as.integer(Sys.getenv(name, unset = as.character(default))))
+  if (is.na(value) || !is.finite(value) || value < minimum) return(as.integer(default))
+  as.integer(value)
+}
+
+read_num <- function(name, default, minimum = -Inf, maximum = Inf) {
+  value <- suppressWarnings(as.numeric(Sys.getenv(name, unset = as.character(default))))
+  if (is.na(value) || !is.finite(value) || value < minimum || value > maximum) return(as.numeric(default))
+  as.numeric(value)
+}
 
 # =============================================================================
 # USER SETTINGS
 # =============================================================================
 
-output_folder_name <- "manuscript_final_clean"
-reset_simulation_dir <- TRUE
+OUTPUT_FOLDER_NAME <- "manuscript_final_clean"
+SIMULATION_FOLDER_NAME <- "simulation_validation"
 
-alpha_standard <- 0.10
-alpha_strong <- 0.10
-alpha_weak <- 0.10
-lfc_boundary <- 1.0
+RESET_OUTPUT <- read_bool("SEQUENCE_RESET_SIM_OUTPUT", TRUE)
+WRITE_PDF <- read_bool("SEQUENCE_WRITE_PDF", TRUE)
+GIT_PUSH_AFTER_SUCCESS <- read_bool("SEQUENCE_GIT_PUSH", TRUE)
 
-strict_empirical_null <- FALSE
-hc_invalid_at_or_above <- 0.95
-hc_invalid_below <- 0.001
-calculation_p_floor <- .Machine$double.xmin
-plot_p_floor <- 1e-16
+SEED <- read_int("SEQUENCE_SIM_SEED", 42L)
+N_FEATURES <- read_int("SEQUENCE_SIM_FEATURES", 5000L)
+N_SAMPLES_PER_GROUP <- read_int("SEQUENCE_SIM_SAMPLES_PER_GROUP", 6L)
+N_REPS <- read_int("SEQUENCE_SIM_REPS", 12L)
 
-figure_dpi <- 600
-base_theme_size <- 9
-export_pdf_also <- TRUE
+BASE_MEAN <- read_num("SEQUENCE_SIM_BASE_MEAN", 200)
+DISP_NULL <- read_num("SEQUENCE_SIM_DISP_NULL", 0.10)
+DISP_DE <- read_num("SEQUENCE_SIM_DISP_DE", 0.15)
 
-simulation_seed <- as.integer(Sys.getenv("SEQUENCE_SIM_SEED", "42"))
-simulation_n_features <- as.integer(Sys.getenv("SEQUENCE_SIM_FEATURES", "1000"))
-simulation_n_samples_per_group <- as.integer(Sys.getenv("SEQUENCE_SIM_SAMPLES_PER_GROUP", "6"))
-simulation_n_reps <- as.integer(Sys.getenv("SEQUENCE_SIM_REPS", "25"))
-simulation_progress_every <- as.integer(Sys.getenv("SEQUENCE_SIM_PROGRESS_EVERY", "5"))
-simulation_checkpoint_every <- as.integer(Sys.getenv("SEQUENCE_SIM_CHECKPOINT_EVERY", "5"))
+ALPHA_STANDARD <- 0.10
+ALPHA_STRONG <- 0.10
+ALPHA_WEAK <- 0.10
+LFC_BOUNDARY <- 1.00
 
-simulation_base_mean <- 200
-simulation_dispersion_null <- 0.10
-simulation_dispersion_de <- 0.15
-simulation_de_fractions <- c(0.05, 0.10)
-simulation_lfc_magnitudes <- c(0.50, 1.00)
-simulation_weak_lfc_min <- 0.20
-simulation_weak_lfc_max <- 0.80
-simulation_null_inflation <- c(0.00, 0.10)
-simulation_use_apeglm_shrinkage <- TRUE
-simulation_fail_on_failed_replicates <- TRUE
-export_simulation_feature_results <- FALSE
+PROB_FLOOR <- .Machine$double.xmin
+PLOT_FLOOR <- 1e-16
+HC_INVALID_BELOW <- 0.001
+HC_INVALID_AT_OR_ABOVE <- 0.95
 
-# Optional GitHub push after successful simulation run.
-git_push_after_success <- TRUE
-git_remote_name <- "origin"
-git_branch_name <- NA_character_
-git_commit_message <- paste0("Update SEQUENCE simulation validation outputs ", format(Sys.time(), "%Y-%m-%d %H:%M:%S"))
-git_pull_rebase_before_push <- TRUE
-git_stage_pipeline_script <- TRUE
-git_allow_no_change_success <- TRUE
-git_max_file_size_bytes <- 95 * 1024^2
-git_exclude_patterns <- c(
-  "exports/manuscript_final_clean/simulation_validation/Simulation_FeatureResults.csv"
+DE_FRACTIONS <- c(0.05, 0.10)
+FIXED_LFC_MAGNITUDES <- c(0.50, 1.00, 2.00)
+WEAK_LFC_MIN <- 0.20
+WEAK_LFC_MAX <- 0.80
+NULL_INFLATION_FRACTIONS <- c(0.00, 0.10)
+
+FIGURE_DPI <- read_int("SEQUENCE_SIM_DPI", 300L)
+BASE_THEME_SIZE <- 9
+
+MAX_FAILURE_FRACTION <- read_num("SEQUENCE_SIM_MAX_FAILURE_FRACTION", 0.05, minimum = 0, maximum = 1)
+
+GIT_REMOTE <- Sys.getenv("SEQUENCE_GIT_REMOTE", unset = "origin")
+GIT_BRANCH <- Sys.getenv("SEQUENCE_GIT_BRANCH", unset = NA_character_)
+GIT_COMMIT_MESSAGE <- Sys.getenv(
+  "SEQUENCE_GIT_COMMIT_MESSAGE",
+  unset = paste0("Update HBFSS simulation outputs ", format(Sys.time(), "%Y-%m-%d %H:%M:%S"))
 )
 
 # =============================================================================
 # PACKAGES
 # =============================================================================
 
-required_packages <- c("DESeq2", "fdrtool", "ggplot2", "dplyr", "grid")
-if (isTRUE(simulation_use_apeglm_shrinkage)) required_packages <- c(required_packages, "apeglm")
+REQUIRED_PACKAGES <- c("DESeq2", "apeglm", "fdrtool", "ggplot2", "dplyr", "tidyr", "grid")
 
-missing_packages <- required_packages[
-  !vapply(required_packages, requireNamespace, logical(1), quietly = TRUE)
+missing_packages <- REQUIRED_PACKAGES[
+  !vapply(REQUIRED_PACKAGES, requireNamespace, logical(1), quietly = TRUE)
 ]
+
 if (length(missing_packages) > 0L) {
   stop("Install missing package(s): ", paste(missing_packages, collapse = ", "), call. = FALSE)
 }
 
 suppressPackageStartupMessages({
   library(DESeq2)
+  library(apeglm)
   library(fdrtool)
   library(ggplot2)
   library(dplyr)
+  library(tidyr)
   library(grid)
-  if (isTRUE(simulation_use_apeglm_shrinkage)) library(apeglm)
 })
 
 # =============================================================================
-# PATHS AND LOGGING
+# PATHS
 # =============================================================================
 
-script_path <- function() {
+current_script <- function() {
   args <- commandArgs(trailingOnly = FALSE)
   hit <- grep("^--file=", args, value = TRUE)
   if (length(hit) == 0L) return(NA_character_)
@@ -98,95 +111,74 @@ script_path <- function() {
 }
 
 find_repo_root <- function() {
-  candidates <- unique(c(dirname(script_path()), getwd()))
-  candidates <- candidates[!is.na(candidates) & dir.exists(candidates)]
+  starts <- unique(c(dirname(current_script()), getwd()))
+  starts <- starts[!is.na(starts) & dir.exists(starts)]
 
-  walk_up <- function(start) {
-    current <- normalizePath(start, winslash = "/", mustWork = TRUE)
+  for (start in starts) {
+    here <- normalizePath(start, winslash = "/", mustWork = TRUE)
     repeat {
-      if (dir.exists(file.path(current, ".git"))) return(current)
-      parent <- dirname(current)
-      if (identical(parent, current)) break
-      current <- parent
+      if (dir.exists(file.path(here, ".git"))) return(here)
+      parent <- dirname(here)
+      if (identical(parent, here)) break
+      here <- parent
     }
-    NA_character_
   }
 
-  hits <- vapply(candidates, walk_up, character(1))
-  hits <- hits[!is.na(hits)]
-  if (length(hits) > 0L) return(hits[1])
   normalizePath(getwd(), winslash = "/", mustWork = TRUE)
 }
 
-repo_root <- find_repo_root()
-output_dir <- file.path(repo_root, "exports", output_folder_name)
-simulation_dir <- file.path(output_dir, "simulation_validation")
-log_file <- file.path(simulation_dir, "Simulation_Log.txt")
+REPO_ROOT <- find_repo_root()
+OUTPUT_DIR <- file.path(REPO_ROOT, "exports", OUTPUT_FOLDER_NAME)
+SIM_DIR <- file.path(OUTPUT_DIR, SIMULATION_FOLDER_NAME)
+FIG_DIR <- file.path(SIM_DIR, "figures")
+PNG_DIR <- file.path(FIG_DIR, "png")
+PDF_DIR <- file.path(FIG_DIR, "pdf")
+LOG_FILE <- file.path(SIM_DIR, "simulation_run.log")
+STATUS_FILE <- file.path(SIM_DIR, "simulation_status.txt")
 
-if (isTRUE(reset_simulation_dir) && dir.exists(simulation_dir)) {
-  unlink(simulation_dir, recursive = TRUE, force = TRUE)
+if (isTRUE(RESET_OUTPUT) && dir.exists(SIM_DIR)) {
+  unlink(SIM_DIR, recursive = TRUE, force = TRUE)
 }
-dir.create(simulation_dir, recursive = TRUE, showWarnings = FALSE)
-figures_dir <- file.path(simulation_dir, "figures")
-figures_png_dir <- file.path(figures_dir, "png")
-figures_pdf_dir <- file.path(figures_dir, "pdf")
-dir.create(figures_png_dir, recursive = TRUE, showWarnings = FALSE)
-dir.create(figures_pdf_dir, recursive = TRUE, showWarnings = FALSE)
 
-log_message <- function(...) {
-  txt <- paste0(...)
-  stamp <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
-  line <- paste0("[", stamp, "] ", txt)
+dir.create(SIM_DIR, recursive = TRUE, showWarnings = FALSE)
+dir.create(PNG_DIR, recursive = TRUE, showWarnings = FALSE)
+dir.create(PDF_DIR, recursive = TRUE, showWarnings = FALSE)
+
+repo_relative <- function(path) {
+  root <- normalizePath(REPO_ROOT, winslash = "/", mustWork = TRUE)
+  full <- normalizePath(path, winslash = "/", mustWork = FALSE)
+  prefix <- paste0(root, "/")
+  if (startsWith(full, prefix)) return(substr(full, nchar(prefix) + 1L, nchar(full)))
+  full
+}
+
+log_msg <- function(...) {
+  text <- paste0(...)
+  line <- paste0("[", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "] ", text)
   message(line)
-  cat(line, "\n", file = log_file, append = TRUE)
+  cat(line, "\n", file = LOG_FILE, append = TRUE)
 }
 
-cleanup_rplots_pdf <- function() {
-  stray <- file.path(repo_root, "Rplots.pdf")
-  if (file.exists(stray)) unlink(stray, force = TRUE)
+write_status <- function(status, detail = "") {
+  lines <- c(
+    paste0("status=", status),
+    paste0("time=", format(Sys.time(), "%Y-%m-%d %H:%M:%S")),
+    paste0("detail=", detail)
+  )
+  writeLines(lines, STATUS_FILE)
 }
 
-positive_integer <- function(x, default, label) {
-  y <- suppressWarnings(as.integer(x[1]))
-  if (!is.finite(y) || is.na(y) || y < 1L) {
-    warning(label, " was invalid; using ", default, ".", call. = FALSE)
-    return(as.integer(default))
-  }
-  as.integer(y)
+write_csv <- function(x, path) {
+  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
+  write.csv(x, path, row.names = FALSE)
+  invisible(path)
 }
-
-simulation_seed <- positive_integer(simulation_seed, 42L, "simulation_seed")
-simulation_n_features <- positive_integer(simulation_n_features, 1000L, "simulation_n_features")
-simulation_n_samples_per_group <- positive_integer(simulation_n_samples_per_group, 6L, "simulation_n_samples_per_group")
-simulation_n_reps <- positive_integer(simulation_n_reps, 25L, "simulation_n_reps")
-simulation_progress_every <- positive_integer(simulation_progress_every, 5L, "simulation_progress_every")
-simulation_checkpoint_every <- positive_integer(simulation_checkpoint_every, 5L, "simulation_checkpoint_every")
 
 # =============================================================================
-# GENERAL HELPERS
+# NUMERIC HELPERS
 # =============================================================================
 
-as_integer_count_matrix <- function(x, label) {
-  row_ids <- rownames(x)
-  col_ids <- colnames(x)
-  mat <- as.matrix(x)
-  suppressWarnings(storage.mode(mat) <- "numeric")
-
-  if (any(is.na(mat) | !is.finite(mat))) stop(label, " has NA or non-finite count values.", call. = FALSE)
-  if (any(mat < 0)) stop(label, " has negative count values.", call. = FALSE)
-
-  rounded <- round(mat)
-  if (any(abs(mat - rounded) > 1e-6)) {
-    warning(label, " had non-integer count values; values were rounded for DESeq2.", call. = FALSE)
-  }
-
-  storage.mode(rounded) <- "integer"
-  rownames(rounded) <- row_ids
-  colnames(rounded) <- col_ids
-  rounded
-}
-
-clip_probability <- function(x, floor_value = calculation_p_floor) {
+clip_probability <- function(x, floor_value = PROB_FLOOR) {
   y <- suppressWarnings(as.numeric(x))
   y[!is.finite(y)] <- NA_real_
   ok <- !is.na(y)
@@ -194,7 +186,7 @@ clip_probability <- function(x, floor_value = calculation_p_floor) {
   y
 }
 
-safe_neglog10 <- function(p, floor_value = plot_p_floor) {
+neglog10_safe <- function(p, floor_value = PLOT_FLOOR) {
   -log10(clip_probability(p, floor_value = floor_value))
 }
 
@@ -226,201 +218,216 @@ max_finite <- function(x) {
   max(y)
 }
 
-save_csv <- function(df, path) {
-  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
-  write.csv(df, path, row.names = FALSE)
-  invisible(path)
-}
+# =============================================================================
+# SIMULATION DATA GENERATION
+# =============================================================================
 
-manuscript_theme <- function() {
-  theme_bw(base_size = base_theme_size) +
-    theme(
-      plot.title = element_text(face = "bold", size = base_theme_size + 0.5, hjust = 0.5),
-      axis.title = element_text(face = "bold", size = base_theme_size - 0.1),
-      axis.text = element_text(color = "black", size = base_theme_size - 0.8),
-      legend.position = "bottom",
-      legend.title = element_text(face = "bold", size = base_theme_size - 0.2),
-      legend.text = element_text(size = base_theme_size - 0.4),
-      panel.grid.minor = element_blank(),
-      panel.grid.major = element_line(linewidth = 0.25, color = "grey88"),
-      strip.text = element_text(face = "bold", size = base_theme_size - 0.8),
-      plot.margin = margin(6, 8, 6, 6)
-    )
-}
-
-draw_to_device <- function(plot_obj) {
-  grid::grid.newpage()
-  if (inherits(plot_obj, "ggplot")) {
-    print(plot_obj)
-  } else {
-    stop("Unsupported figure object class: ", paste(class(plot_obj), collapse = ", "), call. = FALSE)
-  }
-}
-
-check_nonempty_file <- function(path, label) {
-  if (!file.exists(path)) stop(label, " was not written: ", path, call. = FALSE)
-  file_size <- suppressWarnings(file.info(path)$size)
-  if (!is.finite(file_size) || is.na(file_size) || file_size <= 0) {
-    stop(label, " is empty: ", path, call. = FALSE)
-  }
-  invisible(TRUE)
-}
-
-save_figure <- function(plot_obj, figure_name, width, height, export_pdf = export_pdf_also) {
-  if (is.null(plot_obj)) stop("Figure object is NULL for ", figure_name, call. = FALSE)
-  if (!inherits(plot_obj, "ggplot")) stop("Figure object is not a ggplot for ", figure_name, call. = FALSE)
-
-  png_path <- file.path(figures_png_dir, paste0(figure_name, ".png"))
-  pdf_path <- file.path(figures_pdf_dir, paste0(figure_name, ".pdf"))
-
-  dir.create(dirname(png_path), recursive = TRUE, showWarnings = FALSE)
-  ggplot2::ggsave(
-    filename = png_path,
-    plot = plot_obj,
-    width = width,
-    height = height,
-    units = "in",
-    dpi = figure_dpi,
-    bg = "white",
-    limitsize = FALSE
-  )
-  check_nonempty_file(png_path, "PNG figure")
-
-  if (isTRUE(export_pdf)) {
-    grDevices::pdf(file = pdf_path, width = width, height = height, onefile = TRUE, useDingbats = FALSE)
-    tryCatch({
-      draw_to_device(plot_obj)
-    }, finally = {
-      grDevices::dev.off()
-    })
-    check_nonempty_file(pdf_path, "PDF figure")
-  } else {
-    pdf_path <- NA_character_
-  }
-
-  root_png_path <- file.path(simulation_dir, paste0(figure_name, ".png"))
-  file.copy(png_path, root_png_path, overwrite = TRUE)
-  check_nonempty_file(root_png_path, "Root PNG figure")
-
-  log_message("Figure saved: ", root_png_path, " | ", png_path, if (isTRUE(export_pdf)) paste0(" | ", pdf_path) else "")
-  data.frame(
-    figure = figure_name,
-    png_file = path_relative_to_repo(root_png_path),
-    png_archive_file = path_relative_to_repo(png_path),
-    pdf_file = if (isTRUE(export_pdf)) path_relative_to_repo(pdf_path) else NA_character_,
-    status = "saved",
-    error_message = NA_character_,
+make_simulation_grid <- function() {
+  fixed_grid <- expand.grid(
+    de_fraction = DE_FRACTIONS,
+    lfc_magnitude = FIXED_LFC_MAGNITUDES,
+    null_inflation = NULL_INFLATION_FRACTIONS,
+    profile = "fixed",
     stringsAsFactors = FALSE
   )
+
+  weak_grid <- expand.grid(
+    de_fraction = DE_FRACTIONS,
+    lfc_magnitude = NA_real_,
+    null_inflation = NULL_INFLATION_FRACTIONS,
+    profile = "weak_mixture",
+    stringsAsFactors = FALSE
+  )
+
+  dplyr::bind_rows(fixed_grid, weak_grid)
 }
 
-safe_save_figure <- function(plot_obj, figure_name, width, height) {
-  tryCatch({
-    save_figure(plot_obj, figure_name, width, height)
-  }, error = function(e) {
-    log_message("FIGURE FAILED: ", figure_name, " | ", conditionMessage(e))
-    data.frame(
-      figure = figure_name,
-      png_file = NA_character_,
-      png_archive_file = NA_character_,
-      pdf_file = NA_character_,
-      status = "failed",
-      error_message = conditionMessage(e),
-      stringsAsFactors = FALSE
-    )
-  })
+lfc_label_from_profile <- function(profile, lfc_magnitude) {
+  if (identical(as.character(profile), "weak_mixture")) {
+    return(paste0("Weak mix\n|LFC| ", WEAK_LFC_MIN, "-", WEAK_LFC_MAX))
+  }
+  paste0("Fixed\n|LFC| ", lfc_magnitude)
+}
+
+simulate_counts <- function(n_features, n_samples_per_group, de_fraction, lfc_magnitude, profile) {
+  n_de <- max(2L, min(n_features - 2L, round(n_features * de_fraction)))
+  feature_id <- paste0("sim_", seq_len(n_features))
+
+  de_index <- sample(seq_len(n_features), n_de, replace = FALSE)
+
+  base_mu <- stats::rgamma(n_features, shape = 2.5, scale = BASE_MEAN / 2.5)
+  base_mu <- pmax(base_mu, 2)
+
+  dispersion <- rep(DISP_NULL, n_features)
+  dispersion[de_index] <- DISP_DE
+  dispersion <- dispersion * exp(stats::rnorm(n_features, mean = 0, sd = 0.25))
+  dispersion <- pmin(pmax(dispersion, 0.01), 1.50)
+
+  direction <- sample(c(-1, 1), n_de, replace = TRUE)
+
+  abs_lfc <- if (identical(profile, "weak_mixture")) {
+    stats::runif(n_de, min = WEAK_LFC_MIN, max = WEAK_LFC_MAX)
+  } else {
+    rep(lfc_magnitude, n_de)
+  }
+
+  true_lfc <- rep(0, n_features)
+  true_lfc[de_index] <- direction * abs_lfc
+
+  control_mu <- base_mu
+  treatment_mu <- base_mu * 2^true_lfc
+
+  control_lib <- exp(stats::rnorm(n_samples_per_group, mean = 0, sd = 0.12))
+  treatment_lib <- exp(stats::rnorm(n_samples_per_group, mean = 0, sd = 0.12))
+  control_lib <- control_lib / exp(mean(log(control_lib)))
+  treatment_lib <- treatment_lib / exp(mean(log(treatment_lib)))
+
+  draw_group <- function(mu, lib_factor, disp) {
+    out <- matrix(0L, nrow = length(mu), ncol = length(lib_factor))
+    for (j in seq_along(lib_factor)) {
+      out[, j] <- stats::rnbinom(
+        n = length(mu),
+        mu = pmax(mu * lib_factor[j], 1e-3),
+        size = 1 / disp
+      )
+    }
+    out
+  }
+
+  counts <- cbind(
+    draw_group(control_mu, control_lib, dispersion),
+    draw_group(treatment_mu, treatment_lib, dispersion)
+  )
+
+  storage.mode(counts) <- "integer"
+  rownames(counts) <- feature_id
+  colnames(counts) <- c(
+    paste0("ctrl_", seq_len(n_samples_per_group)),
+    paste0("trt_", seq_len(n_samples_per_group))
+  )
+
+  truth <- data.frame(
+    feature_id = feature_id,
+    is_de = seq_len(n_features) %in% de_index,
+    true_lfc = true_lfc,
+    true_abs_lfc = abs(true_lfc),
+    true_weak = seq_len(n_features) %in% de_index & abs(true_lfc) < LFC_BOUNDARY,
+    true_strong = seq_len(n_features) %in% de_index & abs(true_lfc) >= LFC_BOUNDARY,
+    base_mean = base_mu,
+    dispersion = dispersion,
+    stringsAsFactors = FALSE
+  )
+
+  list(counts = counts, truth = truth)
+}
+
+inflate_null_wald <- function(wald, is_de, fraction, inflation_sd = 1.75) {
+  if (!is.finite(fraction) || fraction <= 0) return(wald)
+
+  out <- wald
+  null_index <- which(!is_de & is.finite(out) & !is.na(out))
+  n_target <- round(length(null_index) * fraction)
+
+  if (n_target <= 0L) return(out)
+
+  target <- sample(null_index, n_target, replace = FALSE)
+  out[target] <- stats::rnorm(n_target, mean = 0, sd = inflation_sd)
+  out
 }
 
 # =============================================================================
-# EMPIRICAL NULL AND HC/HBFSS
+# DESEQ2, EMPIRICAL NULL, HC, HBFSS
 # =============================================================================
 
 condition_coef_name <- function(dds) {
-  nm <- resultsNames(dds)
-  if ("condition_trt_vs_untrt" %in% nm) return("condition_trt_vs_untrt")
-  hit <- grep("condition.*trt.*vs.*untrt", nm, value = TRUE)
+  names_available <- resultsNames(dds)
+
+  if ("condition_trt_vs_untrt" %in% names_available) {
+    return("condition_trt_vs_untrt")
+  }
+
+  hit <- grep("condition.*trt.*vs.*untrt", names_available, value = TRUE)
   if (length(hit) > 0L) return(hit[1])
-  stop("Could not find trt-vs-untrt coefficient. Available: ", paste(nm, collapse = ", "), call. = FALSE)
+
+  stop("Could not identify treatment coefficient. Available names: ", paste(names_available, collapse = ", "), call. = FALSE)
 }
 
 extract_eta0 <- function(fit) {
   if (is.null(fit) || is.null(fit$param)) return(NA_real_)
+
   param <- fit$param
+
   if (is.matrix(param) || is.data.frame(param)) {
     if ("eta0" %in% colnames(param)) return(suppressWarnings(as.numeric(param[1, "eta0"])))
     if ("eta0" %in% rownames(param)) return(suppressWarnings(as.numeric(param["eta0", 1])))
   }
+
   if ("eta0" %in% names(param)) return(suppressWarnings(as.numeric(param[["eta0"]][1])))
+
   NA_real_
 }
 
-fit_empirical_null <- function(statistic, label) {
-  valid <- is.finite(statistic) & !is.na(statistic)
-  if (sum(valid) < 5L) stop(label, " has fewer than five finite Wald statistics.", call. = FALSE)
-  z <- statistic[valid]
+fit_empirical_null <- function(wald) {
+  valid <- is.finite(wald) & !is.na(wald)
 
-  run_fit <- function(method) {
+  if (sum(valid) < 5L) {
+    p <- rep(NA_real_, length(wald))
+    return(list(empirical_p = p, empirical_bh = p, method = "failed_too_few_statistics"))
+  }
+
+  z <- wald[valid]
+
+  run_fdrtool <- function(method_name) {
     fit <- tryCatch(
       fdrtool::fdrtool(
         z,
         statistic = "normal",
         plot = FALSE,
         verbose = FALSE,
-        cutoff.method = method,
+        cutoff.method = method_name,
         pct0 = 0.75
       ),
       error = function(e) NULL
     )
+
     if (is.null(fit)) return(NULL)
     if (is.null(fit$pval) || length(fit$pval) != length(z)) return(NULL)
+
     eta0 <- extract_eta0(fit)
     if (!is.finite(eta0) || eta0 <= 0) return(NULL)
+
     fit
   }
 
   method_used <- "fndr"
-  fit <- run_fit("fndr")
+  fit <- run_fdrtool("fndr")
+
   if (is.null(fit)) {
     method_used <- "pct0"
-    fit <- run_fit("pct0")
+    fit <- run_fdrtool("pct0")
   }
 
   if (is.null(fit)) {
-    if (isTRUE(strict_empirical_null)) {
-      stop(label, ": fdrtool empirical-null fit failed with fndr and pct0.", call. = FALSE)
-    }
-    method_used <- "theoretical_normal_fallback"
-    p_raw <- 2 * stats::pnorm(-abs(z))
-    fit <- list(pval = p_raw, qval = p.adjust(p_raw, method = "BH"), lfdr = rep(NA_real_, length(z)))
+    method_used <- "theoretical_normal"
+    p_z <- 2 * stats::pnorm(-abs(z))
+    fit <- list(pval = p_z)
   }
 
-  n <- length(statistic)
-  empirical_p <- rep(NA_real_, n)
-  empirical_q <- rep(NA_real_, n)
-  empirical_lfdr <- rep(NA_real_, n)
-
-  qval <- if (!is.null(fit$qval) && length(fit$qval) == length(z)) fit$qval else rep(NA_real_, length(z))
-  lfdr <- if (!is.null(fit$lfdr) && length(fit$lfdr) == length(z)) fit$lfdr else rep(NA_real_, length(z))
+  empirical_p <- rep(NA_real_, length(wald))
+  empirical_bh <- rep(NA_real_, length(wald))
 
   empirical_p[valid] <- clip_probability(fit$pval)
-  empirical_q[valid] <- clip_probability(qval)
-  empirical_lfdr[valid] <- suppressWarnings(as.numeric(lfdr))
 
-  empirical_bh <- rep(NA_real_, n)
   ok <- !is.na(empirical_p) & is.finite(empirical_p)
   empirical_bh[ok] <- p.adjust(empirical_p[ok], method = "BH")
 
-  list(
-    empirical_p = empirical_p,
-    empirical_q = empirical_q,
-    empirical_lfdr = empirical_lfdr,
-    empirical_bh = empirical_bh,
-    empirical_null_method = method_used
-  )
+  list(empirical_p = empirical_p, empirical_bh = empirical_bh, method = method_used)
 }
 
 hc_threshold <- function(empirical_p) {
-  p <- sort(clip_probability(empirical_p), decreasing = FALSE, na.last = NA)
+  p <- clip_probability(empirical_p)
+  p <- sort(p[is.finite(p) & !is.na(p)], decreasing = FALSE)
+
   if (length(p) < 5L) return(NA_real_)
 
   threshold <- tryCatch(
@@ -428,120 +435,159 @@ hc_threshold <- function(empirical_p) {
     error = function(e) NA_real_
   )
 
-  if (!is.finite(threshold) || is.na(threshold) || threshold <= 0 || threshold >= 1) return(NA_real_)
-  if (threshold < hc_invalid_below) return(NA_real_)
-  if (threshold >= hc_invalid_at_or_above) return(NA_real_)
+  if (!is.finite(threshold) || is.na(threshold)) return(NA_real_)
+  if (threshold <= 0 || threshold >= 1) return(NA_real_)
+  if (threshold < HC_INVALID_BELOW) return(NA_real_)
+  if (threshold >= HC_INVALID_AT_OR_ABOVE) return(NA_real_)
+
   threshold
 }
 
-# =============================================================================
-# SIMULATION CORE
-# =============================================================================
+run_one_analysis <- function(sim, null_inflation) {
+  counts_mat <- sim$counts
 
-simulation_lfc_label <- function(lfc_magnitude, simulation_profile) {
-  profile <- as.character(simulation_profile)
-  lfc <- suppressWarnings(as.numeric(lfc_magnitude))
-  ifelse(
-    profile == "weak_mixture",
-    paste0("Weak mix\nLFC ", simulation_weak_lfc_min, "-", simulation_weak_lfc_max),
-    paste0("Fixed LFC\n", lfc)
+  coldata <- data.frame(
+    condition = factor(
+      c(rep("untrt", N_SAMPLES_PER_GROUP), rep("trt", N_SAMPLES_PER_GROUP)),
+      levels = c("untrt", "trt")
+    ),
+    row.names = colnames(counts_mat)
   )
-}
 
-simulation_lfc_levels <- function() {
-  c(
-    paste0("Fixed LFC\n", simulation_lfc_magnitudes),
-    paste0("Weak mix\nLFC ", simulation_weak_lfc_min, "-", simulation_weak_lfc_max)
+  dds <- DESeqDataSetFromMatrix(
+    countData = counts_mat,
+    colData = coldata,
+    design = ~ condition
   )
-}
 
-simulate_sequence_counts <- function(n_features, n_samples, base_mean, disp_null, de_fraction, lfc_magnitude, disp_de, lfc_profile = c("fixed", "weak_mixture")) {
-  lfc_profile <- match.arg(lfc_profile)
-  n_de <- round(n_features * de_fraction)
-  n_de <- max(2L, min(n_de, n_features - 2L))
-  feature_id <- paste0("sim_feature_", seq_len(n_features))
-  de_id <- sample(seq_len(n_features), n_de, replace = FALSE)
+  dds <- dds[rowSums(counts(dds)) > 0, ]
 
-  base_mu <- stats::rgamma(n_features, shape = 2.5, scale = base_mean / 2.5)
-  base_mu <- pmax(base_mu, 2)
-  dispersion <- rep(disp_null, n_features)
-  dispersion[de_id] <- disp_de
-  dispersion <- dispersion * exp(stats::rnorm(n_features, mean = 0, sd = 0.25))
-  dispersion <- pmin(pmax(dispersion, 0.01), 1.50)
-
-  de_direction <- sample(c(-1, 1), n_de, replace = TRUE)
-  lfc_abs <- if (identical(lfc_profile, "weak_mixture")) {
-    stats::runif(n_de, min = simulation_weak_lfc_min, max = simulation_weak_lfc_max)
-  } else {
-    rep(lfc_magnitude, n_de)
+  if (nrow(dds) < 5L) {
+    stop("Fewer than five nonzero features after DESeq2 filtering.", call. = FALSE)
   }
 
-  true_lfc <- rep(0, n_features)
-  true_lfc[de_id] <- lfc_abs * de_direction
-  control_mu <- base_mu
-  treatment_mu <- base_mu * 2^true_lfc
+  dds <- DESeq(dds, betaPrior = FALSE, quiet = TRUE)
+  coef_name <- condition_coef_name(dds)
 
-  control_lib <- exp(stats::rnorm(n_samples, mean = 0, sd = 0.12))
-  treatment_lib <- exp(stats::rnorm(n_samples, mean = 0, sd = 0.12))
-  control_lib <- control_lib / exp(mean(log(control_lib)))
-  treatment_lib <- treatment_lib / exp(mean(log(treatment_lib)))
-
-  generate_group <- function(mu, lib_factor, dispersion_vector) {
-    out <- matrix(0L, nrow = length(mu), ncol = length(lib_factor))
-    for (j in seq_along(lib_factor)) {
-      sample_mu <- pmax(mu * lib_factor[j], 1e-3)
-      out[, j] <- stats::rnbinom(n = length(sample_mu), mu = sample_mu, size = 1 / dispersion_vector)
-    }
-    out
-  }
-
-  counts_mat <- cbind(
-    generate_group(control_mu, control_lib, dispersion),
-    generate_group(treatment_mu, treatment_lib, dispersion)
-  )
-  storage.mode(counts_mat) <- "integer"
-  rownames(counts_mat) <- feature_id
-  colnames(counts_mat) <- c(paste0("ctrl_", seq_len(n_samples)), paste0("trt_", seq_len(n_samples)))
-
-  truth <- data.frame(
-    feature_id = feature_id,
-    is_de = seq_len(n_features) %in% de_id,
-    true_lfc = true_lfc,
-    true_abs_lfc = abs(true_lfc),
-    true_weak = seq_len(n_features) %in% de_id & abs(true_lfc) < lfc_boundary,
-    true_strong = seq_len(n_features) %in% de_id & abs(true_lfc) >= lfc_boundary,
-    base_mean = base_mu,
-    dispersion = dispersion,
-    simulation_profile = lfc_profile,
-    stringsAsFactors = FALSE
+  standard <- results(
+    dds,
+    contrast = c("condition", "trt", "untrt"),
+    alpha = ALPHA_STANDARD
   )
 
-  list(counts = counts_mat, truth = truth)
+  greater_abs <- results(
+    dds,
+    contrast = c("condition", "trt", "untrt"),
+    lfcThreshold = LFC_BOUNDARY,
+    altHypothesis = "greaterAbs",
+    alpha = ALPHA_STRONG
+  )
+
+  less_abs <- results(
+    dds,
+    contrast = c("condition", "trt", "untrt"),
+    lfcThreshold = LFC_BOUNDARY,
+    altHypothesis = "lessAbs",
+    alpha = ALPHA_WEAK
+  )
+
+  shrunk <- lfcShrink(dds, coef = coef_name, type = "apeglm", quiet = TRUE)
+
+  df <- as.data.frame(standard)
+  df$feature_id <- rownames(df)
+  df$lfc_shrunk <- as.data.frame(shrunk)$log2FoldChange
+  df$greaterAbs_padj <- as.data.frame(greater_abs)$padj
+  df$lessAbs_padj <- as.data.frame(less_abs)$padj
+
+  df <- dplyr::left_join(df, sim$truth, by = "feature_id")
+
+  df$is_de[is.na(df$is_de)] <- FALSE
+  df$true_weak[is.na(df$true_weak)] <- FALSE
+  df$true_strong[is.na(df$true_strong)] <- FALSE
+
+  inflated_wald <- inflate_null_wald(
+    wald = df$stat,
+    is_de = df$is_de,
+    fraction = null_inflation
+  )
+
+  empirical <- fit_empirical_null(inflated_wald)
+
+  df$empirical_p <- empirical$empirical_p
+  df$empirical_bh <- empirical$empirical_bh
+
+  hc_p <- hc_threshold(df$empirical_p)
+  hbfss_cutoff <- if (is.na(hc_p)) NA_real_ else -log10(hc_p) * LFC_BOUNDARY
+
+  df$neglog10_empirical_p <- neglog10_safe(df$empirical_p, floor_value = PROB_FLOOR)
+
+  df$HBFSS <- abs(df$lfc_shrunk) * df$neglog10_empirical_p
+
+  df$hc_pass <- !is.na(hc_p) &
+    !is.na(df$empirical_p) &
+    is.finite(df$empirical_p) &
+    df$empirical_p <= hc_p
+
+  df$standard_sig <- !is.na(df$padj) &
+    df$padj < ALPHA_STANDARD &
+    !is.na(df$lfc_shrunk) &
+    abs(df$lfc_shrunk) >= LFC_BOUNDARY
+
+  df$empirical_bh_sig <- !is.na(df$empirical_bh) &
+    df$empirical_bh < ALPHA_STANDARD &
+    !is.na(df$lfc_shrunk) &
+    abs(df$lfc_shrunk) >= LFC_BOUNDARY
+
+  df$greaterAbs_sig <- !is.na(df$greaterAbs_padj) &
+    df$greaterAbs_padj < ALPHA_STRONG &
+    !is.na(df$lfc_shrunk) &
+    abs(df$lfc_shrunk) >= LFC_BOUNDARY
+
+  df$lessAbs_sig <- !is.na(df$lessAbs_padj) &
+    df$lessAbs_padj < ALPHA_WEAK &
+    !is.na(df$lfc_shrunk) &
+    abs(df$lfc_shrunk) < LFC_BOUNDARY
+
+  df$hbfss_raw_sig <- !is.na(hbfss_cutoff) &
+    !is.na(df$HBFSS) &
+    is.finite(df$HBFSS) &
+    df$HBFSS >= hbfss_cutoff &
+    df$hc_pass
+
+  df$hbfss_total_sig <- df$standard_sig | df$hbfss_raw_sig
+
+  df$hbfss_weak_region_sig <- df$lessAbs_sig & df$hbfss_raw_sig
+
+  list(
+    results = df,
+    hc_p = hc_p,
+    hbfss_cutoff = hbfss_cutoff,
+    empirical_method = empirical$method
+  )
 }
 
-inflate_null_wald_statistics <- function(wald, is_de, inflation_fraction, inflation_sd = 1.75) {
-  if (!is.finite(inflation_fraction) || inflation_fraction <= 0) return(wald)
-  out <- wald
-  null_idx <- which(!is_de & is.finite(out) & !is.na(out))
-  n_inflate <- round(length(null_idx) * inflation_fraction)
-  if (n_inflate <= 0L) return(out)
-  target <- sample(null_idx, n_inflate, replace = FALSE)
-  out[target] <- stats::rnorm(n_inflate, mean = 0, sd = inflation_sd)
-  out
-}
+# =============================================================================
+# METRICS
+# =============================================================================
 
-simulation_metrics <- function(predicted, actual) {
+metric_values <- function(predicted, truth) {
   predicted <- !is.na(predicted) & predicted
-  actual <- !is.na(actual) & actual
-  tp <- sum(predicted & actual)
-  fp <- sum(predicted & !actual)
-  fn <- sum(!predicted & actual)
-  tn <- sum(!predicted & !actual)
+  truth <- !is.na(truth) & truth
+
+  tp <- sum(predicted & truth)
+  fp <- sum(predicted & !truth)
+  fn <- sum(!predicted & truth)
+  tn <- sum(!predicted & !truth)
+
   precision <- if ((tp + fp) == 0) NA_real_ else tp / (tp + fp)
   recall <- if ((tp + fn) == 0) NA_real_ else tp / (tp + fn)
-  specificity <- if ((tn + fp) == 0) NA_real_ else tn / (tn + fp)
   fdr <- if ((tp + fp) == 0) NA_real_ else fp / (tp + fp)
-  f1 <- if (is.na(precision) || is.na(recall) || (precision + recall) == 0) NA_real_ else 2 * precision * recall / (precision + recall)
+  specificity <- if ((tn + fp) == 0) NA_real_ else tn / (tn + fp)
+  f1 <- if (is.na(precision) || is.na(recall) || (precision + recall) == 0) {
+    NA_real_
+  } else {
+    2 * precision * recall / (precision + recall)
+  }
 
   data.frame(
     tp = tp,
@@ -554,323 +600,529 @@ simulation_metrics <- function(predicted, actual) {
     f1 = f1,
     fdr = fdr,
     discovery_count = sum(predicted),
-    truth_count = sum(actual),
+    truth_count = sum(truth),
     stringsAsFactors = FALSE
   )
 }
 
-simulation_metric_row <- function(template, method, truth_target, predicted, actual, hc_p, hbfss_cutoff, empirical_null_method) {
+metric_row <- function(template, method, target, predicted, truth, out) {
   cbind(
     template,
     data.frame(
       method = method,
-      truth_target = truth_target,
-      hc_p_threshold = hc_p,
-      hbfss_cutoff = hbfss_cutoff,
-      hc_valid = is.finite(hc_p) & !is.na(hc_p),
-      empirical_null_method = empirical_null_method,
+      truth_target = target,
+      hc_p_threshold = out$hc_p,
+      hbfss_cutoff = out$hbfss_cutoff,
+      hc_valid = is.finite(out$hc_p) & !is.na(out$hc_p),
+      empirical_method = out$empirical_method,
       stringsAsFactors = FALSE
     ),
-    simulation_metrics(predicted, actual)
+    metric_values(predicted, truth)
   )
 }
 
-sequence_simulation_analysis <- function(sim_obj, null_inflation) {
-  counts_mat <- sim_obj$counts
-
-  if (!is.matrix(counts_mat) && !is.data.frame(counts_mat)) {
-    stop("Simulation counts must be a matrix-like object.", call. = FALSE)
-  }
-  if (ncol(counts_mat) %% 2L != 0L) {
-    stop("Simulation count matrix must contain paired control/treatment sample columns.", call. = FALSE)
-  }
-
-  n_samp <- as.integer(ncol(counts_mat) / 2L)
-  if (n_samp < 2L) {
-    stop("Simulation requires at least two samples per group.", call. = FALSE)
-  }
-
-  counts_mat <- as_integer_count_matrix(counts_mat, "simulation DESeq2 input")
-
-  coldata <- data.frame(
-    condition = factor(c(rep("untrt", n_samp), rep("trt", n_samp)), levels = c("untrt", "trt")),
-    row.names = colnames(counts_mat)
-  )
-
-  dds <- DESeqDataSetFromMatrix(countData = counts_mat, colData = coldata, design = ~ condition)
-  dds <- dds[rowSums(counts(dds)) > 0, ]
-  if (nrow(dds) < 5L) stop("Simulation DESeq2 object has fewer than five nonzero features after filtering.", call. = FALSE)
-
-  dds <- DESeq(dds, betaPrior = FALSE, quiet = TRUE)
-  coef_name <- condition_coef_name(dds)
-
-  standard <- results(dds, contrast = c("condition", "trt", "untrt"), alpha = alpha_standard)
-  greater_abs <- results(dds, contrast = c("condition", "trt", "untrt"), lfcThreshold = lfc_boundary, altHypothesis = "greaterAbs", alpha = alpha_strong)
-  less_abs <- results(dds, contrast = c("condition", "trt", "untrt"), lfcThreshold = lfc_boundary, altHypothesis = "lessAbs", alpha = alpha_weak)
-
-  df <- as.data.frame(standard)
-  df$feature_id <- rownames(df)
-
-  if (isTRUE(simulation_use_apeglm_shrinkage)) {
-    shrunk <- lfcShrink(dds, coef = coef_name, type = "apeglm", quiet = TRUE)
-    shrink_df <- data.frame(
-      feature_id = rownames(shrunk),
-      lfc_shrunk = as.data.frame(shrunk)$log2FoldChange,
-      stringsAsFactors = FALSE
-    )
-  } else {
-    shrink_df <- data.frame(
-      feature_id = rownames(df),
-      lfc_shrunk = df$log2FoldChange,
-      stringsAsFactors = FALSE
-    )
-  }
-
-  df <- df %>%
-    left_join(shrink_df, by = "feature_id") %>%
-    left_join(
-      data.frame(feature_id = rownames(greater_abs), greaterAbs_padj = greater_abs$padj, stringsAsFactors = FALSE),
-      by = "feature_id"
-    ) %>%
-    left_join(
-      data.frame(feature_id = rownames(less_abs), lessAbs_padj = less_abs$padj, stringsAsFactors = FALSE),
-      by = "feature_id"
-    ) %>%
-    left_join(sim_obj$truth, by = "feature_id")
-
-  df$is_de[is.na(df$is_de)] <- FALSE
-  df$true_weak[is.na(df$true_weak)] <- FALSE
-  df$true_strong[is.na(df$true_strong)] <- FALSE
-
-  wald_for_empirical_null <- inflate_null_wald_statistics(
-    wald = df$stat,
-    is_de = df$is_de,
-    inflation_fraction = null_inflation
-  )
-
-  empirical <- fit_empirical_null(wald_for_empirical_null, "simulation")
-
-  df$empirical_p <- empirical$empirical_p
-  df$empirical_bh <- empirical$empirical_bh
-  df$empirical_null_method <- empirical$empirical_null_method
-  df$neglog10_empirical_p_calc <- safe_neglog10(df$empirical_p, floor_value = calculation_p_floor)
-
-  hc_p <- hc_threshold(df$empirical_p)
-  hbfss_cutoff <- if (is.na(hc_p)) NA_real_ else -log10(hc_p) * lfc_boundary
-
-  df$hc_pass <- !is.na(hc_p) & !is.na(df$empirical_p) & is.finite(df$empirical_p) & df$empirical_p <= hc_p
-
-  # Manuscript definition. Do not add a cutoff floor or change the boundary.
-  df$HBFSS <- abs(df$lfc_shrunk) * df$neglog10_empirical_p_calc
-
-  df$standard_sig <- !is.na(df$padj) & df$padj < alpha_standard & !is.na(df$lfc_shrunk) & abs(df$lfc_shrunk) >= lfc_boundary
-  df$greaterAbs_sig <- !is.na(df$greaterAbs_padj) & df$greaterAbs_padj < alpha_strong & !is.na(df$lfc_shrunk) & abs(df$lfc_shrunk) >= lfc_boundary
-  df$lessAbs_sig <- !is.na(df$lessAbs_padj) & df$lessAbs_padj < alpha_weak & !is.na(df$lfc_shrunk) & abs(df$lfc_shrunk) < lfc_boundary
-  df$empirical_bh_sig <- !is.na(df$empirical_bh) & df$empirical_bh < alpha_standard & !is.na(df$lfc_shrunk) & abs(df$lfc_shrunk) >= lfc_boundary
-
-  df$hbfss_raw_sig <- !is.na(hbfss_cutoff) & !is.na(df$HBFSS) & is.finite(df$HBFSS) & df$HBFSS >= hbfss_cutoff & df$hc_pass
-  df$hbfss_total_sig <- df$standard_sig | df$hbfss_raw_sig
-  df$weak_region_hbfss_sig <- df$lessAbs_sig & df$hbfss_raw_sig
-
-  list(
-    results = df,
-    hc_p = hc_p,
-    hbfss_cutoff = hbfss_cutoff,
-    empirical_null_method = empirical$empirical_null_method
-  )
-}
-
-build_simulation_metric_rows <- function(out, template) {
+collect_metrics <- function(out, template) {
   df <- out$results
-  bind_rows(
-    simulation_metric_row(template, "DESeq2_BH", "all_de", df$standard_sig, df$is_de, out$hc_p, out$hbfss_cutoff, out$empirical_null_method),
-    simulation_metric_row(template, "Empirical_BH", "all_de", df$empirical_bh_sig, df$is_de, out$hc_p, out$hbfss_cutoff, out$empirical_null_method),
-    simulation_metric_row(template, "GreaterAbs", "strong_de", df$greaterAbs_sig, df$true_strong, out$hc_p, out$hbfss_cutoff, out$empirical_null_method),
-    simulation_metric_row(template, "LessAbs", "weak_de", df$lessAbs_sig, df$true_weak, out$hc_p, out$hbfss_cutoff, out$empirical_null_method),
-    simulation_metric_row(template, "HBFSS_total", "all_de", df$hbfss_total_sig, df$is_de, out$hc_p, out$hbfss_cutoff, out$empirical_null_method),
-    simulation_metric_row(template, "HBFSS_raw", "all_de", df$hbfss_raw_sig, df$is_de, out$hc_p, out$hbfss_cutoff, out$empirical_null_method),
-    simulation_metric_row(template, "HBFSS_raw", "strong_de", df$hbfss_raw_sig, df$true_strong, out$hc_p, out$hbfss_cutoff, out$empirical_null_method),
-    simulation_metric_row(template, "HBFSS_weak_region", "weak_de", df$weak_region_hbfss_sig, df$true_weak, out$hc_p, out$hbfss_cutoff, out$empirical_null_method)
+
+  dplyr::bind_rows(
+    metric_row(template, "DESeq2_BH", "all_de", df$standard_sig, df$is_de, out),
+    metric_row(template, "Empirical_BH", "all_de", df$empirical_bh_sig, df$is_de, out),
+    metric_row(template, "HBFSS_total", "all_de", df$hbfss_total_sig, df$is_de, out),
+    metric_row(template, "HBFSS_raw", "all_de", df$hbfss_raw_sig, df$is_de, out),
+    metric_row(template, "GreaterAbs", "strong_de", df$greaterAbs_sig, df$true_strong, out),
+    metric_row(template, "HBFSS_raw", "strong_de", df$hbfss_raw_sig, df$true_strong, out),
+    metric_row(template, "LessAbs", "weak_de", df$lessAbs_sig, df$true_weak, out),
+    metric_row(template, "HBFSS_weak_region", "weak_de", df$hbfss_weak_region_sig, df$true_weak, out)
   )
 }
 
-plot_simulation_metric_boxplot <- function(metric_long, metric, title, y_label, methods, target, alpha_line = FALSE, drop_zero_truth = FALSE) {
-  plot_df <- metric_long[metric_long$method %in% methods & metric_long$truth_target == target, , drop = FALSE]
-  if (isTRUE(drop_zero_truth)) plot_df <- plot_df[!is.na(plot_df$truth_count) & plot_df$truth_count > 0, , drop = FALSE]
+# =============================================================================
+# FIGURES
+# =============================================================================
+
+METHOD_COLORS <- c(
+  DESeq2_BH = "#999999",
+  Empirical_BH = "#1F78B4",
+  HBFSS_total = "#6A3D9A",
+  HBFSS_raw = "#54278F",
+  GreaterAbs = "#E31A1C",
+  LessAbs = "#0072B2",
+  HBFSS_weak_region = "#0072B2"
+)
+
+plot_theme <- function() {
+  theme_bw(base_size = BASE_THEME_SIZE) +
+    theme(
+      plot.title = element_text(face = "bold", hjust = 0.5, size = BASE_THEME_SIZE + 1),
+      axis.title = element_text(face = "bold"),
+      axis.text = element_text(color = "black"),
+      legend.position = "bottom",
+      legend.title = element_blank(),
+      panel.grid.minor = element_blank(),
+      panel.grid.major = element_line(linewidth = 0.25, color = "grey88"),
+      strip.text = element_text(face = "bold", size = BASE_THEME_SIZE - 0.5)
+    )
+}
+
+metric_boxplot <- function(metrics, metric_name, title, y_label, methods, target, add_alpha_line = FALSE, drop_zero_truth = FALSE) {
+  plot_df <- metrics[
+    as.character(metrics$method) %in% methods &
+      as.character(metrics$truth_target) == target,
+    ,
+    drop = FALSE
+  ]
+
+  if (isTRUE(drop_zero_truth)) {
+    plot_df <- plot_df[!is.na(plot_df$truth_count) & plot_df$truth_count > 0, , drop = FALSE]
+  }
+
   if (nrow(plot_df) == 0L) return(NULL)
+
   plot_df$method <- factor(as.character(plot_df$method), levels = methods)
-  plot_df$metric_value <- plot_df[[metric]]
+  plot_df$value <- plot_df[[metric_name]]
 
-  method_colors <- c(
-    DESeq2_BH = "#999999",
-    Empirical_BH = "#1F78B4",
-    GreaterAbs = "#E31A1C",
-    LessAbs = "#0072B2",
-    HBFSS_total = "#6A3D9A",
-    HBFSS_raw = "#54278F",
-    HBFSS_weak_region = "#0072B2"
-  )
-
-  p <- ggplot(plot_df, aes(x = method, y = metric_value, fill = method)) +
-    geom_boxplot(outlier.size = 0.35, width = 0.62, linewidth = 0.22, na.rm = TRUE) +
+  p <- ggplot(plot_df, aes(x = method, y = value, fill = method)) +
+    geom_boxplot(outlier.size = 0.4, width = 0.62, linewidth = 0.25, na.rm = TRUE) +
     facet_grid(inflation_label + de_label ~ lfc_label) +
-    scale_fill_manual(values = method_colors[methods], breaks = methods, drop = FALSE, name = NULL) +
+    scale_fill_manual(values = METHOD_COLORS[methods], breaks = methods, drop = FALSE) +
     labs(title = title, x = NULL, y = y_label) +
-    manuscript_theme() +
-    theme(axis.text.x = element_blank(), axis.ticks.x = element_blank(), legend.position = "bottom")
+    plot_theme() +
+    theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())
 
-  if (alpha_line) p <- p + geom_hline(yintercept = alpha_standard, linetype = "dashed", linewidth = 0.30, color = "grey35")
+  if (isTRUE(add_alpha_line)) {
+    p <- p + geom_hline(yintercept = ALPHA_STANDARD, linetype = "dashed", linewidth = 0.30)
+  }
+
   p
 }
 
-plot_hc_valid_fraction <- function(qc_summary) {
-  plot_df <- qc_summary
-  if (nrow(plot_df) == 0L) return(NULL)
-  plot_df$lfc_label <- factor(as.character(plot_df$lfc_label), levels = simulation_lfc_levels())
-  plot_df$de_label <- factor(as.character(plot_df$de_label), levels = unique(as.character(plot_df$de_label)))
+hc_valid_plot <- function(qc) {
+  if (nrow(qc) == 0L) return(NULL)
 
-  ggplot(plot_df, aes(x = de_label, y = hc_valid_fraction, fill = de_label)) +
-    geom_col(width = 0.62, linewidth = 0.20) +
+  ggplot(qc, aes(x = de_label, y = hc_valid_fraction, fill = de_label)) +
+    geom_col(width = 0.62, linewidth = 0.25) +
     facet_grid(inflation_label ~ lfc_label) +
     scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, by = 0.25)) +
     labs(
       title = "Higher-criticism valid-threshold fraction",
       x = "Differential-expression fraction",
-      y = "Valid HC fraction"
+      y = "Valid HC threshold fraction"
     ) +
-    manuscript_theme() +
+    plot_theme() +
     theme(legend.position = "none")
 }
 
+hbfss_cutoff_plot <- function(qc) {
+  plot_df <- qc[is.finite(qc$hbfss_cutoff_median) & !is.na(qc$hbfss_cutoff_median), , drop = FALSE]
+  if (nrow(plot_df) == 0L) return(NULL)
 
-run_sequence_simulation_validation <- function() {
-  set.seed(simulation_seed)
+  ggplot(plot_df, aes(x = de_label, y = hbfss_cutoff_median, fill = de_label)) +
+    geom_col(width = 0.62, linewidth = 0.25) +
+    facet_grid(inflation_label ~ lfc_label) +
+    labs(
+      title = "Median HBFSS cutoff across simulation conditions",
+      x = "Differential-expression fraction",
+      y = "Median cutoff"
+    ) +
+    plot_theme() +
+    theme(legend.position = "none")
+}
 
-  fixed_grid <- expand.grid(
-    de_fraction = simulation_de_fractions,
-    lfc_magnitude = simulation_lfc_magnitudes,
-    null_inflation = simulation_null_inflation,
-    simulation_profile = "fixed",
+save_plot <- function(plot_obj, name, width = 13, height = 8) {
+  if (is.null(plot_obj)) {
+    stop("Cannot save missing plot: ", name, call. = FALSE)
+  }
+
+  root_png <- file.path(SIM_DIR, paste0(name, ".png"))
+  archive_png <- file.path(PNG_DIR, paste0(name, ".png"))
+  archive_pdf <- file.path(PDF_DIR, paste0(name, ".pdf"))
+
+  ggsave(
+    filename = archive_png,
+    plot = plot_obj,
+    width = width,
+    height = height,
+    units = "in",
+    dpi = FIGURE_DPI,
+    bg = "white",
+    limitsize = FALSE
+  )
+
+  file.copy(archive_png, root_png, overwrite = TRUE)
+
+  if (isTRUE(WRITE_PDF)) {
+    ggsave(
+      filename = archive_pdf,
+      plot = plot_obj,
+      width = width,
+      height = height,
+      units = "in",
+      bg = "white",
+      limitsize = FALSE
+    )
+  }
+
+  for (path in c(root_png, archive_png, if (isTRUE(WRITE_PDF)) archive_pdf else character(0))) {
+    if (!file.exists(path)) stop("Figure was not written: ", path, call. = FALSE)
+    size <- file.info(path)$size
+    if (!is.finite(size) || is.na(size) || size <= 0) stop("Figure is empty: ", path, call. = FALSE)
+  }
+
+  data.frame(
+    figure = name,
+    png = repo_relative(root_png),
+    png_archive = repo_relative(archive_png),
+    pdf = if (isTRUE(WRITE_PDF)) repo_relative(archive_pdf) else NA_character_,
     stringsAsFactors = FALSE
   )
-  weak_grid <- expand.grid(
-    de_fraction = simulation_de_fractions,
-    lfc_magnitude = NA_real_,
-    null_inflation = simulation_null_inflation,
-    simulation_profile = "weak_mixture",
+}
+
+# =============================================================================
+# OUTPUT TEXT
+# =============================================================================
+
+write_methods_note <- function() {
+  lines <- c(
+    "HBFSS simulation methods",
+    "",
+    paste0("Negative-binomial count matrices were simulated with ", N_FEATURES, " features and ", N_SAMPLES_PER_GROUP, " samples per condition."),
+    paste0("Differential-expression fractions were ", paste(DE_FRACTIONS, collapse = ", "), "."),
+    paste0("Fixed absolute log2 fold-change magnitudes were ", paste(FIXED_LFC_MAGNITUDES, collapse = ", "), "."),
+    paste0("The weak-mixture condition sampled true absolute log2 fold changes uniformly from ", WEAK_LFC_MIN, " to ", WEAK_LFC_MAX, "."),
+    paste0("Null Wald-statistic inflation fractions were ", paste(NULL_INFLATION_FRACTIONS, collapse = ", "), "."),
+    paste0("Each grid condition used ", N_REPS, " replicate simulations."),
+    "",
+    "Differential features were randomly selected in each replicate.",
+    "Null inflation was applied only to null features.",
+    "DESeq2 was run with design ~ condition.",
+    "Log2 fold changes were shrunken using standard apeglm through DESeq2::lfcShrink(type = 'apeglm').",
+    "No apeMethod shortcut was used.",
+    "",
+    "Empirical-null p-values were estimated from DESeq2 Wald statistics using fdrtool.",
+    "Higher criticism thresholds were estimated with fdrtool::hc.thresh.",
+    paste0("HC thresholds below ", HC_INVALID_BELOW, " or at/above ", HC_INVALID_AT_OR_ABOVE, " were marked invalid."),
+    "",
+    "HBFSS was defined as abs(apeglm-shrunken log2 fold change) * -log10(empirical p).",
+    "The HBFSS cutoff was defined as -log10(HC p-threshold) * LFC boundary.",
+    "No artificial HBFSS floor or alternate cutoff was added.",
+    "",
+    "The simulation reports F1, precision, recall, observed FDR, discovery count, weak-effect recovery, strong-effect recovery, HC valid-threshold fraction, and HBFSS cutoff stability."
+  )
+
+  writeLines(lines, file.path(SIM_DIR, "Methods_Simulation.txt"))
+}
+
+format_number <- function(x, digits = 3) {
+  x <- suppressWarnings(as.numeric(x[1]))
+  if (!is.finite(x) || is.na(x)) return("NA")
+  formatC(x, format = "f", digits = digits)
+}
+
+write_interpretation <- function(summary_table, qc_table, failures) {
+  overall <- summary_table %>%
+    group_by(method, truth_target) %>%
+    summarise(
+      precision_mean = mean_finite(precision_mean),
+      recall_mean = mean_finite(recall_mean),
+      f1_mean = mean_finite(f1_mean),
+      fdr_mean = mean_finite(fdr_mean),
+      discovery_count_mean = mean_finite(discovery_count_mean),
+      truth_count_mean = mean_finite(truth_count_mean),
+      .groups = "drop"
+    ) %>%
+    arrange(truth_target, desc(f1_mean), method)
+
+  write_csv(overall, file.path(SIM_DIR, "Simulation_Overall_MethodMeans.csv"))
+
+  best_all <- overall[overall$truth_target == "all_de" & is.finite(overall$f1_mean), , drop = FALSE]
+  best_method <- if (nrow(best_all) > 0L) as.character(best_all$method[which.max(best_all$f1_mean)]) else "NA"
+
+  hbfss_total <- overall[overall$method == "HBFSS_total" & overall$truth_target == "all_de", , drop = FALSE]
+  deseq2 <- overall[overall$method == "DESeq2_BH" & overall$truth_target == "all_de", , drop = FALSE]
+
+  delta_f1 <- if (nrow(hbfss_total) && nrow(deseq2)) hbfss_total$f1_mean[1] - deseq2$f1_mean[1] else NA_real_
+  delta_recall <- if (nrow(hbfss_total) && nrow(deseq2)) hbfss_total$recall_mean[1] - deseq2$recall_mean[1] else NA_real_
+  delta_fdr <- if (nrow(hbfss_total) && nrow(deseq2)) hbfss_total$fdr_mean[1] - deseq2$fdr_mean[1] else NA_real_
+
+  hc_mean <- mean_finite(qc_table$hc_valid_fraction)
+
+  lines <- c(
+    "HBFSS simulation interpretation",
+    "",
+    "Metric definitions:",
+    "F1 balances precision and recall.",
+    "Precision is the fraction of called features that are true positives.",
+    "Recall is the fraction of true positives recovered.",
+    "Observed FDR is the fraction of called features that are false positives.",
+    "Discovery count shows how aggressive each method is.",
+    "HC valid fraction shows how often higher criticism produced a usable threshold.",
+    "",
+    paste0("Best mean all-DE F1 method: ", best_method),
+    paste0("HBFSS_total minus DESeq2_BH mean F1: ", format_number(delta_f1)),
+    paste0("HBFSS_total minus DESeq2_BH mean recall: ", format_number(delta_recall)),
+    paste0("HBFSS_total minus DESeq2_BH mean observed FDR: ", format_number(delta_fdr)),
+    paste0("Mean HC valid-threshold fraction: ", format_number(hc_mean)),
+    paste0("Failed replicate count: ", nrow(failures)),
+    "",
+    "Interpretation guide:",
+    "If HBFSS improves recall with stable or improved FDR, it supports the claim that HBFSS recovers additional true positives without excessive false discovery burden.",
+    "If HBFSS improves recall but also increases FDR, it should be described as a sensitivity-oriented tradeoff.",
+    "If HC valid fraction is low in any condition, those conditions should be interpreted cautiously because the HBFSS boundary depends on a valid HC threshold.",
+    "Weak-effect plots evaluate sub-boundary true effects.",
+    "Strong-effect plots evaluate above-boundary true effects.",
+    "",
+    "Primary files:",
+    "Simulation_RunMetrics_Long.csv",
+    "Simulation_MethodSummary.csv",
+    "Simulation_HC_QC_Summary.csv",
+    "Simulation_Overall_MethodMeans.csv",
+    "Simulation_F1_Boxplot.png",
+    "Simulation_Precision_Boxplot.png",
+    "Simulation_Recall_Boxplot.png",
+    "Simulation_FDR_Boxplot.png",
+    "Simulation_DiscoveryCount_Boxplot.png",
+    "Simulation_WeakEffect_F1_Boxplot.png",
+    "Simulation_StrongEffect_F1_Boxplot.png",
+    "Simulation_HC_ValidFraction.png",
+    "Simulation_HBFSS_Cutoff.png"
+  )
+
+  writeLines(lines, file.path(SIM_DIR, "Interpretation_Simulation.txt"))
+  writeLines(lines, file.path(SIM_DIR, "Interpretation_Simulation.md"))
+}
+
+write_manifest <- function() {
+  files <- list.files(SIM_DIR, recursive = TRUE, full.names = TRUE)
+  files <- files[file.exists(files)]
+
+  manifest <- data.frame(
+    file = vapply(files, repo_relative, character(1)),
+    size_bytes = file.info(files)$size,
     stringsAsFactors = FALSE
   )
-  sim_grid <- bind_rows(fixed_grid, weak_grid)
-  total_runs <- nrow(sim_grid) * simulation_n_reps
 
-  log_message("Running SEQUENCE simulation validation: ", total_runs, " planned replicates")
-  log_message(
-    "Simulation config: features=", simulation_n_features,
-    ", samples/group=", simulation_n_samples_per_group,
-    ", reps/grid=", simulation_n_reps,
-    ", apeglm_shrinkage=", simulation_use_apeglm_shrinkage
-  )
+  write_csv(manifest, file.path(SIM_DIR, "Manifest_Simulation.csv"))
+  manifest
+}
 
-  simulation_start <- Sys.time()
-  metric_rows <- list()
-  failure_rows <- list()
-  feature_rows <- list()
-  checkpoint_path <- file.path(simulation_dir, "Simulation_RunMetrics_Checkpoint.csv")
-  run_index <- 0L
+# =============================================================================
+# GIT
+# =============================================================================
 
-  for (grid_i in seq_len(nrow(sim_grid))) {
-    grid_row <- sim_grid[grid_i, , drop = FALSE]
+git_available <- function() {
+  nzchar(Sys.which("git"))
+}
 
-    for (rep_i in seq_len(simulation_n_reps)) {
-      run_index <- run_index + 1L
+git_run <- function(args, allow_failure = FALSE) {
+  if (!git_available()) stop("Git is not available on PATH.", call. = FALSE)
 
-      if (run_index %% simulation_progress_every == 0L || run_index == 1L || run_index == total_runs) {
-        elapsed_min <- as.numeric(difftime(Sys.time(), simulation_start, units = "mins"))
-        eta_min <- if (run_index > 0L) elapsed_min * (total_runs - run_index) / run_index else NA_real_
-        log_message(
-          "Simulation progress: ", run_index, "/", total_runs,
-          " | elapsed=", signif(elapsed_min, 3), " min",
-          " | ETA=", signif(eta_min, 3), " min"
-        )
-      }
+  out <- suppressWarnings(system2(
+    "git",
+    args = c("-C", REPO_ROOT, args),
+    stdout = TRUE,
+    stderr = TRUE,
+    timeout = 180
+  ))
+
+  status <- attr(out, "status")
+  if (is.null(status)) status <- 0L
+
+  if (length(out) > 0L) log_msg(paste(out, collapse = "\n"))
+
+  if (status != 0L && !allow_failure) {
+    stop("Git command failed: git ", paste(args, collapse = " "), "\n", paste(out, collapse = "\n"), call. = FALSE)
+  }
+
+  list(status = status, output = out)
+}
+
+git_first_line <- function(args, allow_failure = FALSE) {
+  result <- git_run(args, allow_failure = allow_failure)
+  if (result$status != 0L || length(result$output) == 0L) return(NA_character_)
+  trimws(result$output[1])
+}
+
+push_outputs <- function() {
+  if (!isTRUE(GIT_PUSH_AFTER_SUCCESS)) {
+    log_msg("Git push skipped by setting.")
+    return(invisible(FALSE))
+  }
+
+  if (!dir.exists(file.path(REPO_ROOT, ".git"))) {
+    log_msg("Git push skipped because repository root has no .git directory.")
+    return(invisible(FALSE))
+  }
+
+  remote_url <- git_first_line(c("remote", "get-url", GIT_REMOTE), allow_failure = TRUE)
+  if (is.na(remote_url) || !nzchar(remote_url)) {
+    stop("Git remote is not configured: ", GIT_REMOTE, call. = FALSE)
+  }
+
+  current_branch <- git_first_line(c("rev-parse", "--abbrev-ref", "HEAD"))
+  if (is.na(current_branch) || !nzchar(current_branch) || identical(current_branch, "HEAD")) {
+    stop("Git is in detached HEAD state.", call. = FALSE)
+  }
+
+  target_branch <- if (!is.na(GIT_BRANCH) && nzchar(GIT_BRANCH)) GIT_BRANCH else current_branch
+
+  script_file <- current_script()
+  stage_paths <- c(repo_relative(SIM_DIR))
+
+  if (!is.na(script_file) && file.exists(script_file)) {
+    stage_paths <- c(repo_relative(script_file), stage_paths)
+  }
+
+  git_run(c("fetch", GIT_REMOTE), allow_failure = TRUE)
+  git_run(c("add", "--", unique(stage_paths)))
+
+  changed <- git_run(c("diff", "--cached", "--quiet"), allow_failure = TRUE)
+  if (changed$status == 0L) {
+    log_msg("No Git changes to commit.")
+    return(invisible(FALSE))
+  }
+
+  git_run(c("status", "--short"))
+  git_run(c("commit", "-m", GIT_COMMIT_MESSAGE))
+  git_run(c("push", "-u", GIT_REMOTE, paste0("HEAD:", target_branch)))
+
+  log_msg("Git push complete.")
+  invisible(TRUE)
+}
+
+# =============================================================================
+# MAIN RUN
+# =============================================================================
+
+run_simulation <- function() {
+  set.seed(SEED)
+
+  grid <- make_simulation_grid()
+  total_runs <- nrow(grid) * N_REPS
+
+  log_msg("Simulation started.")
+  log_msg("Repository root: ", REPO_ROOT)
+  log_msg("Output directory: ", SIM_DIR)
+  log_msg("Features: ", N_FEATURES)
+  log_msg("Samples per group: ", N_SAMPLES_PER_GROUP)
+  log_msg("Replicates per condition: ", N_REPS)
+  log_msg("Total planned runs: ", total_runs)
+
+  write_status("running", paste0("0/", total_runs))
+
+  metric_blocks <- list()
+  failure_blocks <- list()
+  run_counter <- 0L
+  start_time <- Sys.time()
+
+  for (grid_i in seq_len(nrow(grid))) {
+    grid_row <- grid[grid_i, , drop = FALSE]
+
+    for (rep_i in seq_len(N_REPS)) {
+      run_counter <- run_counter + 1L
+
+      elapsed <- as.numeric(difftime(Sys.time(), start_time, units = "mins"))
+      eta <- if (run_counter > 0) elapsed * (total_runs - run_counter) / run_counter else NA_real_
+
+      log_msg(
+        "Run ", run_counter, "/", total_runs,
+        " | profile=", grid_row$profile,
+        " | DE=", grid_row$de_fraction,
+        " | LFC=", ifelse(is.na(grid_row$lfc_magnitude), "weak_mix", grid_row$lfc_magnitude),
+        " | inflation=", grid_row$null_inflation,
+        " | replicate=", rep_i,
+        " | elapsed_min=", signif(elapsed, 3),
+        " | eta_min=", signif(eta, 3)
+      )
+
+      write_status("running", paste0(run_counter, "/", total_runs))
 
       template <- data.frame(
         de_fraction = grid_row$de_fraction,
         lfc_magnitude = grid_row$lfc_magnitude,
-        simulation_profile = grid_row$simulation_profile,
+        profile = grid_row$profile,
         null_inflation = grid_row$null_inflation,
         replicate = rep_i,
+        de_label = paste0(grid_row$de_fraction * 100, "% DE"),
+        lfc_label = lfc_label_from_profile(grid_row$profile, grid_row$lfc_magnitude),
+        inflation_label = ifelse(grid_row$null_inflation == 0, "No null inflation", paste0(grid_row$null_inflation * 100, "% null inflation")),
         stringsAsFactors = FALSE
       )
-      template$lfc_label <- simulation_lfc_label(template$lfc_magnitude, template$simulation_profile)
-      template$de_label <- paste0(template$de_fraction * 100, "% DE")
-      template$inflation_label <- paste0(template$null_inflation * 100, "% null inflation")
 
-      out <- tryCatch({
-        sim_obj <- simulate_sequence_counts(
-          n_features = simulation_n_features,
-          n_samples = simulation_n_samples_per_group,
-          base_mean = simulation_base_mean,
-          disp_null = simulation_dispersion_null,
+      result <- tryCatch({
+        sim <- simulate_counts(
+          n_features = N_FEATURES,
+          n_samples_per_group = N_SAMPLES_PER_GROUP,
           de_fraction = grid_row$de_fraction,
           lfc_magnitude = grid_row$lfc_magnitude,
-          disp_de = simulation_dispersion_de,
-          lfc_profile = grid_row$simulation_profile
+          profile = grid_row$profile
         )
-        sequence_simulation_analysis(sim_obj, null_inflation = grid_row$null_inflation)
+
+        out <- run_one_analysis(sim, null_inflation = grid_row$null_inflation)
+        collect_metrics(out, template)
       }, error = function(e) {
-        failure_rows[[length(failure_rows) + 1L]] <<- cbind(template, data.frame(error_message = conditionMessage(e), stringsAsFactors = FALSE))
+        failure_blocks[[length(failure_blocks) + 1L]] <<- cbind(
+          template,
+          data.frame(error_message = conditionMessage(e), stringsAsFactors = FALSE)
+        )
         NULL
       })
 
-      if (is.null(out)) next
-
-      metric_rows[[length(metric_rows) + 1L]] <- build_simulation_metric_rows(out, template)
-
-      if (run_index %% simulation_checkpoint_every == 0L || run_index == total_runs) {
-        if (length(metric_rows) > 0L) {
-          save_csv(bind_rows(metric_rows), checkpoint_path)
-        }
+      if (!is.null(result)) {
+        metric_blocks[[length(metric_blocks) + 1L]] <- result
       }
 
-      if (isTRUE(export_simulation_feature_results)) {
-        feature_export <- out$results
-        feature_export$de_fraction <- grid_row$de_fraction
-        feature_export$lfc_magnitude <- grid_row$lfc_magnitude
-        feature_export$simulation_profile <- grid_row$simulation_profile
-        feature_export$null_inflation <- grid_row$null_inflation
-        feature_export$replicate <- rep_i
-        feature_rows[[length(feature_rows) + 1L]] <- feature_export
+      if (length(metric_blocks) > 0L && (run_counter %% 10L == 0L || run_counter == total_runs)) {
+        write_csv(dplyr::bind_rows(metric_blocks), file.path(SIM_DIR, "Simulation_RunMetrics_Long.partial.csv"))
       }
     }
   }
 
-  failures <- if (length(failure_rows) > 0L) bind_rows(failure_rows) else data.frame()
-  save_csv(failures, file.path(simulation_dir, "Simulation_Failures.csv"))
+  failures <- if (length(failure_blocks) > 0L) dplyr::bind_rows(failure_blocks) else data.frame()
+  write_csv(failures, file.path(SIM_DIR, "Simulation_Failures.csv"))
 
-  if (nrow(failures) > 0L) {
-    log_message("Simulation replicate failure(s) recorded: ", nrow(failures), ". Figures will still be exported from successful replicates before final failure handling.")
+  metrics <- if (length(metric_blocks) > 0L) dplyr::bind_rows(metric_blocks) else data.frame()
+
+  if (nrow(metrics) == 0L) {
+    stop("No successful simulation replicates. See Simulation_Failures.csv.", call. = FALSE)
   }
 
-  metric_long <- if (length(metric_rows) > 0L) bind_rows(metric_rows) else data.frame()
-  if (nrow(metric_long) == 0L) stop("Simulation validation produced no successful replicates. See Simulation_Failures.csv.", call. = FALSE)
+  failure_fraction <- nrow(failures) / total_runs
 
-  planned_lfc_levels <- simulation_lfc_levels()
-  actual_lfc_levels <- unique(as.character(metric_long$lfc_label))
-  metric_long$lfc_label <- factor(as.character(metric_long$lfc_label), levels = unique(c(planned_lfc_levels, actual_lfc_levels)))
-  metric_long$method <- factor(
-    as.character(metric_long$method),
-    levels = c("DESeq2_BH", "Empirical_BH", "GreaterAbs", "LessAbs", "HBFSS_raw", "HBFSS_total", "HBFSS_weak_region")
+  metrics$method <- factor(
+    as.character(metrics$method),
+    levels = c("DESeq2_BH", "Empirical_BH", "HBFSS_total", "HBFSS_raw", "GreaterAbs", "LessAbs", "HBFSS_weak_region")
   )
 
-  metric_summary <- metric_long %>%
-    group_by(de_fraction, lfc_magnitude, simulation_profile, null_inflation, lfc_label, de_label, inflation_label, method, truth_target, empirical_null_method) %>%
+  metrics$truth_target <- factor(
+    as.character(metrics$truth_target),
+    levels = c("all_de", "strong_de", "weak_de")
+  )
+
+  write_csv(metrics, file.path(SIM_DIR, "Simulation_RunMetrics_Long.csv"))
+
+  summary_table <- metrics %>%
+    group_by(
+      de_fraction,
+      lfc_magnitude,
+      profile,
+      null_inflation,
+      de_label,
+      lfc_label,
+      inflation_label,
+      method,
+      truth_target,
+      empirical_method
+    ) %>%
     summarise(
-      n_replicates = n(),
+      n_rows = n(),
       precision_mean = mean_finite(precision),
+      precision_sd = sd(precision, na.rm = TRUE),
       recall_mean = mean_finite(recall),
+      recall_sd = sd(recall, na.rm = TRUE),
       f1_mean = mean_finite(f1),
+      f1_sd = sd(f1, na.rm = TRUE),
       fdr_mean = mean_finite(fdr),
+      fdr_sd = sd(fdr, na.rm = TRUE),
       discovery_count_mean = mean_finite(discovery_count),
       truth_count_mean = mean_finite(truth_count),
       hc_valid_fraction = mean(as.numeric(hc_valid), na.rm = TRUE),
@@ -879,547 +1131,135 @@ run_sequence_simulation_validation <- function() {
       .groups = "drop"
     )
 
-  qc_summary <- metric_long %>%
-    group_by(de_fraction, lfc_magnitude, simulation_profile, null_inflation, lfc_label, de_label, inflation_label, replicate, empirical_null_method) %>%
+  write_csv(summary_table, file.path(SIM_DIR, "Simulation_MethodSummary.csv"))
+
+  qc_table <- metrics %>%
+    group_by(
+      de_fraction,
+      lfc_magnitude,
+      profile,
+      null_inflation,
+      de_label,
+      lfc_label,
+      inflation_label,
+      replicate,
+      empirical_method
+    ) %>%
     summarise(
       hc_p_threshold = first(hc_p_threshold),
       hbfss_cutoff = first(hbfss_cutoff),
       hc_valid = first(hc_valid),
       .groups = "drop"
     ) %>%
-    group_by(de_fraction, lfc_magnitude, simulation_profile, null_inflation, lfc_label, de_label, inflation_label, empirical_null_method) %>%
+    group_by(
+      de_fraction,
+      lfc_magnitude,
+      profile,
+      null_inflation,
+      de_label,
+      lfc_label,
+      inflation_label,
+      empirical_method
+    ) %>%
     summarise(
       n_replicates = n(),
       hc_valid_fraction = mean(as.numeric(hc_valid), na.rm = TRUE),
       hc_p_threshold_min = min_finite(ifelse(hc_valid, hc_p_threshold, NA_real_)),
       hc_p_threshold_median = median_finite(ifelse(hc_valid, hc_p_threshold, NA_real_)),
       hc_p_threshold_max = max_finite(ifelse(hc_valid, hc_p_threshold, NA_real_)),
-      hbfss_cutoff_median = median_finite(hbfss_cutoff),
+      hbfss_cutoff_median = median_finite(ifelse(hc_valid, hbfss_cutoff, NA_real_)),
       .groups = "drop"
     )
-  save_csv(metric_long, file.path(simulation_dir, "Simulation_RunMetrics_Long.csv"))
-  save_csv(metric_summary, file.path(simulation_dir, "Simulation_MethodSummary.csv"))
-  save_csv(qc_summary, file.path(simulation_dir, "Simulation_HC_QC_Summary.csv"))
-  if (file.exists(checkpoint_path)) unlink(checkpoint_path, force = TRUE)
 
-  if (isTRUE(export_simulation_feature_results) && length(feature_rows) > 0L) {
-    save_csv(bind_rows(feature_rows), file.path(simulation_dir, "Simulation_FeatureResults.csv"))
-  }
+  write_csv(qc_table, file.path(SIM_DIR, "Simulation_HC_QC_Summary.csv"))
 
-  all_de_methods <- c("DESeq2_BH", "Empirical_BH", "HBFSS_total", "HBFSS_raw")
+  all_methods <- c("DESeq2_BH", "Empirical_BH", "HBFSS_total", "HBFSS_raw")
   strong_methods <- c("GreaterAbs", "HBFSS_raw")
   weak_methods <- c("LessAbs", "HBFSS_weak_region")
 
-  figure_status <- bind_rows(
-    safe_save_figure(
-      plot_simulation_metric_boxplot(metric_long, "f1", "Simulation F1 score by method", "F1", all_de_methods, "all_de"),
-      "Simulation_F1_Boxplot",
-      14.0,
-      9.2
-    ),
-    safe_save_figure(
-      plot_simulation_metric_boxplot(metric_long, "precision", "Simulation precision by method", "Precision", all_de_methods, "all_de"),
-      "Simulation_Precision_Boxplot",
-      14.0,
-      9.2
-    ),
-    safe_save_figure(
-      plot_simulation_metric_boxplot(metric_long, "recall", "Simulation recall by method", "Recall", all_de_methods, "all_de"),
-      "Simulation_Recall_Boxplot",
-      14.0,
-      9.2
-    ),
-    safe_save_figure(
-      plot_simulation_metric_boxplot(metric_long, "fdr", "Simulation observed FDR by method", "FDR", all_de_methods, "all_de", alpha_line = TRUE),
-      "Simulation_FDR_Boxplot",
-      14.0,
-      9.2
-    ),
-    safe_save_figure(
-      plot_simulation_metric_boxplot(metric_long, "discovery_count", "Simulation discoveries by method", "Discovery count", all_de_methods, "all_de"),
-      "Simulation_DiscoveryCount_Boxplot",
-      14.0,
-      9.2
-    ),
-    safe_save_figure(
-      plot_simulation_metric_boxplot(metric_long, "f1", "Weak-region simulation F1 score", "F1", weak_methods, "weak_de"),
-      "Simulation_WeakRegion_F1_Boxplot",
-      14.0,
-      9.2
-    ),
-    safe_save_figure(
-      plot_simulation_metric_boxplot(metric_long, "precision", "Weak-region simulation precision", "Precision", weak_methods, "weak_de"),
-      "Simulation_WeakRegion_Precision_Boxplot",
-      14.0,
-      9.2
-    ),
-    safe_save_figure(
-      plot_simulation_metric_boxplot(metric_long, "recall", "Weak-region simulation recall", "Recall", weak_methods, "weak_de"),
-      "Simulation_WeakRegion_Recall_Boxplot",
-      14.0,
-      9.2
-    ),
-    safe_save_figure(
-      plot_simulation_metric_boxplot(metric_long, "f1", "Strong-effect simulation F1 score", "F1", strong_methods, "strong_de", drop_zero_truth = TRUE),
-      "Simulation_StrongEffect_F1_Boxplot",
-      14.0,
-      9.2
-    ),
-    safe_save_figure(
-      plot_simulation_metric_boxplot(metric_long, "precision", "Strong-effect simulation precision", "Precision", strong_methods, "strong_de", drop_zero_truth = TRUE),
-      "Simulation_StrongEffect_Precision_Boxplot",
-      14.0,
-      9.2
-    ),
-    safe_save_figure(
-      plot_simulation_metric_boxplot(metric_long, "recall", "Strong-effect simulation recall", "Recall", strong_methods, "strong_de", drop_zero_truth = TRUE),
-      "Simulation_StrongEffect_Recall_Boxplot",
-      14.0,
-      9.2
-    ),
-    safe_save_figure(
-      plot_simulation_metric_boxplot(metric_long, "fdr", "Strong-effect simulation observed FDR", "FDR", strong_methods, "strong_de", alpha_line = TRUE, drop_zero_truth = TRUE),
-      "Simulation_StrongEffect_FDR_Boxplot",
-      14.0,
-      9.2
-    ),
-    safe_save_figure(
-      plot_hc_valid_fraction(qc_summary),
-      "Simulation_HC_ValidFraction",
-      14.0,
-      7.0
+  figure_table <- dplyr::bind_rows(
+    save_plot(metric_boxplot(metrics, "f1", "Simulation F1 score", "F1", all_methods, "all_de"), "Simulation_F1_Boxplot"),
+    save_plot(metric_boxplot(metrics, "precision", "Simulation precision", "Precision", all_methods, "all_de"), "Simulation_Precision_Boxplot"),
+    save_plot(metric_boxplot(metrics, "recall", "Simulation recall", "Recall", all_methods, "all_de"), "Simulation_Recall_Boxplot"),
+    save_plot(metric_boxplot(metrics, "fdr", "Simulation observed FDR", "Observed FDR", all_methods, "all_de", add_alpha_line = TRUE), "Simulation_FDR_Boxplot"),
+    save_plot(metric_boxplot(metrics, "discovery_count", "Simulation discovery count", "Discovery count", all_methods, "all_de"), "Simulation_DiscoveryCount_Boxplot"),
+    save_plot(metric_boxplot(metrics, "f1", "Weak-effect F1 score", "F1", weak_methods, "weak_de"), "Simulation_WeakEffect_F1_Boxplot"),
+    save_plot(metric_boxplot(metrics, "precision", "Weak-effect precision", "Precision", weak_methods, "weak_de"), "Simulation_WeakEffect_Precision_Boxplot"),
+    save_plot(metric_boxplot(metrics, "recall", "Weak-effect recall", "Recall", weak_methods, "weak_de"), "Simulation_WeakEffect_Recall_Boxplot"),
+    save_plot(metric_boxplot(metrics, "f1", "Strong-effect F1 score", "F1", strong_methods, "strong_de", drop_zero_truth = TRUE), "Simulation_StrongEffect_F1_Boxplot"),
+    save_plot(metric_boxplot(metrics, "precision", "Strong-effect precision", "Precision", strong_methods, "strong_de", drop_zero_truth = TRUE), "Simulation_StrongEffect_Precision_Boxplot"),
+    save_plot(metric_boxplot(metrics, "recall", "Strong-effect recall", "Recall", strong_methods, "strong_de", drop_zero_truth = TRUE), "Simulation_StrongEffect_Recall_Boxplot"),
+    save_plot(metric_boxplot(metrics, "fdr", "Strong-effect observed FDR", "Observed FDR", strong_methods, "strong_de", add_alpha_line = TRUE, drop_zero_truth = TRUE), "Simulation_StrongEffect_FDR_Boxplot"),
+    save_plot(hc_valid_plot(qc_table), "Simulation_HC_ValidFraction", width = 12, height = 7),
+    save_plot(hbfss_cutoff_plot(qc_table), "Simulation_HBFSS_Cutoff", width = 12, height = 7)
+  )
+
+  write_csv(figure_table, file.path(SIM_DIR, "Figure_Export_Status.csv"))
+
+  write_methods_note()
+  write_interpretation(summary_table, qc_table, failures)
+  writeLines(capture.output(sessionInfo()), file.path(SIM_DIR, "SessionInfo_Simulation.txt"))
+
+  if (file.exists(file.path(SIM_DIR, "Simulation_RunMetrics_Long.partial.csv"))) {
+    unlink(file.path(SIM_DIR, "Simulation_RunMetrics_Long.partial.csv"), force = TRUE)
+  }
+
+  manifest <- write_manifest()
+
+  if (failure_fraction > MAX_FAILURE_FRACTION) {
+    stop(
+      "Failure fraction exceeded allowed maximum. Failures: ",
+      nrow(failures),
+      "/",
+      total_runs,
+      " = ",
+      round(failure_fraction, 4),
+      ". Figures were written but Git push was stopped.",
+      call. = FALSE
     )
+  }
+
+  list(
+    metrics = metrics,
+    summary = summary_table,
+    qc = qc_table,
+    figures = figure_table,
+    failures = failures,
+    manifest = manifest
   )
-  save_csv(figure_status, file.path(simulation_dir, "Figure_Export_Status.csv"))
-
-  if (nrow(figure_status) == 0L || any(figure_status$status != "saved")) {
-    save_csv(figure_status[figure_status$status != "saved", , drop = FALSE], file.path(simulation_dir, "Figure_Export_Failures.csv"))
-    stop("One or more simulation figures failed. See Figure_Export_Failures.csv.", call. = FALSE)
-  }
-
-  expected_png <- file.path(simulation_dir, paste0(figure_status$figure, ".png"))
-  missing_png <- expected_png[!file.exists(expected_png) | file.info(expected_png)$size <= 0]
-  if (length(missing_png) > 0L) {
-    stop("Simulation figure verification failed. Missing or empty PNG file(s): ", paste(missing_png, collapse = ", "), call. = FALSE)
-  }
-
-  writeLines(
-    c(
-      "SEQUENCE simulation figures",
-      paste0("Root figure folder: ", simulation_dir),
-      paste0("PNG archive folder: ", figures_png_dir),
-      paste0("PDF archive folder: ", figures_pdf_dir),
-      "",
-      paste0("PNG files: ", paste(basename(expected_png), collapse = "; "))
-    ),
-    file.path(simulation_dir, "README_FIGURES.txt")
-  )
-
-  writeLines(capture.output(sessionInfo()), file.path(simulation_dir, "SessionInfo_Simulation.txt"))
-
-  if (nrow(failures) > 0L && isTRUE(simulation_fail_on_failed_replicates)) {
-    stop("Simulation validation had failed replicate(s). Figures were exported, but Git push was stopped. See Simulation_Failures.csv.", call. = FALSE)
-  }
-  log_message("Simulation successful replicates: ", length(metric_rows), "/", total_runs)
-  log_message("Simulation failed replicates: ", nrow(failures))
-
-  invisible(list(metric_long = metric_long, metric_summary = metric_summary, qc_summary = qc_summary))
 }
-
-# =============================================================================
-# METHODS, MANIFEST, AND GIT
-# =============================================================================
-
-write_simulation_methods <- function() {
-  lines <- c(
-    "# SEQUENCE simulation validation methods",
-    "",
-    paste0("The standalone simulation generated negative-binomial count matrices with ", simulation_n_features, " features and ", simulation_n_samples_per_group, " control plus ", simulation_n_samples_per_group, " treatment samples per replicate."),
-    paste0("Baseline feature means were sampled from a gamma distribution with mean scale centered around ", simulation_base_mean, "; null dispersion was ", simulation_dispersion_null, " and differential-feature dispersion was ", simulation_dispersion_de, "."),
-    paste0("The simulation grid used differential-expression fractions of ", paste(simulation_de_fractions, collapse = ", "), ", fixed absolute log2 fold-change magnitudes of ", paste(simulation_lfc_magnitudes, collapse = ", "), ", and a weak-effect mixture sampled uniformly from absolute log2 fold-change ", simulation_weak_lfc_min, " to ", simulation_weak_lfc_max, "."),
-    paste0("Null Wald statistic inflation fractions were ", paste(simulation_null_inflation, collapse = ", "), "."),
-    paste0("Each grid cell was repeated ", simulation_n_reps, " times."),
-    "",
-    "For each simulated count matrix, DESeq2 was run with design ~ condition. Simulated differential features were randomly sampled per replicate rather than assigned by row position. Standard DESeq2 calls used Benjamini-Hochberg adjusted p < alpha_standard and absolute apeglm-shrunken log2 fold change >= lfc_boundary. GreaterAbs and LessAbs tests used the same lfc_boundary with alpha_strong and alpha_weak, respectively.",
-    "",
-    "Empirical-null p-values were fit from the DESeq2 Wald statistics using fdrtool. Higher criticism was applied to the empirical p-value distribution using fdrtool::hc.thresh. HC thresholds that were non-finite, outside (0,1), below hc_invalid_below, or >= hc_invalid_at_or_above were marked invalid.",
-    "",
-    "HBFSS was calculated exactly as abs(apeglm-shrunken log2 fold change) * -log10(empirical p). The HBFSS cutoff was calculated exactly as -log10(HC p-threshold) * lfc_boundary. No artificial minimum HBFSS floor was added.",
-    "The weak-mixture grid contains true differential features below the lfc_boundary by design; therefore strong-effect metrics are exported only for grid cells with nonzero strong-effect truth counts.",
-    "",
-    "Simulation outputs include per-run metric tables, method summary tables, HC quality-control summaries, F1, precision, recall, FDR, discovery-count, weak-region, strong-effect, and HC-valid-fraction figures in both root-level PNG form and archived PNG/PDF folders, figure export status, session info, and this methods note. Per-feature simulation results are optional and disabled by default to keep GitHub pushes small."
-  )
-  writeLines(lines, file.path(simulation_dir, "Methods_Simulation.txt"))
-  invisible(TRUE)
-}
-
-
-fmt_number <- function(x, digits = 3) {
-  x <- suppressWarnings(as.numeric(x[1]))
-  if (!is.finite(x) || is.na(x)) return("NA")
-  formatC(x, format = "f", digits = digits)
-}
-
-fmt_delta <- function(x, digits = 3) {
-  x <- suppressWarnings(as.numeric(x[1]))
-  if (!is.finite(x) || is.na(x)) return("NA")
-  paste0(ifelse(x >= 0, "+", ""), formatC(x, format = "f", digits = digits))
-}
-
-fmt_pct <- function(x, digits = 1) {
-  x <- suppressWarnings(as.numeric(x[1]))
-  if (!is.finite(x) || is.na(x)) return("NA")
-  paste0(formatC(100 * x, format = "f", digits = digits), "%")
-}
-
-lookup_overall <- function(overall, method_name, target_name) {
-  row <- overall[as.character(overall$method) == method_name & as.character(overall$truth_target) == target_name, , drop = FALSE]
-  if (nrow(row) == 0L) return(NULL)
-  row[1, , drop = FALSE]
-}
-
-delta_metric <- function(overall, method_a, method_b, target_name, metric_col) {
-  a <- lookup_overall(overall, method_a, target_name)
-  b <- lookup_overall(overall, method_b, target_name)
-  if (is.null(a) || is.null(b)) return(NA_real_)
-  suppressWarnings(as.numeric(a[[metric_col]][1]) - as.numeric(b[[metric_col]][1]))
-}
-
-markdown_table <- function(df, columns, headers) {
-  if (is.null(df) || nrow(df) == 0L) return(character(0))
-  out <- c(
-    paste0("|", paste(headers, collapse = "|"), "|"),
-    paste0("|", paste(rep("---", length(headers)), collapse = "|"), "|")
-  )
-  for (i in seq_len(nrow(df))) {
-    values <- vapply(columns, function(col) as.character(df[[col]][i]), character(1))
-    out <- c(out, paste0("|", paste(values, collapse = "|"), "|"))
-  }
-  out
-}
-
-write_simulation_interpretation <- function(simulation_result) {
-  metric_summary <- simulation_result$metric_summary
-  qc_summary <- simulation_result$qc_summary
-  metric_long <- simulation_result$metric_long
-
-  if (is.null(metric_summary) || nrow(metric_summary) == 0L) {
-    stop("Cannot write interpretation because Simulation_MethodSummary is empty.", call. = FALSE)
-  }
-
-  overall <- metric_summary %>%
-    group_by(method, truth_target) %>%
-    summarise(
-      n_grid_cells = n(),
-      precision_mean = mean_finite(precision_mean),
-      recall_mean = mean_finite(recall_mean),
-      f1_mean = mean_finite(f1_mean),
-      fdr_mean = mean_finite(fdr_mean),
-      discovery_count_mean = mean_finite(discovery_count_mean),
-      truth_count_mean = mean_finite(truth_count_mean),
-      hc_valid_fraction = mean_finite(hc_valid_fraction),
-      .groups = "drop"
-    ) %>%
-    arrange(truth_target, desc(f1_mean), method)
-
-  overall_print <- overall %>%
-    mutate(
-      precision = vapply(precision_mean, fmt_number, character(1), digits = 3),
-      recall = vapply(recall_mean, fmt_number, character(1), digits = 3),
-      F1 = vapply(f1_mean, fmt_number, character(1), digits = 3),
-      FDR = vapply(fdr_mean, fmt_number, character(1), digits = 3),
-      discoveries = vapply(discovery_count_mean, fmt_number, character(1), digits = 1),
-      truth = vapply(truth_count_mean, fmt_number, character(1), digits = 1)
-    ) %>%
-    select(method, truth_target, precision, recall, F1, FDR, discoveries, truth)
-
-  save_csv(overall, file.path(simulation_dir, "Simulation_Interpretation_OverallMetrics.csv"))
-
-  best_all <- overall[overall$truth_target == "all_de" & is.finite(overall$f1_mean), , drop = FALSE]
-  best_all <- best_all[order(-best_all$f1_mean), , drop = FALSE]
-  best_all_method <- if (nrow(best_all) > 0L) as.character(best_all$method[1]) else "NA"
-
-  hbfss_total <- lookup_overall(overall, "HBFSS_total", "all_de")
-  deseq2 <- lookup_overall(overall, "DESeq2_BH", "all_de")
-  empirical_bh <- lookup_overall(overall, "Empirical_BH", "all_de")
-  hbfss_raw <- lookup_overall(overall, "HBFSS_raw", "all_de")
-
-  strong_hbfss <- lookup_overall(overall, "HBFSS_raw", "strong_de")
-  strong_greater <- lookup_overall(overall, "GreaterAbs", "strong_de")
-  weak_hbfss <- lookup_overall(overall, "HBFSS_weak_region", "weak_de")
-  weak_less <- lookup_overall(overall, "LessAbs", "weak_de")
-
-  hc_overall_fraction <- mean_finite(qc_summary$hc_valid_fraction)
-  hc_min_fraction <- min_finite(qc_summary$hc_valid_fraction)
-  hc_median_threshold <- median_finite(qc_summary$hc_p_threshold_median)
-  hc_median_cutoff <- median_finite(qc_summary$hbfss_cutoff_median)
-
-  failed_path <- file.path(simulation_dir, "Simulation_Failures.csv")
-  failures <- if (file.exists(failed_path)) tryCatch(read.csv(failed_path), error = function(e) data.frame()) else data.frame()
-  failed_count <- if (is.data.frame(failures)) nrow(failures) else 0L
-  total_success <- length(unique(paste(metric_long$de_fraction, metric_long$lfc_magnitude, metric_long$simulation_profile, metric_long$null_inflation, metric_long$replicate, sep = "|")))
-
-  lines <- c(
-    "# SEQUENCE simulation validation interpretation",
-    "",
-    "## What this simulation tests",
-    "This standalone simulation asks whether the SEQUENCE HBFSS framework behaves as intended when the truth is known. It generates negative-binomial count data, randomly assigns true differential features, runs DESeq2, estimates empirical-null p-values from Wald statistics, applies higher criticism, calculates HBFSS exactly as `abs(apeglm-shrunken log2 fold change) * -log10(empirical p)`, and compares calls against the known simulated truth.",
-    "",
-    "## How to read the metrics",
-    "Precision is the fraction of called features that are truly differential. Recall is the fraction of true differential features recovered. F1 is the harmonic mean of precision and recall, so it rewards methods that balance both. FDR is the observed false-discovery proportion among called features; lower is better. Discovery count shows how many features each method calls. The HC valid-fraction figure shows how often higher criticism produced a usable threshold under each simulation condition.",
-    "",
-    "## Main automated summary",
-    paste0("Successful simulation grid/replicate runs represented in the metric table: ", total_success, "."),
-    paste0("Failed replicate records: ", failed_count, "."),
-    paste0("Best average all-DE F1 method across exported grid summaries: ", best_all_method, "."),
-    paste0("Mean HC valid-threshold fraction across conditions: ", fmt_pct(hc_overall_fraction), "; minimum condition-level HC valid fraction: ", fmt_pct(hc_min_fraction), "."),
-    paste0("Median condition-level HC p-threshold: ", fmt_number(hc_median_threshold, 4), "; median HBFSS cutoff: ", fmt_number(hc_median_cutoff, 4), "."),
-    "",
-    "## Direct all-DE comparison: HBFSS_total versus DESeq2_BH",
-    paste0("Delta F1: ", fmt_delta(delta_metric(overall, "HBFSS_total", "DESeq2_BH", "all_de", "f1_mean")), "."),
-    paste0("Delta recall: ", fmt_delta(delta_metric(overall, "HBFSS_total", "DESeq2_BH", "all_de", "recall_mean")), "."),
-    paste0("Delta precision: ", fmt_delta(delta_metric(overall, "HBFSS_total", "DESeq2_BH", "all_de", "precision_mean")), "."),
-    paste0("Delta FDR: ", fmt_delta(delta_metric(overall, "HBFSS_total", "DESeq2_BH", "all_de", "fdr_mean")), "."),
-    paste0("Delta mean discovery count: ", fmt_delta(delta_metric(overall, "HBFSS_total", "DESeq2_BH", "all_de", "discovery_count_mean"), digits = 1), "."),
-    "",
-    "Interpretation: positive delta F1 or recall means HBFSS_total improved balance or sensitivity compared with the standard DESeq2 BH workflow. A positive delta FDR means that gain came with more false discoveries; a negative delta FDR means HBFSS_total was cleaner on average.",
-    "",
-    "## Strong-effect comparison",
-    paste0("GreaterAbs average F1: ", if (is.null(strong_greater)) "NA" else fmt_number(strong_greater$f1_mean), "; HBFSS_raw strong-effect average F1: ", if (is.null(strong_hbfss)) "NA" else fmt_number(strong_hbfss$f1_mean), "."),
-    paste0("GreaterAbs average recall: ", if (is.null(strong_greater)) "NA" else fmt_number(strong_greater$recall_mean), "; HBFSS_raw strong-effect average recall: ", if (is.null(strong_hbfss)) "NA" else fmt_number(strong_hbfss$recall_mean), "."),
-    "",
-    "Interpretation: this is the validation arm for large-effect discoveries. It directly tests whether the HBFSS boundary recovers strong effects compared with DESeq2's `greaterAbs` alternative-hypothesis test.",
-    "",
-    "## Weak-region comparison",
-    paste0("LessAbs average F1: ", if (is.null(weak_less)) "NA" else fmt_number(weak_less$f1_mean), "; HBFSS_weak_region average F1: ", if (is.null(weak_hbfss)) "NA" else fmt_number(weak_hbfss$f1_mean), "."),
-    paste0("LessAbs average recall: ", if (is.null(weak_less)) "NA" else fmt_number(weak_less$recall_mean), "; HBFSS_weak_region average recall: ", if (is.null(weak_hbfss)) "NA" else fmt_number(weak_hbfss$recall_mean), "."),
-    "",
-    "Interpretation: this is the validation arm for sub-boundary effects. The weak-mixture grid intentionally creates true effects below the log2 fold-change boundary, so strong-effect truth counts are zero there by design and strong-effect boxes are omitted for those cells.",
-    "",
-    "## Overall method table",
-    markdown_table(overall_print, c("method", "truth_target", "precision", "recall", "F1", "FDR", "discoveries", "truth"), c("Method", "Truth target", "Precision", "Recall", "F1", "FDR", "Mean discoveries", "Mean truth count")),
-    "",
-    "## Figure guide",
-    "`Simulation_F1_Boxplot` shows the overall balance of precision and recall. `Simulation_Precision_Boxplot` shows how clean the calls are. `Simulation_Recall_Boxplot` shows sensitivity. `Simulation_FDR_Boxplot` shows observed false-discovery burden, with the dashed line at the nominal alpha. `Simulation_DiscoveryCount_Boxplot` shows how aggressively each method calls features. The weak-region figures validate sub-boundary effects; the strong-effect figures validate above-boundary effects; `Simulation_HC_ValidFraction` confirms whether higher criticism is producing usable thresholds across the grid.",
-    "",
-    "## Submission note",
-    "For manuscript reporting, cite the method summary table and the F1/precision/recall/FDR figures together. Do not interpret F1 alone. If HBFSS improves recall but also increases FDR, describe it as a sensitivity-oriented gain. If HBFSS improves F1 without increasing FDR, describe it as improved balance under the simulated conditions."
-  )
-
-  writeLines(lines, file.path(simulation_dir, "Interpretation_Simulation.md"))
-  writeLines(lines, file.path(simulation_dir, "Interpretation_Simulation.txt"))
-  log_message("Simulation interpretation written: ", file.path(simulation_dir, "Interpretation_Simulation.md"))
-  invisible(TRUE)
-}
-
-
-write_manifest <- function() {
-  exported_files <- list.files(simulation_dir, recursive = TRUE, full.names = TRUE, all.files = FALSE)
-  exported_files <- exported_files[file.exists(exported_files)]
-  root <- normalizePath(repo_root, winslash = "/", mustWork = TRUE)
-  manifest <- data.frame(
-    file = sub(paste0("^", root, "/?"), "", normalizePath(exported_files, winslash = "/", mustWork = FALSE)),
-    size_bytes = file.info(exported_files)$size,
-    stringsAsFactors = FALSE
-  )
-  save_csv(manifest, file.path(simulation_dir, "Manifest_Simulation.csv"))
-  manifest
-}
-
-path_relative_to_repo <- function(path) {
-  root <- normalizePath(repo_root, winslash = "/", mustWork = TRUE)
-  abs_path <- normalizePath(path, winslash = "/", mustWork = FALSE)
-  prefix <- paste0(root, "/")
-  if (startsWith(abs_path, prefix)) return(substr(abs_path, nchar(prefix) + 1L, nchar(abs_path)))
-  abs_path
-}
-
-is_under_repo <- function(path) {
-  root <- normalizePath(repo_root, winslash = "/", mustWork = TRUE)
-  abs_path <- normalizePath(path, winslash = "/", mustWork = FALSE)
-  startsWith(abs_path, paste0(root, "/")) || identical(abs_path, root)
-}
-
-git_command <- function(args, allow_failure = FALSE, echo_output = TRUE) {
-  if (Sys.which("git") == "") stop("Git executable was not found on PATH.", call. = FALSE)
-  cmd_display <- paste("git", "-C", repo_root, paste(args, collapse = " "))
-  if (isTRUE(echo_output)) log_message("$ ", cmd_display)
-  out <- suppressWarnings(system2("git", args = c("-C", repo_root, args), stdout = TRUE, stderr = TRUE))
-  status <- attr(out, "status")
-  if (is.null(status)) status <- 0L
-  if (isTRUE(echo_output) && length(out) > 0L) log_message(paste(out, collapse = "\n"))
-  if (status != 0L && !isTRUE(allow_failure)) {
-    stop("Git command failed with status ", status, ": ", cmd_display, "\n", paste(out, collapse = "\n"), call. = FALSE)
-  }
-  list(status = as.integer(status), output = out)
-}
-
-git_output_first_line <- function(args, allow_failure = FALSE) {
-  res <- git_command(args, allow_failure = allow_failure, echo_output = FALSE)
-  if (res$status != 0L || length(res$output) == 0L) return(NA_character_)
-  trimws(res$output[1])
-}
-
-git_has_staged_changes <- function() {
-  res <- git_command(c("diff", "--cached", "--quiet"), allow_failure = TRUE, echo_output = FALSE)
-  if (res$status == 0L) return(FALSE)
-  if (res$status == 1L) return(TRUE)
-  stop("Unable to inspect staged Git changes.", call. = FALSE)
-}
-
-ensure_gitignore_patterns <- function(patterns) {
-  patterns <- unique(patterns[nzchar(patterns)])
-  if (length(patterns) == 0L) return(invisible(FALSE))
-
-  ignore_path <- file.path(repo_root, ".gitignore")
-  existing <- if (file.exists(ignore_path)) readLines(ignore_path, warn = FALSE) else character(0)
-  missing <- setdiff(patterns, existing)
-  if (length(missing) == 0L) return(invisible(FALSE))
-
-  prefix <- if (file.exists(ignore_path) && file.info(ignore_path)$size > 0L) "\n" else ""
-  cat(prefix, paste(missing, collapse = "\n"), "\n", file = ignore_path, append = TRUE, sep = "")
-  log_message("Updated .gitignore with: ", paste(missing, collapse = ", "))
-  invisible(TRUE)
-}
-
-git_remove_cached_excluded_files <- function() {
-  patterns <- unique(git_exclude_patterns[nzchar(git_exclude_patterns)])
-  if (length(patterns) == 0L) return(invisible(FALSE))
-  git_command(c("rm", "-r", "--cached", "--ignore-unmatch", "--", patterns), allow_failure = TRUE)
-  invisible(TRUE)
-}
-
-git_staged_paths <- function() {
-  res <- git_command(c("diff", "--cached", "--name-only"), allow_failure = TRUE, echo_output = FALSE)
-  if (res$status != 0L || length(res$output) == 0L) return(character(0))
-  unique(trimws(res$output[nzchar(res$output)]))
-}
-
-git_unstage_oversized_files <- function(max_bytes = git_max_file_size_bytes) {
-  staged <- git_staged_paths()
-  if (length(staged) == 0L) return(character(0))
-
-  oversized <- character(0)
-  for (rel in staged) {
-    abs_path <- file.path(repo_root, rel)
-    if (file.exists(abs_path)) {
-      sz <- suppressWarnings(file.info(abs_path)$size)
-      if (is.finite(sz) && !is.na(sz) && sz > max_bytes) oversized <- c(oversized, rel)
-    }
-  }
-
-  oversized <- unique(oversized)
-  if (length(oversized) > 0L) {
-    git_command(c("reset", "-q", "HEAD", "--", oversized), allow_failure = FALSE)
-    ensure_gitignore_patterns(oversized)
-    git_command(c("add", "--", ".gitignore"), allow_failure = FALSE)
-    log_message("Unstaged oversized file(s): ", paste(oversized, collapse = ", "))
-  }
-  oversized
-}
-
-git_commit_and_push <- function() {
-  if (!isTRUE(git_push_after_success)) {
-    log_message("Git push disabled: git_push_after_success is FALSE.")
-    return(invisible(FALSE))
-  }
-
-  git_root <- git_output_first_line(c("rev-parse", "--show-toplevel"), allow_failure = TRUE)
-  if (is.na(git_root) || !nzchar(git_root)) stop("Git push requested, but this run is not inside a Git repository.", call. = FALSE)
-  git_root <- normalizePath(git_root, winslash = "/", mustWork = TRUE)
-  expected_root <- normalizePath(repo_root, winslash = "/", mustWork = TRUE)
-  if (!identical(git_root, expected_root)) stop("Git root mismatch. repo_root is ", expected_root, " but Git root is ", git_root, call. = FALSE)
-
-  remote_url <- git_output_first_line(c("remote", "get-url", git_remote_name), allow_failure = TRUE)
-  if (is.na(remote_url) || !nzchar(remote_url)) stop("Git remote '", git_remote_name, "' is not configured.", call. = FALSE)
-
-  current_branch <- git_output_first_line(c("rev-parse", "--abbrev-ref", "HEAD"), allow_failure = FALSE)
-  if (identical(current_branch, "HEAD") || is.na(current_branch) || !nzchar(current_branch)) stop("Git is in detached HEAD state.", call. = FALSE)
-  target_branch <- if (!is.na(git_branch_name) && nzchar(git_branch_name)) git_branch_name else current_branch
-
-  ensure_gitignore_patterns(git_exclude_patterns)
-
-  git_command(c("fetch", git_remote_name), allow_failure = FALSE)
-  upstream <- git_output_first_line(c("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"), allow_failure = TRUE)
-  if (is.na(upstream) || !nzchar(upstream)) {
-    remote_branch_ref <- paste0(git_remote_name, "/", target_branch)
-    remote_branch_sha <- git_output_first_line(c("rev-parse", "--verify", remote_branch_ref), allow_failure = TRUE)
-    if (!is.na(remote_branch_sha) && nzchar(remote_branch_sha)) upstream <- remote_branch_ref
-  }
-
-  if (isTRUE(git_pull_rebase_before_push) && !is.na(upstream) && nzchar(upstream)) {
-    git_command(c("pull", "--rebase", "--autostash", git_remote_name, target_branch), allow_failure = FALSE)
-  }
-
-  git_remove_cached_excluded_files()
-
-  stage_paths <- c(".gitignore", path_relative_to_repo(simulation_dir))
-  if (isTRUE(git_stage_pipeline_script)) {
-    sp <- script_path()
-    if (!is.na(sp) && file.exists(sp) && is_under_repo(sp)) {
-      stage_paths <- c(path_relative_to_repo(sp), stage_paths)
-    } else {
-      log_message("Pipeline script was not staged because it is not inside the Git repository.")
-    }
-  }
-  stage_paths <- unique(stage_paths[nzchar(stage_paths)])
-
-  git_command(c("add", "--", stage_paths), allow_failure = FALSE)
-  git_remove_cached_excluded_files()
-  git_unstage_oversized_files()
-
-  if (!git_has_staged_changes()) {
-    log_message("No changed simulation files to commit.")
-    if (isTRUE(git_allow_no_change_success)) return(invisible(FALSE))
-    stop("No changed files to commit and git_allow_no_change_success is FALSE.", call. = FALSE)
-  }
-
-  git_command(c("status", "--short"), allow_failure = FALSE)
-  git_command(c("commit", "-m", git_commit_message), allow_failure = FALSE)
-
-  final_upstream <- git_output_first_line(c("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"), allow_failure = TRUE)
-  if (!is.na(final_upstream) && nzchar(final_upstream) && identical(target_branch, current_branch)) {
-    git_command(c("push"), allow_failure = FALSE)
-  } else {
-    git_command(c("push", "-u", git_remote_name, paste0("HEAD:", target_branch)), allow_failure = FALSE)
-  }
-
-  log_message("GitHub push complete.")
-  invisible(TRUE)
-}
-
-# =============================================================================
-# EXECUTION
-# =============================================================================
 
 main <- function() {
-  log_message("SEQUENCE standalone simulation started.")
-  log_message("Repository root: ", repo_root)
-  log_message("Simulation output directory: ", simulation_dir)
+  write_status("starting", "initializing")
 
-  simulation_result <- run_sequence_simulation_validation()
-  write_simulation_methods()
-  write_simulation_interpretation(simulation_result)
-  manifest <- write_manifest()
-  cleanup_rplots_pdf()
-  git_commit_and_push()
+  result <- run_simulation()
 
-  cat("\n=====================================================\n")
-  cat("SEQUENCE standalone simulation complete.\n")
-  cat("Output directory: ", simulation_dir, "\n", sep = "")
-  cat("Exported files: ", nrow(manifest), "\n", sep = "")
+  write_status("figures_complete", "simulation outputs written")
+
+  push_outputs()
+
+  write_status("complete", "simulation finished")
+
+  cat("\n")
+  cat("=====================================================\n")
+  cat("HBFSS simulation complete\n")
+  cat("Output directory: ", SIM_DIR, "\n", sep = "")
+  cat("Metric rows: ", nrow(result$metrics), "\n", sep = "")
+  cat("Figures: ", nrow(result$figures), "\n", sep = "")
+  cat("Failures: ", nrow(result$failures), "\n", sep = "")
   cat("=====================================================\n\n")
 
-  print(simulation_result$metric_summary)
-  invisible(simulation_result)
+  print(result$summary)
+
+  invisible(result)
 }
 
 tryCatch(
   main(),
   error = function(e) {
-    log_message("SIMULATION FAILED - DO NOT PUSH: ", conditionMessage(e))
-    try(writeLines(capture.output(sessionInfo()), file.path(simulation_dir, "SessionInfo_Simulation_Failed.txt")), silent = TRUE)
-    try(cleanup_rplots_pdf(), silent = TRUE)
+    write_status("failed", conditionMessage(e))
+    log_msg("FAILED: ", conditionMessage(e))
+    try(writeLines(capture.output(sessionInfo()), file.path(SIM_DIR, "SessionInfo_Simulation_FAILED.txt")), silent = TRUE)
     if (!interactive()) quit(save = "no", status = 1L, runLast = FALSE)
     stop(e)
   }
