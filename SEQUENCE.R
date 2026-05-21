@@ -28,8 +28,11 @@ calculation_p_floor <- .Machine$double.xmin
 plot_p_floor <- 1e-16
 
 figure_dpi <- 600
-base_theme_size <- 9
+base_theme_size <- 7
+figure_width_twocol <- 6.7
 export_pdf_also <- TRUE
+export_tiff_also <- TRUE
+stamp_figures <- FALSE
 
 simulation_seed <- as.integer(Sys.getenv("SEQUENCE_SIM_SEED", "42"))
 simulation_n_features <- as.integer(Sys.getenv("SEQUENCE_SIM_FEATURES", "1000"))
@@ -131,8 +134,10 @@ dir.create(simulation_dir, recursive = TRUE, showWarnings = FALSE)
 figures_dir <- file.path(simulation_dir, "figures")
 figures_png_dir <- file.path(figures_dir, "png")
 figures_pdf_dir <- file.path(figures_dir, "pdf")
+figures_tiff_dir <- file.path(figures_dir, "tiff")
 dir.create(figures_png_dir, recursive = TRUE, showWarnings = FALSE)
 dir.create(figures_pdf_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(figures_tiff_dir, recursive = TRUE, showWarnings = FALSE)
 
 log_message <- function(...) {
   txt <- paste0(...)
@@ -199,39 +204,49 @@ safe_neglog10 <- function(p, floor_value = plot_p_floor) {
   -log10(clip_probability(p, floor_value = floor_value))
 }
 
-mean_finite <- function(x) {
+finite_vals <- function(x) {
   y <- suppressWarnings(as.numeric(x))
-  y <- y[is.finite(y) & !is.na(y)]
-  if (length(y) == 0L) return(NA_real_)
-  mean(y)
+  y[is.finite(y) & !is.na(y)]
+}
+
+mean_finite <- function(x) {
+  v <- finite_vals(x)
+  if (!length(v)) return(NA_real_)
+  mean(v)
 }
 
 median_finite <- function(x) {
-  y <- suppressWarnings(as.numeric(x))
-  y <- y[is.finite(y) & !is.na(y)]
-  if (length(y) == 0L) return(NA_real_)
-  stats::median(y)
+  v <- finite_vals(x)
+  if (!length(v)) return(NA_real_)
+  stats::median(v)
 }
 
 quantile_finite <- function(x, prob) {
-  y <- suppressWarnings(as.numeric(x))
-  y <- y[is.finite(y) & !is.na(y)]
-  if (length(y) == 0L) return(NA_real_)
-  as.numeric(stats::quantile(y, probs = prob, names = FALSE, type = 7, na.rm = TRUE))
+  v <- finite_vals(x)
+  if (!length(v)) return(NA_real_)
+  as.numeric(stats::quantile(v, probs = prob, names = FALSE, type = 7, na.rm = TRUE))
 }
 
 min_finite <- function(x) {
-  y <- suppressWarnings(as.numeric(x))
-  y <- y[is.finite(y) & !is.na(y)]
-  if (length(y) == 0L) return(NA_real_)
-  min(y)
+  v <- finite_vals(x)
+  if (!length(v)) return(NA_real_)
+  min(v)
 }
 
 max_finite <- function(x) {
+  v <- finite_vals(x)
+  if (!length(v)) return(NA_real_)
+  max(v)
+}
+
+percent_label <- function(x) {
   y <- suppressWarnings(as.numeric(x))
-  y <- y[is.finite(y) & !is.na(y)]
-  if (length(y) == 0L) return(NA_real_)
-  max(y)
+  ifelse(is.na(y) | !is.finite(y), NA_character_, paste0(formatC(100 * y, format = "f", digits = 0), "%"))
+}
+
+percent_delta_label <- function(x) {
+  y <- suppressWarnings(as.numeric(x))
+  ifelse(is.na(y) | !is.finite(y), "NA", paste0(ifelse(y >= 0, "+", ""), formatC(100 * y, format = "f", digits = 0), "%"))
 }
 
 save_csv <- function(df, path) {
@@ -274,12 +289,29 @@ check_nonempty_file <- function(path, label) {
   invisible(TRUE)
 }
 
+git_sha_short <- function() {
+  if (Sys.which("git") == "" || !dir.exists(file.path(repo_root, ".git"))) return("NA")
+  out <- suppressWarnings(system2("git", args = c("-C", repo_root, "rev-parse", "--short", "HEAD"), stdout = TRUE, stderr = TRUE))
+  status <- attr(out, "status")
+  if (is.null(status)) status <- 0L
+  if (status != 0L || length(out) == 0L) return("NA")
+  trimws(out[1])
+}
+
+apply_figure_stamp <- function(plot_obj) {
+  if (!isTRUE(stamp_figures)) return(plot_obj)
+  plot_obj + labs(caption = paste0("git: ", git_sha_short(), " | seed: ", simulation_seed, " | reps: ", simulation_n_reps))
+}
+
 save_figure <- function(plot_obj, figure_name, width, height, export_pdf = export_pdf_also) {
   if (is.null(plot_obj)) stop("Figure object is NULL for ", figure_name, call. = FALSE)
   if (!inherits(plot_obj, "ggplot")) stop("Figure object is not a ggplot for ", figure_name, call. = FALSE)
 
+  plot_obj <- apply_figure_stamp(plot_obj)
+
   png_path <- file.path(figures_png_dir, paste0(figure_name, ".png"))
   pdf_path <- file.path(figures_pdf_dir, paste0(figure_name, ".pdf"))
+  tiff_path <- file.path(figures_tiff_dir, paste0(figure_name, ".tiff"))
 
   dir.create(dirname(png_path), recursive = TRUE, showWarnings = FALSE)
   ggplot2::ggsave(
@@ -306,16 +338,34 @@ save_figure <- function(plot_obj, figure_name, width, height, export_pdf = expor
     pdf_path <- NA_character_
   }
 
+  if (isTRUE(export_tiff_also)) {
+    ggplot2::ggsave(
+      filename = tiff_path,
+      plot = plot_obj,
+      width = width,
+      height = height,
+      units = "in",
+      dpi = figure_dpi,
+      compression = "lzw",
+      bg = "white",
+      limitsize = FALSE
+    )
+    check_nonempty_file(tiff_path, "TIFF figure")
+  } else {
+    tiff_path <- NA_character_
+  }
+
   root_png_path <- file.path(simulation_dir, paste0(figure_name, ".png"))
   file.copy(png_path, root_png_path, overwrite = TRUE)
   check_nonempty_file(root_png_path, "Root PNG figure")
 
-  log_message("Figure saved: ", root_png_path, " | ", png_path, if (isTRUE(export_pdf)) paste0(" | ", pdf_path) else "")
+  log_message("Figure saved: ", root_png_path, " | ", png_path, if (isTRUE(export_pdf)) paste0(" | ", pdf_path) else "", if (isTRUE(export_tiff_also)) paste0(" | ", tiff_path) else "")
   data.frame(
     figure = figure_name,
     png_file = path_relative_to_repo(root_png_path),
     png_archive_file = path_relative_to_repo(png_path),
     pdf_file = if (isTRUE(export_pdf)) path_relative_to_repo(pdf_path) else NA_character_,
+    tiff_file = if (isTRUE(export_tiff_also)) path_relative_to_repo(tiff_path) else NA_character_,
     status = "saved",
     error_message = NA_character_,
     stringsAsFactors = FALSE
@@ -332,6 +382,7 @@ safe_save_figure <- function(plot_obj, figure_name, width, height) {
       png_file = NA_character_,
       png_archive_file = NA_character_,
       pdf_file = NA_character_,
+      tiff_file = NA_character_,
       status = "failed",
       error_message = conditionMessage(e),
       stringsAsFactors = FALSE
@@ -350,13 +401,13 @@ method_label_map <- c(
 )
 
 method_color_map <- c(
-  DESeq2_BH = "#7A7A7A",
-  Empirical_BH = "#1F78B4",
-  GreaterAbs = "#E31A1C",
-  LessAbs = "#33A02C",
-  HBFSS_total = "#6A3D9A",
-  HBFSS_raw = "#54278F",
-  HBFSS_weak_region = "#008B8B"
+  DESeq2_BH = "#000000",
+  Empirical_BH = "#E69F00",
+  GreaterAbs = "#D55E00",
+  LessAbs = "#CC79A7",
+  HBFSS_total = "#56B4E9",
+  HBFSS_raw = "#009E73",
+  HBFSS_weak_region = "#0072B2"
 )
 
 condition_short_label <- function(inflation_label, de_label) {
@@ -856,8 +907,7 @@ stack_deltas_for_heatmap <- function(delta_df) {
     data.frame(condition_label = delta_df$condition_label, metric = "Delta F1", value = delta_df$delta_f1, stringsAsFactors = FALSE),
     data.frame(condition_label = delta_df$condition_label, metric = "Delta Recall", value = delta_df$delta_recall, stringsAsFactors = FALSE),
     data.frame(condition_label = delta_df$condition_label, metric = "Delta Precision", value = delta_df$delta_precision, stringsAsFactors = FALSE),
-    data.frame(condition_label = delta_df$condition_label, metric = "Delta FDR", value = delta_df$delta_fdr, stringsAsFactors = FALSE),
-    data.frame(condition_label = delta_df$condition_label, metric = "Delta Discoveries", value = delta_df$delta_discovery_count, stringsAsFactors = FALSE)
+    data.frame(condition_label = delta_df$condition_label, metric = "Delta FDR", value = delta_df$delta_fdr, stringsAsFactors = FALSE)
   )
 }
 
@@ -865,25 +915,26 @@ plot_all_de_delta_heatmap <- function(delta_df) {
   if (nrow(delta_df) == 0L) return(NULL)
   plot_df <- stack_deltas_for_heatmap(delta_df)
   plot_df$condition_label <- factor(plot_df$condition_label, levels = rev(unique(delta_df$condition_label)))
-  plot_df$metric <- factor(plot_df$metric, levels = c("Delta F1", "Delta Recall", "Delta Precision", "Delta FDR", "Delta Discoveries"))
+  plot_df$metric <- factor(plot_df$metric, levels = c("Delta F1", "Delta Recall", "Delta Precision", "Delta FDR"))
   plot_df <- plot_df %>%
     group_by(metric) %>%
     mutate(metric_max_abs = max(abs(value), na.rm = TRUE)) %>%
     ungroup()
   plot_df$fill_value <- ifelse(is.finite(plot_df$metric_max_abs) & plot_df$metric_max_abs > 0, plot_df$value / plot_df$metric_max_abs, 0)
+  plot_df$label <- percent_delta_label(plot_df$value)
 
   ggplot(plot_df, aes(x = metric, y = condition_label, fill = fill_value)) +
-    geom_tile(color = "white", linewidth = 0.35) +
-    geom_text(aes(label = formatC(value, format = "f", digits = 2)), size = 2.4) +
+    geom_tile(color = "white", linewidth = 0.30) +
+    geom_text(aes(label = label), size = 1.9) +
     scale_fill_gradient2(low = "#B2182B", mid = "white", high = "#2166AC", midpoint = 0, limits = c(-1, 1), name = "Direction") +
     labs(
       title = "Overall HBFSS benefit versus DESeq2 BH",
-      subtitle = "Positive numbers favor HBFSS; color is scaled within each metric",
+      subtitle = "Positive percentages favor HBFSS; color is scaled within each metric",
       x = NULL,
       y = NULL
     ) +
     manuscript_theme() +
-    theme(axis.text.y = element_text(size = base_theme_size - 1.2))
+    theme(axis.text.y = element_text(size = 5.3))
 }
 
 plot_head_to_head <- function(summary_df, methods, target, metrics, title, subtitle = NULL) {
@@ -896,18 +947,18 @@ plot_head_to_head <- function(summary_df, methods, target, metrics, title, subti
   plot_df$metric <- factor(plot_df$metric, levels = metrics, labels = unname(metric_label_lookup[metrics]))
   plot_df$method_label <- factor(method_label_map[plot_df$method], levels = method_label_map[methods])
 
-  dodge <- position_dodge(width = 0.40)
+  dodge <- position_dodge(width = 0.55)
 
   ggplot(plot_df, aes(x = de_label, y = value, color = method_label, group = method_label)) +
-    geom_linerange(aes(ymin = q25, ymax = q75), position = dodge, linewidth = 0.70, alpha = 0.90) +
-    geom_point(position = dodge, size = 2.2) +
+    geom_crossbar(aes(ymin = q25, ymax = q75), position = dodge, width = 0.32, linewidth = 0.28, fatten = 1.2, alpha = 0.95) +
     facet_grid(metric ~ inflation_label + lfc_label, scales = "free_y") +
     scale_color_manual(values = setNames(unname(method_color_map[methods]), method_label_map[methods]), breaks = method_label_map[methods], name = NULL) +
+    scale_y_continuous(labels = percent_label) +
     labs(
       title = title,
       subtitle = subtitle,
       x = "Differential-expression fraction",
-      y = "Median metric value with IQR"
+      y = "Median with IQR"
     ) +
     manuscript_theme() +
     theme(legend.position = "bottom")
@@ -919,10 +970,11 @@ plot_qc_heatmap <- function(qc_df, value_col, title, subtitle = NULL, fill_label
   plot_df$value <- plot_df[[value_col]]
   plot_df$de_label <- factor(plot_df$de_label, levels = c("5% DE", "10% DE"))
   plot_df$inflation_label <- factor(plot_df$inflation_label, levels = c("No null inflation", "10% null inflation"))
+  plot_df$label <- if (identical(value_col, "hc_valid_fraction")) percent_label(plot_df$value) else formatC(plot_df$value, format = "f", digits = 2)
 
   p <- ggplot(plot_df, aes(x = de_label, y = inflation_label, fill = value)) +
-    geom_tile(color = "white", linewidth = 0.35) +
-    geom_text(aes(label = formatC(value, format = "f", digits = 2)), size = 2.6) +
+    geom_tile(color = "white", linewidth = 0.30) +
+    geom_text(aes(label = label), size = 2.0) +
     facet_wrap(~ lfc_label, nrow = 1) +
     labs(
       title = title,
@@ -940,7 +992,6 @@ plot_qc_heatmap <- function(qc_df, value_col, title, subtitle = NULL, fill_label
   }
   p
 }
-
 
 run_sequence_simulation_validation <- function() {
   set.seed(simulation_seed)
@@ -1088,8 +1139,8 @@ run_sequence_simulation_validation <- function() {
     safe_save_figure(
       plot_all_de_delta_heatmap(all_de_delta),
       "Figure_01_AllDE_DeltaHeatmap",
-      11.5,
-      8.5
+      figure_width_twocol,
+      5.8
     ),
     safe_save_figure(
       plot_head_to_head(
@@ -1101,8 +1152,8 @@ run_sequence_simulation_validation <- function() {
         subtitle = "Median and IQR across replicate simulations"
       ),
       "Figure_02_StrongEffect_HeadToHead",
-      13.0,
-      8.5
+      figure_width_twocol,
+      5.8
     ),
     safe_save_figure(
       plot_head_to_head(
@@ -1114,8 +1165,8 @@ run_sequence_simulation_validation <- function() {
         subtitle = "HBFSS weak = LessAbs-supported genes that also pass higher criticism"
       ),
       "Figure_03_WeakEffect_HeadToHead",
-      11.5,
-      8.0
+      figure_width_twocol,
+      5.6
     ),
     safe_save_figure(
       plot_qc_heatmap(
@@ -1126,8 +1177,8 @@ run_sequence_simulation_validation <- function() {
         fill_label = "Valid fraction"
       ),
       "Figure_04_HC_Validity",
-      11.5,
-      4.5
+      figure_width_twocol,
+      3.0
     ),
     safe_save_figure(
       plot_qc_heatmap(
@@ -1138,8 +1189,8 @@ run_sequence_simulation_validation <- function() {
         fill_label = "Median cutoff"
       ),
       "Figure_05_HBFSS_Cutoff",
-      11.5,
-      4.5
+      figure_width_twocol,
+      3.0
     )
   )
   save_csv(figure_status, file.path(simulation_dir, "Figure_Export_Status.csv"))
@@ -1161,6 +1212,7 @@ run_sequence_simulation_validation <- function() {
       paste0("Root figure folder: ", simulation_dir),
       paste0("PNG archive folder: ", figures_png_dir),
       paste0("PDF archive folder: ", figures_pdf_dir),
+      paste0("TIFF archive folder: ", figures_tiff_dir),
       "",
       paste0("PNG files: ", paste(basename(expected_png), collapse = "; "))
     ),
