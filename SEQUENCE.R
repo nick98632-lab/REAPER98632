@@ -48,8 +48,9 @@ simulation_seed <- as.integer(Sys.getenv("SEQUENCE_SIM_SEED", "42"))
 simulation_n_features <- as.integer(Sys.getenv("SEQUENCE_SIM_FEATURES", "1000"))
 simulation_n_samples_per_group <- as.integer(Sys.getenv("SEQUENCE_SIM_SAMPLES_PER_GROUP", "6"))
 simulation_n_reps <- as.integer(Sys.getenv("SEQUENCE_SIM_REPS", "20"))
-simulation_progress_every <- as.integer(Sys.getenv("SEQUENCE_SIM_PROGRESS_EVERY", "5"))
+simulation_progress_every <- as.integer(Sys.getenv("SEQUENCE_SIM_PROGRESS_EVERY", "1"))
 simulation_checkpoint_every <- as.integer(Sys.getenv("SEQUENCE_SIM_CHECKPOINT_EVERY", "10"))
+simulation_rep_timeout_seconds <- as.numeric(Sys.getenv("SEQUENCE_SIM_REP_TIMEOUT_SECONDS", "240"))
 
 simulation_base_mean <- 200
 simulation_dispersion_null <- 0.10
@@ -174,6 +175,18 @@ save_csv <- function(x, path) {
   invisible(path)
 }
 
+run_with_elapsed_timeout <- function(expr, timeout_seconds) {
+  timeout_seconds <- suppressWarnings(as.numeric(timeout_seconds[1]))
+  if (!is.finite(timeout_seconds) || is.na(timeout_seconds) || timeout_seconds <= 0) return(force(expr))
+
+  try(base::setTimeLimit(cpu = Inf, elapsed = timeout_seconds, transient = TRUE), silent = TRUE)
+  on.exit({
+    try(base::setTimeLimit(cpu = Inf, elapsed = Inf, transient = FALSE), silent = TRUE)
+  }, add = TRUE)
+
+  force(expr)
+}
+
 cleanup_rplots_pdf <- function() {
   stray <- file.path(repo_root, "Rplots.pdf")
   if (file.exists(stray)) unlink(stray, force = TRUE)
@@ -192,8 +205,10 @@ simulation_seed <- positive_integer(simulation_seed, 42L, "simulation_seed")
 simulation_n_features <- positive_integer(simulation_n_features, 1000L, "simulation_n_features")
 simulation_n_samples_per_group <- positive_integer(simulation_n_samples_per_group, 6L, "simulation_n_samples_per_group")
 simulation_n_reps <- positive_integer(simulation_n_reps, 20L, "simulation_n_reps")
-simulation_progress_every <- positive_integer(simulation_progress_every, 5L, "simulation_progress_every")
+simulation_progress_every <- positive_integer(simulation_progress_every, 1L, "simulation_progress_every")
 simulation_checkpoint_every <- positive_integer(simulation_checkpoint_every, 10L, "simulation_checkpoint_every")
+simulation_rep_timeout_seconds <- suppressWarnings(as.numeric(simulation_rep_timeout_seconds[1]))
+if (!is.finite(simulation_rep_timeout_seconds) || is.na(simulation_rep_timeout_seconds) || simulation_rep_timeout_seconds < 30) simulation_rep_timeout_seconds <- 240
 figure_dpi <- positive_integer(figure_dpi, 600L, "figure_dpi")
 
 # =============================================================================
@@ -825,16 +840,30 @@ run_simulation_validation <- function() {
   run_index <- 0L
   start_time <- Sys.time()
   checkpoint_path <- file.path(simulation_dir, "Simulation_RunMetrics_Checkpoint.csv")
+  # Checkpoints append only newly completed replicate blocks. Do not re-bind/rewrite the full accumulated list each checkpoint.
+  last_checkpoint_metric_index <- 0L
 
   for (grid_i in seq_len(nrow(sim_grid))) {
     grid_row <- sim_grid[grid_i, , drop = FALSE]
     for (rep_i in seq_len(simulation_n_reps)) {
       run_index <- run_index + 1L
+      current_lfc_label <- ifelse(is.na(grid_row$lfc_magnitude), "weak_mixture", as.character(grid_row$lfc_magnitude))
+      elapsed <- as.numeric(difftime(Sys.time(), start_time, units = "mins"))
+      eta <- elapsed * (total_runs - run_index) / max(run_index, 1L)
+      progress_detail <- paste0(
+        run_index, "/", total_runs,
+        " | profile=", grid_row$simulation_profile,
+        " | LFC=", current_lfc_label,
+        " | DE=", grid_row$de_fraction,
+        " | null_inflation=", grid_row$null_inflation,
+        " | rep=", rep_i,
+        " | timeout=", simulation_rep_timeout_seconds, " sec",
+        " | elapsed=", signif(elapsed, 3), " min",
+        " | ETA=", signif(eta, 3), " min"
+      )
+      write_status("running", paste0("started ", progress_detail))
       if (run_index %% simulation_progress_every == 0L || run_index == 1L || run_index == total_runs) {
-        elapsed <- as.numeric(difftime(Sys.time(), start_time, units = "mins"))
-        eta <- elapsed * (total_runs - run_index) / max(run_index, 1L)
-        log_message("Simulation progress: ", run_index, "/", total_runs, " | elapsed=", signif(elapsed, 3), " min | ETA=", signif(eta, 3), " min")
-        write_status("running", paste0(run_index, "/", total_runs))
+        log_message("Simulation progress: ", progress_detail)
       }
 
       template <- data.frame(de_fraction = grid_row$de_fraction, lfc_magnitude = grid_row$lfc_magnitude, simulation_profile = grid_row$simulation_profile, null_inflation = grid_row$null_inflation, replicate = rep_i, stringsAsFactors = FALSE)
@@ -844,15 +873,34 @@ run_simulation_validation <- function() {
       template$condition_label <- condition_label(template$lfc_label, template$inflation_label, template$de_fraction)
 
       out <- tryCatch({
-        sim_obj <- simulate_sequence_counts(simulation_n_features, simulation_n_samples_per_group, simulation_base_mean, simulation_dispersion_null, grid_row$de_fraction, grid_row$lfc_magnitude, simulation_dispersion_de, grid_row$simulation_profile)
-        sequence_simulation_analysis(sim_obj, null_inflation = grid_row$null_inflation)
+        run_with_elapsed_timeout({
+          sim_obj <- simulate_sequence_counts(simulation_n_features, simulation_n_samples_per_group, simulation_base_mean, simulation_dispersion_null, grid_row$de_fraction, grid_row$lfc_magnitude, simulation_dispersion_de, grid_row$simulation_profile)
+          sequence_simulation_analysis(sim_obj, null_inflation = grid_row$null_inflation)
+        }, simulation_rep_timeout_seconds)
       }, error = function(e) {
         failure_rows[[length(failure_rows) + 1L]] <<- cbind(template, data.frame(error_message = conditionMessage(e), stringsAsFactors = FALSE))
+        write_status("running", paste0("failed ", run_index, "/", total_runs, " | ", conditionMessage(e)))
         NULL
       })
       if (is.null(out)) next
       metric_rows[[length(metric_rows) + 1L]] <- build_metric_rows(out, template)
-      if ((run_index %% simulation_checkpoint_every == 0L || run_index == total_runs) && length(metric_rows) > 0L) save_csv(bind_rows(metric_rows), checkpoint_path)
+      write_status("running", paste0("completed ", run_index, "/", total_runs, " | successful_replicates=", length(metric_rows), " | failures=", length(failure_rows)))
+      if ((run_index %% simulation_checkpoint_every == 0L || run_index == total_runs) &&
+          length(metric_rows) > last_checkpoint_metric_index) {
+        checkpoint_rows <- metric_rows[(last_checkpoint_metric_index + 1L):length(metric_rows)]
+        checkpoint_df <- bind_rows(checkpoint_rows)
+        utils::write.table(
+          checkpoint_df,
+          file = checkpoint_path,
+          sep = ",",
+          row.names = FALSE,
+          col.names = !file.exists(checkpoint_path),
+          append = file.exists(checkpoint_path),
+          quote = TRUE,
+          qmethod = "double"
+        )
+        last_checkpoint_metric_index <- length(metric_rows)
+      }
     }
   }
 
@@ -914,7 +962,7 @@ write_methods_and_interpretation <- function(result) {
     "",
     paste0("Negative-binomial count matrices were simulated with ", simulation_n_features, " features and ", simulation_n_samples_per_group, " samples per condition."),
     paste0("DE fractions: ", paste(simulation_de_fractions, collapse = ", "), ". Fixed |LFC| values: ", paste(simulation_lfc_magnitudes, collapse = ", "), ". Weak mixture |LFC| range: ", simulation_weak_lfc_min, "-", simulation_weak_lfc_max, "."),
-    paste0("Each condition used ", simulation_n_reps, " replicate simulations. DESeq2 fitType was '", simulation_fit_type, "'."),
+    paste0("Each condition used ", simulation_n_reps, " replicate simulations. DESeq2 fitType was '", simulation_fit_type, "'. Replicates exceeding ", simulation_rep_timeout_seconds, " seconds were recorded as failures instead of stalling the run."),
     "The simulation truth target for the lessAbs/cusp arm is true_cusp = 0 < |true LFC| < LFC boundary. This excludes exact null features and treats the weak arm as a boundary-adjacent composite-null classification problem, not conventional differential-expression recovery.",
     "",
     "DESeq2_BH uses DESeq2 Wald-test p-values with DESeq2's BH-adjusted padj only; it intentionally does not impose an LFC filter because the strong and cusp arms are handled by DESeq2's composite-null tests.",
