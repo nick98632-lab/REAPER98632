@@ -86,13 +86,27 @@ GROUP_PATTERNS <- c(
   ZT14 = "^ZT14_"
 )
 
-# Preserve the visual smoothing convention of the original empirical-variance
-# figure. This smoothing is for display only; it does NOT determine c1 or c2.
+COMPARISONS <- list(
+  RT0_ZT6  = c(control = "RT0", treatment = "ZT6"),
+  RT2_ZT8  = c(control = "RT2", treatment = "ZT8"),
+  RT4_ZT10 = c(control = "RT4", treatment = "ZT10"),
+  RT8_ZT14 = c(control = "RT8", treatment = "ZT14")
+)
+
+# The manuscript's prespecified terminal leading-edge subset.
+# This value is NEVER used to fit the data-derived shared knots c1 and c2.
+PAPER_LEADING_EDGE_SIZE <- 5000L
+
+# Display smoothing only. These values affect figure appearance, not the fitted
+# shared boundaries or any tabulated inferential quantity.
 VAR_SPLINE_SPAR <- 0.60
+DISPLAY_EMPIRICAL_SPAR <- 0.74
+DISPLAY_MASS_SPAR <- 0.72
+DISPLAY_DIVERGENCE_SPAR <- 0.72
 
 PNG_WIDTH_IN  <- 15
 PNG_HEIGHT_IN <- 11.5
-PNG_DPI       <- 300
+PNG_DPI       <- 360
 
 dir.create(
   OUT_ROOT,
@@ -116,6 +130,9 @@ COL <- list(
   leading     = "#DDF2EA",
   c1          = "#2166AC",
   c2          = "#1B7837",
+  paper       = "#D97706",
+  control     = "#386CB0",
+  treatment   = "#159D91",
   ribbon      = "#BDBDBD"
 )
 
@@ -2108,6 +2125,1151 @@ make_main_figure <- function(
 }
 
 
+
+# =============================================================================
+# FINAL MANUSCRIPT DISPLAY + MINIMAL OUTPUT HELPERS
+# =============================================================================
+
+smooth_series_for_display <- function(
+    rank,
+    y,
+    spar) {
+
+  keep <- (
+    is.finite(rank) &
+    is.finite(y)
+  )
+
+  out <- rep(
+    NA_real_,
+    length(y)
+  )
+
+  if (sum(keep) < 8L) {
+    out[keep] <- y[keep]
+    return(out)
+  }
+
+  fit <- stats::smooth.spline(
+    x = rank[keep],
+    y = y[keep],
+    spar = spar
+  )
+
+  out[keep] <- as.numeric(
+    stats::predict(
+      fit,
+      x = rank[keep],
+      deriv = 0
+    )$y
+  )
+
+  out
+}
+
+
+smooth_mass_for_display <- function(
+    rank,
+    mass,
+    spar) {
+
+  y <- smooth_series_for_display(
+    rank = rank,
+    y = mass,
+    spar = spar
+  )
+
+  y[
+    !is.finite(y)
+  ] <- 0
+
+  y <- pmax(
+    y,
+    0
+  )
+
+  total <- sum(
+    y
+  )
+
+  if (
+    !is.finite(total) ||
+    total <= 0
+  ) {
+    y <- mass
+    y[
+      !is.finite(y)
+    ] <- 0
+    y <- pmax(
+      y,
+      0
+    )
+    total <- sum(
+      y
+    )
+  }
+
+  y /
+    total
+}
+
+
+add_clean_display_curves <- function(
+    group_curves) {
+
+  lapply(
+    group_curves,
+    function(df) {
+
+      rank <- df$rank
+
+      df$display_empirical <- smooth_series_for_display(
+        rank = rank,
+        y = df$smooth_log1p_raw_empirical_variance,
+        spar = DISPLAY_EMPIRICAL_SPAR
+      )
+
+      df$display_p_mass <- smooth_mass_for_display(
+        rank = rank,
+        mass = df$pc1_variance_mass,
+        spar = DISPLAY_MASS_SPAR
+      )
+
+      df$display_q_mass <- smooth_mass_for_display(
+        rank = rank,
+        mass = df$nb_excess_variance_mass,
+        spar = DISPLAY_MASS_SPAR
+      )
+
+      df$display_F_P <- cumsum(
+        df$display_p_mass
+      )
+
+      df$display_F_E <- cumsum(
+        df$display_q_mass
+      )
+
+      # Endpoint identities are preserved by construction:
+      # F_P(N) = F_E(N) = 1 and D(N) = 0.
+      df$display_D <- df$display_F_E -
+        df$display_F_P
+
+      # A final display-only smoothing is used to remove rank-scale stair steps.
+      # The curve is recentered to retain D(1) and D(N) approximately at zero.
+      d_smooth <- smooth_series_for_display(
+        rank = rank,
+        y = df$display_D,
+        spar = DISPLAY_DIVERGENCE_SPAR
+      )
+
+      if (
+        all(
+          is.finite(
+            d_smooth
+          )
+        )
+      ) {
+        endpoint_line <- seq(
+          d_smooth[1L],
+          d_smooth[length(d_smooth)],
+          length.out = length(d_smooth)
+        )
+
+        d_smooth <- d_smooth -
+          endpoint_line
+      }
+
+      df$display_D_smooth <- d_smooth
+
+      df
+    }
+  )
+}
+
+
+rankwise_median_clean <- function(
+    group_curves,
+    column) {
+
+  mat <- do.call(
+    cbind,
+    lapply(
+      group_curves,
+      function(df) {
+        df[[column]]
+      }
+    )
+  )
+
+  apply(
+    mat,
+    1L,
+    median,
+    na.rm = TRUE
+  )
+}
+
+
+build_final_consensus <- function(
+    group_curves,
+    knot_fit) {
+
+  N <- nrow(
+    group_curves[[1L]]
+  )
+
+  data.frame(
+    rank = seq_len(N),
+    empirical = rankwise_median_clean(
+      group_curves,
+      "display_empirical"
+    ),
+    F_P = rankwise_median_clean(
+      group_curves,
+      "display_F_P"
+    ),
+    F_E = rankwise_median_clean(
+      group_curves,
+      "display_F_E"
+    ),
+    D = rankwise_median_clean(
+      group_curves,
+      "display_D_smooth"
+    ),
+    piecewise_fit = apply(
+      knot_fit$fitted,
+      1L,
+      median,
+      na.rm = TRUE
+    ),
+    stringsAsFactors = FALSE
+  )
+}
+
+
+estimate_p_for_rows <- function(
+    df,
+    keep) {
+
+  sub <- df[
+    keep,
+    ,
+    drop = FALSE
+  ]
+
+  estimate_nb_exponent(
+    mu = sub$group_mean_normalized,
+    E = sub$nb_excess_variance
+  )
+}
+
+
+build_key_results <- function(
+    group_curves,
+    c1,
+    c2,
+    paper_cut,
+    joint_sse) {
+
+  N <- nrow(
+    group_curves[[1L]]
+  )
+
+  rows <- list()
+
+  selectors <- list(
+    REMAINDER = function(df) {
+      df$rank < c1
+    },
+    DIVERGENCE_INTERVAL = function(df) {
+      df$rank >= c1 &
+        df$rank <= c2
+    },
+    MODEL_LEADING_EDGE = function(df) {
+      df$rank > c2
+    },
+    PAPER_5000_LEADING_EDGE = function(df) {
+      df$rank >= paper_cut
+    }
+  )
+
+  for (
+    region_name in names(selectors)
+  ) {
+
+    p_by_group <- vapply(
+      names(group_curves),
+      function(g) {
+
+        df <- group_curves[[g]]
+
+        out <- estimate_p_for_rows(
+          df = df,
+          keep = selectors[[region_name]](
+            df
+          )
+        )
+
+        out$p[1L]
+      },
+      numeric(1)
+    )
+
+    finite_p <- p_by_group[
+      is.finite(
+        p_by_group
+      )
+    ]
+
+    rows[[
+      region_name
+    ]] <- data.frame(
+      result_type = "NB_EXPONENT_REGION",
+      region = region_name,
+      value = if (
+        length(finite_p) > 0L
+      ) {
+        median(
+          finite_p
+        )
+      } else {
+        NA_real_
+      },
+      Q25 = if (
+        length(finite_p) > 0L
+      ) {
+        as.numeric(
+          quantile(
+            finite_p,
+            0.25,
+            names = FALSE
+          )
+        )
+      } else {
+        NA_real_
+      },
+      Q75 = if (
+        length(finite_p) > 0L
+      ) {
+        as.numeric(
+          quantile(
+            finite_p,
+            0.75,
+            names = FALSE
+          )
+        )
+      } else {
+        NA_real_
+      },
+      note = "Median and IQR of group-specific slopes from log(E) ~ log(mu).",
+      stringsAsFactors = FALSE
+    )
+  }
+
+  boundary_rows <- data.frame(
+    result_type = c(
+      "BOUNDARY",
+      "BOUNDARY",
+      "REFERENCE",
+      "SIZE",
+      "SIZE",
+      "SIZE",
+      "SUPPORT"
+    ),
+    region = c(
+      "SHARED_C1",
+      "SHARED_C2",
+      "PAPER_5000_START",
+      "REMAINDER",
+      "DIVERGENCE_INTERVAL",
+      "MODEL_LEADING_EDGE",
+      "PAPER_5000_NESTED_IN_MODEL_LEADING_EDGE"
+    ),
+    value = c(
+      c1,
+      c2,
+      paper_cut,
+      c1 - 1L,
+      c2 - c1 + 1L,
+      N - c2,
+      as.numeric(
+        paper_cut >
+          c2
+      )
+    ),
+    Q25 = NA_real_,
+    Q75 = NA_real_,
+    note = c(
+      "First shared knot of the joint cumulative-divergence model.",
+      "Second shared knot; onset of the data-derived terminal leading-edge regime.",
+      paste0(
+        "Prespecified manuscript cutoff retaining exactly ",
+        PAPER_LEADING_EDGE_SIZE,
+        " terminal PC1-ranked features."
+      ),
+      "Features before shared c1.",
+      "Features from c1 through c2 inclusive.",
+      "Features after shared c2.",
+      paste0(
+        "1 = the complete prespecified 5,000-feature subset lies inside the data-derived leading edge. Joint SSE = ",
+        signif(
+          joint_sse,
+          6
+        ),
+        "."
+      )
+    ),
+    stringsAsFactors = FALSE
+  )
+
+  bind_rows(
+    boundary_rows,
+    bind_rows(
+      rows
+    )
+  )
+}
+
+
+build_timepoint_results <- function(
+    group_curves,
+    comparisons,
+    c1,
+    c2,
+    paper_cut) {
+
+  out <- list()
+
+  for (
+    comparison_name in names(comparisons)
+  ) {
+
+    mapping <- comparisons[[comparison_name]]
+
+    for (
+      arm in names(mapping)
+    ) {
+
+      g <- unname(
+        mapping[[arm]]
+      )
+
+      df <- group_curves[[g]]
+
+      model_lead <- estimate_p_for_rows(
+        df,
+        df$rank >
+          c2
+      )
+
+      paper_lead <- estimate_p_for_rows(
+        df,
+        df$rank >=
+          paper_cut
+      )
+
+      remainder <- estimate_p_for_rows(
+        df,
+        df$rank <
+          c1
+      )
+
+      out[[
+        length(out) +
+          1L
+      ]] <- data.frame(
+        comparison = comparison_name,
+        arm = arm,
+        group = g,
+        p_remainder = remainder$p[1L],
+        p_model_leading_edge = model_lead$p[1L],
+        p_paper_5000_leading_edge = paper_lead$p[1L],
+        model_leading_minus_remainder =
+          model_lead$p[1L] -
+          remainder$p[1L],
+        paper_5000_minus_remainder =
+          paper_lead$p[1L] -
+          remainder$p[1L],
+        stringsAsFactors = FALSE
+      )
+    }
+  }
+
+  bind_rows(
+    out
+  )
+}
+
+
+theme_manuscript <- function(
+    base_size = 11) {
+
+  theme_classic(
+    base_size = base_size
+  ) +
+    theme(
+      plot.title = element_text(
+        face = "bold",
+        size = base_size + 1.5
+      ),
+      plot.subtitle = element_text(
+        size = base_size - 0.3,
+        margin = margin(
+          b = 5
+        )
+      ),
+      axis.title = element_text(
+        face = "bold"
+      ),
+      axis.text = element_text(
+        color = "#333333"
+      ),
+      legend.position = "bottom",
+      legend.title = element_blank(),
+      panel.border = element_rect(
+        color = "#B8B8B8",
+        fill = NA,
+        linewidth = 0.45
+      ),
+      plot.margin = margin(
+        7,
+        8,
+        7,
+        8
+      )
+    )
+}
+
+
+add_final_regions <- function(
+    p,
+    c1,
+    c2,
+    paper_cut,
+    N) {
+
+  p +
+    annotate(
+      "rect",
+      xmin = 1,
+      xmax = c1,
+      ymin = -Inf,
+      ymax = Inf,
+      fill = COL$remainder,
+      alpha = 0.52
+    ) +
+    annotate(
+      "rect",
+      xmin = c1,
+      xmax = c2,
+      ymin = -Inf,
+      ymax = Inf,
+      fill = COL$interval,
+      alpha = 0.44
+    ) +
+    annotate(
+      "rect",
+      xmin = c2,
+      xmax = N,
+      ymin = -Inf,
+      ymax = Inf,
+      fill = COL$leading,
+      alpha = 0.52
+    ) +
+    annotate(
+      "rect",
+      xmin = paper_cut,
+      xmax = N,
+      ymin = -Inf,
+      ymax = Inf,
+      fill = COL$paper,
+      alpha = 0.055
+    ) +
+    geom_vline(
+      xintercept = c1,
+      color = COL$c1,
+      linetype = "dashed",
+      linewidth = 0.75
+    ) +
+    geom_vline(
+      xintercept = c2,
+      color = COL$c2,
+      linetype = "dashed",
+      linewidth = 0.75
+    ) +
+    geom_vline(
+      xintercept = paper_cut,
+      color = COL$paper,
+      linetype = "dotdash",
+      linewidth = 0.8
+    )
+}
+
+
+save_vertical_panels <- function(
+    plot_list,
+    out_file,
+    height_in) {
+
+  grDevices::png(
+    out_file,
+    width = PNG_WIDTH_IN,
+    height = height_in,
+    units = "in",
+    res = PNG_DPI,
+    bg = "white"
+  )
+
+  grid.newpage()
+
+  pushViewport(
+    viewport(
+      layout = grid.layout(
+        nrow = length(
+          plot_list
+        ),
+        ncol = 1L
+      )
+    )
+  )
+
+  for (
+    i in seq_along(
+      plot_list
+    )
+  ) {
+
+    print(
+      plot_list[[i]],
+      vp = viewport(
+        layout.pos.row = i,
+        layout.pos.col = 1L
+      )
+    )
+  }
+
+  dev.off()
+}
+
+
+make_final_main_figure <- function(
+    consensus_df,
+    group_curves,
+    c1,
+    c2,
+    paper_cut,
+    key_results,
+    out_file) {
+
+  N <- nrow(
+    consensus_df
+  )
+
+  pA <- ggplot(
+    consensus_df,
+    aes(
+      rank,
+      empirical
+    )
+  )
+
+  pA <- add_final_regions(
+    pA,
+    c1,
+    c2,
+    paper_cut,
+    N
+  )
+
+  pA <- pA +
+    geom_line(
+      color = COL$empirical,
+      linewidth = 1.25,
+      lineend = "round"
+    ) +
+    labs(
+      title = "A. PC1-ranked empirical sequencing-variance geometry",
+      subtitle = paste0(
+        "Ascending |PC1 loading|; shared c1 = ",
+        c1,
+        ", shared c2 = ",
+        c2,
+        "; orange = prespecified 5,000-feature cutoff"
+      ),
+      x = "PC1 rank: low |loading|  ->  high |loading|",
+      y = "Smoothed log(1 + empirical variance)"
+    ) +
+    annotate(
+      "label",
+      x = round(
+        0.025 *
+          N
+      ),
+      y = Inf,
+      label = "Pᵢ = λ₁vᵢ₁² = d₁²vᵢ₁²/(n−1)",
+      hjust = 0,
+      vjust = 1.15,
+      size = 3.15,
+      label.size = 0.25,
+      fill = "white"
+    ) +
+    annotate(
+      "text",
+      x = round(
+        c1 /
+          2
+      ),
+      y = -Inf,
+      label = "REMAINDER",
+      vjust = -0.55,
+      color = COL$c1,
+      fontface = "bold",
+      size = 3.1
+    ) +
+    annotate(
+      "text",
+      x = round(
+        (
+          c1 +
+            c2
+        ) /
+          2
+      ),
+      y = -Inf,
+      label = "DIVERGENCE INTERVAL",
+      vjust = -0.55,
+      fontface = "bold",
+      size = 3.1
+    ) +
+    annotate(
+      "text",
+      x = round(
+        (
+          c2 +
+            N
+        ) /
+          2
+      ),
+      y = -Inf,
+      label = "LEADING EDGE",
+      vjust = -0.55,
+      color = COL$c2,
+      fontface = "bold",
+      size = 3.1
+    ) +
+    theme_manuscript()
+
+  cumulative_long <- consensus_df %>%
+    select(
+      rank,
+      F_P,
+      F_E
+    ) %>%
+    pivot_longer(
+      cols = c(
+        F_P,
+        F_E
+      ),
+      names_to = "curve",
+      values_to = "value"
+    ) %>%
+    mutate(
+      curve = factor(
+        curve,
+        levels = c(
+          "F_P",
+          "F_E"
+        ),
+        labels = c(
+          "PC1 variance mass F_P(r)",
+          "NB excess-variance mass F_E(r)"
+        )
+      )
+    )
+
+  pB <- ggplot()
+
+  pB <- add_final_regions(
+    pB,
+    c1,
+    c2,
+    paper_cut,
+    N
+  )
+
+  pB <- pB +
+    geom_line(
+      data = cumulative_long,
+      aes(
+        rank,
+        value,
+        color = curve
+      ),
+      linewidth = 1.05,
+      lineend = "round"
+    ) +
+    geom_line(
+      data = consensus_df,
+      aes(
+        rank,
+        D
+      ),
+      color = COL$divergence,
+      linewidth = 1.1,
+      lineend = "round"
+    ) +
+    geom_hline(
+      yintercept = 0,
+      linetype = "dotted",
+      linewidth = 0.4
+    ) +
+    scale_color_manual(
+      values = c(
+        "PC1 variance mass F_P(r)" = COL$pc1,
+        "NB excess-variance mass F_E(r)" = COL$nb
+      )
+    ) +
+    labs(
+      title = "B. Cumulative PC1–NB variance-mass divergence",
+      subtitle = "The two normalized variance masses are directly comparable because each integrates to 1",
+      x = "PC1 rank",
+      y = "Cumulative mass / divergence",
+      color = NULL
+    ) +
+    annotate(
+      "label",
+      x = round(
+        0.025 *
+          N
+      ),
+      y = 0.96,
+      label = "p(r)=P(r)/ΣP     q(r)=E(r)/ΣE     D(r)=F_E(r)−F_P(r)     ΔD(r)=q(r)−p(r)",
+      hjust = 0,
+      vjust = 1,
+      size = 2.95,
+      label.size = 0.25,
+      fill = "white"
+    ) +
+    theme_manuscript()
+
+  get_value <- function(
+      region) {
+
+    row <- key_results[
+      key_results$result_type ==
+        "NB_EXPONENT_REGION" &
+        key_results$region ==
+          region,
+      ,
+      drop = FALSE
+    ]
+
+    if (
+      nrow(row) == 0L ||
+      !is.finite(
+        row$value[1L]
+      )
+    ) {
+      return("NA")
+    }
+
+    paste0(
+      sprintf(
+        "%.2f",
+        row$value[1L]
+      ),
+      " [",
+      sprintf(
+        "%.2f",
+        row$Q25[1L]
+      ),
+      ", ",
+      sprintf(
+        "%.2f",
+        row$Q75[1L]
+      ),
+      "]"
+    )
+  }
+
+  p_text <- paste0(
+    "NB scaling after boundaries are fixed\n",
+    "E = α μ^p\n",
+    "p≈1: NB1-like   |   p≈2: NB2-like\n",
+    "Remainder: ", get_value("REMAINDER"), "\n",
+    "Model leading edge: ", get_value("MODEL_LEADING_EDGE"), "\n",
+    "Paper terminal 5,000: ", get_value("PAPER_5000_LEADING_EDGE")
+  )
+
+  pC <- ggplot(
+    consensus_df,
+    aes(
+      rank,
+      D
+    )
+  )
+
+  pC <- add_final_regions(
+    pC,
+    c1,
+    c2,
+    paper_cut,
+    N
+  )
+
+  pC <- pC +
+    geom_line(
+      color = COL$nb,
+      linewidth = 0.8,
+      alpha = 0.65,
+      lineend = "round"
+    ) +
+    geom_line(
+      aes(
+        y = piecewise_fit
+      ),
+      color = COL$fit,
+      linewidth = 1.35,
+      lineend = "round"
+    ) +
+    geom_hline(
+      yintercept = 0,
+      linetype = "dotted",
+      linewidth = 0.4
+    ) +
+    labs(
+      title = "C. Shared two-transition model and prespecified leading-edge support",
+      subtitle = paste0(
+        "The 5,000-feature manuscript subset begins at rank ",
+        paper_cut,
+        " and is nested within the data-derived leading edge beginning after c2 = ",
+        c2
+      ),
+      x = "PC1 rank",
+      y = "Cumulative divergence D(r)"
+    ) +
+    annotate(
+      "label",
+      x = round(
+        0.025 *
+          N
+      ),
+      y = Inf,
+      label = "D_g(x)=β₀g+β₁g x+γ₁g(x−c₁)₊+γ₂g(x−c₂)₊   |   c₁,c₂ shared across all 8 groups",
+      hjust = 0,
+      vjust = 1.15,
+      size = 2.85,
+      label.size = 0.25,
+      fill = "white"
+    ) +
+    annotate(
+      "label",
+      x = round(
+        0.685 *
+          N
+      ),
+      y = -Inf,
+      label = p_text,
+      hjust = 0,
+      vjust = -0.10,
+      size = 2.8,
+      label.size = 0.25,
+      fill = "white"
+    ) +
+    theme_manuscript()
+
+  save_vertical_panels(
+    plot_list = list(
+      pA,
+      pB,
+      pC
+    ),
+    out_file = out_file,
+    height_in = PNG_HEIGHT_IN
+  )
+}
+
+
+make_timepoint_figure <- function(
+    comparison_name,
+    mapping,
+    group_curves,
+    c1,
+    c2,
+    paper_cut,
+    out_file) {
+
+  control_group <- unname(
+    mapping[[
+      "control"
+    ]]
+  )
+
+  treatment_group <- unname(
+    mapping[[
+      "treatment"
+    ]]
+  )
+
+  control_df <- group_curves[[
+    control_group
+  ]] %>%
+    mutate(
+      arm = paste0(
+        "Control (",
+        control_group,
+        ")"
+      )
+    )
+
+  treatment_df <- group_curves[[
+    treatment_group
+  ]] %>%
+    mutate(
+      arm = paste0(
+        "Treatment (",
+        treatment_group,
+        ")"
+      )
+    )
+
+  plot_df <- bind_rows(
+    control_df,
+    treatment_df
+  )
+
+  N <- nrow(
+    control_df
+  )
+
+  arm_colors <- c(
+    paste0(
+      "Control (",
+      control_group,
+      ")"
+    ) = COL$control,
+    paste0(
+      "Treatment (",
+      treatment_group,
+      ")"
+    ) = COL$treatment
+  )
+
+  pA <- ggplot(
+    plot_df,
+    aes(
+      rank,
+      display_empirical,
+      color = arm
+    )
+  )
+
+  pA <- add_final_regions(
+    pA,
+    c1,
+    c2,
+    paper_cut,
+    N
+  )
+
+  pA <- pA +
+    geom_line(
+      linewidth = 1.15,
+      lineend = "round"
+    ) +
+    scale_color_manual(
+      values = arm_colors
+    ) +
+    labs(
+      title = paste0(
+        comparison_name,
+        ": PC1-ranked empirical variance"
+      ),
+      subtitle = "Shared divergence boundaries and prespecified 5,000-feature reference are identical across time points",
+      x = "PC1 rank: low |loading|  ->  high |loading|",
+      y = "Smoothed log(1 + empirical variance)",
+      color = NULL
+    ) +
+    theme_manuscript(
+      base_size = 11.5
+    )
+
+  pB <- ggplot(
+    plot_df,
+    aes(
+      rank,
+      display_D_smooth,
+      color = arm
+    )
+  )
+
+  pB <- add_final_regions(
+    pB,
+    c1,
+    c2,
+    paper_cut,
+    N
+  )
+
+  pB <- pB +
+    geom_line(
+      linewidth = 1.15,
+      lineend = "round"
+    ) +
+    geom_hline(
+      yintercept = 0,
+      linetype = "dotted",
+      linewidth = 0.4
+    ) +
+    scale_color_manual(
+      values = arm_colors
+    ) +
+    labs(
+      title = paste0(
+        comparison_name,
+        ": cumulative PC1–NB divergence"
+      ),
+      subtitle = paste0(
+        "c1 = ",
+        c1,
+        "   |   c2 = ",
+        c2,
+        "   |   paper 5,000-site cutoff = ",
+        paper_cut
+      ),
+      x = "PC1 rank",
+      y = "D(r) = F_E(r) − F_P(r)",
+      color = NULL
+    ) +
+    annotate(
+      "label",
+      x = round(
+        0.025 *
+          N
+      ),
+      y = Inf,
+      label = "p(r)=P(r)/ΣP     q(r)=E(r)/ΣE     D(r)=F_E(r)−F_P(r)",
+      hjust = 0,
+      vjust = 1.15,
+      size = 3.0,
+      label.size = 0.25,
+      fill = "white"
+    ) +
+    theme_manuscript(
+      base_size = 11.5
+    )
+
+  save_vertical_panels(
+    plot_list = list(
+      pA,
+      pB
+    ),
+    out_file = out_file,
+    height_in = 8.7
+  )
+}
+
+
 # =============================================================================
 # RUN ANALYSIS
 # =============================================================================
@@ -2222,21 +3384,13 @@ for (
     pooled_variance = pooled_variance
   )
 
-  write.csv(
-    group_curves[[
-      g
-    ]],
-    file.path(
-      OUT_ROOT,
-      paste0(
-        "Table_RankedGeometry_",
-        g,
-        ".csv"
-      )
-    ),
-    row.names = FALSE
-  )
 }
+
+# Clean display curves are created only after the numerical quantities needed
+# for the shared-knot fit have been calculated.
+group_curves <- add_clean_display_curves(
+  group_curves
+)
 
 message(
   "Estimating the two shared divergence transitions jointly across all 8 groups..."
@@ -2247,193 +3401,211 @@ knot_fit <- fit_shared_knots(
 )
 
 C1 <- knot_fit$c1_rank
-
 C2 <- knot_fit$c2_rank
 
+N_FEATURES <- nrow(
+  group_curves[[1L]]
+)
+
+PAPER_CUTOFF <- N_FEATURES -
+  PAPER_LEADING_EDGE_SIZE +
+  1L
+
+if (
+  PAPER_CUTOFF <= 1L
+) {
+  stop("PAPER_LEADING_EDGE_SIZE is not compatible with the feature count.")
+}
+
 message(
-  "Shared REMAINDER boundary c1 = ",
+  "Shared c1 = ",
   C1
 )
 
 message(
-  "Shared LEADING-EDGE boundary c2 = ",
+  "Shared c2 = ",
   C2
 )
 
 message(
-  "Remainder size = ",
-  C1 -
-    1L
+  "Prespecified 5,000-feature cutoff begins at rank ",
+  PAPER_CUTOFF
 )
 
 message(
-  "Divergence interval size = ",
-  C2 -
-    C1 +
-    1L
-)
-
-message(
-  "Leading-edge size = ",
-  nrow(
-    group_curves[[
-      1L
-    ]]
-  ) -
+  "Data-derived model leading-edge size = ",
+  N_FEATURES -
     C2
 )
 
-# NB1/NB2 characterization occurs AFTER boundary estimation.
-region_results <- summarize_regions(
-  group_curves = group_curves,
-  c1 = C1,
-  c2 = C2
+message(
+  "Prespecified paper leading-edge size = ",
+  PAPER_LEADING_EDGE_SIZE
 )
 
-consensus_df <- build_consensus_table(
+if (
+  PAPER_CUTOFF >
+    C2
+) {
+  message(
+    "The entire prespecified 5,000-feature subset is nested inside the data-derived leading edge."
+  )
+} else {
+  message(
+    "The prespecified 5,000-feature subset begins before the data-derived leading-edge boundary."
+  )
+}
+
+key_results <- build_key_results(
+  group_curves = group_curves,
+  c1 = C1,
+  c2 = C2,
+  paper_cut = PAPER_CUTOFF,
+  joint_sse = knot_fit$SSE
+)
+
+timepoint_results <- build_timepoint_results(
+  group_curves = group_curves,
+  comparisons = COMPARISONS,
+  c1 = C1,
+  c2 = C2,
+  paper_cut = PAPER_CUTOFF
+)
+
+consensus_final <- build_final_consensus(
   group_curves = group_curves,
   knot_fit = knot_fit
 )
 
-consensus_df$region <- assign_region(
-  consensus_df$rank,
-  C1,
-  C2
-)
-
-boundary_table <- data.frame(
-  remainder_boundary_c1 = C1,
-  leading_edge_boundary_c2 = C2,
-  remainder_size = C1 -
-    1L,
-  divergence_interval_size = C2 -
-    C1 +
-    1L,
-  leading_edge_size = nrow(
-    consensus_df
-  ) -
-    C2,
-  joint_piecewise_SSE = knot_fit$SSE,
-  stringsAsFactors = FALSE
-)
+# ---------------------------------------------------------------------------
+# MINIMAL TABLE OUTPUT
+# ---------------------------------------------------------------------------
+# Only two manuscript-facing tables are written:
+#   1. key global results
+#   2. time-point / arm-level NB scaling results
+# All feature-level quantities remain fully reproducible from this script.
+# ---------------------------------------------------------------------------
 
 write.csv(
-  boundary_table,
+  key_results,
   file.path(
     OUT_ROOT,
-    "Table_Shared_Boundaries.csv"
+    "Table_Key_Results.csv"
   ),
   row.names = FALSE
 )
 
 write.csv(
-  consensus_df,
+  timepoint_results,
   file.path(
     OUT_ROOT,
-    "Table_Consensus_PC1_NB_Divergence.csv"
+    "Table_Timepoint_Results.csv"
   ),
   row.names = FALSE
 )
 
-write.csv(
-  region_results$exponent_by_group,
-  file.path(
-    OUT_ROOT,
-    "Table_NB_Exponent_ByGroup_ByRegion.csv"
-  ),
-  row.names = FALSE
-)
+# ---------------------------------------------------------------------------
+# MAIN CUMULATIVE-DIVERGENCE FIGURE
+# ---------------------------------------------------------------------------
 
-write.csv(
-  region_results$exponent_summary,
-  file.path(
-    OUT_ROOT,
-    "Table_NB_Exponent_Region_Summary.csv"
-  ),
-  row.names = FALSE
-)
-
-write.csv(
-  region_results$metrics_by_group,
-  file.path(
-    OUT_ROOT,
-    "Table_NB_Diagnostics_ByGroup_ByRegion.csv"
-  ),
-  row.names = FALSE
-)
-
-write.csv(
-  data.frame(
-    sample = colnames(
-      count_mat
-    ),
-    group = as.character(
-      group_labels
-    ),
-    DESeq2_size_factor = as.numeric(
-      deseq_norm$size_factors
-    ),
-    stringsAsFactors = FALSE
-  ),
-  file.path(
-    OUT_ROOT,
-    "Table_Samples_and_SizeFactors.csv"
-  ),
-  row.names = FALSE
-)
-
-make_main_figure(
-  consensus_df = consensus_df,
+make_final_main_figure(
+  consensus_df = consensus_final,
+  group_curves = group_curves,
   c1 = C1,
   c2 = C2,
-  exponent_summary = region_results$exponent_summary,
+  paper_cut = PAPER_CUTOFF,
+  key_results = key_results,
   out_file = file.path(
     OUT_ROOT,
     "Figure_Main_PC1_NB_Cumulative_Divergence.png"
   )
 )
 
+# ---------------------------------------------------------------------------
+# FOUR CLEAN TIME-POINT FIGURES
+# ---------------------------------------------------------------------------
+
+for (
+  comparison_name in names(
+    COMPARISONS
+  )
+) {
+
+  make_timepoint_figure(
+    comparison_name = comparison_name,
+    mapping = COMPARISONS[[
+      comparison_name
+    ]],
+    group_curves = group_curves,
+    c1 = C1,
+    c2 = C2,
+    paper_cut = PAPER_CUTOFF,
+    out_file = file.path(
+      OUT_ROOT,
+      paste0(
+        "Figure_Timepoint_",
+        comparison_name,
+        ".png"
+      )
+    )
+  )
+}
+
 message(
   "============================================================"
 )
 
 message(
-  "ANALYSIS COMPLETE"
+  "FINAL PC1-NB CUMULATIVE-DIVERGENCE ANALYSIS COMPLETE"
 )
 
 message(
-  "PC1 rank = ascending absolute PC1 loading."
+  "PC1 ranking: ascending absolute PC1 loading."
 )
 
 message(
-  "c1 = ",
+  "Shared c1 = ",
   C1,
-  " | c2 = ",
-  C2
+  " | shared c2 = ",
+  C2,
+  " | paper 5,000 cutoff = ",
+  PAPER_CUTOFF
 )
 
 message(
-  "Main figure:"
+  "Outputs:"
 )
 
 message(
-  file.path(
-    OUT_ROOT,
-    "Figure_Main_PC1_NB_Cumulative_Divergence.png"
+  "  Figure_Main_PC1_NB_Cumulative_Divergence.png"
+)
+
+for (
+  comparison_name in names(
+    COMPARISONS
   )
-)
-
-message(
-  "Boundary table:"
-)
-
-message(
-  file.path(
-    OUT_ROOT,
-    "Table_Shared_Boundaries.csv"
+) {
+  message(
+    "  Figure_Timepoint_",
+    comparison_name,
+    ".png"
   )
+}
+
+message(
+  "  Table_Key_Results.csv"
+)
+
+message(
+  "  Table_Timepoint_Results.csv"
+)
+
+message(
+  "Output directory: ",
+  OUT_ROOT
 )
 
 message(
   "============================================================"
 )
+
