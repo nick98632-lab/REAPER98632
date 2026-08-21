@@ -9,417 +9,172 @@ suppressPackageStartupMessages({
 
 options(stringsAsFactors = FALSE)
 
-
 # =============================================================================
-# MANUSCRIPT ANALYSIS
-# FULL-RANK-AXIS SEARCH FOR THE NB1-LIKE -> NB2-LIKE LEADING-EDGE TRANSITION
-# =============================================================================
-#
-# RATIONALE
-# ---------
-#
-# Features are ranked from LOWEST to HIGHEST absolute PC1 loading.
-#
-# Thus:
-#
-#     LEFT  = relatively low-|PC1|-loading portion of the ranked series
-#     RIGHT = high-|PC1|-loading terminal leading edge
-#
-# The biological/statistical hypothesis is that the LEFT side is relatively
-# NB1-like whereas the high-loading terminal RIGHT side becomes increasingly
-# NB2-like because excess variance grows disproportionately toward the
-# leading edge.
-#
-# IMPORTANT:
-#
-#     The historical fixed 5,000-feature reference is NOT used.
-#
-# The algorithm searches the rank axis itself to determine where the strongest
-# NB1-like -> NB2-like transition occurs.
-#
-#
-# =============================================================================
-# FEATURE-LEVEL NB-RELATED DIAGNOSTICS
+# FINAL MANUSCRIPT SCRIPT
+# DATA-DERIVED TERMINAL TRANSITION DETECTOR
 # =============================================================================
 #
-# For each ranked feature:
+# PURPOSE
+# -------
+# This script preserves the original manuscript analysis architecture while
+# removing the fixed 5,000-feature reference.
 #
-#     mu       = empirical mean across samples
-#     variance = empirical variance across samples
+# 1. MAIN MANUSCRIPT TRACK
+#    - Rank: log1p CPM-style library-size normalization
+#    - Geometry / NB diagnostics: raw counts
 #
-#     excess_variance = max(variance - mu, 0)
+# 2. DESEQ2 SUPPLEMENTARY TRACK
+#    - Rank: DESeq2-normalized log1p counts, optionally VST
+#    - Geometry / NB diagnostics: DESeq2-normalized counts
 #
-#     NB2 =
-#         log(1 + excess_variance)
+# SCIENTIFIC LOGIC
+# ----------------
+# A. Features are ranked within each arm from LOWEST to HIGHEST absolute PC1
+#    loading. The high-|PC1|-loading leading edge is therefore at the RIGHT.
 #
-#     NB2-NB1 =
-#         log(1 + excess_variance) - log(1 + mu)
+# B. Along the complete ranked axis, empirical feature-wise variance is
+#    transformed as log(1 + variance).
 #
-#     alpha =
-#         max((variance - mu) / mu^2, 0)
+# C. The old fixed reference
 #
-#     alpha*mu =
-#         log(1 + alpha*mu)
+#        Ref = N - 5000 + 1
 #
-# NB2-NB1 is the PRIMARY transition variable.
+#    is NOT used.
 #
-# NB2 and alpha*mu are used as directional corroboration.
+# D. A data-derived reference is estimated as a TERMINAL CHANGE POINT in the
+#    ranked log-variance trajectory. The detector uses multiscale continuous
+#    segmented regression. At each smoothing scale, every mathematically
+#    admissible terminal breakpoint is evaluated with a continuous hinge model:
 #
-# These are moment-derived/descriptive diagnostics. They are not formal
-# likelihood-ratio statistics.
+#        y(x) = beta0 + beta1*x + gamma*max(0, x-c)
 #
+#    versus the no-break model:
 #
+#        y(x) = beta0 + beta1*x
+#
+#    The change-point model is fit on one FIXED terminal-half domain. Candidate
+#    c must leave at least 5% of the full feature count on BOTH sides of the
+#    breakpoint within that fixed domain. This is an anti-degeneracy condition
+#    only; it does not encode a 5,000-feature target.
+#
+#    For each candidate, the exact reduction in residual sum of squares from
+#    adding the hinge term is computed. If M is the number of observations in
+#    the fixed terminal-half domain, the BIC improvement score is:
+#
+#        BIC_gain = M*log(SSE_linear / SSE_hinge) - log(M)
+#
+#    Because every candidate is fit to the SAME M observations with the SAME
+#    number of parameters, this score cannot win merely by using a larger LEFT
+#    or RIGHT region. This specifically avoids the 50/50 artifact produced by
+#    the previous t-like / standard-error objective.
+#
+#    A terminal breakpoint is eligible only when:
+#      - gamma > 0 (slope increases after the break),
+#      - terminal fitted slope > 0,
+#      - the terminal segment has a higher mean log-variance than its matched
+#        immediately preceding segment, and
+#      - BIC_gain > 0.
+#
+# E. MULTISCALE CONSENSUS
+#    The breakpoint search is repeated at three prespecified smoothing levels.
+#    Boundary solutions are rejected. A robust weighted-median breakpoint,
+#    weighted by sqrt(BIC_gain), defines the data-derived Ref. At least two
+#    smoothing scales must yield valid interior breakpoints, and their reference
+#    IQR must be <= 5% of the full rank axis.
+#
+# F. ORIGINAL GEOMETRIC RULE IS THEN RESTORED
+#    The original spline-based second derivative is computed at spar = 0.60.
+#    The final custom interval is:
+#
+#      Anchor   = nearest d2 zero crossing immediately LEFT of data-derived Ref
+#      Terminal = nearest d2 zero crossing immediately RIGHT of data-derived Ref
+#
+#    with:
+#
+#      Anchor < Ref < Terminal
+#
+# G. ORIGINAL LEADING-EDGE DEFINITION IS PRESERVED
+#
+#      RIGHT = Anchor through the terminal rank N
+#      LEFT  = equal-sized block immediately preceding Anchor
+#
+#    Terminal is a geometric boundary around Ref; it does NOT truncate RIGHT.
+#
+# H. BOOTSTRAP STABILITY
+#    Samples are resampled within each arm. Every replicate recomputes:
+#      PC1 -> ranking -> variance trajectory -> multiscale terminal Ref ->
+#      d2 crossings -> Anchor / Terminal.
+#
+#    Stability requires:
+#      - >= 90% valid bootstrap replicates
+#      - >= 80% recovery within 3% of N for Ref, Anchor, and Terminal
+#      - Ref, Anchor, and Terminal IQR <= 3% of N
+#      - RIGHT-fraction IQR <= 3 percentage points
+#
+#    Jaccard feature overlap is reported descriptively only.
+#
+# I. NB2-RELATED CORROBORATION
+#    Only after geometry is fixed, LEFT and RIGHT are compared using:
+#
+#      NB2      = log(1 + max(variance - mu, 0))
+#      NB2-NB1  = log(1 + max(variance - mu, 0)) - log(1 + mu)
+#      alpha*mu = log(1 + alpha*mu)
+#
+#      alpha = max((variance - mu) / mu^2, 0)
+#
+#    These are descriptive moment-based diagnostics, not likelihood-ratio tests.
+#    They do NOT participate in terminal-transition detection or bootstrap
+#    selection.
 # =============================================================================
-# CUTOFF SEARCH
-# =============================================================================
-#
-# Every admissible integer cutoff c is examined.
-#
-# For every cutoff, the algorithm constructs the LARGEST POSSIBLE symmetric
-# pair of adjacent windows:
-#
-#     w(c) = min(c - 1, N - c + 1)
-#
-#     LEFT(c)  = ranks [c - w(c), ..., c - 1]
-#     RIGHT(c) = ranks [c, ..., c + w(c) - 1]
-#
-# Therefore both comparison regions always contain exactly the same number
-# of features.
-#
-# Importantly, when c lies in the terminal half of the rank axis:
-#
-#     w(c) = N - c + 1
-#
-# and therefore:
-#
-#     RIGHT(c) = c ... N
-#
-# This is exactly the original leading-edge construction:
-#
-#     RIGHT = cutoff through terminal rank
-#
-# with an immediately preceding equal-sized LEFT region.
-#
-#
-# =============================================================================
-# WHY THIS FIXES THE PREVIOUS 15,879 ARTIFACT
-# =============================================================================
-#
-# The previous code used:
-#
-#     difference / standard error
-#
-# Since:
-#
-#     SE decreases approximately as 1/sqrt(n)
-#
-# very large LEFT/RIGHT regions received an artificial mathematical advantage.
-# That caused the solution to collapse toward the 50/50 midpoint:
-#
-#     cutoff ~ 15,879
-#
-# for N ~ 31,756.
-#
-# THIS VERSION DOES NOT USE STANDARD ERROR TO SELECT THE CUTOFF.
-#
-# Instead it uses a scale-standardized EFFECT SIZE:
-#
-#                       mean_RIGHT - mean_LEFT
-#     score(c) = -----------------------------------------
-#                sqrt((variance_LEFT + variance_RIGHT)/2)
-#
-# for NB2-NB1.
-#
-# There is NO sqrt(n) term.
-#
-# Therefore a cutoff does not become better merely because it contains more
-# sites.
-#
-# The intended behavior is:
-#
-#     Too far LEFT:
-#         RIGHT contains too many NB1-like sites -> contrast diluted.
-#
-#     Near transition:
-#         LEFT relatively NB1-like and RIGHT relatively NB2-like
-#         -> contrast maximized.
-#
-#     Too far RIGHT:
-#         LEFT and RIGHT both increasingly lie inside the NB2-like leading edge
-#         -> contrast falls again.
-#
-# This creates an interior maximum at the transition if such a transition
-# exists.
-#
-#
-# =============================================================================
-# ANTI-DEGENERACY GUARDRAIL
-# =============================================================================
-#
-# The only location restriction is that both local comparison windows must
-# contain at least 5% of all features.
-#
-# For approximately 31,756 features:
-#
-#     5% ~ 1,588 features
-#
-# This exists only to prevent an extreme terminal fluctuation involving a tiny
-# number of sites (e.g. 20 or 50 sites) from winning.
-#
-# It does NOT encode the historical 5,000-site result.
-#
-# Therefore the program can select, for example:
-#
-#     2,000 sites
-#     3,700 sites
-#     4,800 sites
-#     5,300 sites
-#     7,000 sites
-#
-# if that is where the actual transition is strongest.
-#
-#
-# =============================================================================
-# SELECTION CRITERIA
-# =============================================================================
-#
-# A candidate cutoff is eligible only when:
-#
-#     RIGHT mean NB2-NB1 > LEFT mean NB2-NB1
-#     RIGHT mean NB2     > LEFT mean NB2
-#     RIGHT mean alpha*mu > LEFT mean alpha*mu
-#
-# Among eligible cutoffs, the one with the maximum NB2-NB1 standardized
-# effect-size score is selected.
-#
-# No smoothing of the cutoff-response curve is used for selection.
-#
-# This avoids introducing an additional smoothing bandwidth into the
-# optimization problem. Moving the cutoff by one rank already changes the
-# windows by only one or a few features, making the response curve naturally
-# highly correlated from rank to rank.
-#
-#
-# =============================================================================
-# BOUNDARY CHECK
-# =============================================================================
-#
-# If the optimum occurs exactly at either admissible search boundary, it is
-# flagged as a BOUNDARY_OPTIMUM rather than interpreted as a validated
-# transition.
-#
-# This protects against a monotonic score curve in which no internal optimum
-# was actually found.
-#
-#
-# =============================================================================
-# VARIANCE GEOMETRY
-# =============================================================================
-#
-# The original variance-curve analysis is retained independently:
-#
-#     empirical variance
-#         ->
-#     log1p variance
-#         ->
-#     smoothing spline
-#         ->
-#     second derivative
-#         ->
-#     curvature zero crossings
-#
-# The nearest curvature zero crossing to the optimized cutoff is reported as
-# geometric corroboration.
-#
-# It does NOT determine the optimized cutoff.
-#
-#
-# =============================================================================
-# BOOTSTRAP
-# =============================================================================
-#
-# Each bootstrap replicate resamples biological samples WITHIN THE ARM and
-# repeats the COMPLETE analysis:
-#
-#     sample resampling
-#         ->
-#     PC1
-#         ->
-#     rank all features
-#         ->
-#     mean/variance
-#         ->
-#     NB diagnostics
-#         ->
-#     scan every admissible cutoff
-#         ->
-#     select optimal transition
-#
-# The bootstrap therefore estimates stability of the complete selection
-# procedure rather than merely resampling a previously selected region.
-#
-# Stability requirements:
-#
-#     >= 90% valid interior bootstrap optima
-#
-#     >= 80% of valid bootstrap optima within 3% of the total rank axis
-#             of the full-data optimum
-#
-#     bootstrap cutoff IQR <= 3% of total N
-#
-# Jaccard feature overlap is reported descriptively but is NOT used as a
-# pass/fail criterion because the inferential target is the rank-space
-# transition, not exact feature identity under PC1 re-estimation.
-#
-#
-# =============================================================================
-# INTERPRETATION
-# =============================================================================
-#
-# If the selected cutoff is c:
-#
-#     terminal leading-edge size = N - c + 1
-#
-# Thus, with N = 31,756:
-#
-#     c = 26,757  ->  5,000 terminal sites
-#
-# But 26,757 and 5,000 are NEVER supplied to the algorithm.
-#
-# If a ~5,000-site leading edge is intrinsic to the data, it should emerge
-# from the full-axis search and bootstrap distribution.
-# =============================================================================
-
 
 # =============================================================================
 # SETTINGS
 # =============================================================================
 
-COUNT_FILE <-
-  "/root/REAPER98632/data/WTTS-Seq_2022.2_DE_raw_read_numbers.csv"
-
-
-OUT_ROOT <-
-  "/root/REAPER98632/exports/manuscript_nb_transition_repaired"
-
-
-COMPARISONS <- list(
-
-  RT0_ZT6 =
-    list(
-      control = "^R0_",
-      treatment = "^ZT6_"
-    ),
-
-  RT2_ZT8 =
-    list(
-      control = "^R2_",
-      treatment = "^ZT8_"
-    ),
-
-  RT4_ZT10 =
-    list(
-      control = "^R4_",
-      treatment = "^ZT10_"
-    ),
-
-  RT8_ZT14 =
-    list(
-      control = "^R8_",
-      treatment = "^ZT14_"
-    )
-)
-
-
-# -----------------------------------------------------------------------------
-# Anti-degeneracy guardrail.
-# -----------------------------------------------------------------------------
-
-MIN_WINDOW_FRACTION <- 0.05
-
-MIN_WINDOW_ABSOLUTE <- 100L
-
-
-# -----------------------------------------------------------------------------
-# Variance geometry.
-# -----------------------------------------------------------------------------
+COUNT_FILE <- "/root/REAPER98632/data/WTTS-Seq_2022.2_DE_raw_read_numbers.csv"
+OUT_ROOT   <- "/root/REAPER98632/exports/manuscript_terminal_transition_final"
 
 VAR_SPLINE_SPAR <- 0.60
 
-DENSE_GRID_MULTIPLIER <- 2L
+TRANSITION_SPARS <- c(0.50, 0.60, 0.70)
+MIN_VALID_TRANSITION_SCALES <- 2L
+MAX_MULTISCALE_REF_IQR_FRACTION <- 0.05
 
+MIN_TRANSITION_SEGMENT_FRACTION <- 0.05
+MIN_TRANSITION_SEGMENT_ABSOLUTE <- 100L
+
+DENSE_GRID_MULTIPLIER <- 4L
 DENSE_GRID_MIN <- 5000L
 
-
-# -----------------------------------------------------------------------------
-# Bootstrap.
-# -----------------------------------------------------------------------------
-
 BOOTSTRAP_N <- 500L
-
 BOOTSTRAP_SEED_BASE <- 20260820L
-
-
 MIN_BOOTSTRAP_VALID_RATE <- 0.90
+POSITION_TOLERANCE_FRACTION <- 0.03
+MIN_POSITION_RECOVERY_RATE <- 0.80
+MAX_POSITION_IQR_FRACTION <- 0.03
+MAX_RIGHT_FRACTION_IQR <- 0.03
 
-CUTOFF_TOLERANCE_FRACTION <- 0.03
-
-MIN_CUTOFF_RECOVERY_RATE <- 0.80
-
-MAX_CUTOFF_IQR_FRACTION <- 0.03
-
-
-# -----------------------------------------------------------------------------
-# Supplementary DESeq2 analysis.
-# -----------------------------------------------------------------------------
+PNG_WIDTH_IN  <- 14
+PNG_HEIGHT_IN <- 10.8
+PNG_DPI       <- 260
 
 RUN_DESEQ2_SUPPLEMENT <- TRUE
-
 DESEQ2_RANK_METHOD <- "normalized_log1p"
 
-# Allowed:
-#
-#     "normalized_log1p"
-#     "vst"
-
-
-# -----------------------------------------------------------------------------
-# Figures.
-# -----------------------------------------------------------------------------
-
-PNG_WIDTH_IN <- 14
-
-PNG_HEIGHT_IN <- 11
-
-PNG_DPI <- 260
-
-
-# -----------------------------------------------------------------------------
-# Cores.
-# -----------------------------------------------------------------------------
-
-DETECTED_CORES <- suppressWarnings(
-  parallel::detectCores(
-    logical = FALSE
-  )
+COMPARISONS <- list(
+  RT0_ZT6  = list(control = "^R0_", treatment = "^ZT6_"),
+  RT2_ZT8  = list(control = "^R2_", treatment = "^ZT8_"),
+  RT4_ZT10 = list(control = "^R4_", treatment = "^ZT10_"),
+  RT8_ZT14 = list(control = "^R8_", treatment = "^ZT14_")
 )
 
+DETECTED_CORES <- suppressWarnings(parallel::detectCores(logical = FALSE))
 
-if (
-  is.na(DETECTED_CORES) ||
-  DETECTED_CORES < 2L
-) {
-
+if (is.na(DETECTED_CORES) || DETECTED_CORES < 2L) {
   BOOTSTRAP_CORES <- 1L
-
 } else {
-
-  BOOTSTRAP_CORES <- min(
-    4L,
-    DETECTED_CORES - 1L
-  )
+  BOOTSTRAP_CORES <- min(4L, DETECTED_CORES - 1L)
 }
-
 
 dir.create(
   OUT_ROOT,
@@ -427,33 +182,100 @@ dir.create(
   showWarnings = FALSE
 )
 
+# =============================================================================
+# COLORS
+# =============================================================================
+
+COL <- list(
+  var_curve     = "#117A65",
+  nb2           = "#1B9E77",
+  nb_gap        = "#CC1E8C",
+  alpha_mu      = "#386CB0",
+  left_fill     = "#CBE3F8",
+  right_fill    = "#DDF2D5",
+  interval_fill = "#9E9E9E",
+  anchor         = "#000000",
+  ref            = "#E69F00",
+  terminal       = "#D95F02",
+  left_pt        = "#5B8FD1",
+  right_pt       = "#43A047"
+)
+
+EVENT_LEVELS <- c(
+  "Anchor",
+  "Ref",
+  "Terminal"
+)
+
+EVENT_COLORS <- c(
+  "Anchor" = COL$anchor,
+  "Ref" = COL$ref,
+  "Terminal" = COL$terminal
+)
+
+EVENT_SHAPES <- c(
+  "Anchor" = 16,
+  "Ref" = 18,
+  "Terminal" = 1
+)
+
+EVENT_LTY <- c(
+  "Anchor" = "solid",
+  "Ref" = "dashed",
+  "Terminal" = "dotted"
+)
+
+TRACE_LEVELS <- c(
+  "NB2",
+  "NB2-NB1",
+  "alpha*mu"
+)
+
+TRACE_COLORS <- c(
+  "NB2" = COL$nb2,
+  "NB2-NB1" = COL$nb_gap,
+  "alpha*mu" = COL$alpha_mu
+)
+
+REGION_LEVELS <- c(
+  "LEFT",
+  "RIGHT"
+)
+
+REGION_COLORS <- c(
+  "LEFT" = COL$left_pt,
+  "RIGHT" = COL$right_pt
+)
 
 # =============================================================================
-# INPUT
+# INPUT / NORMALIZATION
 # =============================================================================
 
-read_count_matrix <- function(
-    path,
-    comparisons) {
+first_numeric_col_index <- function(df) {
 
-
-  if (
-    !file.exists(path)
-  ) {
-
-    stop(
-      "Count file does not exist: ",
-      path
+  idx <- which(
+    vapply(
+      df,
+      is.numeric,
+      logical(1)
     )
+  )
+
+  if (length(idx) == 0L) {
+    return(NA_integer_)
   }
 
+  idx[1L]
+}
+
+
+read_count_matrix <- function(path) {
 
   raw_df <- read.csv(
     path,
     check.names = FALSE,
     stringsAsFactors = FALSE
   )
-
 
   if (
     nrow(raw_df) == 0L ||
@@ -466,124 +288,15 @@ read_count_matrix <- function(
     )
   }
 
-
-  sample_patterns <- unique(
-    unname(
-      unlist(
-        comparisons,
-        recursive = TRUE,
-        use.names = FALSE
-      )
-    )
+  first_num <- first_numeric_col_index(
+    raw_df
   )
 
-
-  sample_idx <- sort(
-    unique(
-      unlist(
-        lapply(
-          sample_patterns,
-          function(pattern) {
-            grep(
-              pattern,
-              colnames(raw_df)
-            )
-          }
-        )
-      )
-    )
-  )
-
-
-  if (
-    length(sample_idx) == 0L
-  ) {
-
+  if (is.na(first_num)) {
     stop(
-      "No sample columns matched the patterns in COMPARISONS."
+      "No numeric count columns detected."
     )
   }
-
-
-  if (
-    1L %in% sample_idx
-  ) {
-
-    stop(
-      "Column 1 matched a sample pattern; ",
-      "column 1 must contain feature identifiers."
-    )
-  }
-
-
-  count_df <- raw_df[
-    ,
-    sample_idx,
-    drop = FALSE
-  ]
-
-
-  parsed_columns <- lapply(
-    count_df,
-    function(x) {
-
-      suppressWarnings(
-        as.numeric(
-          trimws(
-            as.character(x)
-          )
-        )
-      )
-    }
-  )
-
-
-  count_mat <- do.call(
-    cbind,
-    parsed_columns
-  )
-
-
-  colnames(count_mat) <-
-    colnames(count_df)
-
-
-  storage.mode(count_mat) <-
-    "numeric"
-
-
-  bad_n <- sum(
-    !is.finite(count_mat)
-  )
-
-
-  if (
-    bad_n > 0L
-  ) {
-
-    message(
-      "Replacing ",
-      bad_n,
-      " non-finite count entries with 0 ",
-      "(same behavior used by the previous working script)."
-    )
-
-
-    count_mat[
-      !is.finite(count_mat)
-    ] <- 0
-  }
-
-
-  count_mat <- pmax(
-    count_mat,
-    0
-  )
-
-
-  # ---------------------------------------------------------------------------
-  # Preserve compatibility with the previously encountered blank feature ID.
-  # ---------------------------------------------------------------------------
 
   feature_ids <- trimws(
     as.character(
@@ -591,92 +304,95 @@ read_count_matrix <- function(
     )
   )
 
-
-  blank_ids <- (
+  blank <- (
     is.na(feature_ids) |
     feature_ids == ""
   )
 
-
-  if (
-    any(blank_ids)
-  ) {
+  if (any(blank)) {
 
     feature_ids[
-      blank_ids
+      blank
     ] <- paste0(
       "__feature_row_",
-      which(blank_ids)
+      which(blank)
     )
-
 
     message(
       "Assigned deterministic row IDs to ",
-      sum(blank_ids),
+      sum(blank),
       " blank feature identifier(s)."
     )
   }
-
 
   feature_ids <- make.unique(
     feature_ids,
     sep = "__dup_"
   )
 
+  count_df <- raw_df[
+    ,
+    first_num:ncol(raw_df),
+    drop = FALSE
+  ]
 
-  rownames(count_mat) <-
-    feature_ids
+  count_mat <- as.matrix(
+    count_df
+  )
 
+  suppressWarnings({
+    storage.mode(count_mat) <- "numeric"
+  })
 
-  # ---------------------------------------------------------------------------
-  # Remove all-zero features.
-  # ---------------------------------------------------------------------------
+  rownames(count_mat) <- feature_ids
+
+  bad_n <- sum(
+    !is.finite(count_mat)
+  )
+
+  if (bad_n > 0L) {
+
+    message(
+      "Replacing ",
+      bad_n,
+      " non-finite count entries with 0 ",
+      "(original-script behavior)."
+    )
+
+    count_mat[
+      !is.finite(count_mat)
+    ] <- 0
+  }
+
+  count_mat <- pmax(
+    count_mat,
+    0
+  )
 
   keep <- rowSums(
     count_mat
   ) > 0
 
-
-  count_mat <- count_mat[
+  count_mat[
     keep,
     ,
     drop = FALSE
   ]
-
-
-  if (
-    nrow(count_mat) < 2L
-  ) {
-
-    stop(
-      "Fewer than two nonzero features remain after filtering."
-    )
-  }
-
-
-  count_mat
 }
 
 
-# =============================================================================
-# NORMALIZATION
-# =============================================================================
-
 normalize_cpm_log1p <- function(
     count_mat_arm) {
-
 
   lib_sizes <- colSums(
     count_mat_arm,
     na.rm = TRUE
   )
 
-
   lib_sizes[
     !is.finite(lib_sizes) |
     lib_sizes <= 0
   ] <- 1
-
 
   cpm <- sweep(
     count_mat_arm,
@@ -685,10 +401,7 @@ normalize_cpm_log1p <- function(
     "/"
   )
 
-
-  log1p(
-    cpm
-  )
+  log1p(cpm)
 }
 
 
@@ -696,23 +409,23 @@ compute_deseq2_matrices <- function(
     count_mat_arm,
     rank_method = "normalized_log1p") {
 
-
   if (
     !requireNamespace(
       "DESeq2",
       quietly = TRUE
-    ) ||
+    )
+  ) {
+    return(NULL)
+  }
+
+  if (
     !requireNamespace(
       "SummarizedExperiment",
       quietly = TRUE
     )
   ) {
-
-    return(
-      NULL
-    )
+    return(NULL)
   }
-
 
   if (
     !(
@@ -730,7 +443,6 @@ compute_deseq2_matrices <- function(
     )
   }
 
-
   col_data <- data.frame(
 
     row.names =
@@ -747,7 +459,6 @@ compute_deseq2_matrices <- function(
       )
   )
 
-
   dds <- DESeq2::DESeqDataSetFromMatrix(
 
     countData =
@@ -761,7 +472,6 @@ compute_deseq2_matrices <- function(
     design =
       ~ 1
   )
-
 
   dds <- tryCatch(
 
@@ -777,7 +487,6 @@ compute_deseq2_matrices <- function(
           "retrying with type='poscounts'."
         )
 
-
         DESeq2::estimateSizeFactors(
           dds,
           type = "poscounts"
@@ -785,12 +494,10 @@ compute_deseq2_matrices <- function(
       }
   )
 
-
   norm_counts <- DESeq2::counts(
     dds,
     normalized = TRUE
   )
-
 
   if (
     rank_method == "vst"
@@ -809,15 +516,11 @@ compute_deseq2_matrices <- function(
         }
     )
 
-
-    if (
-      is.null(vst_obj)
-    ) {
+    if (is.null(vst_obj)) {
 
       ranking_matrix <- log1p(
         norm_counts
       )
-
 
       rank_method_used <-
         "DESeq2 log1p (VST fallback)"
@@ -829,7 +532,6 @@ compute_deseq2_matrices <- function(
           vst_obj
         )
 
-
       rank_method_used <-
         "DESeq2 VST"
     }
@@ -840,11 +542,9 @@ compute_deseq2_matrices <- function(
       norm_counts
     )
 
-
     rank_method_used <-
       "DESeq2 log1p"
   }
-
 
   list(
 
@@ -864,34 +564,28 @@ compute_deseq2_matrices <- function(
   )
 }
 
-
 # =============================================================================
-# BASIC NUMERICAL HELPERS
+# NUMERICAL HELPERS
 # =============================================================================
 
 row_variance_fast <- function(
     mat) {
 
-
   n <- ncol(
     mat
   )
 
-
-  if (
-    n < 2L
-  ) {
+  if (n < 2L) {
 
     stop(
-      "At least two samples are required for variance estimation."
+      "At least two samples are required ",
+      "for variance estimation."
     )
   }
-
 
   mu <- rowMeans(
     mat
   )
-
 
   ss <- rowSums(
     mat * mat
@@ -899,23 +593,19 @@ row_variance_fast <- function(
     n *
     mu^2
 
-
   ss[
     ss < 0 &
     abs(ss) < 1e-8
   ] <- 0
-
 
   out <- ss /
     (
       n - 1L
     )
 
-
   out[
     !is.finite(out)
   ] <- 0
-
 
   pmax(
     out,
@@ -924,53 +614,64 @@ row_variance_fast <- function(
 }
 
 
-safe_median <- function(
-    x) {
-
+safe_median <- function(x) {
 
   x <- x[
     is.finite(x)
   ]
 
-
-  if (
-    length(x) == 0L
-  ) {
-
-    return(
-      NA_real_
-    )
+  if (length(x) == 0L) {
+    return(NA_real_)
   }
 
-
-  median(
-    x
-  )
+  median(x)
 }
 
 
-safe_iqr <- function(
-    x) {
-
+safe_iqr <- function(x) {
 
   x <- x[
     is.finite(x)
   ]
 
-
-  if (
-    length(x) == 0L
-  ) {
-
-    return(
-      NA_real_
-    )
+  if (length(x) == 0L) {
+    return(NA_real_)
   }
 
+  stats::IQR(x)
+}
 
-  stats::IQR(
-    x
+
+weighted_median <- function(
+    x,
+    w) {
+
+  ok <- (
+    is.finite(x) &
+    is.finite(w) &
+    w > 0
   )
+
+  x <- x[ok]
+  w <- w[ok]
+
+  if (length(x) == 0L) {
+    return(NA_real_)
+  }
+
+  ord <- order(x)
+
+  x <- x[ord]
+  w <- w[ord]
+
+  cw <- cumsum(w) /
+    sum(w)
+
+  x[
+    which(
+      cw >= 0.5
+    )[1L]
+  ]
 }
 
 
@@ -978,13 +679,11 @@ seed_from_label <- function(
     label,
     base_seed = BOOTSTRAP_SEED_BASE) {
 
-
   label_value <- sum(
     utf8ToInt(
       as.character(label)
     )
   )
-
 
   as.integer(
     (
@@ -1001,26 +700,17 @@ jaccard_similarity <- function(
     a,
     b) {
 
-
   a <- unique(a)
   b <- unique(b)
-
 
   u <- union(
     a,
     b
   )
 
-
-  if (
-    length(u) == 0L
-  ) {
-
-    return(
-      NA_real_
-    )
+  if (length(u) == 0L) {
+    return(NA_real_)
   }
-
 
   length(
     intersect(
@@ -1032,6 +722,15 @@ jaccard_similarity <- function(
 }
 
 
+suffix_sum <- function(x) {
+
+  rev(
+    cumsum(
+      rev(x)
+    )
+  )
+}
+
 # =============================================================================
 # PC1
 # =============================================================================
@@ -1039,71 +738,61 @@ jaccard_similarity <- function(
 compute_abs_pc1_loadings <- function(
     norm_mat_arm) {
 
-
   if (
     nrow(norm_mat_arm) < 2L ||
     ncol(norm_mat_arm) < 2L
   ) {
 
     stop(
-      "PC1 requires at least two features and two samples."
+      "PC1 requires at least two features ",
+      "and two samples."
     )
   }
-
-
-  # Rows = samples
-  # Columns = features
 
   X <- t(
     norm_mat_arm
   )
 
-
-  X_centered <- sweep(
+  Xc <- sweep(
     X,
     2L,
     colMeans(X),
     "-"
   )
 
-
   gram <- tcrossprod(
-    X_centered
+    Xc
   )
-
 
   eig <- eigen(
     gram,
     symmetric = TRUE
   )
 
-
   lambda1 <- eig$values[
     1L
   ]
 
-
   if (
     !is.finite(lambda1) ||
     lambda1 <=
-      .Machine$double.eps
+    .Machine$double.eps
   ) {
 
     stop(
-      "PC1 is undefined because between-sample variation is insufficient."
+      "PC1 is undefined because between-sample ",
+      "variation is insufficient."
     )
   }
-
 
   u1 <- eig$vectors[
     ,
     1L
   ]
 
-
   loading <- as.numeric(
     crossprod(
-      X_centered,
+      Xc,
       u1
     )
   ) /
@@ -1111,32 +800,1529 @@ compute_abs_pc1_loadings <- function(
       lambda1
     )
 
-
-  names(loading) <-
-    colnames(
-      X_centered
-    )
-
+  names(loading) <- colnames(
+    Xc
+  )
 
   loading[
     !is.finite(loading)
   ] <- 0
-
 
   abs(
     loading
   )
 }
 
+# =============================================================================
+# RANKED VARIANCE CURVE
+# =============================================================================
+
+compute_ranked_variance_curve <- function(
+    metric_mat_arm,
+    rank_order,
+    spar = VAR_SPLINE_SPAR) {
+
+  empirical_var <- row_variance_fast(
+    metric_mat_arm
+  )
+
+  ranked_var <- empirical_var[
+    rank_order
+  ]
+
+  ranked_log_var <- log1p(
+    ranked_var
+  )
+
+  ranks <- seq_along(
+    rank_order
+  )
+
+  spline_fit <- stats::smooth.spline(
+    x = ranks,
+    y = ranked_log_var,
+    spar = spar
+  )
+
+  smooth_y <- as.numeric(
+    stats::predict(
+      spline_fit,
+      x = ranks,
+      deriv = 0
+    )$y
+  )
+
+  smooth_d2 <- as.numeric(
+    stats::predict(
+      spline_fit,
+      x = ranks,
+      deriv = 2
+    )$y
+  )
+
+  dense_x <- seq(
+
+    min(ranks),
+
+    max(ranks),
+
+    length.out =
+      max(
+        DENSE_GRID_MIN,
+        length(ranks) *
+        DENSE_GRID_MULTIPLIER
+      )
+  )
+
+  dense_y <- as.numeric(
+    stats::predict(
+      spline_fit,
+      x = dense_x,
+      deriv = 0
+    )$y
+  )
+
+  dense_d2 <- as.numeric(
+    stats::predict(
+      spline_fit,
+      x = dense_x,
+      deriv = 2
+    )$y
+  )
+
+  out <- data.frame(
+
+    rank =
+      ranks,
+
+    empirical_variance =
+      ranked_var,
+
+    log1p_empirical_variance =
+      ranked_log_var,
+
+    smooth_log1p_empirical_variance =
+      smooth_y,
+
+    d2_spline =
+      smooth_d2,
+
+    stringsAsFactors = FALSE
+  )
+
+  attr(
+    out,
+    "dense_curve_df"
+  ) <- data.frame(
+
+    dense_rank =
+      dense_x,
+
+    dense_smooth_log1p_empirical_variance =
+      dense_y,
+
+    dense_d2 =
+      dense_d2,
+
+    stringsAsFactors = FALSE
+  )
+
+  out
+}
+
+
+find_d2_zero_crossings <- function(
+    dense_df) {
+
+  x <- dense_df$dense_rank
+  y <- dense_df$dense_d2
+
+  ok <- (
+    is.finite(x) &
+    is.finite(y)
+  )
+
+  x <- x[ok]
+  y <- y[ok]
+
+  if (length(x) < 2L) {
+
+    return(
+      data.frame(
+        crossing_rank = numeric(0),
+        crossing_type = character(0),
+        stringsAsFactors = FALSE
+      )
+    )
+  }
+
+  a <- y[
+    -length(y)
+  ]
+
+  b <- y[
+    -1L
+  ]
+
+  xa <- x[
+    -length(x)
+  ]
+
+  xb <- x[
+    -1L
+  ]
+
+  idx <- which(
+    (
+      a < 0 &
+      b > 0
+    ) |
+    (
+      a > 0 &
+      b < 0
+    )
+  )
+
+  crossings <- numeric(0)
+
+  if (length(idx) > 0L) {
+
+    frac <- abs(
+      a[idx]
+    ) /
+      (
+        abs(a[idx]) +
+        abs(b[idx])
+      )
+
+    crossings <-
+      xa[idx] +
+      frac *
+      (
+        xb[idx] -
+        xa[idx]
+      )
+  }
+
+  exact_idx <- which(
+    y == 0
+  )
+
+  if (length(exact_idx) > 0L) {
+
+    crossings <- c(
+      crossings,
+      x[exact_idx]
+    )
+  }
+
+  crossings <- sort(
+    unique(
+      round(
+        crossings[
+          is.finite(crossings)
+        ],
+        8L
+      )
+    )
+  )
+
+  data.frame(
+
+    crossing_rank =
+      crossings,
+
+    crossing_type =
+      "sign_change",
+
+    stringsAsFactors = FALSE
+  )
+}
 
 # =============================================================================
-# FEATURE-LEVEL NB DIAGNOSTICS
+# TERMINAL CHANGE-POINT MODEL
+# =============================================================================
+
+fit_terminal_hinge_breakpoint <- function(
+    y,
+    min_segment_fraction = MIN_TRANSITION_SEGMENT_FRACTION,
+    min_segment_absolute = MIN_TRANSITION_SEGMENT_ABSOLUTE) {
+
+  y <- as.numeric(y)
+  N <- length(y)
+
+  if (
+    N < 10L ||
+    any(
+      !is.finite(y)
+    )
+  ) {
+
+    return(
+      list(
+        valid = FALSE,
+        reason = "invalid_transition_series"
+      )
+    )
+  }
+
+  # ---------------------------------------------------------------------------
+  # Terminal-domain definition.
+  #
+  # The original matched LEFT/RIGHT definition means an Anchor left of the
+  # midpoint cannot support RIGHT=Anchor->N plus an equal-sized preceding
+  # LEFT block. Therefore the terminal half is the mathematically relevant
+  # change-point domain.
+  # ---------------------------------------------------------------------------
+
+  domain_start <- as.integer(
+    ceiling(
+      (
+        N +
+        2L
+      ) /
+        2L
+    )
+  )
+
+  min_segment_n <- max(
+
+    as.integer(
+      min_segment_absolute
+    ),
+
+    as.integer(
+      ceiling(
+        min_segment_fraction *
+        N
+      )
+    ),
+
+    2L
+  )
+
+  # ---------------------------------------------------------------------------
+  # Every candidate is compared on ONE FIXED terminal domain.
+  #
+  # Both pre-break and post-break portions must contain at least
+  # min_segment_n points.
+  # ---------------------------------------------------------------------------
+
+  candidate_min <-
+    domain_start +
+    min_segment_n -
+    1L
+
+  candidate_max <-
+    N -
+    min_segment_n +
+    1L
+
+  if (
+    candidate_min >=
+    candidate_max
+  ) {
+
+    return(
+      list(
+        valid = FALSE,
+        reason = "no_admissible_terminal_breakpoints"
+      )
+    )
+  }
+
+  domain_rank <- seq.int(
+    domain_start,
+    N
+  )
+
+  yd <- y[
+    domain_rank
+  ]
+
+  M <- length(
+    yd
+  )
+
+  xd <- (
+    seq_len(M) -
+    1
+  ) /
+    (
+      M -
+      1
+    )
+
+  candidate_rank <- seq.int(
+    candidate_min,
+    candidate_max
+  )
+
+  candidate_pos <-
+    candidate_rank -
+    domain_start +
+    1L
+
+  n <- as.numeric(M)
+
+  sx <- sum(xd)
+  sxx <- sum(xd * xd)
+  sy <- sum(yd)
+  sxy <- sum(xd * yd)
+
+  det0 <-
+    n *
+    sxx -
+    sx *
+    sx
+
+  if (
+    !is.finite(det0) ||
+    abs(det0) <=
+    .Machine$double.eps
+  ) {
+
+    return(
+      list(
+        valid = FALSE,
+        reason = "singular_baseline_linear_model"
+      )
+    )
+  }
+
+  inv00 <- sxx / det0
+  inv01 <- -sx / det0
+  inv11 <- n / det0
+
+  beta0_intercept <-
+    inv00 *
+    sy +
+    inv01 *
+    sxy
+
+  beta0_slope <-
+    inv01 *
+    sy +
+    inv11 *
+    sxy
+
+  residual0 <-
+    yd -
+    beta0_intercept -
+    beta0_slope *
+    xd
+
+  sse0 <- sum(
+    residual0 *
+    residual0
+  )
+
+  if (
+    !is.finite(sse0) ||
+    sse0 <=
+    .Machine$double.eps
+  ) {
+
+    return(
+      list(
+        valid = FALSE,
+        reason = "degenerate_baseline_sse"
+      )
+    )
+  }
+
+  # ---------------------------------------------------------------------------
+  # Suffix statistics permit exact evaluation of every candidate in O(N)
+  # rather than fitting thousands of separate lm() objects.
+  # ---------------------------------------------------------------------------
+
+  sx_suf <- suffix_sum(
+    xd
+  )
+
+  sxx_suf <- suffix_sum(
+    xd *
+    xd
+  )
+
+  sy_suf <- suffix_sum(
+    yd
+  )
+
+  sxy_suf <- suffix_sum(
+    xd *
+    yd
+  )
+
+  tail_start_pos <-
+    candidate_pos +
+    1L
+
+  n_tail_hinge <-
+    M -
+    candidate_pos
+
+  xc <- xd[
+    candidate_pos
+  ]
+
+  sx_tail <- sx_suf[
+    tail_start_pos
+  ]
+
+  sxx_tail <- sxx_suf[
+    tail_start_pos
+  ]
+
+  sy_tail <- sy_suf[
+    tail_start_pos
+  ]
+
+  sxy_tail <- sxy_suf[
+    tail_start_pos
+  ]
+
+  sum_h <-
+    sx_tail -
+    n_tail_hinge *
+    xc
+
+  sum_xh <-
+    sxx_tail -
+    xc *
+    sx_tail
+
+  sum_h2 <-
+    sxx_tail -
+    2 *
+    xc *
+    sx_tail +
+    n_tail_hinge *
+    xc^2
+
+  sum_yh <-
+    sxy_tail -
+    xc *
+    sy_tail
+
+  # ---------------------------------------------------------------------------
+  # Frisch-Waugh-Lovell residualization.
+  #
+  # This gives the exact one-hinge regression improvement while avoiding
+  # thousands of repeated model fits.
+  # ---------------------------------------------------------------------------
+
+  q0 <-
+    inv00 *
+    sum_h +
+    inv01 *
+    sum_xh
+
+  q1 <-
+    inv01 *
+    sum_h +
+    inv11 *
+    sum_xh
+
+  hMh <-
+    sum_h2 -
+    sum_h *
+    q0 -
+    sum_xh *
+    q1
+
+  hMy <-
+    sum_yh -
+    sum_h *
+    beta0_intercept -
+    sum_xh *
+    beta0_slope
+
+  valid_h <- (
+    is.finite(hMh) &
+    hMh >
+    .Machine$double.eps &
+    is.finite(hMy)
+  )
+
+  gamma <- rep(
+    NA_real_,
+    length(candidate_rank)
+  )
+
+  gamma[
+    valid_h
+  ] <- hMy[
+    valid_h
+  ] /
+    hMh[
+      valid_h
+    ]
+
+  pre_slope <- rep(
+    NA_real_,
+    length(candidate_rank)
+  )
+
+  pre_slope[
+    valid_h
+  ] <-
+    beta0_slope -
+    q1[
+      valid_h
+    ] *
+    gamma[
+      valid_h
+    ]
+
+  post_slope <-
+    pre_slope +
+    gamma
+
+  sse1 <- rep(
+    NA_real_,
+    length(candidate_rank)
+  )
+
+  sse1[
+    valid_h
+  ] <-
+    sse0 -
+    (
+      hMy[
+        valid_h
+      ]^2 /
+      hMh[
+        valid_h
+      ]
+    )
+
+  bic_gain <- rep(
+    NA_real_,
+    length(candidate_rank)
+  )
+
+  ok_sse <- (
+    valid_h &
+    is.finite(sse1) &
+    sse1 >
+    .Machine$double.eps &
+    sse1 <
+    sse0
+  )
+
+  bic_gain[
+    ok_sse
+  ] <-
+    M *
+    log(
+      sse0 /
+      sse1[
+        ok_sse
+      ]
+    ) -
+    log(M)
+
+  # ---------------------------------------------------------------------------
+  # Persistent terminal-level check using the original matched-region concept.
+  # No NB quantities are used here.
+  # ---------------------------------------------------------------------------
+
+  prefix_y <- c(
+    0,
+    cumsum(y)
+  )
+
+  right_n <-
+    N -
+    candidate_rank +
+    1L
+
+  left_start <-
+    candidate_rank -
+    right_n
+
+  left_end <-
+    candidate_rank -
+    1L
+
+  left_sum <-
+    prefix_y[
+      left_end +
+      1L
+    ] -
+    prefix_y[
+      left_start
+    ]
+
+  right_sum <-
+    prefix_y[
+      N +
+      1L
+    ] -
+    prefix_y[
+      candidate_rank
+    ]
+
+  left_mean <-
+    left_sum /
+    right_n
+
+  right_mean <-
+    right_sum /
+    right_n
+
+  terminal_minus_left_mean <-
+    right_mean -
+    left_mean
+
+  eligible <- (
+    is.finite(bic_gain) &
+    bic_gain > 0 &
+    is.finite(gamma) &
+    gamma > 0 &
+    is.finite(post_slope) &
+    post_slope > 0 &
+    is.finite(
+      terminal_minus_left_mean
+    ) &
+    terminal_minus_left_mean > 0
+  )
+
+  scan_df <- data.frame(
+
+    reference_rank =
+      candidate_rank,
+
+    right_n =
+      right_n,
+
+    right_fraction =
+      right_n /
+      N,
+
+    gamma =
+      gamma,
+
+    pre_slope =
+      pre_slope,
+
+    post_slope =
+      post_slope,
+
+    terminal_minus_left_mean =
+      terminal_minus_left_mean,
+
+    BIC_gain =
+      bic_gain,
+
+    eligible =
+      eligible,
+
+    stringsAsFactors = FALSE
+  )
+
+  if (!any(eligible)) {
+
+    return(
+      list(
+        valid = FALSE,
+        reason = "no_eligible_terminal_breakpoint",
+        scan_df = scan_df
+      )
+    )
+  }
+
+  idx_eligible <- which(
+    eligible
+  )
+
+  best_idx <- idx_eligible[
+    which.max(
+      bic_gain[
+        idx_eligible
+      ]
+    )
+  ]
+
+  best <- scan_df[
+    best_idx,
+    ,
+    drop = FALSE
+  ]
+
+  boundary_hit <-
+    best$reference_rank[
+      1L
+    ] %in%
+    c(
+      candidate_min,
+      candidate_max
+    )
+
+  list(
+
+    valid = TRUE,
+
+    reason =
+      NA_character_,
+
+    best =
+      best,
+
+    scan_df =
+      scan_df,
+
+    domain_start =
+      domain_start,
+
+    candidate_min =
+      candidate_min,
+
+    candidate_max =
+      candidate_max,
+
+    boundary_hit =
+      boundary_hit
+  )
+}
+
+# =============================================================================
+# MULTISCALE TERMINAL-TRANSITION CONSENSUS
+# =============================================================================
+
+detect_terminal_transition <- function(
+    ranked_log_variance,
+    spars = TRANSITION_SPARS,
+    min_valid_scales = MIN_VALID_TRANSITION_SCALES,
+    max_iqr_fraction = MAX_MULTISCALE_REF_IQR_FRACTION) {
+
+  y <- as.numeric(
+    ranked_log_variance
+  )
+
+  N <- length(y)
+
+  x <- seq_len(
+    N
+  )
+
+  scale_rows <- vector(
+    "list",
+    length(spars)
+  )
+
+  for (
+    i in seq_along(spars)
+  ) {
+
+    sp <- spars[i]
+
+    one <- tryCatch({
+
+      fit <- stats::smooth.spline(
+        x = x,
+        y = y,
+        spar = sp
+      )
+
+      ys <- as.numeric(
+        stats::predict(
+          fit,
+          x = x,
+          deriv = 0
+        )$y
+      )
+
+      bp <- fit_terminal_hinge_breakpoint(
+        ys
+      )
+
+      if (
+        !isTRUE(
+          bp$valid
+        )
+      ) {
+
+        data.frame(
+
+          spar =
+            sp,
+
+          valid =
+            FALSE,
+
+          reason =
+            bp$reason,
+
+          boundary_hit =
+            NA,
+
+          reference_rank =
+            NA_integer_,
+
+          BIC_gain =
+            NA_real_,
+
+          gamma =
+            NA_real_,
+
+          pre_slope =
+            NA_real_,
+
+          post_slope =
+            NA_real_,
+
+          terminal_minus_left_mean =
+            NA_real_,
+
+          stringsAsFactors = FALSE
+        )
+
+      } else {
+
+        b <- bp$best
+
+        data.frame(
+
+          spar =
+            sp,
+
+          valid =
+            !isTRUE(
+              bp$boundary_hit
+            ),
+
+          reason =
+            if (
+              isTRUE(
+                bp$boundary_hit
+              )
+            ) {
+              "boundary_optimum"
+            } else {
+              NA_character_
+            },
+
+          boundary_hit =
+            bp$boundary_hit,
+
+          reference_rank =
+            as.integer(
+              b$reference_rank[
+                1L
+              ]
+            ),
+
+          BIC_gain =
+            b$BIC_gain[
+              1L
+            ],
+
+          gamma =
+            b$gamma[
+              1L
+            ],
+
+          pre_slope =
+            b$pre_slope[
+              1L
+            ],
+
+          post_slope =
+            b$post_slope[
+              1L
+            ],
+
+          terminal_minus_left_mean =
+            b$terminal_minus_left_mean[
+              1L
+            ],
+
+          stringsAsFactors = FALSE
+        )
+      }
+
+    }, error = function(e) {
+
+      data.frame(
+
+        spar =
+          sp,
+
+        valid =
+          FALSE,
+
+        reason =
+          paste0(
+            "scale_error: ",
+            conditionMessage(e)
+          ),
+
+        boundary_hit =
+          NA,
+
+        reference_rank =
+          NA_integer_,
+
+        BIC_gain =
+          NA_real_,
+
+        gamma =
+          NA_real_,
+
+        pre_slope =
+          NA_real_,
+
+        post_slope =
+          NA_real_,
+
+        terminal_minus_left_mean =
+          NA_real_,
+
+        stringsAsFactors = FALSE
+      )
+    })
+
+    scale_rows[[i]] <- one
+  }
+
+  scale_df <- bind_rows(
+    scale_rows
+  )
+
+  valid_df <- scale_df[
+    scale_df$valid,
+    ,
+    drop = FALSE
+  ]
+
+  if (
+    nrow(valid_df) <
+    min_valid_scales
+  ) {
+
+    return(
+      list(
+
+        valid =
+          FALSE,
+
+        reason =
+          "insufficient_valid_multiscale_breakpoints",
+
+        reference_rank =
+          NA_integer_,
+
+        scale_df =
+          scale_df,
+
+        scale_iqr =
+          NA_real_,
+
+        scale_iqr_fraction =
+          NA_real_
+      )
+    )
+  }
+
+  refs <- valid_df$reference_rank
+
+  weights <- sqrt(
+    pmax(
+      valid_df$BIC_gain,
+      .Machine$double.eps
+    )
+  )
+
+  ref_consensus <- weighted_median(
+    refs,
+    weights
+  )
+
+  ref_iqr <- safe_iqr(
+    refs
+  )
+
+  ref_iqr_fraction <-
+    ref_iqr /
+    N
+
+  if (
+    !is.finite(
+      ref_consensus
+    )
+  ) {
+
+    return(
+      list(
+
+        valid =
+          FALSE,
+
+        reason =
+          "invalid_multiscale_consensus",
+
+        reference_rank =
+          NA_integer_,
+
+        scale_df =
+          scale_df,
+
+        scale_iqr =
+          ref_iqr,
+
+        scale_iqr_fraction =
+          ref_iqr_fraction
+      )
+    )
+  }
+
+  if (
+    !is.finite(
+      ref_iqr_fraction
+    ) ||
+    ref_iqr_fraction >
+    max_iqr_fraction
+  ) {
+
+    return(
+      list(
+
+        valid =
+          FALSE,
+
+        reason =
+          "multiscale_reference_disagreement",
+
+        reference_rank =
+          as.integer(
+            round(
+              ref_consensus
+            )
+          ),
+
+        scale_df =
+          scale_df,
+
+        scale_iqr =
+          ref_iqr,
+
+        scale_iqr_fraction =
+          ref_iqr_fraction
+      )
+    )
+  }
+
+  list(
+
+    valid =
+      TRUE,
+
+    reason =
+      NA_character_,
+
+    reference_rank =
+      as.integer(
+        round(
+          ref_consensus
+        )
+      ),
+
+    scale_df =
+      scale_df,
+
+    scale_iqr =
+      ref_iqr,
+
+    scale_iqr_fraction =
+      ref_iqr_fraction,
+
+    median_BIC_gain =
+      safe_median(
+        valid_df$BIC_gain
+      ),
+
+    min_reference =
+      min(refs),
+
+    max_reference =
+      max(refs),
+
+    valid_scales =
+      nrow(valid_df),
+
+    total_scales =
+      length(spars)
+  )
+}
+
+# =============================================================================
+# ORIGINAL GEOMETRIC INTERVAL AROUND DATA-DERIVED REFERENCE
+# =============================================================================
+
+select_custom_interval <- function(
+    zero_df,
+    reference_rank,
+    total_n) {
+
+  if (
+    nrow(zero_df) == 0L
+  ) {
+
+    stop(
+      "No d2 sign-change crossings found."
+    )
+  }
+
+  reference_rank <- as.integer(
+    round(
+      reference_rank
+    )
+  )
+
+  min_anchor_for_match <- as.integer(
+    ceiling(
+      (
+        total_n +
+        2L
+      ) /
+        2L
+    )
+  )
+
+  left_candidates <- zero_df$crossing_rank[
+    zero_df$crossing_rank <
+      reference_rank &
+    zero_df$crossing_rank >=
+      min_anchor_for_match
+  ]
+
+  right_candidates <- zero_df$crossing_rank[
+    zero_df$crossing_rank >
+      reference_rank
+  ]
+
+  if (
+    length(left_candidates) == 0L
+  ) {
+
+    stop(
+      "No admissible left d2 crossing found."
+    )
+  }
+
+  if (
+    length(right_candidates) == 0L
+  ) {
+
+    stop(
+      "No right d2 crossing found."
+    )
+  }
+
+  anchor_rank <- as.integer(
+    round(
+      max(
+        left_candidates
+      )
+    )
+  )
+
+  terminal_rank <- as.integer(
+    round(
+      min(
+        right_candidates
+      )
+    )
+  )
+
+  anchor_rank <- max(
+    min_anchor_for_match,
+    anchor_rank
+  )
+
+  terminal_rank <- min(
+    total_n,
+    terminal_rank
+  )
+
+  if (
+    !(
+      anchor_rank <
+      reference_rank
+    )
+  ) {
+
+    stop(
+      "Invalid interval: Anchor must lie left of Ref."
+    )
+  }
+
+  if (
+    !(
+      reference_rank <
+      terminal_rank
+    )
+  ) {
+
+    stop(
+      "Invalid interval: Ref must lie left of Terminal."
+    )
+  }
+
+  right_n <-
+    total_n -
+    anchor_rank +
+    1L
+
+  left_start <-
+    anchor_rank -
+    right_n
+
+  if (
+    left_start < 1L
+  ) {
+
+    stop(
+      "Invalid interval: matched LEFT block ",
+      "cannot be constructed."
+    )
+  }
+
+  list(
+
+    anchor =
+      anchor_rank,
+
+    ref =
+      reference_rank,
+
+    terminal =
+      terminal_rank,
+
+    interval_min =
+      anchor_rank,
+
+    interval_max =
+      terminal_rank
+  )
+}
+
+# =============================================================================
+# COMPLETE GEOMETRIC SELECTION
+# =============================================================================
+
+compute_geometric_selection <- function(
+    rank_matrix,
+    metric_matrix) {
+
+  if (
+    nrow(rank_matrix) !=
+    nrow(metric_matrix) ||
+    ncol(rank_matrix) !=
+    ncol(metric_matrix)
+  ) {
+
+    stop(
+      "Rank and metric matrices have ",
+      "incompatible dimensions."
+    )
+  }
+
+  if (
+    !identical(
+      rownames(rank_matrix),
+      rownames(metric_matrix)
+    )
+  ) {
+
+    stop(
+      "Feature IDs differ between ",
+      "rank and metric matrices."
+    )
+  }
+
+  abs_loadings <- compute_abs_pc1_loadings(
+    rank_matrix
+  )
+
+  rank_order <- order(
+    abs_loadings,
+    decreasing = FALSE
+  )
+
+  total_n <- length(
+    rank_order
+  )
+
+  variance_df <- compute_ranked_variance_curve(
+
+    metric_mat_arm =
+      metric_matrix,
+
+    rank_order =
+      rank_order,
+
+    spar =
+      VAR_SPLINE_SPAR
+  )
+
+  detector <- detect_terminal_transition(
+    variance_df$log1p_empirical_variance
+  )
+
+  if (
+    !isTRUE(
+      detector$valid
+    )
+  ) {
+
+    return(
+      list(
+
+        valid =
+          FALSE,
+
+        reason =
+          detector$reason,
+
+        abs_loadings =
+          abs_loadings,
+
+        rank_order =
+          rank_order,
+
+        total_n =
+          total_n,
+
+        variance_df =
+          variance_df,
+
+        detector =
+          detector,
+
+        zero_df =
+          data.frame(),
+
+        interval_info =
+          NULL
+      )
+    )
+  }
+
+  dense_curve_df <- attr(
+    variance_df,
+    "dense_curve_df"
+  )
+
+  zero_df <- find_d2_zero_crossings(
+    dense_curve_df
+  )
+
+  interval_info <- tryCatch(
+
+    select_custom_interval(
+
+      zero_df =
+        zero_df,
+
+      reference_rank =
+        detector$reference_rank,
+
+      total_n =
+        total_n
+    ),
+
+    error =
+      function(e) {
+        e
+      }
+  )
+
+  if (
+    inherits(
+      interval_info,
+      "error"
+    )
+  ) {
+
+    return(
+      list(
+
+        valid =
+          FALSE,
+
+        reason =
+          paste0(
+            "interval_error: ",
+            conditionMessage(
+              interval_info
+            )
+          ),
+
+        abs_loadings =
+          abs_loadings,
+
+        rank_order =
+          rank_order,
+
+        total_n =
+          total_n,
+
+        variance_df =
+          variance_df,
+
+        detector =
+          detector,
+
+        zero_df =
+          zero_df,
+
+        interval_info =
+          NULL
+      )
+    )
+  }
+
+  list(
+
+    valid =
+      TRUE,
+
+    reason =
+      NA_character_,
+
+    abs_loadings =
+      abs_loadings,
+
+    rank_order =
+      rank_order,
+
+    total_n =
+      total_n,
+
+    variance_df =
+      variance_df,
+
+    detector =
+      detector,
+
+    zero_df =
+      zero_df,
+
+    interval_info =
+      interval_info
+  )
+}
+
+# =============================================================================
+# FEATURE-LEVEL NB2-RELATED METRICS
 # =============================================================================
 
 compute_ranked_feature_metrics <- function(
     metric_mat_arm,
     rank_order) {
-
 
   ranked_mat <- metric_mat_arm[
     rank_order,
@@ -1144,77 +2330,72 @@ compute_ranked_feature_metrics <- function(
     drop = FALSE
   ]
 
-
   mu <- rowMeans(
     ranked_mat,
     na.rm = TRUE
   )
 
-
   empirical_var <- row_variance_fast(
     ranked_mat
   )
-
 
   mu[
     !is.finite(mu)
   ] <- 0
 
-
   empirical_var[
-    !is.finite(empirical_var)
+    !is.finite(
+      empirical_var
+    )
   ] <- 0
-
 
   mu <- pmax(
     mu,
     0
   )
 
-
   empirical_var <- pmax(
     empirical_var,
     0
   )
 
-
-  excess_variance <- pmax(
+  nb2_var_minus_mu <- pmax(
     empirical_var -
-      mu,
+    mu,
     0
   )
-
 
   alpha_hat <- rep(
     0,
     length(mu)
   )
 
-
-  positive_mu <- mu > 0
-
+  pos <- mu > 0
 
   alpha_hat[
-    positive_mu
+    pos
   ] <- pmax(
 
     (
       empirical_var[
-        positive_mu
+        pos
       ] -
-        mu[
-          positive_mu
-        ]
+      mu[
+        pos
+      ]
     ) /
       (
         mu[
-          positive_mu
+          pos
         ]^2
       ),
 
     0
   )
 
+  alpha_mu_val <-
+    alpha_hat *
+    mu
 
   data.frame(
 
@@ -1238,21 +2419,20 @@ compute_ranked_feature_metrics <- function(
 
     NB2 =
       log1p(
-        excess_variance
+        nb2_var_minus_mu
       ),
 
     NB2_NB1 =
       log1p(
-        excess_variance
+        nb2_var_minus_mu
       ) -
-        log1p(
-          mu
-        ),
+      log1p(
+        mu
+      ),
 
     alpha_mu =
       log1p(
-        alpha_hat *
-          mu
+        alpha_mu_val
       ),
 
     stringsAsFactors = FALSE
@@ -1260,379 +2440,56 @@ compute_ranked_feature_metrics <- function(
 }
 
 
-# =============================================================================
-# FAST PREFIX-MOMENT CALCULATIONS
-# =============================================================================
-
-window_moments <- function(
-    x,
-    starts,
-    ends,
-    n_vec) {
-
-
-  prefix_sum <- c(
-    0,
-    cumsum(x)
-  )
-
-
-  prefix_sum2 <- c(
-    0,
-    cumsum(
-      x * x
-    )
-  )
-
-
-  sums <-
-    prefix_sum[
-      ends + 1L
-    ] -
-      prefix_sum[
-        starts
-      ]
-
-
-  sums2 <-
-    prefix_sum2[
-      ends + 1L
-    ] -
-      prefix_sum2[
-        starts
-      ]
-
-
-  means <- sums /
-    n_vec
-
-
-  vars <- rep(
-    NA_real_,
-    length(means)
-  )
-
-
-  valid_n <- n_vec > 1L
-
-
-  vars[
-    valid_n
-  ] <- (
-
-    sums2[
-      valid_n
-    ] -
-      (
-        sums[
-          valid_n
-        ]^2 /
-          n_vec[
-            valid_n
-          ]
-      )
-
-  ) /
-    (
-      n_vec[
-        valid_n
-      ] -
-        1L
-    )
-
-
-  vars[
-    is.finite(vars) &
-    vars < 0 &
-    abs(vars) < 1e-10
-  ] <- 0
-
-
-  vars[
-    !is.finite(vars)
-  ] <- NA_real_
-
-
-  vars <- pmax(
-    vars,
-    0
-  )
-
-
-  list(
-    mean = means,
-    var = vars
-  )
-}
-
-
-# =============================================================================
-# FULL-RANK-AXIS TRANSITION SCAN
-# =============================================================================
-
-scan_all_cutoffs <- function(
+summarize_regions <- function(
     feature_df,
-    min_window_fraction = MIN_WINDOW_FRACTION,
-    min_window_absolute = MIN_WINDOW_ABSOLUTE) {
+    anchor_rank,
+    total_n) {
 
-
-  N <- nrow(
-    feature_df
+  right_idx <- seq.int(
+    anchor_rank,
+    total_n
   )
 
-
-  min_window_n <- max(
-
-    as.integer(
-      min_window_absolute
-    ),
-
-    as.integer(
-      ceiling(
-        min_window_fraction *
-          N
-      )
-    ),
-
-    2L
+  right_n <- length(
+    right_idx
   )
 
-
-  # ---------------------------------------------------------------------------
-  # Scan every rank where a symmetric LEFT/RIGHT comparison of at least the
-  # minimum allowable size exists.
-  #
-  # This searches essentially the entire rank axis except the protected
-  # terminal margins.
-  # ---------------------------------------------------------------------------
-
-  min_cutoff <- min_window_n +
+  left_end <-
+    anchor_rank -
     1L
 
-
-  max_cutoff <- N -
-    min_window_n +
+  left_start <-
+    left_end -
+    right_n +
     1L
-
 
   if (
-    min_cutoff >
-      max_cutoff
+    left_start < 1L
   ) {
 
-    return(
-      list(
-        valid = FALSE,
-        reason = "no_admissible_cutoffs",
-        scan_df = data.frame(),
-        selected = NULL
-      )
+    stop(
+      "LEFT block extends below rank 1."
     )
   }
 
-
-  cutoffs <- seq.int(
-    min_cutoff,
-    max_cutoff
-  )
-
-
-  # ---------------------------------------------------------------------------
-  # Largest symmetric window available around every cutoff.
-  #
-  # For cutoffs in the RIGHT half:
-  #
-  #     window_n = N - cutoff + 1
-  #
-  # so RIGHT automatically extends all the way to N.
-  # ---------------------------------------------------------------------------
-
-  window_n <- pmin(
-    cutoffs - 1L,
-    N - cutoffs + 1L
-  )
-
-
-  left_start <- cutoffs -
-    window_n
-
-
-  left_end <- cutoffs -
-    1L
-
-
-  right_start <- cutoffs
-
-
-  right_end <- cutoffs +
-    window_n -
-    1L
-
-
-  # ---------------------------------------------------------------------------
-  # Primary and secondary diagnostics.
-  # ---------------------------------------------------------------------------
-
-  primary <- feature_df$NB2_NB1
-  nb2 <- feature_df$NB2
-  alpha_mu <- feature_df$alpha_mu
-
-
-  if (
-    any(!is.finite(primary)) ||
-    any(!is.finite(nb2)) ||
-    any(!is.finite(alpha_mu))
-  ) {
-
-    return(
-      list(
-        valid = FALSE,
-        reason = "nonfinite_nb_metric",
-        scan_df = data.frame(),
-        selected = NULL
-      )
-    )
-  }
-
-
-  L_primary <- window_moments(
-    primary,
+  left_idx <- seq.int(
     left_start,
-    left_end,
-    window_n
+    left_end
   )
 
+  left_df <- feature_df[
+    left_idx,
+    ,
+    drop = FALSE
+  ]
 
-  R_primary <- window_moments(
-    primary,
-    right_start,
-    right_end,
-    window_n
-  )
+  right_df <- feature_df[
+    right_idx,
+    ,
+    drop = FALSE
+  ]
 
-
-  L_nb2 <- window_moments(
-    nb2,
-    left_start,
-    left_end,
-    window_n
-  )
-
-
-  R_nb2 <- window_moments(
-    nb2,
-    right_start,
-    right_end,
-    window_n
-  )
-
-
-  L_alpha <- window_moments(
-    alpha_mu,
-    left_start,
-    left_end,
-    window_n
-  )
-
-
-  R_alpha <- window_moments(
-    alpha_mu,
-    right_start,
-    right_end,
-    window_n
-  )
-
-
-  # ---------------------------------------------------------------------------
-  # Directional differences.
-  # ---------------------------------------------------------------------------
-
-  delta_primary <-
-    R_primary$mean -
-      L_primary$mean
-
-
-  delta_nb2 <-
-    R_nb2$mean -
-      L_nb2$mean
-
-
-  delta_alpha <-
-    R_alpha$mean -
-      L_alpha$mean
-
-
-  # ---------------------------------------------------------------------------
-  # SCALE-STANDARDIZED EFFECT SIZE.
-  #
-  # CRITICAL:
-  #
-  # There is deliberately NO division by standard error and NO sqrt(n).
-  #
-  # Therefore large windows do not automatically receive larger scores.
-  # ---------------------------------------------------------------------------
-
-  pooled_scale <- sqrt(
-    (
-      L_primary$var +
-        R_primary$var
-    ) /
-      2
-  )
-
-
-  effect_size <- rep(
-    NA_real_,
-    length(cutoffs)
-  )
-
-
-  scale_ok <- (
-    is.finite(pooled_scale) &
-      pooled_scale >
-      .Machine$double.eps
-  )
-
-
-  effect_size[
-    scale_ok
-  ] <- delta_primary[
-    scale_ok
-  ] /
-    pooled_scale[
-      scale_ok
-    ]
-
-
-  # ---------------------------------------------------------------------------
-  # Candidate table.
-  # ---------------------------------------------------------------------------
-
-  scan_df <- data.frame(
-
-    cutoff =
-      cutoffs,
-
-    window_n =
-      window_n,
-
-    window_fraction =
-      window_n /
-        N,
-
-    final_terminal_tail_n =
-      N -
-        cutoffs +
-        1L,
-
-    final_terminal_tail_fraction =
-      (
-        N -
-          cutoffs +
-          1L
-      ) /
-        N,
-
+  data.frame(
 
     left_start =
       left_start,
@@ -1641,815 +2498,84 @@ scan_all_cutoffs <- function(
       left_end,
 
     right_start =
-      right_start,
+      anchor_rank,
 
     right_end =
-      right_end,
-
-
-    left_mean_NB2_NB1 =
-      L_primary$mean,
-
-    right_mean_NB2_NB1 =
-      R_primary$mean,
-
-    delta_NB2_NB1 =
-      delta_primary,
-
-
-    left_var_NB2_NB1 =
-      L_primary$var,
-
-    right_var_NB2_NB1 =
-      R_primary$var,
-
-
-    left_mean_NB2 =
-      L_nb2$mean,
-
-    right_mean_NB2 =
-      R_nb2$mean,
-
-    delta_NB2 =
-      delta_nb2,
-
-
-    left_mean_alpha_mu =
-      L_alpha$mean,
-
-    right_mean_alpha_mu =
-      R_alpha$mean,
-
-    delta_alpha_mu =
-      delta_alpha,
-
-
-    transition_effect_size =
-      effect_size,
-
-    stringsAsFactors = FALSE
-  )
-
-
-  # ---------------------------------------------------------------------------
-  # Direction must be consistent with the NB1 -> NB2 hypothesis.
-  # ---------------------------------------------------------------------------
-
-  eligible <- (
-
-    is.finite(
-      scan_df$transition_effect_size
-    ) &
-
-      scan_df$delta_NB2_NB1 > 0 &
-
-      scan_df$delta_NB2 > 0 &
-
-      scan_df$delta_alpha_mu > 0
-  )
-
-
-  scan_df$eligible <-
-    eligible
-
-
-  scan_df$selected <-
-    FALSE
-
-
-  if (
-    !any(eligible)
-  ) {
-
-    return(
-      list(
-        valid = FALSE,
-        reason = "no_directionally_consistent_transition",
-        scan_df = scan_df,
-        selected = NULL,
-        min_window_n = min_window_n
-      )
-    )
-  }
-
-
-  eligible_idx <- which(
-    eligible
-  )
-
-
-  best_idx <- eligible_idx[
-    which.max(
-      scan_df$transition_effect_size[
-        eligible_idx
-      ]
-    )
-  ]
-
-
-  scan_df$selected[
-    best_idx
-  ] <- TRUE
-
-
-  selected <- scan_df[
-    best_idx,
-    ,
-    drop = FALSE
-  ]
-
-
-  # ---------------------------------------------------------------------------
-  # Boundary diagnostic.
-  #
-  # If maximum occurs exactly at the minimum or maximum admissible cutoff,
-  # the data did not demonstrate an internal optimum.
-  # ---------------------------------------------------------------------------
-
-  boundary_hit <- (
-    selected$cutoff[
-      1L
-    ] ==
-      min_cutoff ||
-
-      selected$cutoff[
-        1L
-      ] ==
-      max_cutoff
-  )
-
-
-  selected$boundary_hit <-
-    boundary_hit
-
-
-  list(
-
-    valid = TRUE,
-
-    reason = NA_character_,
-
-    scan_df = scan_df,
-
-    selected = selected,
-
-    min_window_n =
-      min_window_n,
-
-    min_cutoff =
-      min_cutoff,
-
-    max_cutoff =
-      max_cutoff,
-
-    boundary_hit =
-      boundary_hit
-  )
-}
-
-
-# =============================================================================
-# VARIANCE SPLINE / CURVATURE GEOMETRY
-# =============================================================================
-
-find_d2_zero_crossings <- function(
-    dense_x,
-    dense_d2) {
-
-
-  ok <- (
-    is.finite(dense_x) &
-      is.finite(dense_d2)
-  )
-
-
-  x <- dense_x[
-    ok
-  ]
-
-
-  y <- dense_d2[
-    ok
-  ]
-
-
-  if (
-    length(x) < 2L
-  ) {
-
-    return(
-      data.frame(
-        crossing_rank = numeric(0),
-        stringsAsFactors = FALSE
-      )
-    )
-  }
-
-
-  a <- y[
-    -length(y)
-  ]
-
-
-  b <- y[
-    -1L
-  ]
-
-
-  xa <- x[
-    -length(x)
-  ]
-
-
-  xb <- x[
-    -1L
-  ]
-
-
-  idx <- which(
-    (
-      a < 0 &
-        b > 0
-    ) |
-      (
-        a > 0 &
-          b < 0
-      )
-  )
-
-
-  crossings <- numeric(0)
-
-
-  if (
-    length(idx) > 0L
-  ) {
-
-    frac <- abs(
-      a[
-        idx
-      ]
-    ) /
-      (
-        abs(
-          a[
-            idx
-          ]
-        ) +
-          abs(
-            b[
-              idx
-            ]
-          )
-      )
-
-
-    crossings <-
-      xa[
-        idx
-      ] +
-        frac *
-        (
-          xb[
-            idx
-          ] -
-            xa[
-              idx
-            ]
-        )
-  }
-
-
-  exact_zero_idx <- which(
-    y == 0
-  )
-
-
-  if (
-    length(exact_zero_idx) > 0L
-  ) {
-
-    crossings <- c(
-      crossings,
-      x[
-        exact_zero_idx
-      ]
-    )
-  }
-
-
-  crossings <- crossings[
-    is.finite(crossings)
-  ]
-
-
-  crossings <- sort(
-    unique(
-      round(
-        crossings,
-        8L
-      )
-    )
-  )
-
-
-  data.frame(
-    crossing_rank =
-      crossings,
-    stringsAsFactors = FALSE
-  )
-}
-
-
-compute_variance_geometry <- function(
-    feature_df,
-    spar = VAR_SPLINE_SPAR) {
-
-
-  ranks <- feature_df$rank
-
-
-  log_var <- log1p(
-    feature_df$empirical_variance
-  )
-
-
-  spline_fit <- stats::smooth.spline(
-    x = ranks,
-    y = log_var,
-    spar = spar
-  )
-
-
-  smooth_y <- as.numeric(
-    stats::predict(
-      spline_fit,
-      x = ranks,
-      deriv = 0
-    )$y
-  )
-
-
-  smooth_d2 <- as.numeric(
-    stats::predict(
-      spline_fit,
-      x = ranks,
-      deriv = 2
-    )$y
-  )
-
-
-  dense_n <- max(
-    DENSE_GRID_MIN,
-    length(ranks) *
-      DENSE_GRID_MULTIPLIER
-  )
-
-
-  dense_x <- seq(
-    min(ranks),
-    max(ranks),
-    length.out = dense_n
-  )
-
-
-  dense_y <- as.numeric(
-    stats::predict(
-      spline_fit,
-      x = dense_x,
-      deriv = 0
-    )$y
-  )
-
-
-  dense_d2 <- as.numeric(
-    stats::predict(
-      spline_fit,
-      x = dense_x,
-      deriv = 2
-    )$y
-  )
-
-
-  zero_df <- find_d2_zero_crossings(
-    dense_x,
-    dense_d2
-  )
-
-
-  list(
-
-    variance_df =
-      data.frame(
-
-        rank =
-          ranks,
-
-        log1p_empirical_variance =
-          log_var,
-
-        smooth_log1p_empirical_variance =
-          smooth_y,
-
-        d2_spline =
-          smooth_d2,
-
-        stringsAsFactors = FALSE
+      total_n,
+
+    left_n =
+      nrow(
+        left_df
       ),
 
-
-    dense_df =
-      data.frame(
-
-        rank =
-          dense_x,
-
-        smooth_log1p_empirical_variance =
-          dense_y,
-
-        d2 =
-          dense_d2,
-
-        stringsAsFactors = FALSE
+    right_n =
+      nrow(
+        right_df
       ),
 
-
-    zero_df =
-      zero_df
-  )
-}
-
-
-nearest_d2_crossing <- function(
-    zero_df,
-    cutoff) {
-
-
-  if (
-    nrow(zero_df) == 0L
-  ) {
-
-    return(
-      list(
-        rank = NA_real_,
-        distance = NA_real_
-      )
-    )
-  }
-
-
-  idx <- which.min(
-    abs(
-      zero_df$crossing_rank -
-        cutoff
-    )
-  )
-
-
-  list(
-
-    rank =
-      zero_df$crossing_rank[
-        idx
-      ],
-
-    distance =
-      zero_df$crossing_rank[
-        idx
-      ] -
-        cutoff
-  )
-}
-
-
-# =============================================================================
-# COMPLETE FULL-DATA TRACK ANALYSIS
-# =============================================================================
-
-analyze_full_track <- function(
-    rank_matrix,
-    metric_matrix) {
-
-
-  if (
-    nrow(rank_matrix) !=
-      nrow(metric_matrix) ||
-      ncol(rank_matrix) !=
-      ncol(metric_matrix)
-  ) {
-
-    stop(
-      "Rank and metric matrices have incompatible dimensions."
-    )
-  }
-
-
-  if (
-    !identical(
-      rownames(rank_matrix),
-      rownames(metric_matrix)
-    )
-  ) {
-
-    stop(
-      "Feature IDs differ between rank and metric matrices."
-    )
-  }
-
-
-  abs_loadings <- compute_abs_pc1_loadings(
-    rank_matrix
-  )
-
-
-  rank_order <- order(
-    abs_loadings,
-    decreasing = FALSE
-  )
-
-
-  feature_df <- compute_ranked_feature_metrics(
-    metric_matrix,
-    rank_order
-  )
-
-
-  feature_df$abs_pc1_loading <-
-    abs_loadings[
-      rank_order
-    ]
-
-
-  scan <- scan_all_cutoffs(
-    feature_df
-  )
-
-
-  geometry <- compute_variance_geometry(
-    feature_df
-  )
-
-
-  if (
-    !isTRUE(scan$valid)
-  ) {
-
-    return(
-      list(
-
-        valid = FALSE,
-
-        reason =
-          scan$reason,
-
-        abs_loadings =
-          abs_loadings,
-
-        rank_order =
-          rank_order,
-
-        feature_df =
-          feature_df,
-
-        scan =
-          scan,
-
-        geometry =
-          geometry,
-
-        nearest_crossing =
-          list(
-            rank = NA_real_,
-            distance = NA_real_
-          )
-      )
-    )
-  }
-
-
-  selected_cutoff <- as.integer(
-    scan$selected$cutoff[
-      1L
-    ]
-  )
-
-
-  nearest_crossing <- nearest_d2_crossing(
-    geometry$zero_df,
-    selected_cutoff
-  )
-
-
-  list(
-
-    valid = TRUE,
-
-    reason = NA_character_,
-
-    abs_loadings =
-      abs_loadings,
-
-    rank_order =
-      rank_order,
-
-    feature_df =
-      feature_df,
-
-    scan =
-      scan,
-
-    geometry =
-      geometry,
-
-    nearest_crossing =
-      nearest_crossing
-  )
-}
-
-
-# =============================================================================
-# SELECTED REGION SUMMARY
-# =============================================================================
-
-summarize_selected_transition <- function(
-    feature_df,
-    selected_row) {
-
-
-  cutoff <- as.integer(
-    selected_row$cutoff[
-      1L
-    ]
-  )
-
-
-  left_start <- as.integer(
-    selected_row$left_start[
-      1L
-    ]
-  )
-
-
-  left_end <- as.integer(
-    selected_row$left_end[
-      1L
-    ]
-  )
-
-
-  right_start <- as.integer(
-    selected_row$right_start[
-      1L
-    ]
-  )
-
-
-  right_end <- as.integer(
-    selected_row$right_end[
-      1L
-    ]
-  )
-
-
-  N <- nrow(
-    feature_df
-  )
-
-
-  left_df <- feature_df[
-    left_start:left_end,
-    ,
-    drop = FALSE
-  ]
-
-
-  right_window_df <- feature_df[
-    right_start:right_end,
-    ,
-    drop = FALSE
-  ]
-
-
-  terminal_df <- feature_df[
-    cutoff:N,
-    ,
-    drop = FALSE
-  ]
-
-
-  data.frame(
-
-    cutoff =
-      cutoff,
-
-    comparison_window_n =
-      nrow(left_df),
-
-    final_terminal_tail_n =
-      nrow(terminal_df),
-
-    final_terminal_tail_fraction =
-      nrow(terminal_df) /
-        N,
-
-
-    left_start =
-      left_start,
-
-    left_end =
-      left_end,
-
-    right_window_start =
-      right_start,
-
-    right_window_end =
-      right_end,
-
-
-    left_median_NB2_NB1 =
-      median(
-        left_df$NB2_NB1,
-        na.rm = TRUE
-      ),
-
-    right_median_NB2_NB1 =
-      median(
-        right_window_df$NB2_NB1,
-        na.rm = TRUE
-      ),
-
-    delta_median_NB2_NB1 =
-      median(
-        right_window_df$NB2_NB1,
-        na.rm = TRUE
-      ) -
-        median(
-          left_df$NB2_NB1,
-          na.rm = TRUE
-        ),
-
-
-    left_median_NB2 =
+    left_NB2 =
       median(
         left_df$NB2,
         na.rm = TRUE
       ),
 
-    right_median_NB2 =
+    right_NB2 =
       median(
-        right_window_df$NB2,
+        right_df$NB2,
         na.rm = TRUE
       ),
 
-    delta_median_NB2 =
+    diff_NB2 =
       median(
-        right_window_df$NB2,
+        right_df$NB2,
         na.rm = TRUE
       ) -
-        median(
-          left_df$NB2,
-          na.rm = TRUE
-        ),
+      median(
+        left_df$NB2,
+        na.rm = TRUE
+      ),
 
+    left_gap =
+      median(
+        left_df$NB2_NB1,
+        na.rm = TRUE
+      ),
 
-    left_median_alpha_mu =
+    right_gap =
+      median(
+        right_df$NB2_NB1,
+        na.rm = TRUE
+      ),
+
+    diff_gap =
+      median(
+        right_df$NB2_NB1,
+        na.rm = TRUE
+      ) -
+      median(
+        left_df$NB2_NB1,
+        na.rm = TRUE
+      ),
+
+    left_alpha =
       median(
         left_df$alpha_mu,
         na.rm = TRUE
       ),
 
-    right_median_alpha_mu =
+    right_alpha =
       median(
-        right_window_df$alpha_mu,
+        right_df$alpha_mu,
         na.rm = TRUE
       ),
 
-    delta_median_alpha_mu =
+    diff_alpha =
       median(
-        right_window_df$alpha_mu,
+        right_df$alpha_mu,
         na.rm = TRUE
       ) -
-        median(
-          left_df$alpha_mu,
-          na.rm = TRUE
-        ),
-
-
-    terminal_median_NB2_NB1 =
       median(
-        terminal_df$NB2_NB1,
-        na.rm = TRUE
-      ),
-
-    terminal_median_NB2 =
-      median(
-        terminal_df$NB2,
-        na.rm = TRUE
-      ),
-
-    terminal_median_alpha_mu =
-      median(
-        terminal_df$alpha_mu,
+        left_df$alpha_mu,
         na.rm = TRUE
       ),
 
@@ -2458,65 +2584,252 @@ summarize_selected_transition <- function(
 }
 
 
+validate_method_level <- function(
+    feature_df,
+    interval_info,
+    region_summary,
+    total_n) {
+
+  anchor <- interval_info$anchor
+  ref <- interval_info$ref
+  terminal <- interval_info$terminal
+
+  if (
+    !(
+      anchor <
+      ref &&
+      ref <
+      terminal
+    )
+  ) {
+
+    stop(
+      "Validation failed: expected ",
+      "Anchor < Ref < Terminal."
+    )
+  }
+
+  right_idx <- seq.int(
+    anchor,
+    total_n
+  )
+
+  right_n <- length(
+    right_idx
+  )
+
+  left_end <-
+    anchor -
+    1L
+
+  left_start <-
+    left_end -
+    right_n +
+    1L
+
+  if (
+    left_start < 1L
+  ) {
+
+    stop(
+      "Validation failed: LEFT block ",
+      "extends below rank 1."
+    )
+  }
+
+  left_idx <- seq.int(
+    left_start,
+    left_end
+  )
+
+  if (
+    length(left_idx) !=
+    length(right_idx)
+  ) {
+
+    stop(
+      "Validation failed: LEFT and RIGHT ",
+      "blocks do not have equal size."
+    )
+  }
+
+  left_df <- feature_df[
+    left_idx,
+    ,
+    drop = FALSE
+  ]
+
+  right_df <- feature_df[
+    right_idx,
+    ,
+    drop = FALSE
+  ]
+
+  expected <- list(
+
+    left_n =
+      nrow(left_df),
+
+    right_n =
+      nrow(right_df),
+
+    left_NB2 =
+      median(
+        left_df$NB2,
+        na.rm = TRUE
+      ),
+
+    right_NB2 =
+      median(
+        right_df$NB2,
+        na.rm = TRUE
+      ),
+
+    diff_NB2 =
+      median(
+        right_df$NB2,
+        na.rm = TRUE
+      ) -
+      median(
+        left_df$NB2,
+        na.rm = TRUE
+      ),
+
+    left_gap =
+      median(
+        left_df$NB2_NB1,
+        na.rm = TRUE
+      ),
+
+    right_gap =
+      median(
+        right_df$NB2_NB1,
+        na.rm = TRUE
+      ),
+
+    diff_gap =
+      median(
+        right_df$NB2_NB1,
+        na.rm = TRUE
+      ) -
+      median(
+        left_df$NB2_NB1,
+        na.rm = TRUE
+      ),
+
+    left_alpha =
+      median(
+        left_df$alpha_mu,
+        na.rm = TRUE
+      ),
+
+    right_alpha =
+      median(
+        right_df$alpha_mu,
+        na.rm = TRUE
+      ),
+
+    diff_alpha =
+      median(
+        right_df$alpha_mu,
+        na.rm = TRUE
+      ) -
+      median(
+        left_df$alpha_mu,
+        na.rm = TRUE
+      )
+  )
+
+  for (
+    nm in names(
+      expected
+    )
+  ) {
+
+    chk <- all.equal(
+
+      as.numeric(
+        region_summary[[nm]][
+          1L
+        ]
+      ),
+
+      as.numeric(
+        expected[[nm]]
+      ),
+
+      tolerance =
+        1e-10
+    )
+
+    if (
+      !isTRUE(chk)
+    ) {
+
+      stop(
+        "Validation failed for summary field: ",
+        nm,
+        " | ",
+        chk
+      )
+    }
+  }
+
+  invisible(TRUE)
+}
+
 # =============================================================================
-# BOOTSTRAP COMPLETE CUTOFF SEARCH
+# BOOTSTRAP STABILITY OF COMPLETE GEOMETRY
 # =============================================================================
 
-assess_cutoff_stability <- function(
+assess_geometry_stability <- function(
     rank_matrix,
     metric_matrix,
-    full_analysis,
+    full_geometry,
     bootstrap_n = BOOTSTRAP_N,
     seed = BOOTSTRAP_SEED_BASE,
     cores = BOOTSTRAP_CORES) {
 
+  if (
+    !isTRUE(
+      full_geometry$valid
+    )
+  ) {
+
+    stop(
+      "Cannot bootstrap invalid full-data geometry."
+    )
+  }
 
   N <- nrow(
     rank_matrix
   )
 
-
   sample_n <- ncol(
     rank_matrix
   )
 
+  full_interval <-
+    full_geometry$interval_info
 
-  if (
-    !isTRUE(full_analysis$valid)
-  ) {
-
-    stop(
-      "Cannot bootstrap an invalid full-data track."
-    )
-  }
-
-
-  full_selected <- full_analysis$scan$selected
-
-
-  full_cutoff <- as.integer(
-    full_selected$cutoff[
-      1L
+  full_right_idx <-
+    full_geometry$rank_order[
+      seq.int(
+        full_interval$anchor,
+        N
+      )
     ]
-  )
 
-
-  full_terminal_idx <- full_analysis$rank_order[
-    full_cutoff:N
-  ]
-
-
-  full_terminal_features <- rownames(
-    rank_matrix
-  )[
-    full_terminal_idx
-  ]
-
+  full_right_features <-
+    rownames(
+      rank_matrix
+    )[
+      full_right_idx
+    ]
 
   set.seed(
     seed
   )
-
 
   bootstrap_indices <- lapply(
 
@@ -2534,19 +2847,13 @@ assess_cutoff_stability <- function(
     }
   )
 
-
-  worker <- function(
-      b) {
-
+  worker <- function(b) {
 
     idx <- bootstrap_indices[[
       b
     ]]
 
-
-    invalid_row <- function(
-        reason) {
-
+    invalid_row <- function(reason) {
 
       data.frame(
 
@@ -2559,32 +2866,23 @@ assess_cutoff_stability <- function(
         invalid_reason =
           reason,
 
-        cutoff =
+        ref =
           NA_integer_,
 
-        comparison_window_n =
+        anchor =
           NA_integer_,
 
-        terminal_tail_n =
+        terminal =
           NA_integer_,
 
-        terminal_tail_fraction =
+        right_n =
+          NA_integer_,
+
+        right_fraction =
           NA_real_,
 
-        transition_effect_size =
+        multiscale_ref_iqr_fraction =
           NA_real_,
-
-        delta_NB2_NB1 =
-          NA_real_,
-
-        delta_NB2 =
-          NA_real_,
-
-        delta_alpha_mu =
-          NA_real_,
-
-        boundary_hit =
-          NA,
 
         jaccard =
           NA_real_,
@@ -2592,7 +2890,6 @@ assess_cutoff_stability <- function(
         stringsAsFactors = FALSE
       )
     }
-
 
     if (
       length(
@@ -2607,210 +2904,151 @@ assess_cutoff_stability <- function(
       )
     }
 
+    g <- tryCatch(
 
-    boot_rank <- rank_matrix[
-      ,
-      idx,
-      drop = FALSE
-    ]
+      compute_geometric_selection(
 
+        rank_matrix[
+          ,
+          idx,
+          drop = FALSE
+        ],
 
-    boot_metric <- metric_matrix[
-      ,
-      idx,
-      drop = FALSE
-    ]
-
-
-    result <- tryCatch(
-
-      {
-
-        abs_loadings <-
-          compute_abs_pc1_loadings(
-            boot_rank
-          )
-
-
-        rank_order <- order(
-          abs_loadings,
-          decreasing = FALSE
-        )
-
-
-        feature_df <-
-          compute_ranked_feature_metrics(
-            boot_metric,
-            rank_order
-          )
-
-
-        scan <- scan_all_cutoffs(
-          feature_df
-        )
-
-
-        if (
-          !isTRUE(scan$valid)
-        ) {
-
-          invalid_row(
-            scan$reason
-          )
-
-        } else if (
-          isTRUE(scan$boundary_hit)
-        ) {
-
-          invalid_row(
-            "boundary_optimum"
-          )
-
-        } else {
-
-          selected <- scan$selected
-
-
-          cutoff <- as.integer(
-            selected$cutoff[
-              1L
-            ]
-          )
-
-
-          terminal_idx <- rank_order[
-            cutoff:N
-          ]
-
-
-          terminal_features <- rownames(
-            rank_matrix
-          )[
-            terminal_idx
-          ]
-
-
-          data.frame(
-
-            bootstrap =
-              b,
-
-            valid =
-              TRUE,
-
-            invalid_reason =
-              NA_character_,
-
-            cutoff =
-              cutoff,
-
-            comparison_window_n =
-              as.integer(
-                selected$window_n[
-                  1L
-                ]
-              ),
-
-            terminal_tail_n =
-              N -
-                cutoff +
-                1L,
-
-            terminal_tail_fraction =
-              (
-                N -
-                  cutoff +
-                  1L
-              ) /
-                N,
-
-            transition_effect_size =
-              selected$transition_effect_size[
-                1L
-              ],
-
-            delta_NB2_NB1 =
-              selected$delta_NB2_NB1[
-                1L
-              ],
-
-            delta_NB2 =
-              selected$delta_NB2[
-                1L
-              ],
-
-            delta_alpha_mu =
-              selected$delta_alpha_mu[
-                1L
-              ],
-
-            boundary_hit =
-              FALSE,
-
-            jaccard =
-              jaccard_similarity(
-                full_terminal_features,
-                terminal_features
-              ),
-
-            stringsAsFactors = FALSE
-          )
-        }
-      },
+        metric_matrix[
+          ,
+          idx,
+          drop = FALSE
+        ]
+      ),
 
       error =
         function(e) {
-
-          invalid_row(
-            paste0(
-              "analysis_error: ",
-              conditionMessage(e)
-            )
-          )
+          NULL
         }
     )
 
+    if (is.null(g)) {
 
-    result
+      return(
+        invalid_row(
+          "geometry_error"
+        )
+      )
+    }
+
+    if (
+      !isTRUE(
+        g$valid
+      )
+    ) {
+
+      return(
+        invalid_row(
+          g$reason
+        )
+      )
+    }
+
+    interval <-
+      g$interval_info
+
+    right_idx <-
+      g$rank_order[
+        seq.int(
+          interval$anchor,
+          N
+        )
+      ]
+
+    right_features <-
+      rownames(
+        rank_matrix
+      )[
+        right_idx
+      ]
+
+    data.frame(
+
+      bootstrap =
+        b,
+
+      valid =
+        TRUE,
+
+      invalid_reason =
+        NA_character_,
+
+      ref =
+        interval$ref,
+
+      anchor =
+        interval$anchor,
+
+      terminal =
+        interval$terminal,
+
+      right_n =
+        N -
+        interval$anchor +
+        1L,
+
+      right_fraction =
+        (
+          N -
+          interval$anchor +
+          1L
+        ) /
+        N,
+
+      multiscale_ref_iqr_fraction =
+        g$detector$scale_iqr_fraction,
+
+      jaccard =
+        jaccard_similarity(
+          full_right_features,
+          right_features
+        ),
+
+      stringsAsFactors = FALSE
+    )
   }
 
-
-  bootstrap_ids <- seq_len(
+  ids <- seq_len(
     bootstrap_n
   )
-
 
   if (
     .Platform$OS.type == "unix" &&
     cores > 1L
   ) {
 
-    bootstrap_list <- parallel::mclapply(
+    boot_list <- parallel::mclapply(
 
-      bootstrap_ids,
+      ids,
 
       worker,
 
-      mc.cores = cores,
+      mc.cores =
+        cores,
 
-      mc.preschedule = TRUE,
+      mc.preschedule =
+        TRUE,
 
-      mc.set.seed = FALSE
+      mc.set.seed =
+        FALSE
     )
 
   } else {
 
-    bootstrap_list <- lapply(
-      bootstrap_ids,
+    boot_list <- lapply(
+      ids,
       worker
     )
   }
 
-
   bootstrap_df <- bind_rows(
-    bootstrap_list
+    boot_list
   )
-
 
   valid_df <- bootstrap_df[
     bootstrap_df$valid,
@@ -2818,79 +3056,117 @@ assess_cutoff_stability <- function(
     drop = FALSE
   ]
 
-
   valid_n <- nrow(
     valid_df
   )
 
-
-  valid_rate <- valid_n /
+  valid_rate <-
+    valid_n /
     bootstrap_n
 
-
   tolerance_n <- ceiling(
-    CUTOFF_TOLERANCE_FRACTION *
-      N
+    POSITION_TOLERANCE_FRACTION *
+    N
   )
-
 
   if (
     valid_n > 0L
   ) {
 
-    recovery_rate <- mean(
+    ref_recovery <- mean(
+
       abs(
-        valid_df$cutoff -
-          full_cutoff
+        valid_df$ref -
+        full_interval$ref
       ) <=
         tolerance_n
     )
 
+    anchor_recovery <- mean(
 
-    cutoff_iqr <- safe_iqr(
-      valid_df$cutoff
+      abs(
+        valid_df$anchor -
+        full_interval$anchor
+      ) <=
+        tolerance_n
     )
 
+    terminal_recovery <- mean(
 
-    cutoff_iqr_fraction <-
-      cutoff_iqr /
-        N
+      abs(
+        valid_df$terminal -
+        full_interval$terminal
+      ) <=
+        tolerance_n
+    )
 
+    ref_iqr <- safe_iqr(
+      valid_df$ref
+    )
 
-    cutoff_quantiles <- as.numeric(
+    anchor_iqr <- safe_iqr(
+      valid_df$anchor
+    )
+
+    terminal_iqr <- safe_iqr(
+      valid_df$terminal
+    )
+
+    right_fraction_iqr <- safe_iqr(
+      valid_df$right_fraction
+    )
+
+    ref_q <- as.numeric(
       stats::quantile(
-        valid_df$cutoff,
-        probs = c(
+        valid_df$ref,
+        c(
           0.025,
           0.50,
           0.975
         ),
         na.rm = TRUE,
-        names = FALSE,
-        type = 7
+        names = FALSE
       )
     )
 
-
-    tail_quantiles <- as.numeric(
+    anchor_q <- as.numeric(
       stats::quantile(
-        valid_df$terminal_tail_n,
-        probs = c(
+        valid_df$anchor,
+        c(
           0.025,
           0.50,
           0.975
         ),
         na.rm = TRUE,
-        names = FALSE,
-        type = 7
+        names = FALSE
       )
     )
 
-
-    median_effect <- safe_median(
-      valid_df$transition_effect_size
+    terminal_q <- as.numeric(
+      stats::quantile(
+        valid_df$terminal,
+        c(
+          0.025,
+          0.50,
+          0.975
+        ),
+        na.rm = TRUE,
+        names = FALSE
+      )
     )
 
+    right_n_q <- as.numeric(
+      stats::quantile(
+        valid_df$right_n,
+        c(
+          0.025,
+          0.50,
+          0.975
+        ),
+        na.rm = TRUE,
+        names = FALSE
+      )
+    )
 
     median_jaccard <- safe_median(
       valid_df$jaccard
@@ -2898,120 +3174,165 @@ assess_cutoff_stability <- function(
 
   } else {
 
-    recovery_rate <- NA_real_
-
-    cutoff_iqr <- NA_real_
-
-    cutoff_iqr_fraction <- NA_real_
-
-    cutoff_quantiles <- c(
-      NA_real_,
-      NA_real_,
+    ref_recovery <-
       NA_real_
-    )
 
-    tail_quantiles <- c(
-      NA_real_,
-      NA_real_,
+    anchor_recovery <-
       NA_real_
-    )
 
-    median_effect <- NA_real_
+    terminal_recovery <-
+      NA_real_
 
-    median_jaccard <- NA_real_
+    ref_iqr <-
+      NA_real_
+
+    anchor_iqr <-
+      NA_real_
+
+    terminal_iqr <-
+      NA_real_
+
+    right_fraction_iqr <-
+      NA_real_
+
+    ref_q <-
+      rep(
+        NA_real_,
+        3L
+      )
+
+    anchor_q <-
+      rep(
+        NA_real_,
+        3L
+      )
+
+    terminal_q <-
+      rep(
+        NA_real_,
+        3L
+      )
+
+    right_n_q <-
+      rep(
+        NA_real_,
+        3L
+      )
+
+    median_jaccard <-
+      NA_real_
   }
 
-
-  pass_full_interior <-
-    !isTRUE(
-      full_analysis$scan$boundary_hit
-    )
-
-
-  pass_valid_rate <- (
-    is.finite(valid_rate) &&
-      valid_rate >=
+  pass_valid <- (
+    is.finite(
+      valid_rate
+    ) &&
+    valid_rate >=
       MIN_BOOTSTRAP_VALID_RATE
   )
 
-
-  pass_recovery <- (
-    is.finite(recovery_rate) &&
-      recovery_rate >=
-      MIN_CUTOFF_RECOVERY_RATE
+  pass_ref_recovery <- (
+    is.finite(
+      ref_recovery
+    ) &&
+    ref_recovery >=
+      MIN_POSITION_RECOVERY_RATE
   )
 
-
-  pass_iqr <- (
-    is.finite(cutoff_iqr_fraction) &&
-      cutoff_iqr_fraction <=
-      MAX_CUTOFF_IQR_FRACTION
+  pass_anchor_recovery <- (
+    is.finite(
+      anchor_recovery
+    ) &&
+    anchor_recovery >=
+      MIN_POSITION_RECOVERY_RATE
   )
 
-
-  pass_stability <- (
-    pass_full_interior &&
-      pass_valid_rate &&
-      pass_recovery &&
-      pass_iqr
+  pass_terminal_recovery <- (
+    is.finite(
+      terminal_recovery
+    ) &&
+    terminal_recovery >=
+      MIN_POSITION_RECOVERY_RATE
   )
 
+  pass_ref_iqr <- (
+    is.finite(
+      ref_iqr
+    ) &&
+    ref_iqr /
+      N <=
+      MAX_POSITION_IQR_FRACTION
+  )
 
-  if (
-    isTRUE(
-      full_analysis$scan$boundary_hit
+  pass_anchor_iqr <- (
+    is.finite(
+      anchor_iqr
+    ) &&
+    anchor_iqr /
+      N <=
+      MAX_POSITION_IQR_FRACTION
+  )
+
+  pass_terminal_iqr <- (
+    is.finite(
+      terminal_iqr
+    ) &&
+    terminal_iqr /
+      N <=
+      MAX_POSITION_IQR_FRACTION
+  )
+
+  pass_right_iqr <- (
+    is.finite(
+      right_fraction_iqr
+    ) &&
+    right_fraction_iqr <=
+      MAX_RIGHT_FRACTION_IQR
+  )
+
+  pass_stability <- all(
+    c(
+      pass_valid,
+      pass_ref_recovery,
+      pass_anchor_recovery,
+      pass_terminal_recovery,
+      pass_ref_iqr,
+      pass_anchor_iqr,
+      pass_terminal_iqr,
+      pass_right_iqr
     )
-  ) {
-
-    status <- "BOUNDARY_OPTIMUM"
-
-  } else if (
-    pass_stability
-  ) {
-
-    status <- "PASS"
-
-  } else {
-
-    status <- "UNSTABLE"
-  }
-
+  )
 
   stability_summary <- data.frame(
 
     Status =
-      status,
+      ifelse(
+        pass_stability,
+        "PASS",
+        "UNSTABLE"
+      ),
 
+    FullRef =
+      full_interval$ref,
 
-    FullCutoff =
-      full_cutoff,
+    FullAnchor =
+      full_interval$anchor,
 
-    FullComparisonWindowN =
-      full_selected$window_n[
-        1L
-      ],
+    FullTerminal =
+      full_interval$terminal,
 
-    FullTerminalTailN =
+    FullRightN =
       N -
-        full_cutoff +
-        1L,
+      full_interval$anchor +
+      1L,
 
-    FullTerminalTailFraction =
+    FullRightFraction =
       (
         N -
-          full_cutoff +
-          1L
-      ) /
-        N,
-
-    FullTransitionEffectSize =
-      full_selected$transition_effect_size[
+        full_interval$anchor +
         1L
-      ],
-
-    FullBoundaryHit =
-      full_analysis$scan$boundary_hit,
-
+      ) /
+      N,
 
     BootstrapN =
       bootstrap_n,
@@ -3022,77 +3343,110 @@ assess_cutoff_stability <- function(
     BootstrapValidRate =
       valid_rate,
 
-
-    CutoffToleranceN =
+    PositionToleranceN =
       tolerance_n,
 
-    CutoffRecoveryRate =
-      recovery_rate,
+    RefRecoveryRate =
+      ref_recovery,
 
-    CutoffIQR =
-      cutoff_iqr,
+    AnchorRecoveryRate =
+      anchor_recovery,
 
-    CutoffIQRFraction =
-      cutoff_iqr_fraction,
+    TerminalRecoveryRate =
+      terminal_recovery,
 
+    RefIQR =
+      ref_iqr,
 
-    BootstrapCutoffCI025 =
-      cutoff_quantiles[
-        1L
-      ],
+    RefIQRFraction =
+      ref_iqr /
+      N,
 
-    BootstrapCutoffMedian =
-      cutoff_quantiles[
-        2L
-      ],
+    AnchorIQR =
+      anchor_iqr,
 
-    BootstrapCutoffCI975 =
-      cutoff_quantiles[
-        3L
-      ],
+    AnchorIQRFraction =
+      anchor_iqr /
+      N,
 
+    TerminalIQR =
+      terminal_iqr,
 
-    BootstrapTailNCI025 =
-      tail_quantiles[
-        1L
-      ],
+    TerminalIQRFraction =
+      terminal_iqr /
+      N,
 
-    BootstrapTailNMedian =
-      tail_quantiles[
-        2L
-      ],
+    RightFractionIQR =
+      right_fraction_iqr,
 
-    BootstrapTailNCI975 =
-      tail_quantiles[
-        3L
-      ],
+    RefCI025 =
+      ref_q[1L],
 
+    RefMedian =
+      ref_q[2L],
 
-    MedianBootstrapEffectSize =
-      median_effect,
+    RefCI975 =
+      ref_q[3L],
+
+    AnchorCI025 =
+      anchor_q[1L],
+
+    AnchorMedian =
+      anchor_q[2L],
+
+    AnchorCI975 =
+      anchor_q[3L],
+
+    TerminalCI025 =
+      terminal_q[1L],
+
+    TerminalMedian =
+      terminal_q[2L],
+
+    TerminalCI975 =
+      terminal_q[3L],
+
+    RightNCI025 =
+      right_n_q[1L],
+
+    RightNMedian =
+      right_n_q[2L],
+
+    RightNCI975 =
+      right_n_q[3L],
 
     MedianJaccard =
       median_jaccard,
 
-
-    PassFullInteriorOptimum =
-      pass_full_interior,
-
     PassValidRate =
-      pass_valid_rate,
+      pass_valid,
 
-    PassCutoffRecovery =
-      pass_recovery,
+    PassRefRecovery =
+      pass_ref_recovery,
 
-    PassCutoffIQR =
-      pass_iqr,
+    PassAnchorRecovery =
+      pass_anchor_recovery,
+
+    PassTerminalRecovery =
+      pass_terminal_recovery,
+
+    PassRefIQR =
+      pass_ref_iqr,
+
+    PassAnchorIQR =
+      pass_anchor_iqr,
+
+    PassTerminalIQR =
+      pass_terminal_iqr,
+
+    PassRightFractionIQR =
+      pass_right_iqr,
 
     PassStability =
       pass_stability,
 
     stringsAsFactors = FALSE
   )
-
 
   list(
 
@@ -3104,54 +3458,95 @@ assess_cutoff_stability <- function(
   )
 }
 
-
 # =============================================================================
 # FIGURE HELPERS
 # =============================================================================
+
+make_display_event_df <- function(
+    event_df,
+    total_n) {
+
+  offset_big <- max(
+    12L,
+    round(
+      total_n *
+      0.006
+    )
+  )
+
+  event_df %>%
+    mutate(
+
+      rank_display =
+        case_when(
+
+          event == "Anchor" ~
+            rank -
+            offset_big,
+
+          event == "Ref" ~
+            rank,
+
+          event == "Terminal" ~
+            rank +
+            offset_big,
+
+          TRUE ~
+            rank
+        )
+    )
+}
+
 
 save_three_panel_plot <- function(
     plot_list,
     filename) {
 
-
   png(
 
     filename,
 
-    width = PNG_WIDTH_IN,
+    width =
+      PNG_WIDTH_IN,
 
-    height = PNG_HEIGHT_IN,
+    height =
+      PNG_HEIGHT_IN,
 
-    units = "in",
+    units =
+      "in",
 
-    res = PNG_DPI,
+    res =
+      PNG_DPI,
 
-    bg = "white"
+    bg =
+      "white"
   )
 
-
   grid.newpage()
-
 
   pushViewport(
     viewport(
       layout =
         grid.layout(
-          nrow = 3L,
-          ncol = 1L,
+
+          nrow =
+            3,
+
+          ncol =
+            1,
+
           heights =
             unit(
               c(
-                1.0,
-                1.05,
-                0.90
+                1.18,
+                1.18,
+                0.88
               ),
               "null"
             )
         )
     )
   )
-
 
   for (
     i in seq_along(
@@ -3160,88 +3555,372 @@ save_three_panel_plot <- function(
   ) {
 
     print(
+
       plot_list[[i]],
+
       vp =
         viewport(
-          layout.pos.row = i,
-          layout.pos.col = 1L
+
+          layout.pos.row =
+            i,
+
+          layout.pos.col =
+            1
         )
     )
   }
-
 
   dev.off()
 }
 
 
+compute_text_positions <- function(
+    total_n,
+    anchor,
+    ref,
+    terminal) {
+
+  pad <- max(
+    50L,
+    round(
+      total_n *
+      0.04
+    )
+  )
+
+  safe_right_limit <- max(
+    200L,
+    anchor -
+    pad
+  )
+
+  left_x <- max(
+    5L,
+    round(
+      total_n *
+      0.035
+    )
+  )
+
+  stat_x <- min(
+
+    max(
+      150L,
+      round(
+        total_n *
+        0.26
+      )
+    ),
+
+    safe_right_limit
+  )
+
+  if (
+    stat_x <=
+    left_x +
+    50L
+  ) {
+
+    stat_x <-
+      left_x +
+      60L
+  }
+
+  list(
+    left_x = left_x,
+    stat_x = stat_x
+  )
+}
+
 # =============================================================================
-# FIGURE
+# FIGURE BUILDER
 # =============================================================================
 
-build_figure <- function(
+build_main_figure <- function(
     comparison_name,
     arm_name,
-    track,
-    full_analysis,
-    selected_summary,
+    variance_df,
+    feature_df,
+    interval_info,
+    region_summary,
+    detector,
     stability_summary,
-    out_file) {
+    out_file,
+    fig_tag,
+    rank_tag,
+    metric_tag) {
 
-
-  N <- nrow(
-    full_analysis$feature_df
+  total_n <- nrow(
+    feature_df
   )
 
+  anchor <-
+    interval_info$anchor
 
-  selected <- full_analysis$scan$selected
+  ref <-
+    interval_info$ref
 
+  terminal <-
+    interval_info$terminal
 
-  cutoff <- as.integer(
-    selected$cutoff[
+  left_n <-
+    region_summary$left_n
+
+  left_min <-
+    anchor -
+    left_n
+
+  left_max <-
+    anchor -
+    1L
+
+  right_min <-
+    anchor
+
+  right_max <-
+    total_n
+
+  event_df <- data.frame(
+
+    event =
+      factor(
+        EVENT_LEVELS,
+        levels = EVENT_LEVELS
+      ),
+
+    rank =
+      c(
+        anchor,
+        ref,
+        terminal
+      ),
+
+    y =
+      c(
+        variance_df$smooth_log1p_empirical_variance[
+          anchor
+        ],
+        variance_df$smooth_log1p_empirical_variance[
+          ref
+        ],
+        variance_df$smooth_log1p_empirical_variance[
+          terminal
+        ]
+      ),
+
+    stringsAsFactors = FALSE
+  )
+
+  event_display_df <- make_display_event_df(
+    event_df,
+    total_n
+  )
+
+  vline_df <- data.frame(
+
+    event =
+      factor(
+        EVENT_LEVELS,
+        levels = EVENT_LEVELS
+      ),
+
+    xint =
+      c(
+        anchor,
+        ref,
+        terminal
+      ),
+
+    stringsAsFactors = FALSE
+  )
+
+  nb_long <- feature_df %>%
+
+    select(
+      rank,
+      NB2,
+      NB2_NB1,
+      alpha_mu
+    ) %>%
+
+    pivot_longer(
+
+      cols =
+        c(
+          NB2,
+          NB2_NB1,
+          alpha_mu
+        ),
+
+      names_to =
+        "metric",
+
+      values_to =
+        "value"
+    ) %>%
+
+    mutate(
+
+      metric =
+        factor(
+
+          metric,
+
+          levels =
+            c(
+              "NB2",
+              "NB2_NB1",
+              "alpha_mu"
+            ),
+
+          labels =
+            c(
+              "NB2",
+              "NB2-NB1",
+              "alpha*mu"
+            )
+        )
+    )
+
+  pos <- compute_text_positions(
+    total_n,
+    anchor,
+    ref,
+    terminal
+  )
+
+  top_y <- max(
+    variance_df$smooth_log1p_empirical_variance,
+    na.rm = TRUE
+  )
+
+  mid_y <- max(
+    nb_long$value,
+    na.rm = TRUE
+  )
+
+  box1 <- paste(
+    fig_tag,
+    rank_tag,
+    metric_tag,
+    "Blue = LEFT",
+    "Green = RIGHT",
+    "Grey = transition interval",
+    sep = "\n"
+  )
+
+  box2 <- paste0(
+
+    "Anchor = ",
+    anchor,
+    "\n",
+
+    "Data-derived Ref = ",
+    ref,
+    "\n",
+
+    "Terminal = ",
+    terminal,
+    "\n",
+
+    "Interval = [",
+    anchor,
+    ", ",
+    terminal,
+    "]\n",
+
+    "RIGHT n = ",
+    region_summary$right_n,
+    "\n",
+
+    "Scale Ref IQR/N = ",
+    round(
+      detector$scale_iqr_fraction,
+      4
+    ),
+    "\n",
+
+    "Bootstrap status = ",
+    stability_summary$Status[
       1L
     ]
   )
 
+  box3 <- paste(
 
-  left_start <- as.integer(
-    selected$left_start[
-      1L
-    ]
+    "RIGHT = Anchor to end",
+
+    "LEFT = equal matched block",
+
+    "NB metrics do not select geometry",
+
+    sep = "\n"
   )
 
+  box4 <- paste0(
 
-  left_end <- as.integer(
-    selected$left_end[
-      1L
-    ]
+    "LEFT NB2 = ",
+    round(
+      region_summary$left_NB2,
+      3
+    ),
+    "\n",
+
+    "RIGHT NB2 = ",
+    round(
+      region_summary$right_NB2,
+      3
+    ),
+    "\n",
+
+    "RIGHT-LEFT NB2 = ",
+    round(
+      region_summary$diff_NB2,
+      3
+    ),
+    "\n",
+
+    "LEFT NB2-NB1 = ",
+    round(
+      region_summary$left_gap,
+      3
+    ),
+    "\n",
+
+    "RIGHT NB2-NB1 = ",
+    round(
+      region_summary$right_gap,
+      3
+    ),
+    "\n",
+
+    "RIGHT-LEFT NB2-NB1 = ",
+    round(
+      region_summary$diff_gap,
+      3
+    ),
+    "\n",
+
+    "LEFT alpha*mu = ",
+    round(
+      region_summary$left_alpha,
+      3
+    ),
+    "\n",
+
+    "RIGHT alpha*mu = ",
+    round(
+      region_summary$right_alpha,
+      3
+    ),
+    "\n",
+
+    "RIGHT-LEFT alpha*mu = ",
+    round(
+      region_summary$diff_alpha,
+      3
+    )
   )
-
-
-  right_start <- as.integer(
-    selected$right_start[
-      1L
-    ]
-  )
-
-
-  right_end <- as.integer(
-    selected$right_end[
-      1L
-    ]
-  )
-
-
-  # ---------------------------------------------------------------------------
-  # PANEL 1: original variance geometry.
-  # ---------------------------------------------------------------------------
-
-  variance_df <-
-    full_analysis$geometry$variance_df
-
-
-  zero_df <-
-    full_analysis$geometry$zero_df
-
 
   p1 <- ggplot(
     variance_df,
@@ -3253,53 +3932,163 @@ build_figure <- function(
 
     annotate(
       "rect",
-      xmin = left_start,
-      xmax = left_end,
+      xmin = left_min,
+      xmax = left_max,
       ymin = -Inf,
       ymax = Inf,
-      fill = "grey90"
+      fill = COL$left_fill,
+      alpha = 0.70
     ) +
 
     annotate(
       "rect",
-      xmin = right_start,
-      xmax = right_end,
+      xmin = right_min,
+      xmax = right_max,
       ymin = -Inf,
       ymax = Inf,
-      fill = "grey75",
-      alpha = 0.65
+      fill = COL$right_fill,
+      alpha = 0.70
+    ) +
+
+    annotate(
+      "rect",
+      xmin = anchor,
+      xmax = terminal,
+      ymin = -Inf,
+      ymax = Inf,
+      fill = COL$interval_fill,
+      alpha = 0.18
     ) +
 
     geom_line(
-      linewidth = 0.9
+      color = COL$var_curve,
+      linewidth = 1.0
     ) +
 
     geom_vline(
-      xintercept = cutoff,
+
+      data =
+        vline_df,
+
+      aes(
+        xintercept = xint,
+        color = event,
+        linetype = event
+      ),
+
       linewidth = 0.9
-    )
+    ) +
 
+    geom_point(
 
-  if (
-    nrow(zero_df) > 0L
-  ) {
+      data =
+        event_display_df,
 
-    p1 <- p1 +
+      aes(
+        rank_display,
+        y,
+        color = event,
+        shape = event
+      ),
 
-      geom_vline(
-        data = zero_df,
-        aes(
-          xintercept = crossing_rank
-        ),
-        inherit.aes = FALSE,
-        linetype = "dotted",
-        linewidth = 0.25,
-        alpha = 0.45
-      )
-  }
+      size = 3.4,
+      stroke = 1.0
+    ) +
 
+    annotate(
 
-  p1 <- p1 +
+      "label",
+
+      x =
+        pos$left_x,
+
+      y =
+        top_y *
+        0.96,
+
+      label =
+        box1,
+
+      hjust = 0,
+      vjust = 1,
+      size = 2.8,
+      label.size = 0.25,
+
+      fill =
+        grDevices::adjustcolor(
+          "white",
+          alpha.f = 0.96
+        )
+    ) +
+
+    annotate(
+
+      "label",
+
+      x =
+        pos$stat_x,
+
+      y =
+        top_y *
+        0.70,
+
+      label =
+        box2,
+
+      hjust = 0,
+      vjust = 1,
+      size = 2.8,
+      label.size = 0.25,
+
+      fill =
+        grDevices::adjustcolor(
+          "white",
+          alpha.f = 0.96
+        )
+    ) +
+
+    scale_color_manual(
+
+      values =
+        EVENT_COLORS,
+
+      breaks =
+        EVENT_LEVELS,
+
+      guide =
+        guide_legend(
+
+          override.aes =
+            list(
+
+              shape =
+                unname(
+                  EVENT_SHAPES
+                ),
+
+              linetype =
+                unname(
+                  EVENT_LTY
+                ),
+
+              linewidth =
+                1.0,
+
+              size =
+                3.4
+            )
+        )
+    ) +
+
+    scale_shape_manual(
+      values = EVENT_SHAPES,
+      guide = "none"
+    ) +
+
+    scale_linetype_manual(
+      values = EVENT_LTY,
+      guide = "none"
+    ) +
 
     labs(
 
@@ -3308,281 +4097,22 @@ build_figure <- function(
           comparison_name,
           " ",
           arm_name,
-          " ",
-          track,
-          ": variance geometry"
+          ": geometry"
         ),
 
       subtitle =
         paste0(
-          "Selected cutoff = ",
-          cutoff,
-          "; terminal leading edge = ",
-          N - cutoff + 1L,
-          " features; nearest d2 crossing = ",
-          ifelse(
-            is.finite(
-              full_analysis$nearest_crossing$rank
-            ),
-            round(
-              full_analysis$nearest_crossing$rank,
-              1
-            ),
-            "NA"
-          )
+          "Multiscale terminal change point ",
+          "-> original Anchor/Ref/Terminal geometry"
         ),
 
       x =
         "Rank (ascending absolute PC1 loading)",
 
       y =
-        "Smoothed log(1 + empirical variance)"
-    ) +
+        "Smoothed log(1 + variance)",
 
-    theme_bw(
-      base_size = 11
-    ) +
-
-    theme(
-      panel.grid.minor =
-        element_blank()
-    )
-
-
-  # ---------------------------------------------------------------------------
-  # PANEL 2: complete transition-response curve.
-  # ---------------------------------------------------------------------------
-
-  scan_df <-
-    full_analysis$scan$scan_df
-
-
-  selected_df <- scan_df[
-    scan_df$selected,
-    ,
-    drop = FALSE
-  ]
-
-
-  ci_low <-
-    stability_summary$BootstrapCutoffCI025[
-      1L
-    ]
-
-
-  ci_high <-
-    stability_summary$BootstrapCutoffCI975[
-      1L
-    ]
-
-
-  p2 <- ggplot(
-    scan_df,
-    aes(
-      cutoff,
-      transition_effect_size
-    )
-  )
-
-
-  if (
-    is.finite(ci_low) &&
-    is.finite(ci_high)
-  ) {
-
-    p2 <- p2 +
-
-      annotate(
-        "rect",
-        xmin = ci_low,
-        xmax = ci_high,
-        ymin = -Inf,
-        ymax = Inf,
-        alpha = 0.10
-      )
-  }
-
-
-  p2 <- p2 +
-
-    geom_hline(
-      yintercept = 0,
-      linetype = "dashed",
-      linewidth = 0.4
-    ) +
-
-    geom_line(
-      linewidth = 0.8
-    ) +
-
-    geom_vline(
-      xintercept = cutoff,
-      linewidth = 0.9
-    ) +
-
-    geom_point(
-      data = selected_df,
-      aes(
-        cutoff,
-        transition_effect_size
-      ),
-      size = 3
-    ) +
-
-    labs(
-
-      title =
-        "Full-rank-axis NB1-like to NB2-like transition scan",
-
-      subtitle =
-        paste0(
-          "Primary score = standardized NB2-NB1 effect size; ",
-          "no standard-error or sqrt(n) term; status = ",
-          stability_summary$Status[
-            1L
-          ]
-        ),
-
-      x =
-        "Candidate cutoff rank",
-
-      y =
-        "NB2-NB1 transition effect size"
-    ) +
-
-    theme_bw(
-      base_size = 11
-    ) +
-
-    theme(
-      panel.grid.minor =
-        element_blank()
-    )
-
-
-  # ---------------------------------------------------------------------------
-  # PANEL 3: selected LEFT/RIGHT medians.
-  # ---------------------------------------------------------------------------
-
-  region_df <- data.frame(
-
-    metric =
-      factor(
-        c(
-          "NB2-NB1",
-          "NB2",
-          "alpha*mu"
-        ),
-        levels =
-          rev(
-            c(
-              "NB2-NB1",
-              "NB2",
-              "alpha*mu"
-            )
-          )
-      ),
-
-    LEFT =
-      c(
-        selected_summary$left_median_NB2_NB1[
-          1L
-        ],
-        selected_summary$left_median_NB2[
-          1L
-        ],
-        selected_summary$left_median_alpha_mu[
-          1L
-        ]
-      ),
-
-    RIGHT =
-      c(
-        selected_summary$right_median_NB2_NB1[
-          1L
-        ],
-        selected_summary$right_median_NB2[
-          1L
-        ],
-        selected_summary$right_median_alpha_mu[
-          1L
-        ]
-      ),
-
-    stringsAsFactors = FALSE
-  )
-
-
-  p3 <- ggplot(
-    region_df,
-    aes(
-      y = metric
-    )
-  ) +
-
-    geom_segment(
-      aes(
-        x = LEFT,
-        xend = RIGHT,
-        yend = metric
-      ),
-      linewidth = 0.8
-    ) +
-
-    geom_point(
-      aes(
-        x = LEFT,
-        shape = "LEFT"
-      ),
-      size = 3.2
-    ) +
-
-    geom_point(
-      aes(
-        x = RIGHT,
-        shape = "RIGHT"
-      ),
-      size = 3.2
-    ) +
-
-    scale_shape_manual(
-      values =
-        c(
-          "LEFT" = 16,
-          "RIGHT" = 17
-        )
-    ) +
-
-    labs(
-
-      title =
-        "Selected matched LEFT versus RIGHT transition",
-
-      subtitle =
-        paste0(
-          "Comparison-window n = ",
-          selected_summary$comparison_window_n[
-            1L
-          ],
-          "; terminal leading-edge n = ",
-          selected_summary$final_terminal_tail_n[
-            1L
-          ],
-          "; bootstrap cutoff median = ",
-          round(
-            stability_summary$BootstrapCutoffMedian[
-              1L
-            ]
-          )
-        ),
-
-      x =
-        "Median feature-level diagnostic",
-
-      y =
-        NULL,
-
-      shape =
+      color =
         NULL
     ) +
 
@@ -3591,12 +4121,323 @@ build_figure <- function(
     ) +
 
     theme(
+
       panel.grid.minor =
         element_blank(),
+
       legend.position =
         "bottom"
     )
 
+  p2 <- ggplot() +
+
+    annotate(
+      "rect",
+      xmin = left_min,
+      xmax = left_max,
+      ymin = -Inf,
+      ymax = Inf,
+      fill = COL$left_fill,
+      alpha = 0.70
+    ) +
+
+    annotate(
+      "rect",
+      xmin = right_min,
+      xmax = right_max,
+      ymin = -Inf,
+      ymax = Inf,
+      fill = COL$right_fill,
+      alpha = 0.70
+    ) +
+
+    annotate(
+      "rect",
+      xmin = anchor,
+      xmax = terminal,
+      ymin = -Inf,
+      ymax = Inf,
+      fill = COL$interval_fill,
+      alpha = 0.18
+    ) +
+
+    geom_vline(
+
+      data =
+        vline_df,
+
+      aes(
+        xintercept = xint
+      ),
+
+      color =
+        "grey35",
+
+      linetype =
+        "dashed",
+
+      linewidth =
+        0.5
+    ) +
+
+    geom_line(
+
+      data =
+        nb_long,
+
+      aes(
+        rank,
+        value,
+        color = metric
+      ),
+
+      linewidth =
+        0.95
+    ) +
+
+    annotate(
+
+      "label",
+
+      x =
+        pos$left_x,
+
+      y =
+        mid_y *
+        0.96,
+
+      label =
+        box3,
+
+      hjust = 0,
+      vjust = 1,
+      size = 2.8,
+      label.size = 0.25,
+
+      fill =
+        grDevices::adjustcolor(
+          "white",
+          alpha.f = 0.96
+        )
+    ) +
+
+    annotate(
+
+      "label",
+
+      x =
+        pos$stat_x,
+
+      y =
+        mid_y *
+        0.70,
+
+      label =
+        box4,
+
+      hjust = 0,
+      vjust = 1,
+      size = 2.8,
+      label.size = 0.25,
+
+      fill =
+        grDevices::adjustcolor(
+          "white",
+          alpha.f = 0.96
+        )
+    ) +
+
+    scale_color_manual(
+      values = TRACE_COLORS,
+      breaks = TRACE_LEVELS
+    ) +
+
+    labs(
+
+      title =
+        paste0(
+          comparison_name,
+          " ",
+          arm_name,
+          ": corroboration"
+        ),
+
+      subtitle =
+        paste0(
+          "RIGHT is compared directly with the matched LEFT ",
+          "block after geometry is fixed"
+        ),
+
+      x =
+        "Rank",
+
+      y =
+        "NB2-related signal",
+
+      color =
+        NULL
+    ) +
+
+    theme_bw(
+      base_size = 11
+    ) +
+
+    theme(
+
+      panel.grid.minor =
+        element_blank(),
+
+      legend.position =
+        "bottom"
+    )
+
+  summary_df <- data.frame(
+
+    metric =
+      factor(
+
+        c(
+          "NB2",
+          "NB2-NB1",
+          "alpha*mu"
+        ),
+
+        levels =
+          rev(
+            c(
+              "NB2",
+              "NB2-NB1",
+              "alpha*mu"
+            )
+          )
+      ),
+
+    LEFT =
+      c(
+        region_summary$left_NB2,
+        region_summary$left_gap,
+        region_summary$left_alpha
+      ),
+
+    RIGHT =
+      c(
+        region_summary$right_NB2,
+        region_summary$right_gap,
+        region_summary$right_alpha
+      ),
+
+    stringsAsFactors = FALSE
+  )
+
+  p3 <- ggplot(
+    summary_df,
+    aes(
+      y = metric
+    )
+  ) +
+
+    geom_segment(
+
+      aes(
+        x = LEFT,
+        xend = RIGHT,
+        yend = metric
+      ),
+
+      color =
+        "#7A7A7A",
+
+      linewidth =
+        0.8
+    ) +
+
+    geom_point(
+
+      aes(
+        x = LEFT,
+        color = "LEFT"
+      ),
+
+      size =
+        3.4
+    ) +
+
+    geom_point(
+
+      aes(
+        x = RIGHT,
+        color = "RIGHT"
+      ),
+
+      size =
+        3.4
+    ) +
+
+    scale_color_manual(
+
+      values =
+        REGION_COLORS,
+
+      breaks =
+        REGION_LEVELS
+    ) +
+
+    labs(
+
+      title =
+        paste0(
+          comparison_name,
+          " ",
+          arm_name,
+          ": summary"
+        ),
+
+      subtitle =
+        paste0(
+
+          "Bootstrap Anchor 95% interval: ",
+
+          round(
+            stability_summary$AnchorCI025[
+              1L
+            ]
+          ),
+
+          "-",
+
+          round(
+            stability_summary$AnchorCI975[
+              1L
+            ]
+          ),
+
+          "; RIGHT n = ",
+
+          region_summary$right_n
+        ),
+
+      x =
+        "Median",
+
+      y =
+        NULL,
+
+      color =
+        NULL
+    ) +
+
+    theme_bw(
+      base_size = 11
+    ) +
+
+    theme(
+
+      panel.grid.minor =
+        element_blank(),
+
+      legend.position =
+        "bottom"
+    )
 
   save_three_panel_plot(
     list(
@@ -3608,9 +4449,8 @@ build_figure <- function(
   )
 }
 
-
 # =============================================================================
-# RUN ONE TRACK
+# ONE ANALYSIS TRACK
 # =============================================================================
 
 run_one_track <- function(
@@ -3620,10 +4460,11 @@ run_one_track <- function(
     metric_matrix,
     output_dir,
     track,
-    rank_method,
+    fig_tag,
+    rank_tag,
+    metric_tag,
     metric_name,
     seed) {
-
 
   prefix <- paste(
     comparison_name,
@@ -3632,7 +4473,6 @@ run_one_track <- function(
     sep = "_"
   )
 
-
   message(
     "[",
     track,
@@ -3640,71 +4480,44 @@ run_one_track <- function(
     comparison_name,
     " ",
     arm_name,
-    ": scanning full admissible rank axis..."
+    ": detecting data-derived terminal transition..."
   )
 
-
-  full_analysis <- analyze_full_track(
+  geometry <- compute_geometric_selection(
     rank_matrix,
     metric_matrix
   )
 
-
-  # ---------------------------------------------------------------------------
-  # Always save ranked features and geometry when available.
-  # ---------------------------------------------------------------------------
-
-  write.csv(
-    full_analysis$feature_df,
-    file.path(
-      output_dir,
-      paste0(
-        "Table_RankedFeatures_",
-        prefix,
-        ".csv"
-      )
-    ),
-    row.names = FALSE
-  )
-
-
-  write.csv(
-    full_analysis$geometry$zero_df,
-    file.path(
-      output_dir,
-      paste0(
-        "Table_ZeroCrossings_",
-        prefix,
-        ".csv"
-      )
-    ),
-    row.names = FALSE
-  )
-
-
-  write.csv(
-    full_analysis$scan$scan_df,
-    file.path(
-      output_dir,
-      paste0(
-        "Table_CutoffScan_",
-        prefix,
-        ".csv"
-      )
-    ),
-    row.names = FALSE
-  )
-
-
-  # ---------------------------------------------------------------------------
-  # No directionally valid full-data transition.
-  # ---------------------------------------------------------------------------
-
   if (
-    !isTRUE(full_analysis$valid)
+    !is.null(
+      geometry$detector$scale_df
+    )
   ) {
 
-    fail_row <- data.frame(
+    write.csv(
+
+      geometry$detector$scale_df,
+
+      file.path(
+        output_dir,
+        paste0(
+          "Table_TransitionScales_",
+          prefix,
+          ".csv"
+        )
+      ),
+
+      row.names = FALSE
+    )
+  }
+
+  if (
+    !isTRUE(
+      geometry$valid
+    )
+  ) {
+
+    fail <- data.frame(
 
       comp =
         comparison_name,
@@ -3716,23 +4529,47 @@ run_one_track <- function(
         track,
 
       rank_method =
-        rank_method,
+        rank_tag,
 
       metric_matrix =
         metric_name,
 
       Status =
-        "NO_VALID_TRANSITION",
+        "NO_VALID_GEOMETRY",
 
       Reason =
-        full_analysis$reason,
+        geometry$reason,
+
+      Anchor =
+        NA_integer_,
+
+      Ref =
+        if (
+          !is.null(
+            geometry$detector$reference_rank
+          )
+        ) {
+          geometry$detector$reference_rank
+        } else {
+          NA_integer_
+        },
+
+      Terminal =
+        NA_integer_,
+
+      LeftSize =
+        NA_integer_,
+
+      RightSize =
+        NA_integer_,
 
       stringsAsFactors = FALSE
     )
 
-
     write.csv(
-      fail_row,
+
+      fail,
+
       file.path(
         output_dir,
         paste0(
@@ -3741,73 +4578,94 @@ run_one_track <- function(
           ".csv"
         )
       ),
+
       row.names = FALSE
     )
 
-
     message(
+
       "[",
       track,
       "] ",
       comparison_name,
       " ",
       arm_name,
-      " | NO_VALID_TRANSITION"
+      " | NO_VALID_GEOMETRY | ",
+      geometry$reason
     )
-
 
     return(
       list(
-        summary = fail_row,
+        summary = fail,
         stability_summary = data.frame()
       )
     )
   }
 
+  interval_info <-
+    geometry$interval_info
 
-  selected <- full_analysis$scan$selected
+  total_n <-
+    geometry$total_n
 
+  feature_df <- compute_ranked_feature_metrics(
+    metric_matrix,
+    geometry$rank_order
+  )
 
-  cutoff <- as.integer(
-    selected$cutoff[
-      1L
+  feature_df$abs_pc1_loading <-
+    geometry$abs_loadings[
+      geometry$rank_order
     ]
+
+  region_summary <- summarize_regions(
+    feature_df,
+    interval_info$anchor,
+    total_n
   )
 
+  validate_method_level(
 
-  selected_summary <- summarize_selected_transition(
-    full_analysis$feature_df,
-    selected
+    feature_df =
+      feature_df,
+
+    interval_info =
+      interval_info,
+
+    region_summary =
+      region_summary,
+
+    total_n =
+      total_n
   )
-
 
   message(
+
     "[",
     track,
     "] ",
     comparison_name,
     " ",
     arm_name,
-    ": full-data optimum cutoff=",
-    cutoff,
-    ", terminal leading edge n=",
-    selected_summary$final_terminal_tail_n[
-      1L
-    ],
-    ", effect size=",
-    sprintf(
-      "%.4f",
-      selected$transition_effect_size[
-        1L
-      ]
-    ),
-    "; bootstrapping ",
+
+    " | full-data Anchor=",
+    interval_info$anchor,
+
+    " Ref=",
+    interval_info$ref,
+
+    " Terminal=",
+    interval_info$terminal,
+
+    " RIGHT n=",
+    region_summary$right_n,
+
+    " | bootstrapping ",
     BOOTSTRAP_N,
     " replicates..."
   )
 
-
-  stability <- assess_cutoff_stability(
+  stability <- assess_geometry_stability(
 
     rank_matrix =
       rank_matrix,
@@ -3815,8 +4673,8 @@ run_one_track <- function(
     metric_matrix =
       metric_matrix,
 
-    full_analysis =
-      full_analysis,
+    full_geometry =
+      geometry,
 
     bootstrap_n =
       BOOTSTRAP_N,
@@ -3828,52 +4686,26 @@ run_one_track <- function(
       BOOTSTRAP_CORES
   )
 
-
-  write.csv(
-    stability$bootstrap_df,
-    file.path(
-      output_dir,
-      paste0(
-        "Table_Bootstrap_",
-        prefix,
-        ".csv"
-      )
-    ),
-    row.names = FALSE
-  )
-
-
   stability_summary <- cbind(
 
     data.frame(
+
       comp =
         comparison_name,
+
       arm =
         arm_name,
+
       track =
         track,
+
       stringsAsFactors = FALSE
     ),
 
     stability$stability_summary
   )
 
-
-  write.csv(
-    stability_summary,
-    file.path(
-      output_dir,
-      paste0(
-        "Table_StabilitySummary_",
-        prefix,
-        ".csv"
-      )
-    ),
-    row.names = FALSE
-  )
-
-
-  summary_row <- data.frame(
+  selected_df <- data.frame(
 
     comp =
       comparison_name,
@@ -3885,7 +4717,7 @@ run_one_track <- function(
       track,
 
     rank_method =
-      rank_method,
+      rank_tag,
 
     metric_matrix =
       metric_name,
@@ -3895,152 +4727,283 @@ run_one_track <- function(
         1L
       ],
 
+    Anchor =
+      interval_info$anchor,
 
-    Cutoff =
-      cutoff,
+    Ref =
+      interval_info$ref,
 
-    ComparisonWindowN =
-      selected$window_n[
-        1L
-      ],
+    Terminal =
+      interval_info$terminal,
 
-    TerminalLeadingEdgeN =
-      selected_summary$final_terminal_tail_n[
-        1L
-      ],
+    IntMin =
+      interval_info$interval_min,
 
-    TerminalLeadingEdgeFraction =
-      selected_summary$final_terminal_tail_fraction[
-        1L
-      ],
+    IntMax =
+      interval_info$interval_max,
 
+    TransitionValidScales =
+      geometry$detector$valid_scales,
 
-    TransitionEffectSize =
-      selected$transition_effect_size[
-        1L
-      ],
+    TransitionTotalScales =
+      geometry$detector$total_scales,
 
+    TransitionScaleRefIQR =
+      geometry$detector$scale_iqr,
 
-    MeanDelta_NB2_NB1 =
-      selected$delta_NB2_NB1[
-        1L
-      ],
+    TransitionScaleRefIQRFraction =
+      geometry$detector$scale_iqr_fraction,
 
-    MeanDelta_NB2 =
-      selected$delta_NB2[
-        1L
-      ],
-
-    MeanDelta_alpha_mu =
-      selected$delta_alpha_mu[
-        1L
-      ],
-
-
-    MedianDelta_NB2_NB1 =
-      selected_summary$delta_median_NB2_NB1[
-        1L
-      ],
-
-    MedianDelta_NB2 =
-      selected_summary$delta_median_NB2[
-        1L
-      ],
-
-    MedianDelta_alpha_mu =
-      selected_summary$delta_median_alpha_mu[
-        1L
-      ],
-
-
-    NearestD2Crossing =
-      full_analysis$nearest_crossing$rank,
-
-    DistanceToNearestD2 =
-      full_analysis$nearest_crossing$distance,
-
-
-    BoundaryHit =
-      full_analysis$scan$boundary_hit,
-
-
-    BootstrapValidRate =
-      stability_summary$BootstrapValidRate[
-        1L
-      ],
-
-    CutoffRecoveryRate =
-      stability_summary$CutoffRecoveryRate[
-        1L
-      ],
-
-    CutoffIQR =
-      stability_summary$CutoffIQR[
-        1L
-      ],
-
-    CutoffIQRFraction =
-      stability_summary$CutoffIQRFraction[
-        1L
-      ],
-
-
-    BootstrapCutoffCI025 =
-      stability_summary$BootstrapCutoffCI025[
-        1L
-      ],
-
-    BootstrapCutoffMedian =
-      stability_summary$BootstrapCutoffMedian[
-        1L
-      ],
-
-    BootstrapCutoffCI975 =
-      stability_summary$BootstrapCutoffCI975[
-        1L
-      ],
-
-
-    BootstrapTailNCI025 =
-      stability_summary$BootstrapTailNCI025[
-        1L
-      ],
-
-    BootstrapTailNMedian =
-      stability_summary$BootstrapTailNMedian[
-        1L
-      ],
-
-    BootstrapTailNCI975 =
-      stability_summary$BootstrapTailNCI975[
-        1L
-      ],
-
-
-    MedianJaccard =
-      stability_summary$MedianJaccard[
-        1L
-      ],
+    TransitionMedianBICGain =
+      geometry$detector$median_BIC_gain,
 
     stringsAsFactors = FALSE
   )
 
+  cutoff_summary <- bind_cols(
+    selected_df,
+    region_summary
+  ) %>%
+
+    mutate(
+
+      LeftSize =
+        region_summary$left_n,
+
+      RightSize =
+        region_summary$right_n,
+
+      BootstrapValidRate =
+        stability_summary$BootstrapValidRate[
+          1L
+        ],
+
+      RefRecoveryRate =
+        stability_summary$RefRecoveryRate[
+          1L
+        ],
+
+      AnchorRecoveryRate =
+        stability_summary$AnchorRecoveryRate[
+          1L
+        ],
+
+      TerminalRecoveryRate =
+        stability_summary$TerminalRecoveryRate[
+          1L
+        ],
+
+      AnchorCI025 =
+        stability_summary$AnchorCI025[
+          1L
+        ],
+
+      AnchorMedian =
+        stability_summary$AnchorMedian[
+          1L
+        ],
+
+      AnchorCI975 =
+        stability_summary$AnchorCI975[
+          1L
+        ],
+
+      RightNCI025 =
+        stability_summary$RightNCI025[
+          1L
+        ],
+
+      RightNMedian =
+        stability_summary$RightNMedian[
+          1L
+        ],
+
+      RightNCI975 =
+        stability_summary$RightNCI975[
+          1L
+        ],
+
+      MedianJaccard =
+        stability_summary$MedianJaccard[
+          1L
+        ],
+
+      Call_NB2 =
+        ifelse(
+          diff_NB2 > 0,
+          "RIGHT",
+          "NOT_RIGHT"
+        ),
+
+      Call_Gap =
+        ifelse(
+          diff_gap > 0,
+          "RIGHT",
+          "NOT_RIGHT"
+        ),
+
+      Call_Alpha =
+        ifelse(
+          diff_alpha > 0,
+          "RIGHT",
+          "NOT_RIGHT"
+        )
+    )
+
+  zero_path <- file.path(
+    output_dir,
+    paste0(
+      "Table_Zero_",
+      prefix,
+      ".csv"
+    )
+  )
+
+  valid_path <- file.path(
+    output_dir,
+    paste0(
+      "Table_Valid_",
+      prefix,
+      ".csv"
+    )
+  )
+
+  rank_path <- file.path(
+    output_dir,
+    paste0(
+      "Table_Rank_",
+      prefix,
+      ".csv"
+    )
+  )
+
+  cut_path <- file.path(
+    output_dir,
+    paste0(
+      "Table_Cutoff_",
+      prefix,
+      ".csv"
+    )
+  )
+
+  boot_path <- file.path(
+    output_dir,
+    paste0(
+      "Table_Bootstrap_",
+      prefix,
+      ".csv"
+    )
+  )
+
+  stability_path <- file.path(
+    output_dir,
+    paste0(
+      "Table_StabilitySummary_",
+      prefix,
+      ".csv"
+    )
+  )
+
+  fig_path <- file.path(
+    output_dir,
+    paste0(
+      "Figure_",
+      track,
+      "_",
+      comparison_name,
+      "_",
+      arm_name,
+      ".png"
+    )
+  )
 
   write.csv(
-    summary_row,
-    file.path(
-      output_dir,
-      paste0(
-        "Table_Cutoff_",
-        prefix,
-        ".csv"
-      )
-    ),
+    geometry$zero_df,
+    zero_path,
     row.names = FALSE
   )
 
+  write.csv(
+    stability$bootstrap_df,
+    boot_path,
+    row.names = FALSE
+  )
 
-  build_figure(
+  write.csv(
+    stability_summary,
+    stability_path,
+    row.names = FALSE
+  )
+
+  write.csv(
+
+    data.frame(
+
+      comp =
+        comparison_name,
+
+      arm =
+        arm_name,
+
+      track =
+        track,
+
+      Status =
+        stability_summary$Status[
+          1L
+        ],
+
+      Anchor_lt_Ref =
+        interval_info$anchor <
+        interval_info$ref,
+
+      Ref_lt_Terminal =
+        interval_info$ref <
+        interval_info$terminal,
+
+      LeftN =
+        region_summary$left_n,
+
+      RightN =
+        region_summary$right_n,
+
+      EqualRegionSize =
+        region_summary$left_n ==
+        region_summary$right_n,
+
+      PassStability =
+        stability_summary$PassStability[
+          1L
+        ],
+
+      stringsAsFactors = FALSE
+    ),
+
+    valid_path,
+
+    row.names = FALSE
+  )
+
+  write.csv(
+
+    feature_df %>%
+      left_join(
+        geometry$variance_df,
+        by = "rank"
+      ),
+
+    rank_path,
+
+    row.names = FALSE
+  )
+
+  write.csv(
+    cutoff_summary,
+    cut_path,
+    row.names = FALSE
+  )
+
+  build_main_figure(
 
     comparison_name =
       comparison_name,
@@ -4048,117 +5011,117 @@ run_one_track <- function(
     arm_name =
       arm_name,
 
-    track =
-      track,
+    variance_df =
+      geometry$variance_df,
 
-    full_analysis =
-      full_analysis,
+    feature_df =
+      feature_df,
 
-    selected_summary =
-      selected_summary,
+    interval_info =
+      interval_info,
+
+    region_summary =
+      region_summary,
+
+    detector =
+      geometry$detector,
 
     stability_summary =
       stability_summary,
 
     out_file =
-      file.path(
-        output_dir,
-        paste0(
-          "Figure_",
-          track,
-          "_",
-          comparison_name,
-          "_",
-          arm_name,
-          ".png"
-        )
-      )
+      fig_path,
+
+    fig_tag =
+      fig_tag,
+
+    rank_tag =
+      rank_tag,
+
+    metric_tag =
+      metric_tag
   )
 
-
   message(
+
     "[",
     track,
     "] ",
     comparison_name,
     " ",
     arm_name,
+
     " | ",
     stability_summary$Status[
       1L
     ],
-    " | cutoff=",
-    cutoff,
-    " | terminal leading edge n=",
-    selected_summary$final_terminal_tail_n[
-      1L
-    ],
-    " | effect size=",
+
+    " | Anchor=",
+    interval_info$anchor,
+
+    " Ref=",
+    interval_info$ref,
+
+    " Terminal=",
+    interval_info$terminal,
+
+    " | RIGHT n=",
+    region_summary$right_n,
+
+    " | bootstrap Anchor median=",
+    round(
+      stability_summary$AnchorMedian[
+        1L
+      ]
+    ),
+
+    " | 95% Anchor interval=",
+    round(
+      stability_summary$AnchorCI025[
+        1L
+      ]
+    ),
+
+    "-",
+
+    round(
+      stability_summary$AnchorCI975[
+        1L
+      ]
+    ),
+
+    " | Jaccard(descriptive)=",
+
     sprintf(
-      "%.4f",
-      selected$transition_effect_size[
-        1L
-      ]
-    ),
-    " | bootstrap median cutoff=",
-    round(
-      stability_summary$BootstrapCutoffMedian[
-        1L
-      ]
-    ),
-    " | 95% cutoff interval=",
-    round(
-      stability_summary$BootstrapCutoffCI025[
-        1L
-      ]
-    ),
-    "-",
-    round(
-      stability_summary$BootstrapCutoffCI975[
-        1L
-      ]
-    ),
-    " | 95% terminal-tail interval=",
-    round(
-      stability_summary$BootstrapTailNCI025[
-        1L
-      ]
-    ),
-    "-",
-    round(
-      stability_summary$BootstrapTailNCI975[
+      "%.3f",
+      stability_summary$MedianJaccard[
         1L
       ]
     )
   )
 
-
   list(
 
     summary =
-      summary_row,
+      cutoff_summary,
 
     stability_summary =
       stability_summary
   )
 }
 
-
 # =============================================================================
-# RUN COMPLETE ANALYSIS
+# RUN
 # =============================================================================
 
 count_mat <- read_count_matrix(
-  COUNT_FILE,
-  COMPARISONS
+  COUNT_FILE
 )
-
 
 message(
   "Using count file: ",
   COUNT_FILE
 )
-
 
 message(
   "Count matrix dimensions: ",
@@ -4168,52 +5131,44 @@ message(
   " samples"
 )
 
-
 message(
   "Fixed 5,000-feature reference: REMOVED"
 )
 
-
 message(
-  "N_eff reference: REMOVED"
+  "Terminal detector: multiscale continuous segmented regression"
 )
 
-
 message(
-  "Standard-error / t-like cutoff score: REMOVED"
+  "Transition smoothing scales: ",
+  paste(
+    TRANSITION_SPARS,
+    collapse = ", "
+  )
 )
 
-
 message(
-  "Primary cutoff criterion: NB2-NB1 standardized effect size"
-)
-
-
-message(
-  "Minimum comparison window: max(",
-  MIN_WINDOW_ABSOLUTE,
+  "Minimum change-point segment guardrail: max(",
+  MIN_TRANSITION_SEGMENT_ABSOLUTE,
   " features, ",
-  100 * MIN_WINDOW_FRACTION,
+  100 *
+  MIN_TRANSITION_SEGMENT_FRACTION,
   "% of N)"
 )
-
 
 message(
   "Bootstrap replicates per track: ",
   BOOTSTRAP_N
 )
 
-
 message(
   "Bootstrap cores: ",
   BOOTSTRAP_CORES
 )
 
+overall_rows <- list()
 
-all_summary_rows <- list()
-
-all_stability_rows <- list()
-
+overall_stability_rows <- list()
 
 for (
   comparison_name in names(
@@ -4221,12 +5176,10 @@ for (
   )
 ) {
 
-
   comp_dir <- file.path(
     OUT_ROOT,
     comparison_name
   )
-
 
   dir.create(
     comp_dir,
@@ -4234,11 +5187,9 @@ for (
     showWarnings = FALSE
   )
 
-
   pats <- COMPARISONS[[
     comparison_name
   ]]
-
 
   for (
     arm_name in c(
@@ -4247,12 +5198,10 @@ for (
     )
   ) {
 
-
     sample_idx <- grep(
       pats[[arm_name]],
       colnames(count_mat)
     )
-
 
     if (
       length(sample_idx) < 2L
@@ -4262,12 +5211,9 @@ for (
         "Not enough samples for ",
         comparison_name,
         " ",
-        arm_name,
-        ". Matched columns: ",
-        length(sample_idx)
+        arm_name
       )
     }
-
 
     count_mat_arm <- count_mat[
       ,
@@ -4275,21 +5221,13 @@ for (
       drop = FALSE
     ]
 
-
     # =========================================================================
-    # MAIN TRACK
-    #
-    # PC1 ranking:
-    #     CPM log1p
-    #
-    # Mean/variance/NB diagnostics:
-    #     raw counts
+    # MAIN MANUSCRIPT TRACK
     # =========================================================================
 
     main_rank_matrix <- normalize_cpm_log1p(
       count_mat_arm
     )
-
 
     main_res <- run_one_track(
 
@@ -4311,8 +5249,14 @@ for (
       track =
         "Main",
 
-      rank_method =
-        "CPM log1p",
+      fig_tag =
+        "Main",
+
+      rank_tag =
+        "Rank: CPM log1p",
+
+      metric_tag =
+        "Metrics: raw counts",
 
       metric_name =
         "raw_counts",
@@ -4328,12 +5272,10 @@ for (
         )
     )
 
-
-    all_summary_rows[[
-      length(all_summary_rows) +
-        1L
+    overall_rows[[
+      length(overall_rows) +
+      1L
     ]] <- main_res$summary
-
 
     if (
       nrow(
@@ -4341,12 +5283,11 @@ for (
       ) > 0L
     ) {
 
-      all_stability_rows[[
-        length(all_stability_rows) +
-          1L
+      overall_stability_rows[[
+        length(overall_stability_rows) +
+        1L
       ]] <- main_res$stability_summary
     }
-
 
     # =========================================================================
     # DESEQ2 SUPPLEMENTARY TRACK
@@ -4356,7 +5297,6 @@ for (
       RUN_DESEQ2_SUPPLEMENT
     ) {
 
-
       deseq2_obj <- compute_deseq2_matrices(
 
         count_mat_arm,
@@ -4365,20 +5305,20 @@ for (
           DESEQ2_RANK_METHOD
       )
 
-
       if (
-        is.null(deseq2_obj)
+        is.null(
+          deseq2_obj
+        )
       ) {
 
         message(
-          "[DESeq2] skipped: required package(s) unavailable for ",
+          "[DESeq2] skipped: package not available for ",
           comparison_name,
           " ",
           arm_name
         )
 
       } else {
-
 
         deseq2_res <- run_one_track(
 
@@ -4400,8 +5340,14 @@ for (
           track =
             "DESeq2",
 
-          rank_method =
+          fig_tag =
+            "DESeq2 supplement",
+
+          rank_tag =
             deseq2_obj$rank_method_used,
+
+          metric_tag =
+            "Metrics: DESeq2 normalized",
 
           metric_name =
             "deseq2_normalized_counts",
@@ -4416,7 +5362,6 @@ for (
               )
             )
         )
-
 
         write.csv(
 
@@ -4449,12 +5394,10 @@ for (
           row.names = FALSE
         )
 
-
-        all_summary_rows[[
-          length(all_summary_rows) +
-            1L
+        overall_rows[[
+          length(overall_rows) +
+          1L
         ]] <- deseq2_res$summary
-
 
         if (
           nrow(
@@ -4462,9 +5405,9 @@ for (
           ) > 0L
         ) {
 
-          all_stability_rows[[
-            length(all_stability_rows) +
-              1L
+          overall_stability_rows[[
+            length(overall_stability_rows) +
+            1L
           ]] <- deseq2_res$stability_summary
         }
       }
@@ -4472,91 +5415,70 @@ for (
   }
 }
 
-
 # =============================================================================
 # OVERALL OUTPUTS
 # =============================================================================
 
 overall_summary <- bind_rows(
-  all_summary_rows
+  overall_rows
 )
-
 
 overall_stability <- bind_rows(
-  all_stability_rows
+  overall_stability_rows
 )
 
-
 write.csv(
+
   overall_summary,
+
   file.path(
     OUT_ROOT,
     "Table_Overall_Cutoff.csv"
   ),
+
   row.names = FALSE
 )
 
-
 write.csv(
+
   overall_stability,
+
   file.path(
     OUT_ROOT,
     "Table_Overall_Stability.csv"
   ),
+
   row.names = FALSE
 )
-
 
 message(
   "============================================================"
 )
 
-
 message(
   "Analysis complete."
 )
 
-
 message(
-  "All admissible cutoff ranks were searched."
+  "No fixed 5,000-feature reference was used."
 )
 
-
 message(
-  "The historical 5,000-site cutoff was not supplied anywhere."
+  "The terminal reference was estimated from variance geometry only."
 )
 
-
 message(
-  "The previous sample-size-biased standard-error score was removed."
+  "Anchor/Ref/Terminal and RIGHT=Anchor->end preserve the original method."
 )
 
-
 message(
-  "The selected cutoff maximizes NB2-NB1 effect-size separation."
+  "NB2-related quantities were evaluated only after geometric selection."
 )
-
-
-message(
-  "NB2 and alpha*mu must independently move in the expected RIGHT direction."
-)
-
-
-message(
-  "Boundary optima are explicitly flagged rather than accepted."
-)
-
-
-message(
-  "Bootstrap repeats the entire PC1/ranking/cutoff-selection procedure."
-)
-
 
 message(
   "Outputs written to: ",
   OUT_ROOT
 )
-
 
 message(
   "============================================================"
