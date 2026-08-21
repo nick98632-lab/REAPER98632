@@ -1707,8 +1707,7 @@ make_main_figure <- function(
         )
       ),
       y = Inf,
-      label = "P[i] == lambda[1]*v[i*1]^2 == d[1]^2*v[i*1]^2/(n-1)",
-      parse = TRUE,
+      label = "Pᵢ = λ₁vᵢ₁² = d₁²vᵢ₁²/(n−1)",
       hjust = 0,
       vjust = 1.2,
       size = 3.0,
@@ -1880,8 +1879,7 @@ make_main_figure <- function(
         )
       ),
       y = 0.96,
-      label = "p(r) == P(r)/sum[j](P(j))~~','~~q(r) == E(r)/sum[j](E(j))",
-      parse = TRUE,
+      label = "p(r) = P(r)/ΣⱼP(j)     q(r) = E(r)/ΣⱼE(j)",
       hjust = 0,
       vjust = 1,
       size = 2.9,
@@ -1897,8 +1895,7 @@ make_main_figure <- function(
         )
       ),
       y = 0.74,
-      label = "D(r) == F[E](r)-F[P](r)~~','~~Delta*D(r) == q(r)-p(r)",
-      parse = TRUE,
+      label = "D(r) = F_E(r) − F_P(r)     ΔD(r) = q(r) − p(r)",
       hjust = 0,
       vjust = 1,
       size = 2.9,
@@ -1945,7 +1942,7 @@ make_main_figure <- function(
   )
 
   equation_box <-
-    "D[g](x) == beta[0*g] + beta[1*g]*x + gamma[1*g]*(x-c[1])['+'] + gamma[2*g]*(x-c[2])['+']"
+    "D_g(x) = β₀g + β₁g x + γ₁g(x − c₁)₊ + γ₂g(x − c₂)₊"
 
   pC <- ggplot(
     consensus_df,
@@ -2021,7 +2018,6 @@ make_main_figure <- function(
       ),
       y = Inf,
       label = equation_box,
-      parse = TRUE,
       hjust = 0,
       vjust = 1.2,
       size = 2.8,
