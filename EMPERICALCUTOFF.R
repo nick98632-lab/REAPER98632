@@ -89,31 +89,44 @@ options(stringsAsFactors = FALSE)
 # first and second derivatives are evaluated on the complete normalized rank
 # axis.
 #
-# A transition episode begins where curvature changes from non-positive to
-# positive:
+# A candidate transition episode begins at an inflection where acceleration
+# changes from non-positive to positive:
 #
 #     D_cons''(r):  -  ->  +
 #
-# and continues until the next positive-to-non-positive curvature crossing (or
-# the end of the applicable rank domain). Episode strength is the increase in
-# the smoothed divergence trajectory across that acceleration episode.
+# and continues until the next positive-to-non-positive curvature crossing, or
+# to the terminal end of the ranked axis when positive acceleration persists.
 #
-# The REMAINDER_BOUNDARY is the strongest positive-divergence acceleration
-# episode whose onset lies in the lower-rank half of the ordered axis.
+# A candidate is retained when the smoothed divergence has a positive net rise
+# across that acceleration episode and the episode contains positive slope:
 #
-# The LEADING_EDGE_BOUNDARY is the strongest positive-divergence acceleration
-# episode whose onset lies in the upper-rank half of the ordered axis.
+#     Delta D = D_cons(r_end) - D_cons(r_start) > 0
+#
+#     max D_cons'(r) > 0.
+#
+# After excluding only the small numerical endpoint guard used to protect spline
+# derivatives, the biologically defined boundaries are the OUTERMOST retained
+# transition onsets:
+#
+#     REMAINDER_BOUNDARY   = min(valid transition onset ranks)
+#
+#     LEADING_EDGE_BOUNDARY = max(valid transition onset ranks).
+#
+# Thus no internal transition is selected because it is stronger than another.
+# Everything before the first retained transition belongs to the remainder;
+# everything after the final retained transition belongs to the leading edge;
+# the range between the two transition points is the interval of interest.
 #
 # The same two shared rank boundaries are applied to every arm:
 #
 #     REMAINDER:
-#         ranks < REMAINDER_BOUNDARY
+#         rank < REMAINDER_BOUNDARY
 #
 #     TRANSITION INTERVAL:
-#         REMAINDER_BOUNDARY <= rank < LEADING_EDGE_BOUNDARY
+#         REMAINDER_BOUNDARY <= rank <= LEADING_EDGE_BOUNDARY
 #
 #     LEADING EDGE:
-#         ranks >= LEADING_EDGE_BOUNDARY
+#         rank > LEADING_EDGE_BOUNDARY
 #
 #
 # BOOTSTRAP UNCERTAINTY
@@ -192,21 +205,52 @@ COMPARISONS <- list(
 ENDPOINT_GUARD_FRACTION <- 0.02
 
 
-BOOTSTRAP_N <- 500L
+BOOTSTRAP_N <- as.integer(
+  Sys.getenv(
+    "WTTS_BOOTSTRAP_N",
+    unset = "500"
+  )
+)
+
 BOOTSTRAP_SEED <- 20260820L
 
 
 DETECTED_CORES <- suppressWarnings(
-  parallel::detectCores(logical = FALSE)
+  parallel::detectCores(logical = TRUE)
 )
 
-if (
+
+DEFAULT_BOOTSTRAP_CORES <- if (
   is.na(DETECTED_CORES) ||
   DETECTED_CORES < 2L
 ) {
-  BOOTSTRAP_CORES <- 1L
+  1L
 } else {
-  BOOTSTRAP_CORES <- min(4L, DETECTED_CORES - 1L)
+  min(4L, DETECTED_CORES - 1L)
+}
+
+
+BOOTSTRAP_CORES <- as.integer(
+  Sys.getenv(
+    "WTTS_BOOTSTRAP_CORES",
+    unset = as.character(DEFAULT_BOOTSTRAP_CORES)
+  )
+)
+
+
+if (
+  is.na(BOOTSTRAP_N) ||
+  BOOTSTRAP_N < 1L
+) {
+  stop("WTTS_BOOTSTRAP_N must be a positive integer.")
+}
+
+
+if (
+  is.na(BOOTSTRAP_CORES) ||
+  BOOTSTRAP_CORES < 1L
+) {
+  BOOTSTRAP_CORES <- 1L
 }
 
 
@@ -1607,7 +1651,8 @@ detect_shared_boundaries <- function(
   }
 
 
-  # GCV selects the smoothing level from the observed consensus trajectory.
+  # The smoothing level is selected from the data by generalized
+  # cross-validation rather than by specifying a biological cutoff scale.
   spline_fit <- stats::smooth.spline(
     x = x,
     y = y,
@@ -1656,6 +1701,16 @@ detect_shared_boundaries <- function(
   )
 
 
+  curve_out <- data.frame(
+    rank = consensus_df$rank,
+    x = x,
+    smooth_divergence = smooth_y,
+    derivative_1 = d1,
+    derivative_2 = d2,
+    stringsAsFactors = FALSE
+  )
+
+
   if (
     nrow(episodes) == 0L ||
     !any(episodes$valid)
@@ -1664,14 +1719,7 @@ detect_shared_boundaries <- function(
       list(
         valid = FALSE,
         reason = "no_valid_positive_acceleration_episodes",
-        curve = data.frame(
-          rank = consensus_df$rank,
-          x = x,
-          smooth_divergence = smooth_y,
-          derivative_1 = d1,
-          derivative_2 = d2,
-          stringsAsFactors = FALSE
-        ),
+        curve = curve_out,
         crossings = crossings,
         episodes = episodes,
         spline = spline_fit
@@ -1693,42 +1741,34 @@ detect_shared_boundaries <- function(
         (
           N -
           1
-        ),
-      domain = ifelse(
-        onset_x <= 0.5,
-        "REMAINDER_SIDE",
-        "LEADING_EDGE_SIDE"
-      )
+        )
+    ) %>%
+    arrange(
+      onset_rank
     )
 
 
-  remainder_candidates <- episodes %>%
+  valid_episodes <- episodes %>%
     filter(
-      valid,
-      domain == "REMAINDER_SIDE"
+      valid
+    ) %>%
+    arrange(
+      onset_rank
     )
 
 
-  leading_candidates <- episodes %>%
-    filter(
-      valid,
-      domain == "LEADING_EDGE_SIDE"
-    )
-
-
-  if (nrow(remainder_candidates) == 0L) {
+  # Two distinct outer transitions are required:
+  #   first valid onset  -> remainder boundary
+  #   last valid onset   -> leading-edge boundary
+  #
+  # Importantly, there is NO lower-half/upper-half split and NO selection of
+  # the strongest internal episode.
+  if (nrow(valid_episodes) < 2L) {
     return(
       list(
         valid = FALSE,
-        reason = "no_valid_remainder_side_transition",
-        curve = data.frame(
-          rank = consensus_df$rank,
-          x = x,
-          smooth_divergence = smooth_y,
-          derivative_1 = d1,
-          derivative_2 = d2,
-          stringsAsFactors = FALSE
-        ),
+        reason = "fewer_than_two_valid_outer_transitions",
+        curve = curve_out,
         crossings = crossings,
         episodes = episodes,
         spline = spline_fit
@@ -1737,54 +1777,15 @@ detect_shared_boundaries <- function(
   }
 
 
-  if (nrow(leading_candidates) == 0L) {
-    return(
-      list(
-        valid = FALSE,
-        reason = "no_valid_leading_edge_side_transition",
-        curve = data.frame(
-          rank = consensus_df$rank,
-          x = x,
-          smooth_divergence = smooth_y,
-          derivative_1 = d1,
-          derivative_2 = d2,
-          stringsAsFactors = FALSE
-        ),
-        crossings = crossings,
-        episodes = episodes,
-        spline = spline_fit
-      )
-    )
-  }
-
-
-  # The strongest sustained increase in smoothed divergence identifies each
-  # side's transition episode. Ties are resolved by larger peak slope.
-  remainder_candidates <- remainder_candidates %>%
-    arrange(
-      desc(rise),
-      desc(peak_d1),
-      onset_rank
-    )
-
-
-  leading_candidates <- leading_candidates %>%
-    arrange(
-      desc(rise),
-      desc(peak_d1),
-      onset_rank
-    )
-
-
-  rem <- remainder_candidates[
+  rem <- valid_episodes[
     1L,
     ,
     drop = FALSE
   ]
 
 
-  lead <- leading_candidates[
-    1L,
+  lead <- valid_episodes[
+    nrow(valid_episodes),
     ,
     drop = FALSE
   ]
@@ -1809,27 +1810,52 @@ detect_shared_boundaries <- function(
 
 
   if (
-    remainder_boundary >=
-    leading_edge_boundary
+    remainder_boundary < 2L ||
+    leading_edge_boundary > (N - 1L) ||
+    remainder_boundary >= leading_edge_boundary
   ) {
     return(
       list(
         valid = FALSE,
-        reason = "boundary_order_failure",
-        curve = data.frame(
-          rank = consensus_df$rank,
-          x = x,
-          smooth_divergence = smooth_y,
-          derivative_1 = d1,
-          derivative_2 = d2,
-          stringsAsFactors = FALSE
-        ),
+        reason = "boundary_order_or_endpoint_failure",
+        curve = curve_out,
         crossings = crossings,
         episodes = episodes,
         spline = spline_fit
       )
     )
   }
+
+
+  episodes$selected_boundary <- "NONE"
+
+  rem_idx <- which.min(
+    abs(
+      episodes$onset_rank -
+      rem$onset_rank[
+        1L
+      ]
+    )
+  )
+
+  lead_idx <- which.min(
+    abs(
+      episodes$onset_rank -
+      lead$onset_rank[
+        1L
+      ]
+    )
+  )
+
+
+  episodes$selected_boundary[
+    rem_idx
+  ] <- "REMAINDER_BOUNDARY"
+
+
+  episodes$selected_boundary[
+    lead_idx
+  ] <- "LEADING_EDGE_BOUNDARY"
 
 
   list(
@@ -1839,14 +1865,7 @@ detect_shared_boundaries <- function(
     leading_edge_boundary = leading_edge_boundary,
     remainder_episode = rem,
     leading_episode = lead,
-    curve = data.frame(
-      rank = consensus_df$rank,
-      x = x,
-      smooth_divergence = smooth_y,
-      derivative_1 = d1,
-      derivative_2 = d2,
-      stringsAsFactors = FALSE
-    ),
+    curve = curve_out,
     crossings = crossings,
     episodes = episodes,
     spline = spline_fit,
@@ -1855,7 +1874,6 @@ detect_shared_boundaries <- function(
     spline_df = spline_fit$df
   )
 }
-
 
 # =============================================================================
 # REGION ASSIGNMENT AND SUMMARIES
@@ -1870,7 +1888,7 @@ assign_regions <- function(
     rank < remainder_boundary,
     "REMAINDER",
     ifelse(
-      rank < leading_edge_boundary,
+      rank <= leading_edge_boundary,
       "TRANSITION",
       "LEADING_EDGE"
     )
@@ -2014,6 +2032,7 @@ bootstrap_shared_boundaries <- function(
         reason = reason,
         remainder_boundary = NA_integer_,
         leading_edge_boundary = NA_integer_,
+        remainder_size = NA_integer_,
         transition_width = NA_integer_,
         leading_edge_size = NA_integer_,
         spline_spar = NA_real_,
@@ -2178,8 +2197,9 @@ bootstrap_shared_boundaries <- function(
       reason = NA_character_,
       remainder_boundary = rem,
       leading_edge_boundary = lead,
-      transition_width = lead - rem,
-      leading_edge_size = N - lead + 1L,
+      remainder_size = rem - 1L,
+      transition_width = lead - rem + 1L,
+      leading_edge_size = N - lead,
       spline_spar = detector_b$spline_spar,
       spline_df = detector_b$spline_df,
       stringsAsFactors = FALSE
@@ -2207,10 +2227,48 @@ bootstrap_shared_boundaries <- function(
 
   } else {
 
-    boot_list <- lapply(
-      ids,
-      worker
+    boot_list <- vector(
+      "list",
+      length(ids)
     )
+
+
+    progress_every <- max(
+      1L,
+      floor(
+        bootstrap_n / 20L
+      )
+    )
+
+
+    for (
+      ii in seq_along(ids)
+    ) {
+
+      boot_list[[ii]] <- worker(
+        ids[[ii]]
+      )
+
+
+      if (
+        ii == 1L ||
+        ii %% progress_every == 0L ||
+        ii == bootstrap_n
+      ) {
+        message(
+          "Bootstrap progress: ",
+          ii,
+          "/",
+          bootstrap_n,
+          " (",
+          round(
+            100 * ii / bootstrap_n,
+            1
+          ),
+          "%)"
+        )
+      }
+    }
   }
 
 
@@ -2259,6 +2317,19 @@ bootstrap_shared_boundaries <- function(
     ),
     LeadingQ75 = safe_quantile(
       valid_df$leading_edge_boundary,
+      0.75
+    ),
+
+    RemainderSizeMedian = safe_quantile(
+      valid_df$remainder_size,
+      0.50
+    ),
+    RemainderSizeQ25 = safe_quantile(
+      valid_df$remainder_size,
+      0.25
+    ),
+    RemainderSizeQ75 = safe_quantile(
+      valid_df$remainder_size,
       0.75
     ),
 
@@ -2812,7 +2883,7 @@ build_consensus_figure <- function(
     ) +
     labs(
       title = "Calculus of the consensus divergence trajectory",
-      subtitle = "Boundaries mark the strongest positive-divergence acceleration episodes on the remainder and leading-edge sides",
+      subtitle = "Boundaries are the first and last retained positive-divergence acceleration onsets",
       x = "Rank",
       y = "Robust standardized derivative",
       color = NULL
@@ -3528,6 +3599,12 @@ LEADING_EDGE_BOUNDARY <- detector$leading_edge_boundary
 
 
 message(
+  "Boundary rule: first valid positive-acceleration onset = remainder boundary; ",
+  "last valid positive-acceleration onset = leading-edge boundary."
+)
+
+
+message(
   "Shared REMAINDER_BOUNDARY = ",
   REMAINDER_BOUNDARY
 )
@@ -3540,14 +3617,14 @@ message(
 message(
   "Shared transition interval width = ",
   LEADING_EDGE_BOUNDARY -
-  REMAINDER_BOUNDARY
+  REMAINDER_BOUNDARY +
+  1L
 )
 
 message(
   "Shared terminal leading-edge size = ",
   nrow(consensus_df) -
-  LEADING_EDGE_BOUNDARY +
-  1L
+  LEADING_EDGE_BOUNDARY
 )
 
 
@@ -3602,9 +3679,20 @@ boundary_summary <- data.frame(
   LeadingEdgeBoundaryBootstrapQ75 =
     bootstrap$summary_df$LeadingQ75[1L],
 
+  RemainderSizeFull =
+    REMAINDER_BOUNDARY -
+    1L,
+  RemainderSizeBootstrapMedian =
+    bootstrap$summary_df$RemainderSizeMedian[1L],
+  RemainderSizeBootstrapQ25 =
+    bootstrap$summary_df$RemainderSizeQ25[1L],
+  RemainderSizeBootstrapQ75 =
+    bootstrap$summary_df$RemainderSizeQ75[1L],
+
   TransitionWidthFull =
     LEADING_EDGE_BOUNDARY -
-    REMAINDER_BOUNDARY,
+    REMAINDER_BOUNDARY +
+    1L,
   TransitionWidthBootstrapMedian =
     bootstrap$summary_df$TransitionWidthMedian[1L],
   TransitionWidthBootstrapQ25 =
@@ -3614,8 +3702,7 @@ boundary_summary <- data.frame(
 
   LeadingEdgeSizeFull =
     nrow(consensus_df) -
-    LEADING_EDGE_BOUNDARY +
-    1L,
+    LEADING_EDGE_BOUNDARY,
   LeadingEdgeSizeBootstrapMedian =
     bootstrap$summary_df$LeadingEdgeSizeMedian[1L],
   LeadingEdgeSizeBootstrapQ25 =
