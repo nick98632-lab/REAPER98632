@@ -10,43 +10,113 @@ suppressPackageStartupMessages({
 options(stringsAsFactors = FALSE)
 
 # =============================================================================
-# DIAGNOSTIC ANALYSIS ONLY:
-# PC1 VARIANCE CONTRIBUTION vs NEGATIVE-BINOMIAL EXCESS VARIANCE
+# PC1–NB DIFFERENTIAL GEOMETRY DIAGNOSTIC
+# =============================================================================
 #
-# IMPORTANT:
-#   This script DOES NOT estimate a cutoff.
-#   This script DOES NOT bootstrap.
+# PURPOSE
+# -------
+# This script does NOT choose a cutoff and does NOT bootstrap.
 #
-# Its sole purpose is to calculate and display the mathematical object that
-# should be inspected BEFORE any boundary rule is defined:
+# It preserves the original feature ordering:
 #
-#   P_i   = d1^2 * v_i1^2 / (n - 1)
-#   E_ig  = max(V_i - mu_ig, 0)
+#     ascending |PC1 loading|
 #
-#   P*_g(r) = robustZ[ log(1 + P_g(r)) ]
-#   E*_g(r) = robustZ[ log(1 + E_g(r)) ]
+# and calculates two differential quantities along that ranked axis.
 #
-#   D_g(r) = E*_g(r) - P*_g(r)
 #
-#   D_cons(r) = median_g D_g(r)
+# 1) PC1 VARIANCE CONTRIBUTION
+# ----------------------------
+# For the centered sample-by-feature matrix X = U D V^T,
 #
-# The consensus curve is smoothed by a GCV-selected smoothing spline and the
-# first and second derivatives are calculated:
+#                 d1^2 * v_i1^2
+#     P_i =       ------------- ,
+#                     n - 1
 #
-#   D'_cons(x)
-#   D''_cons(x)
+# where d1 is the first singular value and v_i1 is feature i's PC1 loading.
 #
-# where x = (rank - 1) / (N - 1) is normalized PC1 rank.
+# Ranking is performed explicitly by ascending |v_i1|.
 #
-# PC1 RANKING IS EXPLICITLY:
 #
-#   ascending abs(PC1 loading)
+# 2) DESIGN-AWARE SEQUENCING VARIANCE
+# -----------------------------------
+# DESeq2-normalized counts from all eight experimental groups are used to
+# estimate pooled within-group variance:
 #
-# Thus:
-#   low |PC1 loading|  -->  high |PC1 loading|
-#   REMAINDER          -->  LEADING EDGE
+#                 sum_g sum_{j in g} (y_ij - ybar_ig)^2
+#     V_i =       --------------------------------------- .
+#                          sum_g (n_g - 1)
 #
-# No boundary is selected in this script.
+# For feature i in group g:
+#
+#     mu_ig = mean normalized count
+#
+#     E_ig = max(V_i - mu_ig, 0)
+#
+# E_ig is the empirical excess-over-Poisson variance signal.
+#
+#
+# 3) PC1–NB ELASTICITY
+# --------------------
+# Instead of subtracting standardized P and E values, calculate their local
+# log-slope along normalized PC1 rank x:
+#
+#                  d log(E_g) / dx
+#     eta_EP,g =  ------------------ .
+#                  d log(P_g) / dx
+#
+# eta_EP is dimensionless.  Where defined:
+#
+#     eta_EP = 1   -> E and P change proportionally on the log scale
+#     eta_EP > 1   -> NB excess variance changes faster than PC1 contribution
+#     eta_EP < 1   -> PC1 contribution changes faster than NB excess variance
+#
+#
+# 4) LOCAL NEGATIVE-BINOMIAL MEAN–VARIANCE EXPONENT
+# -------------------------------------------------
+# Write the excess variance law locally as
+#
+#     E = alpha * mu^p .
+#
+# Taking logs gives
+#
+#     log(E) = log(alpha) + p log(mu).
+#
+# Therefore the local effective exponent along the PC1-ranked trajectory is
+#
+#                d log(E_g) / dx
+#     p_NB,g =  ------------------- .
+#                d log(mu_g) / dx
+#
+# When alpha changes slowly over the local rank neighborhood:
+#
+#     p_NB approximately 1  -> NB1-like mean–variance scaling
+#     p_NB approximately 2  -> NB2-like mean–variance scaling
+#
+# Because a derivative ratio is undefined when its denominator is numerically
+# zero, eta_EP and p_NB are reported as NA at those positions.  The numerical
+# tolerance is tied only to machine precision and derivative magnitude; it is
+# not a biological cutoff.
+#
+#
+# 5) SMOOTHING
+# ------------
+# log(P), log(E), and log(mu) are each fit as functions of normalized rank
+#
+#     x = (rank - 1)/(N - 1)
+#
+# with generalized-cross-validation-selected smoothing splines.  Derivatives
+# are taken analytically from those spline fits.
+#
+# Only strictly positive raw values are used for the exact logarithms.
+#
+#
+# 6) CONSENSUS
+# ------------
+# eta_EP and p_NB are calculated independently in each of the eight
+# experimental groups and then summarized rank-wise across groups by the
+# median and interquartile range.
+#
+# The figures contain the defining equations directly on the panels.
 # =============================================================================
 
 
@@ -58,7 +128,7 @@ COUNT_FILE <-
   "/root/REAPER98632/data/WTTS-Seq_2022.2_DE_raw_read_numbers.csv"
 
 OUT_ROOT <-
-  "/root/REAPER98632/exports/PC1_NB_DIVERGENCE_DIAGNOSTIC"
+  "/root/REAPER98632/exports/PC1_NB_DIFFERENTIAL_GEOMETRY"
 
 GROUP_PATTERNS <- c(
   RT0  = "^R0_",
@@ -79,74 +149,7 @@ dir.create(
 
 
 # =============================================================================
-# HELPERS
-# =============================================================================
-
-robust_z <- function(x) {
-
-  x <- as.numeric(x)
-
-  finite <- is.finite(x)
-
-  if (!any(finite)) {
-    return(rep(0, length(x)))
-  }
-
-  med <- median(
-    x[finite],
-    na.rm = TRUE
-  )
-
-  scale_value <- stats::mad(
-    x[finite],
-    center = med,
-    constant = 1.4826,
-    na.rm = TRUE
-  )
-
-  if (
-    !is.finite(scale_value) ||
-    scale_value <= .Machine$double.eps
-  ) {
-    scale_value <- stats::IQR(
-      x[finite],
-      na.rm = TRUE
-    ) / 1.349
-  }
-
-  if (
-    !is.finite(scale_value) ||
-    scale_value <= .Machine$double.eps
-  ) {
-    scale_value <- stats::sd(
-      x[finite],
-      na.rm = TRUE
-    )
-  }
-
-  if (
-    !is.finite(scale_value) ||
-    scale_value <= .Machine$double.eps
-  ) {
-    scale_value <- 1
-  }
-
-  out <- rep(
-    0,
-    length(x)
-  )
-
-  out[finite] <- (
-    x[finite] -
-    med
-  ) / scale_value
-
-  out
-}
-
-
-# =============================================================================
-# READ COUNT MATRIX
+# INPUT
 # =============================================================================
 
 read_count_matrix <- function(
@@ -216,13 +219,27 @@ read_count_matrix <- function(
     )
   )
 
-  colnames(count_mat) <- colnames(count_df)
+  colnames(count_mat) <- colnames(
+    count_df
+  )
 
   storage.mode(count_mat) <- "numeric"
 
-  count_mat[
+  nonfinite_n <- sum(
     !is.finite(count_mat)
-  ] <- 0
+  )
+
+  if (nonfinite_n > 0L) {
+    message(
+      "Replacing ",
+      nonfinite_n,
+      " non-finite count entries with 0."
+    )
+
+    count_mat[
+      !is.finite(count_mat)
+    ] <- 0
+  }
 
   count_mat <- pmax(
     count_mat,
@@ -241,9 +258,17 @@ read_count_matrix <- function(
   )
 
   if (any(blank)) {
-    feature_ids[blank] <- paste0(
+    feature_ids[
+      blank
+    ] <- paste0(
       "__feature_row_",
       which(blank)
+    )
+
+    message(
+      "Assigned deterministic row IDs to ",
+      sum(blank),
+      " blank feature identifier(s)."
     )
   }
 
@@ -265,7 +290,7 @@ read_count_matrix <- function(
   ]
 
   if (nrow(count_mat) < 2L) {
-    stop("Fewer than two nonzero features remain.")
+    stop("Fewer than two nonzero features remain after filtering.")
   }
 
   count_mat
@@ -302,7 +327,7 @@ assign_sample_groups <- function(
 
   if (any(is.na(assigned))) {
     stop(
-      "Unassigned samples: ",
+      "Unassigned sample columns: ",
       paste(
         sample_names[is.na(assigned)],
         collapse = ", "
@@ -321,12 +346,12 @@ assign_sample_groups <- function(
 # NORMALIZATION
 # =============================================================================
 
-# This matrix is used for PC1 so the original ranking convention is preserved:
-# CPM -> log1p -> PCA/SVD -> ascending absolute PC1 loading.
-normalize_cpm_log1p <- function(count_mat) {
+normalize_cpm_log1p <- function(
+    count_mat) {
 
   lib_size <- colSums(
-    count_mat
+    count_mat,
+    na.rm = TRUE
   )
 
   lib_size[
@@ -341,12 +366,12 @@ normalize_cpm_log1p <- function(count_mat) {
     "/"
   )
 
-  log1p(cpm)
+  log1p(
+    cpm
+  )
 }
 
 
-# DESeq2 normalized counts are used to estimate the sequencing mean/variance
-# relationship across the complete experimental design.
 normalize_deseq2 <- function(
     count_mat,
     group_labels) {
@@ -358,17 +383,23 @@ normalize_deseq2 <- function(
     )
   ) {
     stop(
-      "DESeq2 is required for this script. Install DESeq2 and rerun."
+      "DESeq2 is required. Install DESeq2 before running this script."
     )
   }
 
   col_data <- data.frame(
-    group = factor(group_labels),
-    row.names = colnames(count_mat)
+    group = factor(
+      group_labels
+    ),
+    row.names = colnames(
+      count_mat
+    )
   )
 
   dds <- DESeq2::DESeqDataSetFromMatrix(
-    countData = round(count_mat),
+    countData = round(
+      count_mat
+    ),
     colData = col_data,
     design = ~ group
   )
@@ -378,8 +409,9 @@ normalize_deseq2 <- function(
       dds
     ),
     error = function(e) {
+
       message(
-        "Default DESeq2 size factors failed; using type='poscounts'."
+        "Default DESeq2 size-factor estimation failed; using type='poscounts'."
       )
 
       DESeq2::estimateSizeFactors(
@@ -402,7 +434,7 @@ normalize_deseq2 <- function(
 
 
 # =============================================================================
-# POOLED WITHIN-GROUP SEQUENCING VARIANCE
+# POOLED WITHIN-GROUP VARIANCE
 # =============================================================================
 
 compute_pooled_within_group_variance <- function(
@@ -410,12 +442,16 @@ compute_pooled_within_group_variance <- function(
     group_labels) {
 
   groups <- levels(
-    factor(group_labels)
+    factor(
+      group_labels
+    )
   )
 
   sse <- rep(
     0,
-    nrow(normalized_counts)
+    nrow(
+      normalized_counts
+    )
   )
 
   residual_df <- 0L
@@ -460,44 +496,47 @@ compute_pooled_within_group_variance <- function(
   }
 
   if (residual_df < 2L) {
-    stop("Insufficient pooled residual degrees of freedom.")
+    stop("Pooled residual degrees of freedom < 2.")
   }
 
-  V <- sse /
+  variance <- sse /
     residual_df
 
-  V[
-    !is.finite(V)
+  variance[
+    !is.finite(variance)
   ] <- 0
 
-  V <- pmax(
-    V,
+  variance <- pmax(
+    variance,
     0
   )
 
-  names(V) <- rownames(
+  names(variance) <- rownames(
     normalized_counts
   )
 
   list(
-    variance = V,
+    variance = variance,
     residual_df = residual_df
   )
 }
 
 
 # =============================================================================
-# PC1 FROM SVD
+# PC1 / SVD
 # =============================================================================
 
 compute_pc1 <- function(
     rank_matrix_arm) {
 
-  # rank_matrix_arm:
-  #   features x samples
-  #
-  # X:
-  #   samples x features
+  if (
+    nrow(rank_matrix_arm) < 2L ||
+    ncol(rank_matrix_arm) < 2L
+  ) {
+    stop("PC1 requires at least two features and two samples.")
+  }
+
+  # samples x features
   X <- t(
     rank_matrix_arm
   )
@@ -505,11 +544,13 @@ compute_pc1 <- function(
   Xc <- sweep(
     X,
     2L,
-    colMeans(X),
+    colMeans(
+      X
+    ),
     "-"
   )
 
-  # Efficient SVD geometry through the sample-space Gram matrix.
+  # Efficient sample-space SVD geometry.
   gram <- tcrossprod(
     Xc
   )
@@ -539,13 +580,15 @@ compute_pc1 <- function(
     lambda1
   )
 
-  # v1 = X^T u1 / d1
+  # Right singular vector / feature loading:
+  #     v1 = X^T u1 / d1
   v1 <- as.numeric(
     crossprod(
       Xc,
       u1
     )
-  ) / d1
+  ) /
+    d1
 
   names(v1) <- colnames(
     Xc
@@ -563,7 +606,6 @@ compute_pc1 <- function(
     Xc
   )
 
-  # Feature-specific variance represented through PC1.
   P <- (
     d1^2 *
     v1^2
@@ -598,10 +640,250 @@ compute_pc1 <- function(
 
 
 # =============================================================================
-# ONE ARM: RANK BY abs(PC1 LOADING), THEN CALCULATE P*, E*, D
+# SPLINE / DIFFERENTIAL HELPERS
 # =============================================================================
 
-compute_group_divergence <- function(
+fit_positive_log_spline <- function(
+    x,
+    quantity,
+    label) {
+
+  keep <- (
+    is.finite(x) &
+    is.finite(quantity) &
+    quantity > 0
+  )
+
+  if (sum(keep) < 10L) {
+    stop(
+      "Too few positive observations to fit log spline for ",
+      label,
+      "."
+    )
+  }
+
+  x_fit <- x[
+    keep
+  ]
+
+  y_fit <- log(
+    quantity[
+      keep
+    ]
+  )
+
+  fit <- stats::smooth.spline(
+    x = x_fit,
+    y = y_fit,
+    cv = FALSE
+  )
+
+  domain <- range(
+    x_fit,
+    finite = TRUE
+  )
+
+  pred0 <- rep(
+    NA_real_,
+    length(x)
+  )
+
+  pred1 <- rep(
+    NA_real_,
+    length(x)
+  )
+
+  inside <- (
+    x >= domain[
+      1L
+    ] &
+    x <= domain[
+      2L
+    ]
+  )
+
+  pred0[
+    inside
+  ] <- as.numeric(
+    stats::predict(
+      fit,
+      x = x[
+        inside
+      ],
+      deriv = 0
+    )$y
+  )
+
+  pred1[
+    inside
+  ] <- as.numeric(
+    stats::predict(
+      fit,
+      x = x[
+        inside
+      ],
+      deriv = 1
+    )$y
+  )
+
+  list(
+    fit = fit,
+    log_quantity = pred0,
+    derivative = pred1,
+    positive = quantity > 0,
+    domain = domain
+  )
+}
+
+
+safe_derivative_ratio <- function(
+    numerator,
+    denominator) {
+
+  out <- rep(
+    NA_real_,
+    length(numerator)
+  )
+
+  finite_den <- denominator[
+    is.finite(
+      denominator
+    )
+  ]
+
+  if (length(finite_den) == 0L) {
+    return(
+      list(
+        ratio = out,
+        tolerance = NA_real_
+      )
+    )
+  }
+
+  den_scale <- max(
+    abs(
+      finite_den
+    ),
+    na.rm = TRUE
+  )
+
+  if (
+    !is.finite(den_scale) ||
+    den_scale <= 0
+  ) {
+    return(
+      list(
+        ratio = out,
+        tolerance = NA_real_
+      )
+    )
+  }
+
+  # Purely numerical guard: sqrt(machine precision) relative to the observed
+  # derivative scale.  This prevents division by a derivative indistinguishable
+  # from zero without imposing a biological threshold.
+  tolerance <- sqrt(
+    .Machine$double.eps
+  ) *
+    den_scale
+
+  valid <- (
+    is.finite(numerator) &
+    is.finite(denominator) &
+    abs(denominator) >
+      tolerance
+  )
+
+  out[
+    valid
+  ] <- numerator[
+    valid
+  ] /
+    denominator[
+      valid
+    ]
+
+  list(
+    ratio = out,
+    tolerance = tolerance
+  )
+}
+
+
+rankwise_median <- function(
+    mat) {
+
+  apply(
+    mat,
+    1L,
+    function(z) {
+
+      z <- z[
+        is.finite(z)
+      ]
+
+      if (length(z) == 0L) {
+        return(
+          NA_real_
+        )
+      }
+
+      median(
+        z
+      )
+    }
+  )
+}
+
+
+rankwise_quantile <- function(
+    mat,
+    p) {
+
+  apply(
+    mat,
+    1L,
+    function(z) {
+
+      z <- z[
+        is.finite(z)
+      ]
+
+      if (length(z) == 0L) {
+        return(
+          NA_real_
+        )
+      }
+
+      as.numeric(
+        stats::quantile(
+          z,
+          probs = p,
+          names = FALSE,
+          type = 7
+        )
+      )
+    }
+  )
+}
+
+
+rankwise_n_finite <- function(
+    mat) {
+
+  rowSums(
+    is.finite(
+      mat
+    )
+  )
+}
+
+
+# =============================================================================
+# ONE GROUP
+# =============================================================================
+
+compute_group_geometry <- function(
     group_name,
     rank_matrix_arm,
     normalized_counts_arm,
@@ -612,12 +894,11 @@ compute_group_divergence <- function(
   )
 
   # ---------------------------------------------------------------------------
-  # THIS IS THE RANKING RULE:
+  # EXACT RANKING RULE:
   #
   #     ascending absolute PC1 loading
   #
-  # It is deliberately written explicitly rather than ranking on P_i, even
-  # though the two orders are mathematically identical within an arm.
+  # Sign is retained in the output, but magnitude determines rank.
   # ---------------------------------------------------------------------------
   rank_order <- order(
     pc1$abs_loading,
@@ -659,97 +940,184 @@ compute_group_divergence <- function(
     rank_order
   ]
 
-  logP <- log1p(
-    P_ranked
+  N <- length(
+    rank_order
   )
 
-  logE <- log1p(
-    E_ranked
+  rank <- seq_len(
+    N
   )
 
-  P_star <- robust_z(
-    logP
-  )
-
-  E_star <- robust_z(
-    logE
-  )
-
-  D <- E_star -
-    P_star
-
-  alpha_nb2 <- rep(
-    0,
-    length(mu_ranked)
-  )
-
-  positive_mu <- mu_ranked > 0
-
-  alpha_nb2[
-    positive_mu
-  ] <- E_ranked[
-    positive_mu
-  ] /
+  x <- (
+    rank -
+    1
+  ) /
     (
-      mu_ranked[
-        positive_mu
-      ]^2
+      N -
+      1
     )
+
+  # Exact logarithms are fit only on positive values.
+  fit_P <- fit_positive_log_spline(
+    x = x,
+    quantity = P_ranked,
+    label = paste0(
+      group_name,
+      " P"
+    )
+  )
+
+  fit_E <- fit_positive_log_spline(
+    x = x,
+    quantity = E_ranked,
+    label = paste0(
+      group_name,
+      " E"
+    )
+  )
+
+  fit_mu <- fit_positive_log_spline(
+    x = x,
+    quantity = mu_ranked,
+    label = paste0(
+      group_name,
+      " mu"
+    )
+  )
+
+  # ---------------------------------------------------------------------------
+  # Differential field 1:
+  #
+  #                 d log(E)/dx
+  #     eta_EP =   ---------------
+  #                 d log(P)/dx
+  # ---------------------------------------------------------------------------
+  eta_obj <- safe_derivative_ratio(
+    numerator = fit_E$derivative,
+    denominator = fit_P$derivative
+  )
+
+  eta_EP <- eta_obj$ratio
+
+  eta_valid_raw <- (
+    P_ranked > 0 &
+    E_ranked > 0
+  )
+
+  eta_EP[
+    !eta_valid_raw
+  ] <- NA_real_
+
+  # ---------------------------------------------------------------------------
+  # Differential field 2:
+  #
+  #                d log(E)/dx
+  #     p_NB =    ---------------
+  #                d log(mu)/dx
+  #
+  # This is the local effective exponent in E = alpha * mu^p.
+  # ---------------------------------------------------------------------------
+  p_obj <- safe_derivative_ratio(
+    numerator = fit_E$derivative,
+    denominator = fit_mu$derivative
+  )
+
+  p_NB <- p_obj$ratio
+
+  p_valid_raw <- (
+    E_ranked > 0 &
+    mu_ranked > 0
+  )
+
+  p_NB[
+    !p_valid_raw
+  ] <- NA_real_
 
   feature_df <- data.frame(
     group = group_name,
-    rank = seq_along(
-      rank_order
-    ),
+    rank = rank,
+    normalized_rank = x,
+
     feature_id = rownames(
       rank_matrix_arm
-    )[rank_order],
+    )[
+      rank_order
+    ],
 
     pc1_loading = pc1$loading[
       rank_order
     ],
+
     abs_pc1_loading = pc1$abs_loading[
       rank_order
     ],
+
     pc1_variance_contribution = P_ranked,
 
     group_mean_normalized = mu_ranked,
+
     pooled_within_group_variance = V_ranked,
+
     nb_excess_variance = E_ranked,
 
-    log1p_pc1_variance = logP,
-    log1p_nb_excess_variance = logE,
+    smooth_log_P = fit_P$log_quantity,
 
-    P_star = P_star,
-    E_star = E_star,
-    divergence = D,
+    smooth_log_E = fit_E$log_quantity,
 
-    NB2_alpha = alpha_nb2,
-    NB2 = log1p(
-      E_ranked
-    ),
-    NB2_NB1 = log1p(
-      E_ranked
-    ) -
-      log1p(
-        mu_ranked
-      ),
-    alpha_mu = log1p(
-      alpha_nb2 *
-      mu_ranked
-    ),
+    smooth_log_mu = fit_mu$log_quantity,
+
+    d_logP_dx = fit_P$derivative,
+
+    d_logE_dx = fit_E$derivative,
+
+    d_logmu_dx = fit_mu$derivative,
+
+    eta_EP = eta_EP,
+
+    p_NB = p_NB,
 
     stringsAsFactors = FALSE
   )
 
   summary_df <- data.frame(
     group = group_name,
+
     n_samples = ncol(
       rank_matrix_arm
     ),
+
     singular_value_1 = pc1$singular_value,
+
     eigenvalue_1 = pc1$eigenvalue,
+
     pc1_fraction_total_variance = pc1$pc1_fraction_total,
+
+    spline_df_logP = fit_P$fit$df,
+
+    spline_df_logE = fit_E$fit$df,
+
+    spline_df_logmu = fit_mu$fit$df,
+
+    eta_denominator_tolerance =
+      eta_obj$tolerance,
+
+    p_denominator_tolerance =
+      p_obj$tolerance,
+
+    eta_valid_rank_fraction =
+      mean(
+        is.finite(
+          eta_EP
+        )
+      ),
+
+    p_valid_rank_fraction =
+      mean(
+        is.finite(
+          p_NB
+        )
+      ),
+
     stringsAsFactors = FALSE
   )
 
@@ -761,7 +1129,7 @@ compute_group_divergence <- function(
 
 
 # =============================================================================
-# CONSENSUS ACROSS ALL 8 ARMS
+# CONSENSUS ACROSS ALL EIGHT GROUPS
 # =============================================================================
 
 compute_consensus <- function(
@@ -775,192 +1143,129 @@ compute_consensus <- function(
 
   if (
     length(
-      unique(N_values)
+      unique(
+        N_values
+      )
     ) != 1L
   ) {
-    stop("All arms must contain the same number of ranked features.")
+    stop("All group curves must contain the same number of ranked features.")
   }
 
   N <- N_values[
     1L
   ]
 
-  P_mat <- do.call(
-    cbind,
-    lapply(
-      group_curves,
-      function(x) {
-        x$P_star
-      }
-    )
-  )
-
-  E_mat <- do.call(
-    cbind,
-    lapply(
-      group_curves,
-      function(x) {
-        x$E_star
-      }
-    )
-  )
-
-  D_mat <- do.call(
-    cbind,
-    lapply(
-      group_curves,
-      function(x) {
-        x$divergence
-      }
-    )
-  )
-
-  colnames(P_mat) <- names(
+  groups <- names(
     group_curves
   )
 
-  colnames(E_mat) <- names(
-    group_curves
+  make_matrix <- function(
+      column_name) {
+
+    m <- do.call(
+      cbind,
+      lapply(
+        group_curves,
+        function(df) {
+          df[[
+            column_name
+          ]]
+        }
+      )
+    )
+
+    colnames(
+      m
+    ) <- groups
+
+    m
+  }
+
+  eta_mat <- make_matrix(
+    "eta_EP"
   )
 
-  colnames(D_mat) <- names(
-    group_curves
+  p_mat <- make_matrix(
+    "p_NB"
   )
 
-  out <- data.frame(
+  dlogP_mat <- make_matrix(
+    "d_logP_dx"
+  )
+
+  dlogE_mat <- make_matrix(
+    "d_logE_dx"
+  )
+
+  dlogmu_mat <- make_matrix(
+    "d_logmu_dx"
+  )
+
+  data.frame(
     rank = seq_len(
       N
     ),
 
-    consensus_P_star = apply(
-      P_mat,
-      1L,
-      median,
-      na.rm = TRUE
+    normalized_rank = (
+      seq_len(
+        N
+      ) -
+      1
+    ) /
+      (
+        N -
+        1
+      ),
+
+    eta_EP_median = rankwise_median(
+      eta_mat
     ),
 
-    consensus_E_star = apply(
-      E_mat,
-      1L,
-      median,
-      na.rm = TRUE
+    eta_EP_Q25 = rankwise_quantile(
+      eta_mat,
+      0.25
     ),
 
-    consensus_divergence = apply(
-      D_mat,
-      1L,
-      median,
-      na.rm = TRUE
+    eta_EP_Q75 = rankwise_quantile(
+      eta_mat,
+      0.75
     ),
 
-    divergence_Q25 = apply(
-      D_mat,
-      1L,
-      stats::quantile,
-      probs = 0.25,
-      na.rm = TRUE,
-      names = FALSE
+    eta_EP_n_valid = rankwise_n_finite(
+      eta_mat
     ),
 
-    divergence_Q75 = apply(
-      D_mat,
-      1L,
-      stats::quantile,
-      probs = 0.75,
-      na.rm = TRUE,
-      names = FALSE
+    p_NB_median = rankwise_median(
+      p_mat
+    ),
+
+    p_NB_Q25 = rankwise_quantile(
+      p_mat,
+      0.25
+    ),
+
+    p_NB_Q75 = rankwise_quantile(
+      p_mat,
+      0.75
+    ),
+
+    p_NB_n_valid = rankwise_n_finite(
+      p_mat
+    ),
+
+    d_logP_dx_median = rankwise_median(
+      dlogP_mat
+    ),
+
+    d_logE_dx_median = rankwise_median(
+      dlogE_mat
+    ),
+
+    d_logmu_dx_median = rankwise_median(
+      dlogmu_mat
     ),
 
     stringsAsFactors = FALSE
-  )
-
-  out
-}
-
-
-# =============================================================================
-# GCV SPLINE + TRUE CALCULUS OF THE CONSENSUS DIVERGENCE
-# =============================================================================
-
-differentiate_consensus <- function(
-    consensus_df) {
-
-  N <- nrow(
-    consensus_df
-  )
-
-  x <- (
-    consensus_df$rank -
-    1
-  ) /
-    (
-      N -
-      1
-    )
-
-  y <- consensus_df$consensus_divergence
-
-  if (any(!is.finite(y))) {
-    stop("Consensus divergence contains non-finite values.")
-  }
-
-  fit <- stats::smooth.spline(
-    x = x,
-    y = y,
-    cv = FALSE
-  )
-
-  smooth_D <- as.numeric(
-    stats::predict(
-      fit,
-      x = x,
-      deriv = 0
-    )$y
-  )
-
-  dD_dx <- as.numeric(
-    stats::predict(
-      fit,
-      x = x,
-      deriv = 1
-    )$y
-  )
-
-  d2D_dx2 <- as.numeric(
-    stats::predict(
-      fit,
-      x = x,
-      deriv = 2
-    )$y
-  )
-
-  # Also save derivatives with respect to integer rank r.
-  dD_dr <- dD_dx /
-    (
-      N -
-      1
-    )
-
-  d2D_dr2 <- d2D_dx2 /
-    (
-      N -
-      1
-    )^2
-
-  data.frame(
-    rank = consensus_df$rank,
-    normalized_rank = x,
-    smooth_divergence = smooth_D,
-    dD_dx = dD_dx,
-    d2D_dx2 = d2D_dx2,
-    dD_dr = dD_dr,
-    d2D_dr2 = d2D_dr2,
-    stringsAsFactors = FALSE
-  ) -> calculus_df
-
-  list(
-    calculus = calculus_df,
-    spline = fit
   )
 }
 
@@ -987,8 +1292,8 @@ save_four_panel <- function(
   pushViewport(
     viewport(
       layout = grid.layout(
-        nrow = 4,
-        ncol = 1
+        nrow = 4L,
+        ncol = 1L
       )
     )
   )
@@ -998,11 +1303,12 @@ save_four_panel <- function(
       plots
     )
   ) {
+
     print(
       plots[[i]],
       vp = viewport(
         layout.pos.row = i,
-        layout.pos.col = 1
+        layout.pos.col = 1L
       )
     )
   }
@@ -1011,10 +1317,56 @@ save_four_panel <- function(
 }
 
 
+finite_plot_range <- function(
+    x) {
+
+  z <- x[
+    is.finite(
+      x
+    )
+  ]
+
+  if (length(z) == 0L) {
+    return(
+      c(
+        -1,
+        1
+      )
+    )
+  }
+
+  r <- range(
+    z
+  )
+
+  if (
+    !all(
+      is.finite(
+        r
+      )
+    ) ||
+    diff(
+      r
+    ) <= 0
+  ) {
+    r <- c(
+      min(
+        z
+      ) -
+        1,
+      max(
+        z
+      ) +
+        1
+    )
+  }
+
+  r
+}
+
+
 make_consensus_figure <- function(
     consensus_df,
-    calculus_df,
-    spline_fit,
     group_curves,
     out_file) {
 
@@ -1022,29 +1374,61 @@ make_consensus_figure <- function(
     consensus_df
   )
 
-  all_D <- bind_rows(
+  all_eta <- bind_rows(
     lapply(
-      names(group_curves),
+      names(
+        group_curves
+      ),
       function(g) {
+
         data.frame(
           group = g,
-          rank = group_curves[[g]]$rank,
-          divergence = group_curves[[g]]$divergence
+          rank = group_curves[[
+            g
+          ]]$rank,
+          eta_EP = group_curves[[
+            g
+          ]]$eta_EP,
+          stringsAsFactors = FALSE
         )
       }
     )
   )
 
-  components_long <- consensus_df %>%
+  all_p <- bind_rows(
+    lapply(
+      names(
+        group_curves
+      ),
+      function(g) {
+
+        data.frame(
+          group = g,
+          rank = group_curves[[
+            g
+          ]]$rank,
+          p_NB = group_curves[[
+            g
+          ]]$p_NB,
+          stringsAsFactors = FALSE
+        )
+      }
+    )
+  )
+
+  # ---------------------------------------------------------------------------
+  # Panel A: derivatives that form the PC1–NB elasticity.
+  # ---------------------------------------------------------------------------
+  derivative_long <- consensus_df %>%
     select(
       rank,
-      consensus_P_star,
-      consensus_E_star
+      d_logP_dx_median,
+      d_logE_dx_median
     ) %>%
     pivot_longer(
       cols = c(
-        consensus_P_star,
-        consensus_E_star
+        d_logP_dx_median,
+        d_logE_dx_median
       ),
       names_to = "signal",
       values_to = "value"
@@ -1053,42 +1437,49 @@ make_consensus_figure <- function(
       signal = factor(
         signal,
         levels = c(
-          "consensus_P_star",
-          "consensus_E_star"
+          "d_logP_dx_median",
+          "d_logE_dx_median"
         ),
         labels = c(
-          "P*: PC1 variance contribution",
-          "E*: NB excess variance"
+          "d log(P) / dx",
+          "d log(E) / dx"
         )
       )
     )
 
   p1 <- ggplot(
-    components_long,
+    derivative_long,
     aes(
       rank,
       value,
       color = signal
     )
   ) +
+    geom_hline(
+      yintercept = 0,
+      linetype = "dashed",
+      linewidth = 0.35
+    ) +
     geom_line(
-      linewidth = 0.9
+      linewidth = 0.85
     ) +
     labs(
-      title = "A. PC1 variance contribution and NB excess variance on the same dimensionless scale",
-      subtitle = "Features are ranked explicitly by ascending absolute PC1 loading",
+      title = "A. Differential change in PC1 variance contribution and NB excess variance",
+      subtitle = "Rank is explicitly ascending absolute PC1 loading",
       x = "PC1 rank: low |loading|  ->  high |loading|",
-      y = "Robust standardized log signal",
+      y = "Median log-derivative across groups",
       color = NULL
     ) +
     annotate(
       "label",
-      x = round(
-        N * 0.03
+      x = max(
+        1,
+        round(
+          N * 0.03
+        )
       ),
       y = Inf,
-      label = "P[i] == d[1]^2*v[i*1]^2/(n-1)",
-      parse = TRUE,
+      label = "P_i = d1^2 * v_i1^2 / (n - 1)",
       hjust = 0,
       vjust = 1.2,
       size = 3.0,
@@ -1096,12 +1487,14 @@ make_consensus_figure <- function(
     ) +
     annotate(
       "label",
-      x = round(
-        N * 0.03
+      x = max(
+        1,
+        round(
+          N * 0.03
+        )
       ),
       y = Inf,
-      label = "E[i*g] == max(V[i]-mu[i*g],0)",
-      parse = TRUE,
+      label = "E_ig = max(V_i - mu_ig, 0)",
       hjust = 0,
       vjust = 3.0,
       size = 3.0,
@@ -1115,23 +1508,26 @@ make_consensus_figure <- function(
       legend.position = "bottom"
     )
 
+  # ---------------------------------------------------------------------------
+  # Panel B: PC1–NB elasticity.
+  # ---------------------------------------------------------------------------
   p2 <- ggplot() +
     geom_line(
-      data = all_D,
+      data = all_eta,
       aes(
         rank,
-        divergence,
+        eta_EP,
         group = group
       ),
-      linewidth = 0.35,
-      alpha = 0.28
+      linewidth = 0.30,
+      alpha = 0.22
     ) +
     geom_ribbon(
       data = consensus_df,
       aes(
         x = rank,
-        ymin = divergence_Q25,
-        ymax = divergence_Q75
+        ymin = eta_EP_Q25,
+        ymax = eta_EP_Q75
       ),
       alpha = 0.18
     ) +
@@ -1139,54 +1535,33 @@ make_consensus_figure <- function(
       data = consensus_df,
       aes(
         rank,
-        consensus_divergence
+        eta_EP_median
       ),
-      linewidth = 0.8
+      linewidth = 0.95
     ) +
-    geom_line(
-      data = calculus_df,
-      aes(
-        rank,
-        smooth_divergence
-      ),
-      linewidth = 1.05
+    geom_hline(
+      yintercept = 1,
+      linetype = "dashed",
+      linewidth = 0.55
     ) +
     labs(
-      title = "B. PC1–NB divergence field across the ranked feature axis",
-      subtitle = paste0(
-        "Thin curves = 8 arms; ribbon = armwise IQR; thick smooth = GCV spline (effective df = ",
-        round(
-          spline_fit$df,
-          1
-        ),
-        ")"
-      ),
+      title = "B. PC1–NB elasticity",
+      subtitle = "eta_EP = 1 indicates proportional local log-change; >1 means E changes faster than P",
       x = "PC1 rank",
-      y = "D(r)"
+      y = "eta_EP(r)"
     ) +
     annotate(
       "label",
-      x = round(
-        N * 0.03
+      x = max(
+        1,
+        round(
+          N * 0.03
+        )
       ),
       y = Inf,
-      label = "D[g](r) == E[g]^'*'(r)-P[g]^'*'(r)",
-      parse = TRUE,
+      label = "eta_EP(r) = [d log(E)/dx] / [d log(P)/dx]",
       hjust = 0,
       vjust = 1.2,
-      size = 3.1,
-      fill = "white"
-    ) +
-    annotate(
-      "label",
-      x = round(
-        N * 0.03
-      ),
-      y = Inf,
-      label = "D[cons](r) == median[g](D[g](r))",
-      parse = TRUE,
-      hjust = 0,
-      vjust = 3.0,
       size = 3.1,
       fill = "white"
     ) +
@@ -1197,51 +1572,66 @@ make_consensus_figure <- function(
       panel.grid.minor = element_blank()
     )
 
-  p3 <- ggplot(
-    calculus_df,
-    aes(
-      rank,
-      dD_dx
-    )
-  ) +
-    geom_hline(
-      yintercept = 0,
-      linetype = "dashed",
-      linewidth = 0.4
+  # ---------------------------------------------------------------------------
+  # Panel C: mean-variance exponent.
+  # ---------------------------------------------------------------------------
+  p3 <- ggplot() +
+    geom_line(
+      data = all_p,
+      aes(
+        rank,
+        p_NB,
+        group = group
+      ),
+      linewidth = 0.30,
+      alpha = 0.22
+    ) +
+    geom_ribbon(
+      data = consensus_df,
+      aes(
+        x = rank,
+        ymin = p_NB_Q25,
+        ymax = p_NB_Q75
+      ),
+      alpha = 0.18
     ) +
     geom_line(
-      linewidth = 0.9
+      data = consensus_df,
+      aes(
+        rank,
+        p_NB_median
+      ),
+      linewidth = 0.95
+    ) +
+    geom_hline(
+      yintercept = 1,
+      linetype = "dashed",
+      linewidth = 0.55
+    ) +
+    geom_hline(
+      yintercept = 2,
+      linetype = "dotted",
+      linewidth = 0.65
     ) +
     labs(
-      title = "C. First derivative of the smoothed divergence field",
-      subtitle = "Positive values mean divergence is increasing as features move toward the high-PC1 leading edge",
+      title = "C. Local effective negative-binomial mean–variance exponent",
+      subtitle = "Under locally stable alpha: p approximately 1 is NB1-like; p approximately 2 is NB2-like",
       x = "PC1 rank",
-      y = "dD/dx"
+      y = "p_NB(r)"
     ) +
     annotate(
       "label",
-      x = round(
-        N * 0.03
+      x = max(
+        1,
+        round(
+          N * 0.03
+        )
       ),
       y = Inf,
-      label = "x == (r-1)/(N-1)",
-      parse = TRUE,
+      label = "E = alpha * mu^p     =>     p_NB(r) = [d log(E)/dx] / [d log(mu)/dx]",
       hjust = 0,
       vjust = 1.2,
-      size = 3.1,
-      fill = "white"
-    ) +
-    annotate(
-      "label",
-      x = round(
-        N * 0.03
-      ),
-      y = Inf,
-      label = "D^minute(x) == d*D/d*x",
-      parse = TRUE,
-      hjust = 0,
-      vjust = 3.0,
-      size = 3.1,
+      size = 3.0,
       fill = "white"
     ) +
     theme_bw(
@@ -1249,47 +1639,86 @@ make_consensus_figure <- function(
     ) +
     theme(
       panel.grid.minor = element_blank()
+    )
+
+  # ---------------------------------------------------------------------------
+  # Panel D: number of groups contributing finite differential estimates.
+  # This makes denominator-zero regions visible rather than silently hiding them.
+  # ---------------------------------------------------------------------------
+  validity_long <- consensus_df %>%
+    select(
+      rank,
+      eta_EP_n_valid,
+      p_NB_n_valid
+    ) %>%
+    pivot_longer(
+      cols = c(
+        eta_EP_n_valid,
+        p_NB_n_valid
+      ),
+      names_to = "field",
+      values_to = "n_valid"
+    ) %>%
+    mutate(
+      field = factor(
+        field,
+        levels = c(
+          "eta_EP_n_valid",
+          "p_NB_n_valid"
+        ),
+        labels = c(
+          "eta_EP",
+          "p_NB"
+        )
+      )
     )
 
   p4 <- ggplot(
-    calculus_df,
+    validity_long,
     aes(
       rank,
-      d2D_dx2
+      n_valid,
+      color = field
     )
   ) +
-    geom_hline(
-      yintercept = 0,
-      linetype = "dashed",
-      linewidth = 0.4
-    ) +
     geom_line(
-      linewidth = 0.9
+      linewidth = 0.85
+    ) +
+    scale_y_continuous(
+      breaks = 0:8,
+      limits = c(
+        0,
+        8
+      )
     ) +
     labs(
-      title = "D. Second derivative: curvature of PC1–NB divergence",
-      subtitle = "Zero crossings and sustained curvature changes are visible here; no cutoff is selected",
+      title = "D. Support for the differential estimates",
+      subtitle = "Number of experimental groups with a mathematically defined derivative ratio at each rank",
       x = "PC1 rank",
-      y = "d²D/dx²"
+      y = "Number of groups",
+      color = NULL
     ) +
     annotate(
       "label",
-      x = round(
-        N * 0.03
+      x = max(
+        1,
+        round(
+          N * 0.03
+        )
       ),
-      y = Inf,
-      label = "D^second(x) == d^2*D/d*x^2",
-      parse = TRUE,
+      y = 8,
+      label = "x = (rank - 1)/(N - 1); ratios are NA where the denominator derivative is numerically zero",
       hjust = 0,
       vjust = 1.2,
-      size = 3.1,
+      size = 2.8,
       fill = "white"
     ) +
     theme_bw(
       base_size = 11
     ) +
     theme(
-      panel.grid.minor = element_blank()
+      panel.grid.minor = element_blank(),
+      legend.position = "bottom"
     )
 
   save_four_panel(
@@ -1313,105 +1742,62 @@ make_group_figure <- function(
     feature_df
   )
 
-  x <- (
-    feature_df$rank -
-    1
-  ) /
-    (
-      N -
-      1
-    )
-
-  fit <- stats::smooth.spline(
-    x = x,
-    y = feature_df$divergence,
-    cv = FALSE
-  )
-
-  smooth_D <- as.numeric(
-    stats::predict(
-      fit,
-      x = x,
-      deriv = 0
-    )$y
-  )
-
-  d1 <- as.numeric(
-    stats::predict(
-      fit,
-      x = x,
-      deriv = 1
-    )$y
-  )
-
-  d2 <- as.numeric(
-    stats::predict(
-      fit,
-      x = x,
-      deriv = 2
-    )$y
-  )
-
-  components_long <- feature_df %>%
+  deriv_long <- feature_df %>%
     select(
       rank,
-      P_star,
-      E_star
+      d_logP_dx,
+      d_logE_dx,
+      d_logmu_dx
     ) %>%
     pivot_longer(
       cols = c(
-        P_star,
-        E_star
+        d_logP_dx,
+        d_logE_dx,
+        d_logmu_dx
       ),
-      names_to = "signal",
+      names_to = "quantity",
       values_to = "value"
     )
 
   p1 <- ggplot(
-    components_long,
+    deriv_long,
     aes(
       rank,
       value,
-      color = signal
+      color = quantity
     )
   ) +
+    geom_hline(
+      yintercept = 0,
+      linetype = "dashed",
+      linewidth = 0.35
+    ) +
     geom_line(
-      linewidth = 0.75
+      linewidth = 0.72
     ) +
     labs(
       title = paste0(
         group_name,
-        ": P* versus E*"
+        ": log-derivatives along PC1 rank"
       ),
       subtitle = "Rank = ascending absolute PC1 loading",
       x = "PC1 rank",
-      y = "Robust standardized log signal",
+      y = "Derivative with respect to normalized rank x",
       color = NULL
     ) +
     annotate(
       "label",
-      x = round(
-        N * 0.03
+      x = max(
+        1,
+        round(
+          N * 0.03
+        )
       ),
       y = Inf,
-      label = "P[i] == d[1]^2*v[i*1]^2/(n-1)",
-      parse = TRUE,
+      label = "P_i = d1^2 * v_i1^2/(n-1);   E_ig = max(V_i - mu_ig, 0)",
       hjust = 0,
       vjust = 1.2,
-      size = 3.0,
-      fill = "white"
-    ) +
-    annotate(
-      "label",
-      x = round(
-        N * 0.03
-      ),
-      y = Inf,
-      label = "E[i*g] == max(V[i]-mu[i*g],0)",
-      parse = TRUE,
-      hjust = 0,
-      vjust = 3.0,
-      size = 3.0,
+      size = 2.9,
       fill = "white"
     ) +
     theme_bw(
@@ -1422,55 +1808,43 @@ make_group_figure <- function(
       legend.position = "bottom"
     )
 
-  divergence_df <- data.frame(
-    rank = feature_df$rank,
-    divergence = feature_df$divergence,
-    smooth_divergence = smooth_D
-  )
-
   p2 <- ggplot(
-    divergence_df,
+    feature_df,
     aes(
       rank,
-      divergence
+      eta_EP
     )
   ) +
-    geom_line(
-      linewidth = 0.35,
-      alpha = 0.45
+    geom_hline(
+      yintercept = 1,
+      linetype = "dashed",
+      linewidth = 0.55
     ) +
     geom_line(
-      aes(
-        y = smooth_divergence
-      ),
-      linewidth = 1.0
+      linewidth = 0.8
     ) +
     labs(
       title = paste0(
         group_name,
-        ": divergence"
+        ": PC1–NB elasticity"
       ),
-      subtitle = paste0(
-        "GCV spline effective df = ",
-        round(
-          fit$df,
-          1
-        )
-      ),
+      subtitle = "eta_EP > 1: excess variance changes faster than PC1 contribution on the local log scale",
       x = "PC1 rank",
-      y = "D(r)"
+      y = "eta_EP(r)"
     ) +
     annotate(
       "label",
-      x = round(
-        N * 0.03
+      x = max(
+        1,
+        round(
+          N * 0.03
+        )
       ),
       y = Inf,
-      label = "D[g](r) == E[g]^'*'(r)-P[g]^'*'(r)",
-      parse = TRUE,
+      label = "eta_EP(r) = [d log(E)/dx] / [d log(P)/dx]",
       hjust = 0,
       vjust = 1.2,
-      size = 3.1,
+      size = 3.0,
       fill = "white"
     ) +
     theme_bw(
@@ -1480,47 +1854,49 @@ make_group_figure <- function(
       panel.grid.minor = element_blank()
     )
 
-  derivative_df <- bind_rows(
-    data.frame(
-      rank = feature_df$rank,
-      derivative = "D'(x)",
-      value = d1
-    ),
-    data.frame(
-      rank = feature_df$rank,
-      derivative = "D''(x)",
-      value = d2
-    )
-  )
-
   p3 <- ggplot(
-    derivative_df,
+    feature_df,
     aes(
       rank,
-      value
+      p_NB
     )
   ) +
     geom_hline(
-      yintercept = 0,
+      yintercept = 1,
       linetype = "dashed",
-      linewidth = 0.4
+      linewidth = 0.55
+    ) +
+    geom_hline(
+      yintercept = 2,
+      linetype = "dotted",
+      linewidth = 0.65
     ) +
     geom_line(
-      linewidth = 0.75
-    ) +
-    facet_wrap(
-      ~ derivative,
-      ncol = 1,
-      scales = "free_y"
+      linewidth = 0.8
     ) +
     labs(
       title = paste0(
         group_name,
-        ": calculus of divergence"
+        ": local effective NB exponent"
       ),
-      subtitle = "Derivatives are with respect to normalized rank x = (r-1)/(N-1)",
+      subtitle = "Under locally stable alpha: p about 1 is NB1-like; p about 2 is NB2-like",
       x = "PC1 rank",
-      y = NULL
+      y = "p_NB(r)"
+    ) +
+    annotate(
+      "label",
+      x = max(
+        1,
+        round(
+          N * 0.03
+        )
+      ),
+      y = Inf,
+      label = "E = alpha * mu^p;   p_NB(r) = [d log(E)/dx] / [d log(mu)/dx]",
+      hjust = 0,
+      vjust = 1.2,
+      size = 2.9,
+      fill = "white"
     ) +
     theme_bw(
       base_size = 11
@@ -1529,59 +1905,75 @@ make_group_figure <- function(
       panel.grid.minor = element_blank()
     )
 
-  png(
-    out_file,
-    width = 15,
-    height = 11.5,
-    units = "in",
-    res = 260,
-    bg = "white"
-  )
-
-  grid.newpage()
-
-  pushViewport(
-    viewport(
-      layout = grid.layout(
-        nrow = 3,
-        ncol = 1
+  valid_df <- data.frame(
+    rank = feature_df$rank,
+    eta_defined = as.integer(
+      is.finite(
+        feature_df$eta_EP
+      )
+    ),
+    p_defined = as.integer(
+      is.finite(
+        feature_df$p_NB
       )
     )
-  )
-
-  print(
-    p1,
-    vp = viewport(
-      layout.pos.row = 1,
-      layout.pos.col = 1
+  ) %>%
+    pivot_longer(
+      cols = c(
+        eta_defined,
+        p_defined
+      ),
+      names_to = "field",
+      values_to = "defined"
     )
-  )
 
-  print(
-    p2,
-    vp = viewport(
-      layout.pos.row = 2,
-      layout.pos.col = 1
+  p4 <- ggplot(
+    valid_df,
+    aes(
+      rank,
+      defined,
+      color = field
     )
-  )
-
-  print(
-    p3,
-    vp = viewport(
-      layout.pos.row = 3,
-      layout.pos.col = 1
+  ) +
+    geom_line(
+      linewidth = 0.65
+    ) +
+    scale_y_continuous(
+      breaks = c(
+        0,
+        1
+      ),
+      labels = c(
+        "undefined",
+        "defined"
+      )
+    ) +
+    labs(
+      title = paste0(
+        group_name,
+        ": mathematical support"
+      ),
+      subtitle = "Undefined points are retained as NA rather than replaced by extreme ratios",
+      x = "PC1 rank",
+      y = NULL,
+      color = NULL
+    ) +
+    theme_bw(
+      base_size = 11
+    ) +
+    theme(
+      panel.grid.minor = element_blank(),
+      legend.position = "bottom"
     )
-  )
 
-  dev.off()
-
-  data.frame(
-    rank = feature_df$rank,
-    normalized_rank = x,
-    smooth_divergence = smooth_D,
-    dD_dx = d1,
-    d2D_dx2 = d2,
-    stringsAsFactors = FALSE
+  save_four_panel(
+    list(
+      p1,
+      p2,
+      p3,
+      p4
+    ),
+    out_file
   )
 }
 
@@ -1596,29 +1988,43 @@ count_mat <- read_count_matrix(
 )
 
 group_labels <- assign_sample_groups(
-  colnames(count_mat),
-  GROUP_PATTERNS
+  sample_names = colnames(
+    count_mat
+  ),
+  group_patterns = GROUP_PATTERNS
 )
 
 message(
-  "Count matrix: ",
-  nrow(count_mat),
+  "Using count file: ",
+  COUNT_FILE
+)
+
+message(
+  "Count matrix dimensions: ",
+  nrow(
+    count_mat
+  ),
   " features x ",
-  ncol(count_mat),
+  ncol(
+    count_mat
+  ),
   " samples"
 )
 
 message(
-  "Groups: ",
+  "Experimental groups: ",
   paste(
-    levels(group_labels),
+    levels(
+      group_labels
+    ),
     collapse = ", "
   )
 )
 
 
 # -----------------------------------------------------------------------------
-# PC1 matrix: original CPM-log1p convention.
+# PC1 ranking matrix:
+# CPM -> log1p -> arm-specific PC1 -> ascending |loading|.
 # -----------------------------------------------------------------------------
 
 rank_matrix_all <- normalize_cpm_log1p(
@@ -1627,36 +2033,37 @@ rank_matrix_all <- normalize_cpm_log1p(
 
 
 # -----------------------------------------------------------------------------
-# Sequencing variance matrix: DESeq2-normalized counts.
+# Sequencing mean/variance matrix:
+# DESeq2-normalized counts across the complete experiment.
 # -----------------------------------------------------------------------------
 
-deseq_norm <- normalize_deseq2(
-  count_mat,
-  group_labels
+deseq2_norm <- normalize_deseq2(
+  count_mat = count_mat,
+  group_labels = group_labels
 )
 
-normalized_counts <- deseq_norm$normalized_counts
+normalized_counts <- deseq2_norm$normalized_counts
 
 
 # -----------------------------------------------------------------------------
-# Stable variance estimated from all groups after subtracting group means.
+# Pooled within-group sequencing variance.
 # -----------------------------------------------------------------------------
 
 pooled <- compute_pooled_within_group_variance(
-  normalized_counts,
-  group_labels
+  normalized_counts = normalized_counts,
+  group_labels = group_labels
 )
 
 pooled_variance <- pooled$variance
 
 message(
-  "Pooled within-group residual df = ",
+  "Pooled within-group residual degrees of freedom: ",
   pooled$residual_df
 )
 
 
 # -----------------------------------------------------------------------------
-# Calculate each of the 8 PC1-ranked divergence trajectories.
+# One differential-geometry trajectory per experimental group.
 # -----------------------------------------------------------------------------
 
 groups <- levels(
@@ -1665,17 +2072,25 @@ groups <- levels(
 
 group_curves <- vector(
   "list",
-  length(groups)
+  length(
+    groups
+  )
 )
 
-names(group_curves) <- groups
+names(
+  group_curves
+) <- groups
 
-pc1_summary_list <- vector(
+summary_rows <- vector(
   "list",
-  length(groups)
+  length(
+    groups
+  )
 )
 
-names(pc1_summary_list) <- groups
+names(
+  summary_rows
+) <- groups
 
 
 for (
@@ -1686,7 +2101,7 @@ for (
     group_labels == g
   )
 
-  one <- compute_group_divergence(
+  one <- compute_group_geometry(
     group_name = g,
     rank_matrix_arm = rank_matrix_all[
       ,
@@ -1701,16 +2116,20 @@ for (
     pooled_variance = pooled_variance
   )
 
-  group_curves[[g]] <- one$features
+  group_curves[[
+    g
+  ]] <- one$features
 
-  pc1_summary_list[[g]] <- one$summary
+  summary_rows[[
+    g
+  ]] <- one$summary
 
   write.csv(
     one$features,
     file.path(
       OUT_ROOT,
       paste0(
-        "Table_Divergence_",
+        "Table_DifferentialGeometry_",
         g,
         ".csv"
       )
@@ -1718,86 +2137,89 @@ for (
     row.names = FALSE
   )
 
-  group_calculus <- make_group_figure(
+  make_group_figure(
     feature_df = one$features,
     group_name = g,
     out_file = file.path(
       OUT_ROOT,
       paste0(
-        "Figure_Diagnostic_",
+        "Figure_DifferentialGeometry_",
         g,
         ".png"
       )
     )
   )
 
-  write.csv(
-    group_calculus,
-    file.path(
-      OUT_ROOT,
-      paste0(
-        "Table_Calculus_",
-        g,
-        ".csv"
-      )
+  message(
+    "Completed group ",
+    g,
+    ": eta defined at ",
+    round(
+      100 *
+        one$summary$eta_valid_rank_fraction[
+          1L
+        ],
+      1
     ),
-    row.names = FALSE
+    "% of ranks; p_NB defined at ",
+    round(
+      100 *
+        one$summary$p_valid_rank_fraction[
+          1L
+        ],
+      1
+    ),
+    "% of ranks."
   )
 }
 
 
-pc1_summary <- bind_rows(
-  pc1_summary_list
+pc1_spline_summary <- bind_rows(
+  summary_rows
 )
 
 write.csv(
-  pc1_summary,
+  pc1_spline_summary,
   file.path(
     OUT_ROOT,
-    "Table_PC1_Summary.csv"
+    "Table_PC1_and_Spline_Summary.csv"
   ),
   row.names = FALSE
 )
 
 
 # -----------------------------------------------------------------------------
-# Build one consensus divergence trajectory across all 8 arms.
+# Rank-wise consensus across all eight groups.
 # -----------------------------------------------------------------------------
 
 consensus_df <- compute_consensus(
   group_curves
 )
 
-calculus_obj <- differentiate_consensus(
-  consensus_df
-)
-
-consensus_output <- consensus_df %>%
-  left_join(
-    calculus_obj$calculus,
-    by = "rank"
-  )
-
 write.csv(
-  consensus_output,
+  consensus_df,
   file.path(
     OUT_ROOT,
-    "Table_Consensus_Divergence_and_Calculus.csv"
+    "Table_Consensus_DifferentialGeometry.csv"
   ),
   row.names = FALSE
 )
 
 
 # -----------------------------------------------------------------------------
-# Save sample normalization information.
+# Sample normalization metadata.
 # -----------------------------------------------------------------------------
 
 write.csv(
   data.frame(
-    sample = colnames(count_mat),
-    group = as.character(group_labels),
+    sample = colnames(
+      count_mat
+    ),
+    group = as.character(
+      group_labels
+    ),
     DESeq2_size_factor = as.numeric(
-      deseq_norm$size_factors
+      deseq2_norm$size_factors
     ),
     stringsAsFactors = FALSE
   ),
@@ -1810,23 +2232,21 @@ write.csv(
 
 
 # -----------------------------------------------------------------------------
-# Main diagnostic mathematical figure.
+# Main consensus mathematical figure.
 # -----------------------------------------------------------------------------
 
 make_consensus_figure(
   consensus_df = consensus_df,
-  calculus_df = calculus_obj$calculus,
-  spline_fit = calculus_obj$spline,
   group_curves = group_curves,
   out_file = file.path(
     OUT_ROOT,
-    "Figure_Consensus_PC1_NB_Divergence_DIAGNOSTIC.png"
+    "Figure_Consensus_PC1_NB_DifferentialGeometry.png"
   )
 )
 
 
 # =============================================================================
-# FINAL CONSOLE OUTPUT
+# CONSOLE SUMMARY
 # =============================================================================
 
 message(
@@ -1834,11 +2254,27 @@ message(
 )
 
 message(
-  "DIAGNOSTIC PC1-NB DIVERGENCE ANALYSIS COMPLETE"
+  "PC1-NB DIFFERENTIAL GEOMETRY ANALYSIS COMPLETE"
 )
 
 message(
-  "PC1 ordering used: ascending abs(PC1 loading)"
+  "Ranking used: ascending absolute PC1 loading."
+)
+
+message(
+  "Primary differential field:"
+)
+
+message(
+  "  eta_EP(r) = [d log(E)/dx] / [d log(P)/dx]"
+)
+
+message(
+  "Local effective NB exponent:"
+)
+
+message(
+  "  p_NB(r) = [d log(E)/dx] / [d log(mu)/dx]"
 )
 
 message(
@@ -1850,15 +2286,19 @@ message(
 )
 
 message(
-  "Inspect:"
+  "Inspect first:"
 )
 
 message(
-  "  Figure_Consensus_PC1_NB_Divergence_DIAGNOSTIC.png"
+  "  Figure_Consensus_PC1_NB_DifferentialGeometry.png"
 )
 
 message(
-  "  Table_Consensus_Divergence_and_Calculus.csv"
+  "Then inspect:"
+)
+
+message(
+  "  Table_Consensus_DifferentialGeometry.csv"
 )
 
 message(
