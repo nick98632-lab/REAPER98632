@@ -3142,17 +3142,23 @@ make_timepoint_figure <- function(
     control_df
   )
 
-  arm_colors <- c(
-    paste0(
-      "Control (",
-      control_group,
-      ")"
-    ) = COL$control,
-    paste0(
-      "Treatment (",
-      treatment_group,
-      ")"
-    ) = COL$treatment
+  arm_colors <- stats::setNames(
+    c(
+      COL$control,
+      COL$treatment
+    ),
+    c(
+      paste0(
+        "Control (",
+        control_group,
+        ")"
+      ),
+      paste0(
+        "Treatment (",
+        treatment_group,
+        ")"
+      )
+    )
   )
 
   pA <- ggplot(
