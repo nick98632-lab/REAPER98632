@@ -2282,7 +2282,6 @@ make_overall_figure <- function(
       hjust = 0,
       vjust = 1.15,
       size = 2.9,
-      label.size = 0.22,
       fill = "white"
     ) +
     theme_manuscript()
@@ -2388,7 +2387,6 @@ make_overall_figure <- function(
       hjust = 0,
       vjust = 1,
       size = 2.8,
-      label.size = 0.22,
       fill = "white"
     ) +
     theme_manuscript()
@@ -2483,7 +2481,6 @@ make_overall_figure <- function(
       hjust = 0,
       vjust = 1.15,
       size = 2.75,
-      label.size = 0.22,
       fill = "white"
     ) +
     annotate(
@@ -2497,7 +2494,6 @@ make_overall_figure <- function(
       hjust = 0,
       vjust = -0.08,
       size = 2.75,
-      label.size = 0.22,
       fill = "white"
     ) +
     theme_manuscript()
@@ -2722,7 +2718,6 @@ make_timepoint_figure <- function(
       hjust = 0,
       vjust = 1.15,
       size = 2.85,
-      label.size = 0.22,
       fill = "white"
     ) +
     theme_manuscript()
@@ -2801,7 +2796,6 @@ make_timepoint_figure <- function(
       hjust = 0,
       vjust = 1.15,
       size = 2.8,
-      label.size = 0.22,
       fill = "white"
     ) +
     theme_manuscript()
@@ -2820,6 +2814,7 @@ make_timepoint_figure <- function(
       cols = c(
         p_remainder,
         p_model_leading_edge,
+        p_anchor_terminal,
         p_paper_5000,
         p_terminal_tail
       ),
@@ -2832,6 +2827,7 @@ make_timepoint_figure <- function(
         levels = c(
           "p_remainder",
           "p_model_leading_edge",
+          "p_anchor_terminal",
           "p_paper_5000",
           "p_terminal_tail"
         ),
