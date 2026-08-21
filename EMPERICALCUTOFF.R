@@ -10,194 +10,93 @@ suppressPackageStartupMessages({
 options(stringsAsFactors = FALSE)
 
 # =============================================================================
-# FINAL MANUSCRIPT SCRIPT
+# MANUSCRIPT ANALYSIS
 # BOOTSTRAP-STABLE, DATA-DERIVED HIGH-PC1 CUTOFF
 # =============================================================================
 #
-# PURPOSE
+# METHODS
 #
-# This script produces:
+# Within each experimental arm, features are ordered from lowest to highest
+# absolute loading on the first principal component (|PC1 loading|). For the
+# primary analysis, PC1 is calculated from log1p-transformed counts normalized
+# to counts per million (CPM), whereas empirical feature variance is calculated
+# from the corresponding raw count matrix. For the supplementary DESeq2
+# analysis, PC1 ranking and variance estimation are based on DESeq2-normalized
+# quantities, with ranking performed on either log1p-normalized counts or a
+# variance-stabilizing transformation (VST), as specified below.
 #
-# 1. Main manuscript figures
-#    - Rank: log-transformed CPM-style library-size normalization
-#    - Metrics: raw counts
-#
-# 2. DESeq2 supplementary figures
-#    - Rank: DESeq2-normalized counts, optionally VST
-#    - Metrics: DESeq2-normalized counts
-#
-# =============================================================================
-# CORE SCIENTIFIC LOGIC
-# =============================================================================
-#
-# A. RANKING
-#
-# Features are ranked within each arm by absolute PC1 loading:
-#
-#     low |PC1 loading|  ---------------------->  high |PC1 loading|
-#
-# Therefore, the RIGHT side of the ranked series contains the features with
-# the largest absolute PC1 loadings.
-#
-# =============================================================================
-# B. VARIANCE GEOMETRY
-# =============================================================================
-#
-# At every feature:
-#
-#     empirical variance
-#
-# is calculated from the metric matrix and transformed:
-#
-#     log(1 + variance)
-#
-# A smoothing spline is fitted to this ranked variance trajectory.
-#
-# The spline's second derivative is then calculated over a dense rank grid.
-# Sign changes in the second derivative identify curvature transitions
+# To identify a data-derived boundary in the high-|PC1|-loading tail, empirical
+# feature variance is ordered along the PC1 rank axis, transformed as
+# log(1 + variance), and represented by a smoothing spline. The second
+# derivative of the spline is evaluated over a dense rank grid. Sign changes
+# in the second derivative define candidate curvature transitions
 # (inflection points).
 #
-# =============================================================================
-# C. NO FIXED 5,000-FEATURE REFERENCE
-# =============================================================================
+# No fixed feature-count cutoff (e.g., 5,000 features) is used.
 #
-# The previous fixed 5,000-feature reference has been removed completely.
+# Instead, a prespecified grid of minimum high-loading tail fractions is
+# evaluated:
 #
-# Instead, candidate minimum RIGHT-tail fractions are prespecified:
+#     5%, 7.5%, 10%, 12.5%, and 15%.
 #
-#     5%, 7.5%, 10%, 12.5%, 15%
+# For a candidate minimum fraction f, an eligible Anchor must:
 #
-# For each candidate minimum fraction f:
+#   1. correspond to a spline second-derivative sign-change crossing;
+#   2. leave at least f*N features from the Anchor through the right edge;
+#   3. permit construction of an immediately adjacent, equally sized LEFT
+#      comparison block.
 #
-# 1. Find all spline second-derivative zero crossings.
+# Among all eligible crossings for a given f, the rightmost crossing is chosen.
+# Thus, the procedure identifies the most terminal curvature transition that
+# still supports the prespecified minimum tail size and matched comparison.
 #
-# 2. Restrict to crossings that:
+# Cutoff reproducibility is then evaluated by bootstrap resampling of biological
+# samples within each arm. For every bootstrap replicate, the complete
+# track-specific preprocessing, PC1 ranking, empirical variance trajectory,
+# spline fit, second derivative, and Anchor selection are recomputed.
 #
-#    a. leave at least f * N features from Anchor through the right edge;
+# A candidate fraction is classified as geometrically stable only if all of
+# the following prespecified criteria are satisfied:
 #
-#    b. leave enough features on the left to construct an equally sized
-#       matched LEFT block.
+#   - >= 90% of bootstrap replicates yield a valid Anchor;
+#   - >= 80% of valid replicates recover an Anchor within 3% of the total
+#     rank axis from the full-data Anchor;
+#   - bootstrap Anchor IQR is <= 3% of the total rank axis;
+#   - bootstrap RIGHT-region fraction IQR is <= 3 percentage points;
+#   - median Jaccard overlap between bootstrap and full-data RIGHT feature
+#     membership is >= 0.80.
 #
-# 3. Among those valid crossings, select the RIGHTMOST crossing.
+# The smallest candidate minimum fraction satisfying all stability criteria is
+# selected. The final Anchor is the corresponding Anchor obtained from the full
+# dataset; the bootstrap median Anchor is not substituted for the full-data
+# estimate.
 #
-# Thus, for each fraction:
+# After cutoff selection is complete, the RIGHT region is defined as all
+# features from the Anchor through the highest-|PC1|-loading rank. LEFT is the
+# immediately preceding block containing exactly the same number of features.
 #
-#     Anchor = rightmost curvature transition satisfying the minimum
-#              tail-size requirement.
+# NB2-related quantities are evaluated only after the geometric cutoff has been
+# selected:
 #
-# RIGHT = Anchor through rank N.
+#     NB2 = log(1 + max(variance - mu, 0))
 #
-# LEFT  = immediately preceding block having exactly the same number of
-#         features as RIGHT.
-#
-# =============================================================================
-# D. BOOTSTRAP STABILITY
-# =============================================================================
-#
-# The minimum fraction is NOT selected using NB2 results.
-#
-# Instead, samples within each arm are resampled with replacement.
-#
-# For each bootstrap replicate:
-#
-#     sample resampling
-#          ->
-#     PC1 reranking
-#          ->
-#     variance spline
-#          ->
-#     second derivative
-#          ->
-#     zero crossings
-#          ->
-#     candidate Anchor
-#
-# Stability is assessed separately for every candidate minimum fraction.
-#
-# A fraction is considered stable only if ALL criteria are met:
-#
-# 1. Bootstrap-valid rate >= MIN_BOOTSTRAP_VALID_RATE
-#
-# 2. Anchor recovery rate >= MIN_ANCHOR_RECOVERY_RATE
-#    Recovery means:
-#
-#       |bootstrap Anchor - full-data Anchor|
-#             <= ANCHOR_TOLERANCE_FRACTION * N
-#
-# 3. Anchor IQR <= MAX_ANCHOR_IQR_FRACTION * N
-#
-# 4. Median Jaccard overlap between bootstrap RIGHT-feature membership
-#    and full-data RIGHT-feature membership >= MIN_MEDIAN_JACCARD
-#
-# The SMALLEST candidate minimum fraction satisfying all criteria is chosen.
-#
-# This means the fraction is chosen from geometric reproducibility alone.
-#
-# =============================================================================
-# E. FINAL CUTOFF
-# =============================================================================
-#
-# After the minimum fraction has been selected by bootstrap stability,
-# the final Anchor is the Anchor obtained from the FULL dataset using that
-# selected minimum fraction.
-#
-# The bootstrap median Anchor is NOT substituted for the full-data Anchor.
-#
-# =============================================================================
-# F. NB2 CORROBORATION
-# =============================================================================
-#
-# Only AFTER the Anchor has been selected are NB2-related quantities examined.
-#
-# Let:
-#
-#     mu = empirical mean
-#     variance = empirical variance
-#
-# 1. NB2
-#
-#     log(1 + max(variance - mu, 0))
-#
-# 2. NB2-NB1
-#
-#     log(1 + max(variance - mu, 0)) - log(1 + mu)
-#
-# 3. alpha*mu
+#     NB2-NB1 =
+#       log(1 + max(variance - mu, 0)) - log(1 + mu)
 #
 #     alpha = max((variance - mu) / mu^2, 0)
 #
 #     alpha*mu signal = log(1 + alpha*mu)
 #
-# These are descriptive corroborative diagnostics.
+# where mu and variance are the empirical feature mean and variance.
 #
-# They are NOT used to select:
+# These quantities are descriptive measures of excess-variance behavior and
+# are not formal likelihood-ratio statistics or independent validation tests.
+# Importantly, none of the NB2-related quantities is used to select the minimum
+# fraction, Anchor, spline smoothing parameter, or bootstrap stability result.
 #
-#     - minimum fraction
-#     - Anchor
-#     - spline smoothing
-#     - bootstrap stability
-#
-# Therefore, the geometric selection and NB2 corroboration remain separated.
-#
-# =============================================================================
-# G. METHODS-LEVEL VALIDATION
-# =============================================================================
-#
-# For every arm and track, the script verifies:
-#
-# - selected fraction passed all stability criteria
-# - Anchor is a rounded spline d2 zero crossing
-# - RIGHT contains at least the selected minimum fraction
-# - LEFT and RIGHT have exactly equal size
-# - LEFT does not extend below rank 1
-# - summary medians exactly match the plotted/sliced regions
-#
-# If NO candidate fraction is stable:
-#
-# - the track is marked UNSTABLE
-# - stability tables are still written
-# - no cutoff is forced
-# - no NB2 corroboration figure is produced for that track
+# If no candidate fraction satisfies all prespecified stability criteria, the
+# analysis track is reported as UNSTABLE and no cutoff or corroborative figure
+# is forced.
 #
 # =============================================================================
 
@@ -212,17 +111,17 @@ OUT_ROOT <- "/root/REAPER98632/exports/manuscript_bootstrap_stable"
 
 
 # -----------------------------------------------------------------------------
-# Variance spline
+# Spline geometry
 # -----------------------------------------------------------------------------
 
 VAR_SPLINE_SPAR <- 0.60
 
+DENSE_GRID_MULTIPLIER <- 2L
+DENSE_GRID_MIN <- 5000L
+
 
 # -----------------------------------------------------------------------------
-# Candidate minimum RIGHT-tail fractions
-#
-# IMPORTANT:
-# These must be specified before examining NB2 corroboration.
+# Prespecified candidate minimum RIGHT-tail fractions
 # -----------------------------------------------------------------------------
 
 MIN_FRACTION_GRID <- c(
@@ -235,41 +134,52 @@ MIN_FRACTION_GRID <- c(
 
 
 # -----------------------------------------------------------------------------
-# Bootstrap settings
-#
-# 500 is reasonable for manuscript analysis.
-# For development/testing, temporarily reduce to 100-200.
+# Bootstrap
 # -----------------------------------------------------------------------------
 
 BOOTSTRAP_N <- 500L
-
 BOOTSTRAP_SEED_BASE <- 20260820L
+
+detected_cores <- suppressWarnings(
+  parallel::detectCores(logical = FALSE)
+)
+
+if (is.na(detected_cores) || detected_cores < 2L) {
+  BOOTSTRAP_CORES <- 1L
+} else {
+  BOOTSTRAP_CORES <- max(
+    1L,
+    min(
+      4L,
+      detected_cores - 1L
+    )
+  )
+}
 
 
 # -----------------------------------------------------------------------------
-# Stability thresholds
-#
-# These should be fixed before examining NB2 results.
+# Prespecified stability criteria
 # -----------------------------------------------------------------------------
 
 MIN_BOOTSTRAP_VALID_RATE <- 0.90
 
 ANCHOR_TOLERANCE_FRACTION <- 0.03
-
 MIN_ANCHOR_RECOVERY_RATE <- 0.80
 
 MAX_ANCHOR_IQR_FRACTION <- 0.03
+
+MAX_RIGHT_FRACTION_IQR <- 0.03
 
 MIN_MEDIAN_JACCARD <- 0.80
 
 
 # -----------------------------------------------------------------------------
-# Figure settings
+# Figures
 # -----------------------------------------------------------------------------
 
-PNG_WIDTH_IN  <- 14
+PNG_WIDTH_IN <- 14
 PNG_HEIGHT_IN <- 10.8
-PNG_DPI       <- 260
+PNG_DPI <- 260
 
 
 # -----------------------------------------------------------------------------
@@ -279,13 +189,13 @@ PNG_DPI       <- 260
 RUN_DESEQ2_SUPPLEMENT <- TRUE
 
 DESEQ2_RANK_METHOD <- "normalized_log1p"
-# Options:
+# Allowed:
 #   "normalized_log1p"
 #   "vst"
 
 
 # -----------------------------------------------------------------------------
-# Comparisons
+# Experimental comparisons
 # -----------------------------------------------------------------------------
 
 COMPARISONS <- list(
@@ -308,7 +218,6 @@ dir.create(
 # =============================================================================
 
 COL <- list(
-
   var_curve = "#117A65",
 
   nb2      = "#1B9E77",
@@ -318,14 +227,12 @@ COL <- list(
   left_fill  = "#CBE3F8",
   right_fill = "#DDF2D5",
 
-  anchor = "#000000",
-
+  anchor        = "#000000",
   zero_crossing = "#777777",
 
   left_pt  = "#5B8FD1",
   right_pt = "#43A047"
 )
-
 
 TRACE_LEVELS <- c(
   "NB2",
@@ -339,7 +246,6 @@ TRACE_COLORS <- c(
   "alpha*mu" = COL$alpha_mu
 )
 
-
 REGION_LEVELS <- c(
   "LEFT",
   "RIGHT"
@@ -352,80 +258,194 @@ REGION_COLORS <- c(
 
 
 # =============================================================================
-# BASIC HELPERS
+# INPUT
 # =============================================================================
 
-first_numeric_col_index <- function(df) {
+read_count_matrix <- function(path, comparisons) {
 
-  idx <- which(
-    vapply(
-      df,
-      is.numeric,
-      logical(1)
-    )
-  )
-
-  if (length(idx) == 0L) {
-    return(NA_integer_)
+  if (!file.exists(path)) {
+    stop("Count file does not exist: ", path)
   }
-
-  idx[1L]
-}
-
-
-# -----------------------------------------------------------------------------
-
-read_count_matrix <- function(path) {
 
   raw_df <- read.csv(
     path,
-    check.names = FALSE
+    check.names = FALSE,
+    stringsAsFactors = FALSE
   )
 
-  if (
-    nrow(raw_df) == 0L ||
-    ncol(raw_df) < 2L
-  ) {
+  if (nrow(raw_df) == 0L || ncol(raw_df) < 2L) {
+    stop("Count file is empty or malformed: ", path)
+  }
+
+  # Identify sample columns from the experimental sample-name patterns.
+  # This avoids coercing unrelated metadata columns to numeric.
+
+  sample_patterns <- unique(
+    unname(
+      unlist(
+        comparisons,
+        recursive = TRUE,
+        use.names = FALSE
+      )
+    )
+  )
+
+  sample_idx <- sort(
+    unique(
+      unlist(
+        lapply(
+          sample_patterns,
+          function(pattern) {
+            grep(
+              pattern,
+              colnames(raw_df)
+            )
+          }
+        )
+      )
+    )
+  )
+
+  if (length(sample_idx) == 0L) {
     stop(
-      "Count file is empty or malformed: ",
-      path
+      "No sample columns matched the patterns specified in COMPARISONS."
     )
   }
 
-  first_num <- first_numeric_col_index(raw_df)
-
-  if (is.na(first_num)) {
-    stop("No numeric count columns detected.")
+  if (1L %in% sample_idx) {
+    stop(
+      "The first column matched a sample pattern. ",
+      "The first column is expected to contain feature identifiers."
+    )
   }
 
-  feature_ids <- make.unique(
-    as.character(raw_df[[1L]])
+  feature_ids <- trimws(
+    as.character(
+      raw_df[[1L]]
+    )
   )
 
-  count_df <- raw_df[
-    ,
-    first_num:ncol(raw_df),
-    drop = FALSE
-  ]
+  if (
+    any(is.na(feature_ids)) ||
+    any(feature_ids == "")
+  ) {
+    stop(
+      "Missing or empty feature identifiers were found in column 1."
+    )
+  }
 
-  count_mat <- as.matrix(count_df)
+  feature_ids <- make.unique(feature_ids)
 
-  storage.mode(count_mat) <- "numeric"
+  parsed_columns <- vector(
+    mode = "list",
+    length = length(sample_idx)
+  )
+
+  for (j in seq_along(sample_idx)) {
+
+    col_index <- sample_idx[j]
+    col_name <- colnames(raw_df)[col_index]
+
+    original <- raw_df[[col_index]]
+
+    if (is.numeric(original) || is.integer(original)) {
+
+      numeric_values <- as.numeric(original)
+
+    } else {
+
+      numeric_values <- suppressWarnings(
+        as.numeric(
+          trimws(
+            as.character(original)
+          )
+        )
+      )
+    }
+
+    if (any(!is.finite(numeric_values))) {
+
+      bad_rows <- which(
+        !is.finite(numeric_values)
+      )
+
+      preview_rows <- paste(
+        head(
+          bad_rows,
+          10L
+        ),
+        collapse = ", "
+      )
+
+      stop(
+        "Sample column '",
+        col_name,
+        "' contains missing or non-numeric count values. ",
+        "Example row indices: ",
+        preview_rows,
+        ". Counts are not silently replaced by zero."
+      )
+    }
+
+    if (any(numeric_values < 0)) {
+      stop(
+        "Negative values detected in sample column: ",
+        col_name
+      )
+    }
+
+    parsed_columns[[j]] <- numeric_values
+  }
+
+  count_mat <- do.call(
+    cbind,
+    parsed_columns
+  )
 
   rownames(count_mat) <- feature_ids
 
-  count_mat[
-    !is.finite(count_mat)
-  ] <- 0
+  colnames(count_mat) <- colnames(raw_df)[sample_idx]
 
-  count_mat <- pmax(
-    count_mat,
-    0
-  )
+  storage.mode(count_mat) <- "double"
 
-  keep <- rowSums(
-    count_mat
-  ) > 0
+  if (any(!is.finite(count_mat))) {
+    stop("Non-finite count values remain after parsing.")
+  }
+
+  if (any(count_mat < 0)) {
+    stop("Negative count values remain after parsing.")
+  }
+
+  # This is a raw-read-count analysis. Noninteger values indicate that
+  # the wrong columns or an inappropriate input matrix may have been supplied.
+
+  noninteger <- abs(
+    count_mat -
+      round(count_mat)
+  ) > 1e-8
+
+  if (any(noninteger)) {
+
+    bad_col <- which(
+      colSums(noninteger) > 0
+    )[1L]
+
+    stop(
+      "Noninteger values were detected in raw count column '",
+      colnames(count_mat)[bad_col],
+      "'. Verify that COUNT_FILE contains raw read counts."
+    )
+  }
+
+  count_mat <- round(count_mat)
+
+  # Remove features with zero counts across every selected sample.
+
+  keep <- rowSums(count_mat) > 0
+
+  if (!any(keep)) {
+    stop("All features have zero total counts.")
+  }
 
   count_mat[
     keep,
@@ -435,23 +455,28 @@ read_count_matrix <- function(path) {
 }
 
 
-# -----------------------------------------------------------------------------
+# =============================================================================
+# NORMALIZATION
+# =============================================================================
 
 normalize_cpm_log1p <- function(count_mat_arm) {
 
   lib_sizes <- colSums(
-    count_mat_arm,
-    na.rm = TRUE
+    count_mat_arm
   )
 
-  lib_sizes[
-    !is.finite(lib_sizes) |
-      lib_sizes <= 0
-  ] <- 1
+  if (
+    any(!is.finite(lib_sizes)) ||
+    any(lib_sizes <= 0)
+  ) {
+    stop(
+      "At least one sample has a nonpositive or invalid library size."
+    )
+  }
 
   cpm <- sweep(
     count_mat_arm,
-    2,
+    2L,
     lib_sizes / 1e6,
     "/"
   )
@@ -460,13 +485,27 @@ normalize_cpm_log1p <- function(count_mat_arm) {
 }
 
 
-# =============================================================================
-# DESEQ2
-# =============================================================================
+prepare_main_matrices <- function(count_mat_arm) {
 
-compute_deseq2_matrices <- function(
+  list(
+    rank_matrix = normalize_cpm_log1p(
+      count_mat_arm
+    ),
+
+    metric_matrix = count_mat_arm,
+
+    rank_method_used = "CPM log1p",
+
+    metric_method_used = "raw counts",
+
+    size_factors = NULL
+  )
+}
+
+
+prepare_deseq2_matrices <- function(
     count_mat_arm,
-    rank_method = "normalized_log1p") {
+    rank_method = DESEQ2_RANK_METHOD) {
 
   if (
     !requireNamespace(
@@ -474,7 +513,7 @@ compute_deseq2_matrices <- function(
       quietly = TRUE
     )
   ) {
-    return(NULL)
+    stop("DESeq2 is not installed.")
   }
 
   if (
@@ -483,13 +522,53 @@ compute_deseq2_matrices <- function(
       quietly = TRUE
     )
   ) {
-    return(NULL)
+    stop("SummarizedExperiment is not installed.")
   }
 
+  if (
+    !(rank_method %in% c("normalized_log1p", "vst"))
+  ) {
+    stop(
+      "DESEQ2_RANK_METHOD must be 'normalized_log1p' or 'vst'."
+    )
+  }
+
+  if (
+    any(
+      abs(
+        count_mat_arm -
+          round(count_mat_arm)
+      ) > 1e-8
+    )
+  ) {
+    stop(
+      "DESeq2 requires integer raw counts."
+    )
+  }
+
+  # Bootstrap resampling can repeat the same biological sample.
+  # DESeq2 requires unique column names, so duplicate draws are assigned
+  # unique computational identifiers without changing their values.
+
+  if (
+    is.null(
+      colnames(count_mat_arm)
+    )
+  ) {
+    colnames(count_mat_arm) <- paste0(
+      "sample_",
+      seq_len(
+        ncol(count_mat_arm)
+      )
+    )
+  }
+
+  colnames(count_mat_arm) <- make.unique(
+    colnames(count_mat_arm)
+  )
+
   col_data <- data.frame(
-
     row.names = colnames(count_mat_arm),
-
     intercept = factor(
       rep(
         "one",
@@ -499,11 +578,8 @@ compute_deseq2_matrices <- function(
   )
 
   dds <- DESeq2::DESeqDataSetFromMatrix(
-
     countData = round(count_mat_arm),
-
     colData = col_data,
-
     design = ~ 1
   )
 
@@ -514,61 +590,94 @@ compute_deseq2_matrices <- function(
     normalized = TRUE
   )
 
-  vst_mat <- NULL
+  if (rank_method == "normalized_log1p") {
 
-  rank_method_used <- rank_method
-
-  if (rank_method == "vst") {
-
-    vst_obj <- tryCatch(
-
-      DESeq2::vst(
-        dds,
-        blind = TRUE
-      ),
-
-      error = function(e) NULL
+    ranking_matrix <- log1p(
+      norm_counts
     )
 
-    if (!is.null(vst_obj)) {
+    rank_method_used <- "DESeq2 normalized log1p"
 
-      vst_mat <- SummarizedExperiment::assay(
-        vst_obj
-      )
+  } else {
 
-    } else {
+    vst_obj <- DESeq2::vst(
+      dds,
+      blind = TRUE
+    )
 
-      rank_method_used <- "normalized_log1p_fallback"
-    }
+    ranking_matrix <- SummarizedExperiment::assay(
+      vst_obj
+    )
+
+    rank_method_used <- "DESeq2 VST"
   }
 
-  ranking_matrix <- switch(
-
-    rank_method,
-
-    normalized_log1p =
-      log1p(norm_counts),
-
-    vst =
-      if (!is.null(vst_mat)) {
-        vst_mat
-      } else {
-        log1p(norm_counts)
-      },
-
-    log1p(norm_counts)
-  )
-
   list(
+    rank_matrix = ranking_matrix,
 
-    normalized_counts = norm_counts,
+    metric_matrix = norm_counts,
 
-    ranking_matrix = ranking_matrix,
+    rank_method_used = rank_method_used,
 
-    size_factors = DESeq2::sizeFactors(dds),
+    metric_method_used = "DESeq2 normalized counts",
 
-    rank_method_used = rank_method_used
+    size_factors = DESeq2::sizeFactors(dds)
   )
+}
+
+
+# =============================================================================
+# NUMERICAL HELPERS
+# =============================================================================
+
+fast_row_variance <- function(mat) {
+
+  n <- ncol(mat)
+
+  if (n < 2L) {
+    stop(
+      "At least two samples are required to calculate feature variance."
+    )
+  }
+
+  mu <- rowMeans(mat)
+
+  ss <- rowSums(
+    mat * mat
+  ) -
+    n * mu^2
+
+  # Floating-point cancellation can produce tiny negative values.
+
+  tolerance <- .Machine$double.eps *
+    pmax(
+      1,
+      abs(
+        rowSums(
+          mat * mat
+        )
+      )
+    )
+
+  ss[
+    ss < 0 &
+      abs(ss) <= tolerance
+  ] <- 0
+
+  variance <- ss /
+    (n - 1L)
+
+  variance[
+    !is.finite(variance)
+  ] <- NA_real_
+
+  variance <- pmax(
+    variance,
+    0,
+    na.rm = FALSE
+  )
+
+  variance
 }
 
 
@@ -582,38 +691,93 @@ compute_abs_pc1_loadings <- function(norm_mat_arm) {
     nrow(norm_mat_arm) < 2L ||
     ncol(norm_mat_arm) < 2L
   ) {
-    return(NULL)
+    stop(
+      "PC1 calculation requires at least two features and two samples."
+    )
   }
 
-  pca <- tryCatch(
+  # X:
+  #   rows    = samples
+  #   columns = features
 
-    stats::prcomp(
-      t(norm_mat_arm),
-      center = TRUE,
-      scale. = FALSE,
-      rank. = 1
-    ),
+  X <- t(
+    norm_mat_arm
+  )
 
-    error = function(e) NULL
+  feature_means <- colMeans(X)
+
+  X_centered <- sweep(
+    X,
+    2L,
+    feature_means,
+    "-"
+  )
+
+  # Because the number of samples is much smaller than the number of
+  # features, PC1 is obtained through the sample-space Gram matrix.
+  # This is mathematically equivalent to the leading right singular
+  # vector used by prcomp() but substantially faster for repeated
+  # bootstrap analyses.
+
+  gram <- tcrossprod(
+    X_centered
+  )
+
+  eig <- eigen(
+    gram,
+    symmetric = TRUE
+  )
+
+  lambda1 <- eig$values[1L]
+
+  scale_reference <- max(
+    1,
+    max(
+      abs(
+        eig$values
+      ),
+      na.rm = TRUE
+    )
   )
 
   if (
-    is.null(pca) ||
-    is.null(pca$rotation) ||
-    ncol(pca$rotation) < 1L
+    !is.finite(lambda1) ||
+    lambda1 <=
+      .Machine$double.eps *
+      scale_reference
   ) {
-    return(NULL)
+    stop(
+      "PC1 is undefined because the bootstrap sample matrix has ",
+      "insufficient between-sample variation."
+    )
   }
 
-  out <- abs(
-    pca$rotation[, 1L]
+  u1 <- eig$vectors[
+    ,
+    1L
+  ]
+
+  singular_value <- sqrt(
+    lambda1
   )
 
-  out[
-    !is.finite(out)
+  loading <- as.numeric(
+    crossprod(
+      X_centered,
+      u1
+    )
+  ) /
+    singular_value
+
+  names(loading) <- colnames(
+    X_centered
+  )
+
+  loading[
+    !is.finite(loading)
   ] <- 0
 
-  out
+  abs(loading)
 }
 
 
@@ -624,23 +788,23 @@ compute_abs_pc1_loadings <- function(norm_mat_arm) {
 compute_ranked_variance_curve <- function(
     metric_mat_arm,
     rank_order,
-    spar = 0.60) {
+    spar = VAR_SPLINE_SPAR) {
 
-  empirical_var <- apply(
-    metric_mat_arm,
-    1L,
-    stats::var,
-    na.rm = TRUE
+  empirical_var <- fast_row_variance(
+    metric_mat_arm
   )
 
-  empirical_var[
-    !is.finite(empirical_var)
-  ] <- 0
-
-  empirical_var <- pmax(
-    empirical_var,
-    0
-  )
+  if (
+    any(
+      !is.finite(
+        empirical_var
+      )
+    )
+  ) {
+    stop(
+      "Non-finite empirical feature variances were produced."
+    )
+  }
 
   ranked_var <- empirical_var[
     rank_order
@@ -654,14 +818,22 @@ compute_ranked_variance_curve <- function(
     rank_order
   )
 
-  spline_fit <- stats::smooth.spline(
-
-    x = ranks,
-
-    y = ranked_log_var,
-
-    spar = spar
+  spline_fit <- tryCatch(
+    stats::smooth.spline(
+      x = ranks,
+      y = ranked_log_var,
+      spar = spar
+    ),
+    error = function(e) {
+      NULL
+    }
   )
+
+  if (is.null(spline_fit)) {
+    stop(
+      "Smoothing spline fit failed."
+    )
+  }
 
   smooth_y <- as.numeric(
     stats::predict(
@@ -680,13 +852,14 @@ compute_ranked_variance_curve <- function(
   )
 
   dense_n <- max(
-    5000L,
-    length(ranks) * 4L
+    DENSE_GRID_MIN,
+    length(ranks) *
+      DENSE_GRID_MULTIPLIER
   )
 
   dense_x <- seq(
-    min(ranks),
-    max(ranks),
+    from = min(ranks),
+    to = max(ranks),
     length.out = dense_n
   )
 
@@ -707,11 +880,9 @@ compute_ranked_variance_curve <- function(
   )
 
   out <- data.frame(
-
     rank = ranks,
 
-    empirical_variance =
-      ranked_var,
+    empirical_variance = ranked_var,
 
     log1p_empirical_variance =
       ranked_log_var,
@@ -729,15 +900,12 @@ compute_ranked_variance_curve <- function(
     out,
     "dense_curve_df"
   ) <- data.frame(
-
-    dense_rank =
-      dense_x,
+    dense_rank = dense_x,
 
     dense_smooth_log1p_empirical_variance =
       dense_y,
 
-    dense_d2 =
-      dense_d2,
+    dense_d2 = dense_d2,
 
     stringsAsFactors = FALSE
   )
@@ -746,21 +914,15 @@ compute_ranked_variance_curve <- function(
 }
 
 
-# -----------------------------------------------------------------------------
-
 find_d2_zero_crossings <- function(dense_df) {
 
   x <- dense_df$dense_rank
-
   y <- dense_df$dense_d2
 
-  ok <- (
-    is.finite(x) &
-      is.finite(y)
-  )
+  ok <- is.finite(x) &
+    is.finite(y)
 
   x <- x[ok]
-
   y <- y[ok]
 
   if (length(x) < 2L) {
@@ -783,11 +945,9 @@ find_d2_zero_crossings <- function(dense_df) {
   ) {
 
     a <- y[i]
-
     b <- y[i + 1L]
 
     xa <- x[i]
-
     xb <- x[i + 1L]
 
     if (
@@ -797,7 +957,6 @@ find_d2_zero_crossings <- function(dense_df) {
       next
     }
 
-    # Exact zero on left point
     if (
       a == 0 &&
       b != 0
@@ -811,7 +970,6 @@ find_d2_zero_crossings <- function(dense_df) {
       next
     }
 
-    # Exact zero on right point
     if (
       b == 0 &&
       a != 0
@@ -825,27 +983,26 @@ find_d2_zero_crossings <- function(dense_df) {
       next
     }
 
-    # True sign change
     if (
       (a < 0 && b > 0) ||
       (a > 0 && b < 0)
     ) {
 
-      frac <- abs(a) /
+      fraction_between_points <- abs(a) /
         (
           abs(a) +
             abs(b)
         )
 
-      xr <- xa +
-        frac *
+      crossing_rank <- xa +
+        fraction_between_points *
         (
           xb - xa
         )
 
       crossings <- c(
         crossings,
-        xr
+        crossing_rank
       )
     }
   }
@@ -854,9 +1011,7 @@ find_d2_zero_crossings <- function(dense_df) {
     is.finite(crossings)
   ]
 
-  if (
-    length(crossings) == 0L
-  ) {
+  if (length(crossings) == 0L) {
 
     return(
       data.frame(
@@ -871,27 +1026,18 @@ find_d2_zero_crossings <- function(dense_df) {
     unique(
       round(
         crossings,
-        8
+        digits = 8L
       )
     )
   )
 
   data.frame(
-
-    crossing_rank =
-      crossings,
-
-    crossing_type =
-      "d2_sign_change",
-
+    crossing_rank = crossings,
+    crossing_type = "d2_sign_change",
     stringsAsFactors = FALSE
   )
 }
 
-
-# =============================================================================
-# COMPLETE GEOMETRY FOR ONE DATA MATRIX
-# =============================================================================
 
 compute_geometry <- function(
     rank_matrix,
@@ -902,9 +1048,8 @@ compute_geometry <- function(
     nrow(rank_matrix) !=
       nrow(metric_matrix)
   ) {
-
     stop(
-      "rank_matrix and metric_matrix have different numbers of features."
+      "rank_matrix and metric_matrix contain different feature counts."
     )
   }
 
@@ -912,9 +1057,19 @@ compute_geometry <- function(
     ncol(rank_matrix) !=
       ncol(metric_matrix)
   ) {
-
     stop(
-      "rank_matrix and metric_matrix have different numbers of samples."
+      "rank_matrix and metric_matrix contain different sample counts."
+    )
+  }
+
+  if (
+    !identical(
+      rownames(rank_matrix),
+      rownames(metric_matrix)
+    )
+  ) {
+    stop(
+      "Feature identifiers differ between rank_matrix and metric_matrix."
     )
   }
 
@@ -922,28 +1077,15 @@ compute_geometry <- function(
     rank_matrix
   )
 
-  if (is.null(abs_loadings)) {
-
-    stop(
-      "PC1 calculation failed."
-    )
-  }
-
   rank_order <- order(
     abs_loadings,
     decreasing = FALSE
   )
 
   variance_df <- compute_ranked_variance_curve(
-
-    metric_mat_arm =
-      metric_matrix,
-
-    rank_order =
-      rank_order,
-
-    spar =
-      spar
+    metric_mat_arm = metric_matrix,
+    rank_order = rank_order,
+    spar = spar
   )
 
   dense_curve_df <- attr(
@@ -956,27 +1098,17 @@ compute_geometry <- function(
   )
 
   list(
-
-    abs_loadings =
-      abs_loadings,
-
-    rank_order =
-      rank_order,
-
-    variance_df =
-      variance_df,
-
-    dense_curve_df =
-      dense_curve_df,
-
-    zero_df =
-      zero_df
+    abs_loadings = abs_loadings,
+    rank_order = rank_order,
+    variance_df = variance_df,
+    dense_curve_df = dense_curve_df,
+    zero_df = zero_df
   )
 }
 
 
 # =============================================================================
-# SELECT ANCHOR FOR ONE MINIMUM FRACTION
+# CANDIDATE ANCHOR SELECTION
 # =============================================================================
 
 select_anchor_for_min_fraction <- function(
@@ -989,9 +1121,8 @@ select_anchor_for_min_fraction <- function(
     min_fraction <= 0 ||
     min_fraction >= 0.50
   ) {
-
     stop(
-      "min_fraction must be > 0 and < 0.50."
+      "min_fraction must lie strictly between 0 and 0.50."
     )
   }
 
@@ -1000,108 +1131,62 @@ select_anchor_for_min_fraction <- function(
       total_n
   )
 
-  # Equal-sized LEFT requires:
+  # Equal-size LEFT comparison requires:
   #
-  # anchor - 1 >= total_n - anchor + 1
+  #   Anchor - 1 >= N - Anchor + 1
   #
   # therefore:
   #
-  # anchor >= (total_n + 2) / 2
+  #   Anchor >= (N + 2) / 2
 
   minimum_anchor_for_match <- ceiling(
     (
-      total_n + 2L
-    ) / 2
+      total_n +
+        2L
+    ) /
+      2
   )
 
-  # To leave at least minimum_right_n features on the right:
+  # Minimum RIGHT size requires:
   #
-  # total_n - anchor + 1 >= minimum_right_n
+  #   N - Anchor + 1 >= minimum_right_n
   #
-  # anchor <= total_n - minimum_right_n + 1
+  # therefore:
+  #
+  #   Anchor <= N - minimum_right_n + 1
 
-  maximum_anchor_for_tail <- (
-    total_n -
-      minimum_right_n +
-      1L
-  )
+  maximum_anchor_for_tail <- total_n -
+    minimum_right_n +
+    1L
+
+  invalid_result <- function() {
+
+    data.frame(
+      min_fraction = min_fraction,
+      valid = FALSE,
+      anchor = NA_integer_,
+      right_n = NA_integer_,
+      left_n = NA_integer_,
+      actual_right_fraction = NA_real_,
+      minimum_right_n = minimum_right_n,
+      minimum_anchor_for_match = minimum_anchor_for_match,
+      maximum_anchor_for_tail = maximum_anchor_for_tail,
+      stringsAsFactors = FALSE
+    )
+  }
 
   if (
     maximum_anchor_for_tail <
       minimum_anchor_for_match
   ) {
-
     return(
-      data.frame(
-
-        min_fraction =
-          min_fraction,
-
-        valid =
-          FALSE,
-
-        anchor =
-          NA_integer_,
-
-        right_n =
-          NA_integer_,
-
-        left_n =
-          NA_integer_,
-
-        actual_right_fraction =
-          NA_real_,
-
-        minimum_right_n =
-          minimum_right_n,
-
-        minimum_anchor_for_match =
-          minimum_anchor_for_match,
-
-        maximum_anchor_for_tail =
-          maximum_anchor_for_tail,
-
-        stringsAsFactors = FALSE
-      )
+      invalid_result()
     )
   }
 
-  if (
-    nrow(zero_df) == 0L
-  ) {
-
+  if (nrow(zero_df) == 0L) {
     return(
-      data.frame(
-
-        min_fraction =
-          min_fraction,
-
-        valid =
-          FALSE,
-
-        anchor =
-          NA_integer_,
-
-        right_n =
-          NA_integer_,
-
-        left_n =
-          NA_integer_,
-
-        actual_right_fraction =
-          NA_real_,
-
-        minimum_right_n =
-          minimum_right_n,
-
-        minimum_anchor_for_match =
-          minimum_anchor_for_match,
-
-        maximum_anchor_for_tail =
-          maximum_anchor_for_tail,
-
-        stringsAsFactors = FALSE
-      )
+      invalid_result()
     )
   }
 
@@ -1127,141 +1212,76 @@ select_anchor_for_min_fraction <- function(
       maximum_anchor_for_tail
   ]
 
-  if (
-    length(eligible) == 0L
-  ) {
-
+  if (length(eligible) == 0L) {
     return(
-      data.frame(
-
-        min_fraction =
-          min_fraction,
-
-        valid =
-          FALSE,
-
-        anchor =
-          NA_integer_,
-
-        right_n =
-          NA_integer_,
-
-        left_n =
-          NA_integer_,
-
-        actual_right_fraction =
-          NA_real_,
-
-        minimum_right_n =
-          minimum_right_n,
-
-        minimum_anchor_for_match =
-          minimum_anchor_for_match,
-
-        maximum_anchor_for_tail =
-          maximum_anchor_for_tail,
-
-        stringsAsFactors = FALSE
-      )
+      invalid_result()
     )
   }
 
-  # Critical rule:
+  # Primary geometric rule:
   #
-  # Choose the RIGHTMOST curvature crossing that still leaves
-  # the required minimum RIGHT-tail size.
+  # Choose the most terminal/rightmost curvature transition that still
+  # leaves the required minimum tail size and allows a matched LEFT block.
 
   anchor <- max(
     eligible
   )
 
-  right_n <- (
-    total_n -
-      anchor +
-      1L
-  )
+  right_n <- total_n -
+    anchor +
+    1L
 
   left_n <- right_n
 
-  actual_right_fraction <- (
-    right_n /
-      total_n
-  )
+  actual_right_fraction <- right_n /
+    total_n
 
   data.frame(
-
-    min_fraction =
-      min_fraction,
-
-    valid =
-      TRUE,
-
-    anchor =
-      anchor,
-
-    right_n =
-      right_n,
-
-    left_n =
-      left_n,
-
-    actual_right_fraction =
-      actual_right_fraction,
-
-    minimum_right_n =
-      minimum_right_n,
-
-    minimum_anchor_for_match =
-      minimum_anchor_for_match,
-
-    maximum_anchor_for_tail =
-      maximum_anchor_for_tail,
-
+    min_fraction = min_fraction,
+    valid = TRUE,
+    anchor = anchor,
+    right_n = right_n,
+    left_n = left_n,
+    actual_right_fraction = actual_right_fraction,
+    minimum_right_n = minimum_right_n,
+    minimum_anchor_for_match = minimum_anchor_for_match,
+    maximum_anchor_for_tail = maximum_anchor_for_tail,
     stringsAsFactors = FALSE
   )
 }
 
 
 # =============================================================================
-# JACCARD FEATURE-SET STABILITY
+# FEATURE-SET STABILITY
 # =============================================================================
 
-jaccard_similarity <- function(
-    set_a,
-    set_b) {
+jaccard_similarity <- function(set_a, set_b) {
 
   set_a <- unique(set_a)
-
   set_b <- unique(set_b)
 
-  union_n <- length(
-    union(
-      set_a,
-      set_b
-    )
+  union_set <- union(
+    set_a,
+    set_b
   )
 
-  if (
-    union_n == 0L
-  ) {
-    return(NA_real_)
+  if (length(union_set) == 0L) {
+    return(
+      NA_real_
+    )
   }
 
-  intersection_n <- length(
+  length(
     intersect(
       set_a,
       set_b
     )
-  )
-
-  intersection_n /
-    union_n
+  ) /
+    length(
+      union_set
+    )
 }
 
-
-# =============================================================================
-# DETERMINISTIC SEED
-# =============================================================================
 
 seed_from_label <- function(
     label,
@@ -1273,26 +1293,29 @@ seed_from_label <- function(
     )
   )
 
-  out <- (
+  seed <- (
     base_seed +
-      label_value * 1009L
-  ) %% 2147483647L
+      label_value *
+      1009L
+  ) %%
+    2147483647L
 
-  as.integer(out)
+  as.integer(seed)
 }
 
 
 # =============================================================================
-# BOOTSTRAP STABILITY
+# BOOTSTRAP GEOMETRIC STABILITY
 # =============================================================================
 
 assess_geometry_stability <- function(
-    rank_matrix,
-    metric_matrix,
+    count_mat_arm,
+    prepare_function,
     candidate_fractions = MIN_FRACTION_GRID,
     bootstrap_n = BOOTSTRAP_N,
     spar = VAR_SPLINE_SPAR,
-    seed = BOOTSTRAP_SEED_BASE) {
+    seed = BOOTSTRAP_SEED_BASE,
+    cores = BOOTSTRAP_CORES) {
 
   candidate_fractions <- sort(
     unique(
@@ -1304,7 +1327,9 @@ assess_geometry_stability <- function(
 
   if (
     any(
-      !is.finite(candidate_fractions)
+      !is.finite(
+        candidate_fractions
+      )
     ) ||
     any(
       candidate_fractions <= 0
@@ -1313,86 +1338,55 @@ assess_geometry_stability <- function(
       candidate_fractions >= 0.50
     )
   ) {
-
     stop(
-      "All candidate fractions must lie between 0 and 0.50."
+      "All candidate fractions must lie strictly between 0 and 0.50."
     )
   }
 
-  if (
-    bootstrap_n < 1L
-  ) {
-
+  if (bootstrap_n < 1L) {
     stop(
       "bootstrap_n must be >= 1."
     )
   }
 
-  if (
-    is.null(
-      rownames(rank_matrix)
-    )
-  ) {
-
-    stop(
-      "rank_matrix must have feature row names."
-    )
-  }
-
-  if (
-    !identical(
-      rownames(rank_matrix),
-      rownames(metric_matrix)
-    )
-  ) {
-
-    stop(
-      "Feature row names do not match between rank and metric matrices."
-    )
-  }
-
   total_n <- nrow(
-    rank_matrix
+    count_mat_arm
   )
 
   sample_n <- ncol(
-    rank_matrix
+    count_mat_arm
   )
 
+  if (sample_n < 2L) {
+    stop(
+      "At least two biological samples are required."
+    )
+  }
+
 
   # ---------------------------------------------------------------------------
-  # Full-data geometry
+  # Full-data preprocessing and geometry
   # ---------------------------------------------------------------------------
+
+  original_prepared <- prepare_function(
+    count_mat_arm
+  )
 
   original_geometry <- compute_geometry(
-
-    rank_matrix =
-      rank_matrix,
-
-    metric_matrix =
-      metric_matrix,
-
-    spar =
-      spar
+    rank_matrix = original_prepared$rank_matrix,
+    metric_matrix = original_prepared$metric_matrix,
+    spar = spar
   )
 
-
   original_candidates <- bind_rows(
-
     lapply(
       candidate_fractions,
       function(f) {
 
         select_anchor_for_min_fraction(
-
-          zero_df =
-            original_geometry$zero_df,
-
-          total_n =
-            total_n,
-
-          min_fraction =
-            f
+          zero_df = original_geometry$zero_df,
+          total_n = total_n,
+          min_fraction = f
         )
       }
     )
@@ -1400,12 +1394,14 @@ assess_geometry_stability <- function(
 
 
   # ---------------------------------------------------------------------------
-  # Full-data RIGHT-feature sets for each candidate fraction
+  # Full-data RIGHT feature sets
   # ---------------------------------------------------------------------------
 
   original_right_sets <- vector(
     mode = "list",
-    length = length(candidate_fractions)
+    length = length(
+      candidate_fractions
+    )
   )
 
   names(original_right_sets) <- sprintf(
@@ -1414,7 +1410,9 @@ assess_geometry_stability <- function(
   )
 
   for (
-    j in seq_along(candidate_fractions)
+    j in seq_along(
+      candidate_fractions
+    )
   ) {
 
     candidate_row <- original_candidates[
@@ -1444,7 +1442,7 @@ assess_geometry_stability <- function(
       ]
 
       original_right_sets[[key]] <- rownames(
-        rank_matrix
+        count_mat_arm
       )[
         right_order_idx
       ]
@@ -1457,88 +1455,62 @@ assess_geometry_stability <- function(
 
 
   # ---------------------------------------------------------------------------
-  # Bootstrap
+  # Generate all bootstrap samples before parallel execution.
+  #
+  # This makes the bootstrap sample draws deterministic regardless of the
+  # number of worker processes.
   # ---------------------------------------------------------------------------
 
   set.seed(seed)
 
-  boot_rows <- vector(
-    mode = "list",
-    length = bootstrap_n *
-      length(candidate_fractions)
+  bootstrap_indices <- lapply(
+    seq_len(
+      bootstrap_n
+    ),
+    function(b) {
+
+      sample.int(
+        n = sample_n,
+        size = sample_n,
+        replace = TRUE
+      )
+    }
   )
 
-  row_counter <- 0L
 
+  # ---------------------------------------------------------------------------
+  # One bootstrap replicate
+  # ---------------------------------------------------------------------------
 
-  add_invalid_rows <- function(
-      bootstrap_id,
-      reason) {
+  bootstrap_worker <- function(b) {
 
-    out <- vector(
-      "list",
-      length(candidate_fractions)
-    )
+    boot_sample_idx <- bootstrap_indices[[b]]
 
-    for (
-      jj in seq_along(candidate_fractions)
-    ) {
+    make_invalid_rows <- function(reason) {
 
-      out[[jj]] <- data.frame(
+      bind_rows(
+        lapply(
+          candidate_fractions,
+          function(f) {
 
-        bootstrap =
-          bootstrap_id,
-
-        min_fraction =
-          candidate_fractions[jj],
-
-        valid =
-          FALSE,
-
-        anchor =
-          NA_integer_,
-
-        right_n =
-          NA_integer_,
-
-        right_fraction =
-          NA_real_,
-
-        jaccard =
-          NA_real_,
-
-        invalid_reason =
-          reason,
-
-        stringsAsFactors = FALSE
+            data.frame(
+              bootstrap = b,
+              min_fraction = f,
+              valid = FALSE,
+              anchor = NA_integer_,
+              right_n = NA_integer_,
+              right_fraction = NA_real_,
+              jaccard = NA_real_,
+              invalid_reason = reason,
+              stringsAsFactors = FALSE
+            )
+          }
+        )
       )
     }
 
-    out
-  }
-
-
-  for (
-    b in seq_len(
-      bootstrap_n
-    )
-  ) {
-
-    boot_sample_idx <- sample.int(
-
-      n =
-        sample_n,
-
-      size =
-        sample_n,
-
-      replace =
-        TRUE
-    )
-
-
-    # A bootstrap consisting of only one unique biological sample
-    # contains no meaningful between-sample variance information.
+    # A resample containing only one unique biological sample cannot
+    # provide meaningful between-sample variance or PCA geometry.
 
     if (
       length(
@@ -1547,81 +1519,78 @@ assess_geometry_stability <- function(
         )
       ) < 2L
     ) {
-
-      invalid_list <- add_invalid_rows(
-        bootstrap_id = b,
-        reason = "fewer_than_2_unique_samples"
+      return(
+        make_invalid_rows(
+          "fewer_than_2_unique_samples"
+        )
       )
-
-      for (
-        jj in seq_along(invalid_list)
-      ) {
-
-        row_counter <- row_counter + 1L
-
-        boot_rows[[row_counter]] <-
-          invalid_list[[jj]]
-      }
-
-      next
     }
 
-
-    boot_rank_matrix <- rank_matrix[
+    boot_counts <- count_mat_arm[
       ,
       boot_sample_idx,
       drop = FALSE
     ]
 
-    boot_metric_matrix <- metric_matrix[
-      ,
-      boot_sample_idx,
-      drop = FALSE
-    ]
+    # Repeated bootstrap draws are intentionally preserved, but computational
+    # column identifiers are made unique for packages such as DESeq2.
 
-
-    boot_geometry <- tryCatch(
-
-      compute_geometry(
-
-        rank_matrix =
-          boot_rank_matrix,
-
-        metric_matrix =
-          boot_metric_matrix,
-
-        spar =
-          spar
-      ),
-
-      error = function(e) NULL
+    colnames(boot_counts) <- paste0(
+      colnames(
+        count_mat_arm
+      )[
+        boot_sample_idx
+      ],
+      "__bootstrap_",
+      b,
+      "_draw_",
+      seq_along(
+        boot_sample_idx
+      )
     )
 
-
-    if (
-      is.null(
-        boot_geometry
-      )
-    ) {
-
-      invalid_list <- add_invalid_rows(
-        bootstrap_id = b,
-        reason = "geometry_failed"
-      )
-
-      for (
-        jj in seq_along(invalid_list)
-      ) {
-
-        row_counter <- row_counter + 1L
-
-        boot_rows[[row_counter]] <-
-          invalid_list[[jj]]
+    boot_prepared <- tryCatch(
+      prepare_function(
+        boot_counts
+      ),
+      error = function(e) {
+        NULL
       }
+    )
 
-      next
+    if (is.null(boot_prepared)) {
+      return(
+        make_invalid_rows(
+          "preprocessing_failed"
+        )
+      )
     }
 
+    boot_geometry <- tryCatch(
+      compute_geometry(
+        rank_matrix = boot_prepared$rank_matrix,
+        metric_matrix = boot_prepared$metric_matrix,
+        spar = spar
+      ),
+      error = function(e) {
+        NULL
+      }
+    )
+
+    if (is.null(boot_geometry)) {
+      return(
+        make_invalid_rows(
+          "geometry_failed"
+        )
+      )
+    }
+
+    result_rows <- vector(
+      "list",
+      length(
+        candidate_fractions
+      )
+    )
 
     for (
       j in seq_along(
@@ -1632,19 +1601,10 @@ assess_geometry_stability <- function(
       f <- candidate_fractions[j]
 
       selection <- select_anchor_for_min_fraction(
-
-        zero_df =
-          boot_geometry$zero_df,
-
-        total_n =
-          total_n,
-
-        min_fraction =
-          f
+        zero_df = boot_geometry$zero_df,
+        total_n = total_n,
+        min_fraction = f
       )
-
-      row_counter <- row_counter + 1L
-
 
       if (
         !isTRUE(
@@ -1652,38 +1612,20 @@ assess_geometry_stability <- function(
         )
       ) {
 
-        boot_rows[[row_counter]] <- data.frame(
-
-          bootstrap =
-            b,
-
-          min_fraction =
-            f,
-
-          valid =
-            FALSE,
-
-          anchor =
-            NA_integer_,
-
-          right_n =
-            NA_integer_,
-
-          right_fraction =
-            NA_real_,
-
-          jaccard =
-            NA_real_,
-
-          invalid_reason =
-            "no_valid_anchor",
-
+        result_rows[[j]] <- data.frame(
+          bootstrap = b,
+          min_fraction = f,
+          valid = FALSE,
+          anchor = NA_integer_,
+          right_n = NA_integer_,
+          right_fraction = NA_real_,
+          jaccard = NA_real_,
+          invalid_reason = "no_valid_anchor",
           stringsAsFactors = FALSE
         )
 
         next
       }
-
 
       boot_anchor <- selection$anchor
 
@@ -1695,7 +1637,7 @@ assess_geometry_stability <- function(
       ]
 
       boot_right_features <- rownames(
-        rank_matrix
+        count_mat_arm
       )[
         boot_right_order_idx
       ]
@@ -1705,9 +1647,7 @@ assess_geometry_stability <- function(
         f
       )
 
-      original_right_features <-
-        original_right_sets[[key]]
-
+      original_right_features <- original_right_sets[[key]]
 
       jac <- if (
         length(
@@ -1725,59 +1665,69 @@ assess_geometry_stability <- function(
         NA_real_
       }
 
-
-      boot_rows[[row_counter]] <- data.frame(
-
-        bootstrap =
-          b,
-
-        min_fraction =
-          f,
-
-        valid =
-          TRUE,
-
-        anchor =
-          boot_anchor,
-
-        right_n =
-          selection$right_n,
-
-        right_fraction =
-          selection$actual_right_fraction,
-
-        jaccard =
-          jac,
-
-        invalid_reason =
-          NA_character_,
-
+      result_rows[[j]] <- data.frame(
+        bootstrap = b,
+        min_fraction = f,
+        valid = TRUE,
+        anchor = boot_anchor,
+        right_n = selection$right_n,
+        right_fraction = selection$actual_right_fraction,
+        jaccard = jac,
+        invalid_reason = NA_character_,
         stringsAsFactors = FALSE
       )
     }
+
+    bind_rows(
+      result_rows
+    )
   }
 
 
-  boot_rows <- boot_rows[
-    seq_len(
-      row_counter
+  # ---------------------------------------------------------------------------
+  # Run bootstrap
+  # ---------------------------------------------------------------------------
+
+  bootstrap_ids <- seq_len(
+    bootstrap_n
+  )
+
+  if (
+    .Platform$OS.type == "unix" &&
+    cores > 1L
+  ) {
+
+    bootstrap_list <- parallel::mclapply(
+      bootstrap_ids,
+      bootstrap_worker,
+      mc.cores = cores,
+      mc.preschedule = TRUE,
+      mc.set.seed = FALSE
     )
-  ]
+
+  } else {
+
+    bootstrap_list <- lapply(
+      bootstrap_ids,
+      bootstrap_worker
+    )
+  }
 
   bootstrap_df <- bind_rows(
-    boot_rows
+    bootstrap_list
   )
 
 
   # ---------------------------------------------------------------------------
-  # Stability summary
+  # Summarize stability for each candidate minimum fraction
   # ---------------------------------------------------------------------------
 
   stability_rows <- vector(
-    mode = "list",
-    length = length(candidate_fractions)
+    "list",
+    length(
+      candidate_fractions
+    )
   )
-
 
   for (
     j in seq_along(
@@ -1802,62 +1752,52 @@ assess_geometry_stability <- function(
       drop = FALSE
     ]
 
-    valid_idx <- which(
-      boot_sub$valid
+    valid_sub <- boot_sub[
+      boot_sub$valid,
+      ,
+      drop = FALSE
+    ]
+
+    valid_bootstraps <- nrow(
+      valid_sub
     )
 
-    valid_rate <- mean(
-      boot_sub$valid
-    )
+    valid_rate <- valid_bootstraps /
+      bootstrap_n
 
 
-    if (
-      length(valid_idx) > 0L
-    ) {
-
-      valid_anchors <- boot_sub$anchor[
-        valid_idx
-      ]
-
-      valid_right_fraction <- boot_sub$right_fraction[
-        valid_idx
-      ]
+    if (valid_bootstraps > 0L) {
 
       anchor_median <- median(
-        valid_anchors,
+        valid_sub$anchor,
         na.rm = TRUE
       )
 
       anchor_iqr <- stats::IQR(
-        valid_anchors,
+        valid_sub$anchor,
         na.rm = TRUE
       )
 
-      anchor_iqr_fraction <- (
-        anchor_iqr /
-          total_n
-      )
+      anchor_iqr_fraction <- anchor_iqr /
+        total_n
 
       right_fraction_median <- median(
-        valid_right_fraction,
+        valid_sub$right_fraction,
         na.rm = TRUE
       )
 
       right_fraction_iqr <- stats::IQR(
-        valid_right_fraction,
+        valid_sub$right_fraction,
         na.rm = TRUE
       )
 
     } else {
 
       anchor_median <- NA_real_
-
       anchor_iqr <- NA_real_
-
       anchor_iqr_fraction <- NA_real_
 
       right_fraction_median <- NA_real_
-
       right_fraction_iqr <- NA_real_
     }
 
@@ -1865,7 +1805,8 @@ assess_geometry_stability <- function(
     if (
       isTRUE(
         original_row$valid
-      )
+      ) &&
+      valid_bootstraps > 0L
     ) {
 
       full_anchor <- original_row$anchor
@@ -1875,25 +1816,12 @@ assess_geometry_stability <- function(
           total_n
       )
 
-      recovered <- rep(
-        FALSE,
-        nrow(boot_sub)
-      )
-
-      recovered[
-        boot_sub$valid
-      ] <- abs(
-        boot_sub$anchor[
-          boot_sub$valid
-        ] -
-          full_anchor
-      ) <= tolerance_n
-
-      # Denominator is ALL bootstrap replicates.
-      # Failed geometry therefore does not count as recovery.
-
       anchor_recovery_rate <- mean(
-        recovered
+        abs(
+          valid_sub$anchor -
+            full_anchor
+        ) <=
+          tolerance_n
       )
 
     } else {
@@ -1909,20 +1837,20 @@ assess_geometry_stability <- function(
     }
 
 
-    valid_jaccard <- boot_sub$jaccard[
+    finite_jaccard <- valid_sub$jaccard[
       is.finite(
-        boot_sub$jaccard
+        valid_sub$jaccard
       )
     ]
 
     median_jaccard <- if (
       length(
-        valid_jaccard
+        finite_jaccard
       ) > 0L
     ) {
 
       median(
-        valid_jaccard
+        finite_jaccard
       )
 
     } else {
@@ -1931,35 +1859,53 @@ assess_geometry_stability <- function(
     }
 
 
-    passes <- (
-      isTRUE(
-        original_row$valid
-      ) &&
-        is.finite(valid_rate) &&
-        valid_rate >=
-          MIN_BOOTSTRAP_VALID_RATE &&
-        is.finite(
-          anchor_recovery_rate
-        ) &&
-        anchor_recovery_rate >=
-          MIN_ANCHOR_RECOVERY_RATE &&
-        is.finite(
-          anchor_iqr_fraction
-        ) &&
-        anchor_iqr_fraction <=
-          MAX_ANCHOR_IQR_FRACTION &&
-        is.finite(
-          median_jaccard
-        ) &&
-        median_jaccard >=
-          MIN_MEDIAN_JACCARD
-    )
+    pass_valid_rate <- is.finite(
+      valid_rate
+    ) &&
+      valid_rate >=
+      MIN_BOOTSTRAP_VALID_RATE
+
+
+    pass_anchor_recovery <- is.finite(
+      anchor_recovery_rate
+    ) &&
+      anchor_recovery_rate >=
+      MIN_ANCHOR_RECOVERY_RATE
+
+
+    pass_anchor_iqr <- is.finite(
+      anchor_iqr_fraction
+    ) &&
+      anchor_iqr_fraction <=
+      MAX_ANCHOR_IQR_FRACTION
+
+
+    pass_right_fraction_iqr <- is.finite(
+      right_fraction_iqr
+    ) &&
+      right_fraction_iqr <=
+      MAX_RIGHT_FRACTION_IQR
+
+
+    pass_jaccard <- is.finite(
+      median_jaccard
+    ) &&
+      median_jaccard >=
+      MIN_MEDIAN_JACCARD
+
+
+    pass_stability <- isTRUE(
+      original_row$valid
+    ) &&
+      pass_valid_rate &&
+      pass_anchor_recovery &&
+      pass_anchor_iqr &&
+      pass_right_fraction_iqr &&
+      pass_jaccard
 
 
     stability_rows[[j]] <- data.frame(
-
-      min_fraction =
-        f,
+      min_fraction = f,
 
       original_valid =
         original_row$valid,
@@ -1977,7 +1923,7 @@ assess_geometry_stability <- function(
         bootstrap_n,
 
       valid_bootstraps =
-        length(valid_idx),
+        valid_bootstraps,
 
       bootstrap_valid_rate =
         valid_rate,
@@ -2006,13 +1952,42 @@ assess_geometry_stability <- function(
       median_jaccard =
         median_jaccard,
 
+      threshold_valid_rate =
+        MIN_BOOTSTRAP_VALID_RATE,
+
+      threshold_anchor_recovery =
+        MIN_ANCHOR_RECOVERY_RATE,
+
+      threshold_anchor_iqr_fraction =
+        MAX_ANCHOR_IQR_FRACTION,
+
+      threshold_right_fraction_iqr =
+        MAX_RIGHT_FRACTION_IQR,
+
+      threshold_median_jaccard =
+        MIN_MEDIAN_JACCARD,
+
+      pass_valid_rate =
+        pass_valid_rate,
+
+      pass_anchor_recovery =
+        pass_anchor_recovery,
+
+      pass_anchor_iqr =
+        pass_anchor_iqr,
+
+      pass_right_fraction_iqr =
+        pass_right_fraction_iqr,
+
+      pass_jaccard =
+        pass_jaccard,
+
       pass_stability =
-        passes,
+        pass_stability,
 
       stringsAsFactors = FALSE
     )
   }
-
 
   stability_summary <- bind_rows(
     stability_rows
@@ -2020,19 +1995,16 @@ assess_geometry_stability <- function(
 
 
   # ---------------------------------------------------------------------------
-  # Select the SMALLEST stable minimum fraction
+  # Select the smallest candidate fraction satisfying all criteria
   # ---------------------------------------------------------------------------
 
   stable_rows <- stability_summary %>%
-
     filter(
       pass_stability
     ) %>%
-
     arrange(
       min_fraction
     )
-
 
   selected <- if (
     nrow(stable_rows) > 0L
@@ -2051,27 +2023,18 @@ assess_geometry_stability <- function(
 
 
   list(
-
-    original_geometry =
-      original_geometry,
-
-    original_candidates =
-      original_candidates,
-
-    bootstrap_df =
-      bootstrap_df,
-
-    stability_summary =
-      stability_summary,
-
-    selected =
-      selected
+    original_prepared = original_prepared,
+    original_geometry = original_geometry,
+    original_candidates = original_candidates,
+    bootstrap_df = bootstrap_df,
+    stability_summary = stability_summary,
+    selected = selected
   )
 }
 
 
 # =============================================================================
-# FEATURE-LEVEL NB2 METRICS
+# NB2-RELATED FEATURE METRICS
 # =============================================================================
 
 compute_ranked_feature_metrics <- function(
@@ -2085,24 +2048,21 @@ compute_ranked_feature_metrics <- function(
   ]
 
   mu <- rowMeans(
-    ranked_mat,
-    na.rm = TRUE
+    ranked_mat
   )
 
-  empirical_var <- apply(
-    ranked_mat,
-    1L,
-    stats::var,
-    na.rm = TRUE
+  empirical_var <- fast_row_variance(
+    ranked_mat
   )
 
-  mu[
-    !is.finite(mu)
-  ] <- 0
-
-  empirical_var[
-    !is.finite(empirical_var)
-  ] <- 0
+  if (
+    any(!is.finite(mu)) ||
+    any(!is.finite(empirical_var))
+  ) {
+    stop(
+      "Non-finite feature means or variances were produced."
+    )
+  }
 
   mu <- pmax(
     mu,
@@ -2114,77 +2074,61 @@ compute_ranked_feature_metrics <- function(
     0
   )
 
-
-  # Extra-Poisson variance component
-
-  nb2_var_minus_mu <- pmax(
+  extra_variance <- pmax(
     empirical_var -
       mu,
     0
   )
 
-
-  # Method-of-moments alpha estimate under:
-  #
-  # variance = mu + alpha*mu^2
-
-  alpha_hat <- rep(
-    0,
+  alpha_hat <- numeric(
     length(mu)
   )
 
-  pos <- mu > 0
+  positive_mu <- mu > 0
 
-  alpha_hat[pos] <- pmax(
-
+  alpha_hat[positive_mu] <- pmax(
     (
-      empirical_var[pos] -
-        mu[pos]
+      empirical_var[positive_mu] -
+        mu[positive_mu]
     ) /
       (
-        mu[pos]^2
+        mu[positive_mu]^2
       ),
-
     0
   )
 
-  alpha_mu_val <- (
-    alpha_hat *
-      mu
-  )
-
+  alpha_mu_value <- alpha_hat *
+    mu
 
   data.frame(
+    rank = seq_along(
+      rank_order
+    ),
 
-    rank =
-      seq_along(rank_order),
+    feature_id = rownames(
+      metric_mat_arm
+    )[
+      rank_order
+    ],
 
-    feature_id =
-      rownames(metric_mat_arm)[
-        rank_order
-      ],
-
-    mu =
-      mu,
+    mu = mu,
 
     empirical_variance =
       empirical_var,
 
-    NB2 =
-      log1p(
-        nb2_var_minus_mu
-      ),
+    NB2 = log1p(
+      extra_variance
+    ),
 
     NB2_NB1 =
       log1p(
-        nb2_var_minus_mu
+        extra_variance
       ) -
       log1p(mu),
 
-    alpha_mu =
-      log1p(
-        alpha_mu_val
-      ),
+    alpha_mu = log1p(
+      alpha_mu_value
+    ),
 
     stringsAsFactors = FALSE
   )
@@ -2192,7 +2136,7 @@ compute_ranked_feature_metrics <- function(
 
 
 # =============================================================================
-# MATCHED LEFT / RIGHT SUMMARY
+# MATCHED LEFT/RIGHT REGIONS
 # =============================================================================
 
 summarize_regions <- function(
@@ -2209,21 +2153,14 @@ summarize_regions <- function(
     right_idx
   )
 
-  left_end <- (
-    anchor_rank -
-      1L
-  )
+  left_end <- anchor_rank -
+    1L
 
-  left_start <- (
-    left_end -
-      right_n +
-      1L
-  )
+  left_start <- left_end -
+    right_n +
+    1L
 
-  if (
-    left_start < 1L
-  ) {
-
+  if (left_start < 1L) {
     stop(
       "LEFT block extends below rank 1."
     )
@@ -2233,6 +2170,15 @@ summarize_regions <- function(
     left_start,
     left_end
   )
+
+  if (
+    length(left_idx) !=
+      length(right_idx)
+  ) {
+    stop(
+      "LEFT and RIGHT blocks are not equal in size."
+    )
+  }
 
   left_df <- feature_df[
     left_idx,
@@ -2246,39 +2192,25 @@ summarize_regions <- function(
     drop = FALSE
   ]
 
-
   data.frame(
+    left_start = left_start,
+    left_end = left_end,
 
-    left_start =
-      left_start,
+    right_start = anchor_rank,
+    right_end = total_n,
 
-    left_end =
-      left_end,
+    left_n = nrow(left_df),
+    right_n = nrow(right_df),
 
-    right_start =
-      anchor_rank,
+    left_NB2 = median(
+      left_df$NB2,
+      na.rm = TRUE
+    ),
 
-    right_end =
-      total_n,
-
-    left_n =
-      nrow(left_df),
-
-    right_n =
-      nrow(right_df),
-
-
-    left_NB2 =
-      median(
-        left_df$NB2,
-        na.rm = TRUE
-      ),
-
-    right_NB2 =
-      median(
-        right_df$NB2,
-        na.rm = TRUE
-      ),
+    right_NB2 = median(
+      right_df$NB2,
+      na.rm = TRUE
+    ),
 
     diff_NB2 =
       median(
@@ -2290,18 +2222,15 @@ summarize_regions <- function(
         na.rm = TRUE
       ),
 
+    left_gap = median(
+      left_df$NB2_NB1,
+      na.rm = TRUE
+    ),
 
-    left_gap =
-      median(
-        left_df$NB2_NB1,
-        na.rm = TRUE
-      ),
-
-    right_gap =
-      median(
-        right_df$NB2_NB1,
-        na.rm = TRUE
-      ),
+    right_gap = median(
+      right_df$NB2_NB1,
+      na.rm = TRUE
+    ),
 
     diff_gap =
       median(
@@ -2313,18 +2242,15 @@ summarize_regions <- function(
         na.rm = TRUE
       ),
 
+    left_alpha = median(
+      left_df$alpha_mu,
+      na.rm = TRUE
+    ),
 
-    left_alpha =
-      median(
-        left_df$alpha_mu,
-        na.rm = TRUE
-      ),
-
-    right_alpha =
-      median(
-        right_df$alpha_mu,
-        na.rm = TRUE
-      ),
+    right_alpha = median(
+      right_df$alpha_mu,
+      na.rm = TRUE
+    ),
 
     diff_alpha =
       median(
@@ -2342,7 +2268,7 @@ summarize_regions <- function(
 
 
 # =============================================================================
-# VALIDATION
+# METHOD-LEVEL VALIDATION
 # =============================================================================
 
 validate_method_level <- function(
@@ -2354,41 +2280,25 @@ validate_method_level <- function(
     region_summary,
     total_n) {
 
-  # ---------------------------------------------------------------------------
-  # Stability must have passed
-  # ---------------------------------------------------------------------------
-
   if (
     !isTRUE(
       selected_stability_row$pass_stability
     )
   ) {
-
     stop(
-      "Validation failed: selected fraction did not pass stability."
+      "Validation failed: selected fraction did not pass stability criteria."
     )
   }
-
-
-  # ---------------------------------------------------------------------------
-  # Anchor validity
-  # ---------------------------------------------------------------------------
 
   if (
     !is.finite(anchor) ||
     anchor < 1L ||
     anchor > total_n
   ) {
-
     stop(
-      "Validation failed: invalid Anchor."
+      "Validation failed: Anchor is outside the ranked feature series."
     )
   }
-
-
-  # ---------------------------------------------------------------------------
-  # Anchor must correspond to a rounded d2 zero crossing
-  # ---------------------------------------------------------------------------
 
   rounded_crossings <- unique(
     as.integer(
@@ -2401,16 +2311,10 @@ validate_method_level <- function(
   if (
     !(anchor %in% rounded_crossings)
   ) {
-
     stop(
-      "Validation failed: Anchor is not a rounded d2 zero crossing."
+      "Validation failed: Anchor is not a rounded spline d2 zero crossing."
     )
   }
-
-
-  # ---------------------------------------------------------------------------
-  # RIGHT must satisfy the selected minimum fraction
-  # ---------------------------------------------------------------------------
 
   right_idx <- seq.int(
     anchor,
@@ -2421,44 +2325,29 @@ validate_method_level <- function(
     right_idx
   )
 
-  actual_fraction <- (
-    right_n /
-      total_n
-  )
+  actual_right_fraction <- right_n /
+    total_n
 
   if (
-    actual_fraction +
+    actual_right_fraction +
       1e-12 <
       selected_fraction
   ) {
-
     stop(
-      "Validation failed: RIGHT is smaller than selected minimum fraction."
+      "Validation failed: RIGHT is smaller than the selected minimum fraction."
     )
   }
 
+  left_end <- anchor -
+    1L
 
-  # ---------------------------------------------------------------------------
-  # LEFT must be equal-sized
-  # ---------------------------------------------------------------------------
+  left_start <- left_end -
+    right_n +
+    1L
 
-  left_end <- (
-    anchor -
-      1L
-  )
-
-  left_start <- (
-    left_end -
-      right_n +
-      1L
-  )
-
-  if (
-    left_start < 1L
-  ) {
-
+  if (left_start < 1L) {
     stop(
-      "Validation failed: LEFT block extends below rank 1."
+      "Validation failed: matched LEFT block extends below rank 1."
     )
   }
 
@@ -2471,16 +2360,10 @@ validate_method_level <- function(
     length(left_idx) !=
       length(right_idx)
   ) {
-
     stop(
-      "Validation failed: LEFT and RIGHT blocks are not equal size."
+      "Validation failed: LEFT and RIGHT blocks are not equal in size."
     )
   }
-
-
-  # ---------------------------------------------------------------------------
-  # Verify reported medians exactly match sliced regions
-  # ---------------------------------------------------------------------------
 
   left_df <- feature_df[
     left_idx,
@@ -2494,26 +2377,20 @@ validate_method_level <- function(
     drop = FALSE
   ]
 
-
   expected <- list(
+    left_n = nrow(left_df),
 
-    left_n =
-      nrow(left_df),
+    right_n = nrow(right_df),
 
-    right_n =
-      nrow(right_df),
+    left_NB2 = median(
+      left_df$NB2,
+      na.rm = TRUE
+    ),
 
-    left_NB2 =
-      median(
-        left_df$NB2,
-        na.rm = TRUE
-      ),
-
-    right_NB2 =
-      median(
-        right_df$NB2,
-        na.rm = TRUE
-      ),
+    right_NB2 = median(
+      right_df$NB2,
+      na.rm = TRUE
+    ),
 
     diff_NB2 =
       median(
@@ -2525,17 +2402,15 @@ validate_method_level <- function(
         na.rm = TRUE
       ),
 
-    left_gap =
-      median(
-        left_df$NB2_NB1,
-        na.rm = TRUE
-      ),
+    left_gap = median(
+      left_df$NB2_NB1,
+      na.rm = TRUE
+    ),
 
-    right_gap =
-      median(
-        right_df$NB2_NB1,
-        na.rm = TRUE
-      ),
+    right_gap = median(
+      right_df$NB2_NB1,
+      na.rm = TRUE
+    ),
 
     diff_gap =
       median(
@@ -2547,17 +2422,15 @@ validate_method_level <- function(
         na.rm = TRUE
       ),
 
-    left_alpha =
-      median(
-        left_df$alpha_mu,
-        na.rm = TRUE
-      ),
+    left_alpha = median(
+      left_df$alpha_mu,
+      na.rm = TRUE
+    ),
 
-    right_alpha =
-      median(
-        right_df$alpha_mu,
-        na.rm = TRUE
-      ),
+    right_alpha = median(
+      right_df$alpha_mu,
+      na.rm = TRUE
+    ),
 
     diff_alpha =
       median(
@@ -2570,37 +2443,27 @@ validate_method_level <- function(
       )
   )
 
+  for (nm in names(expected)) {
 
-  for (
-    nm in names(expected)
-  ) {
-
-    chk <- all.equal(
-
+    comparison <- all.equal(
       as.numeric(
-        region_summary[[nm]][1]
+        region_summary[[nm]][1L]
       ),
-
       as.numeric(
         expected[[nm]]
       ),
-
       tolerance = 1e-10
     )
 
-    if (
-      !isTRUE(chk)
-    ) {
-
+    if (!isTRUE(comparison)) {
       stop(
-        "Validation failed for summary field: ",
+        "Validation failed for summary field '",
         nm,
-        " | ",
-        chk
+        "': ",
+        comparison
       )
     }
   }
-
 
   invisible(TRUE)
 }
@@ -2615,37 +2478,21 @@ save_three_panel_plot <- function(
     filename) {
 
   png(
-
     filename,
-
-    width =
-      PNG_WIDTH_IN,
-
-    height =
-      PNG_HEIGHT_IN,
-
-    units =
-      "in",
-
-    res =
-      PNG_DPI,
-
-    bg =
-      "white"
+    width = PNG_WIDTH_IN,
+    height = PNG_HEIGHT_IN,
+    units = "in",
+    res = PNG_DPI,
+    bg = "white"
   )
 
   grid.newpage()
 
   pushViewport(
-
     viewport(
-
       layout = grid.layout(
-
-        nrow = 3,
-
-        ncol = 1,
-
+        nrow = 3L,
+        ncol = 1L,
         heights = unit(
           c(
             1.18,
@@ -2665,16 +2512,10 @@ save_three_panel_plot <- function(
   ) {
 
     print(
-
       plot_list[[i]],
-
       vp = viewport(
-
-        layout.pos.row =
-          i,
-
-        layout.pos.col =
-          1
+        layout.pos.row = i,
+        layout.pos.col = 1L
       )
     )
   }
@@ -2682,8 +2523,6 @@ save_three_panel_plot <- function(
   dev.off()
 }
 
-
-# -----------------------------------------------------------------------------
 
 compute_text_positions <- function(
     total_n,
@@ -2712,7 +2551,6 @@ compute_text_positions <- function(
   )
 
   stat_x <- min(
-
     max(
       150L,
       round(
@@ -2720,7 +2558,6 @@ compute_text_positions <- function(
           0.26
       )
     ),
-
     safe_right_limit
   )
 
@@ -2729,26 +2566,19 @@ compute_text_positions <- function(
       left_x +
       50L
   ) {
-
-    stat_x <- (
-      left_x +
-        60L
-    )
+    stat_x <- left_x +
+      60L
   }
 
   list(
-
-    left_x =
-      left_x,
-
-    stat_x =
-      stat_x
+    left_x = left_x,
+    stat_x = stat_x
   )
 }
 
 
 # =============================================================================
-# FIGURE BUILDER
+# THREE-PANEL FIGURE
 # =============================================================================
 
 build_main_figure <- function(
@@ -2769,108 +2599,77 @@ build_main_figure <- function(
     feature_df
   )
 
-  left_n <- region_summary$left_n
+  left_min <- region_summary$left_start
+  left_max <- region_summary$left_end
 
-  left_min <- (
-    anchor -
-      left_n
-  )
-
-  left_max <- (
-    anchor -
-      1L
-  )
-
-  right_min <- anchor
-
-  right_max <- total_n
+  right_min <- region_summary$right_start
+  right_max <- region_summary$right_end
 
 
   # ---------------------------------------------------------------------------
-  # Zero-crossing display positions
+  # Curvature-transition coordinates
   # ---------------------------------------------------------------------------
 
-  zero_plot_df <- data.frame(
+  if (nrow(zero_df) > 0L) {
 
-    rank =
-      zero_df$crossing_rank,
-
-    stringsAsFactors = FALSE
-  )
-
-  if (
-    nrow(zero_plot_df) > 0L
-  ) {
-
-    zero_plot_df$y <- approx(
-
-      x =
-        variance_df$rank,
-
-      y =
-        variance_df$smooth_log1p_empirical_variance,
-
-      xout =
-        zero_plot_df$rank,
-
-      rule =
-        2
+    zero_y <- approx(
+      x = variance_df$rank,
+      y = variance_df$smooth_log1p_empirical_variance,
+      xout = zero_df$crossing_rank,
+      rule = 2
     )$y
+
+    zero_plot_df <- data.frame(
+      rank = zero_df$crossing_rank,
+      y = zero_y,
+      stringsAsFactors = FALSE
+    )
+
+  } else {
+
+    zero_plot_df <- data.frame(
+      rank = numeric(0),
+      y = numeric(0),
+      stringsAsFactors = FALSE
+    )
   }
 
-
   anchor_y <- approx(
-
-    x =
-      variance_df$rank,
-
-    y =
-      variance_df$smooth_log1p_empirical_variance,
-
-    xout =
-      anchor,
-
-    rule =
-      2
+    x = variance_df$rank,
+    y = variance_df$smooth_log1p_empirical_variance,
+    xout = anchor,
+    rule = 2
   )$y
 
 
-  nb_long <- feature_df %>%
+  # ---------------------------------------------------------------------------
+  # Long-form NB2 metrics
+  # ---------------------------------------------------------------------------
 
+  nb_long <- feature_df %>%
     select(
       rank,
       NB2,
       NB2_NB1,
       alpha_mu
     ) %>%
-
     pivot_longer(
-
       cols = c(
         NB2,
         NB2_NB1,
         alpha_mu
       ),
-
-      names_to =
-        "metric",
-
-      values_to =
-        "value"
+      names_to = "metric",
+      values_to = "value"
     ) %>%
-
     mutate(
-
       metric = factor(
-
         metric,
-
         levels = c(
           "NB2",
           "NB2_NB1",
           "alpha_mu"
         ),
-
         labels = c(
           "NB2",
           "NB2-NB1",
@@ -2879,22 +2678,46 @@ build_main_figure <- function(
       )
     )
 
-
   pos <- compute_text_positions(
-    total_n,
-    anchor
+    total_n = total_n,
+    anchor = anchor
   )
 
-
-  top_y <- max(
+  variance_range <- range(
     variance_df$smooth_log1p_empirical_variance,
-    na.rm = TRUE
+    finite = TRUE
   )
 
-  mid_y <- max(
-    nb_long$value,
-    na.rm = TRUE
+  variance_span <- diff(
+    variance_range
   )
+
+  if (
+    !is.finite(variance_span) ||
+    variance_span <= 0
+  ) {
+    variance_span <- 1
+  }
+
+  top_y <- variance_range[2L]
+
+  mid_range <- range(
+    nb_long$value,
+    finite = TRUE
+  )
+
+  mid_span <- diff(
+    mid_range
+  )
+
+  if (
+    !is.finite(mid_span) ||
+    mid_span <= 0
+  ) {
+    mid_span <- 1
+  }
+
+  mid_top <- mid_range[2L]
 
 
   selected_fraction_pct <- round(
@@ -2911,51 +2734,38 @@ build_main_figure <- function(
 
 
   box1 <- paste(
-
     fig_tag,
-
     rank_tag,
-
     metric_tag,
-
     "Blue = LEFT",
-
     "Green = RIGHT",
-
     sep = "\n"
   )
 
 
   box2 <- paste0(
-
     "Anchor = ",
     anchor,
     "\n",
-
-    "Selected minimum = ",
+    "Minimum tail = ",
     selected_fraction_pct,
     "%\n",
-
-    "Actual RIGHT = ",
+    "Observed RIGHT = ",
     actual_fraction_pct,
     "%\n",
-
     "LEFT n = ",
     region_summary$left_n,
     "\n",
-
     "RIGHT n = ",
     region_summary$right_n,
     "\n",
-
-    "Bootstrap recovery = ",
+    "Recovery = ",
     round(
       selected_stability_row$anchor_recovery_rate,
       3
     ),
     "\n",
-
-    "Median Jaccard = ",
+    "Jaccard = ",
     round(
       selected_stability_row$median_jaccard,
       3
@@ -2964,75 +2774,62 @@ build_main_figure <- function(
 
 
   box3 <- paste(
-
     "RIGHT = Anchor to end",
-
     "LEFT = matched block",
-
-    "Higher RIGHT = more NB2-like",
-
+    "NB2 metrics evaluated after selection",
     sep = "\n"
   )
 
 
   box4 <- paste0(
-
     "LEFT NB2 = ",
     round(
       region_summary$left_NB2,
       3
     ),
     "\n",
-
     "RIGHT NB2 = ",
     round(
       region_summary$right_NB2,
       3
     ),
     "\n",
-
     "RIGHT-LEFT NB2 = ",
     round(
       region_summary$diff_NB2,
       3
     ),
     "\n",
-
     "LEFT NB2-NB1 = ",
     round(
       region_summary$left_gap,
       3
     ),
     "\n",
-
     "RIGHT NB2-NB1 = ",
     round(
       region_summary$right_gap,
       3
     ),
     "\n",
-
     "RIGHT-LEFT NB2-NB1 = ",
     round(
       region_summary$diff_gap,
       3
     ),
     "\n",
-
     "LEFT alpha*mu = ",
     round(
       region_summary$left_alpha,
       3
     ),
     "\n",
-
     "RIGHT alpha*mu = ",
     round(
       region_summary$right_alpha,
       3
     ),
     "\n",
-
     "RIGHT-LEFT alpha*mu = ",
     round(
       region_summary$diff_alpha,
@@ -3042,13 +2839,11 @@ build_main_figure <- function(
 
 
   # ---------------------------------------------------------------------------
-  # PANEL 1: GEOMETRY
+  # PANEL 1: DATA-DERIVED GEOMETRY
   # ---------------------------------------------------------------------------
 
   p1 <- ggplot(
-
     variance_df,
-
     aes(
       rank,
       smooth_log1p_empirical_variance
@@ -3056,205 +2851,104 @@ build_main_figure <- function(
   ) +
 
     annotate(
-
       "rect",
-
-      xmin =
-        left_min,
-
-      xmax =
-        left_max,
-
-      ymin =
-        -Inf,
-
-      ymax =
-        Inf,
-
-      fill =
-        COL$left_fill,
-
-      alpha =
-        0.70
+      xmin = left_min,
+      xmax = left_max,
+      ymin = -Inf,
+      ymax = Inf,
+      fill = COL$left_fill,
+      alpha = 0.70
     ) +
 
     annotate(
-
       "rect",
-
-      xmin =
-        right_min,
-
-      xmax =
-        right_max,
-
-      ymin =
-        -Inf,
-
-      ymax =
-        Inf,
-
-      fill =
-        COL$right_fill,
-
-      alpha =
-        0.70
+      xmin = right_min,
+      xmax = right_max,
+      ymin = -Inf,
+      ymax = Inf,
+      fill = COL$right_fill,
+      alpha = 0.70
     ) +
 
     geom_line(
-
-      color =
-        COL$var_curve,
-
-      linewidth =
-        1.0
+      color = COL$var_curve,
+      linewidth = 1.0
     ) +
 
     geom_point(
-
-      data =
-        zero_plot_df,
-
-      aes(
-        rank,
-        y
+      data = zero_plot_df,
+      mapping = aes(
+        x = rank,
+        y = y
       ),
-
-      inherit.aes =
-        FALSE,
-
-      color =
-        COL$zero_crossing,
-
-      size =
-        1.25,
-
-      alpha =
-        0.65
+      inherit.aes = FALSE,
+      color = COL$zero_crossing,
+      size = 1.2,
+      alpha = 0.65
     ) +
 
     geom_vline(
-
-      xintercept =
-        anchor,
-
-      color =
-        COL$anchor,
-
-      linetype =
-        "solid",
-
-      linewidth =
-        1.0
-    ) +
-
-    geom_point(
-
-      aes(
-        x =
-          anchor,
-
-        y =
-          anchor_y
-      ),
-
-      inherit.aes =
-        FALSE,
-
-      color =
-        COL$anchor,
-
-      shape =
-        16,
-
-      size =
-        3.5
+      xintercept = anchor,
+      color = COL$anchor,
+      linewidth = 1.0
     ) +
 
     annotate(
-
-      "label",
-
-      x =
-        pos$left_x,
-
-      y =
-        top_y *
-          0.96,
-
-      label =
-        box1,
-
-      hjust =
-        0,
-
-      vjust =
-        1,
-
-      size =
-        2.8,
-
-      label.size =
-        0.25,
-
-      fill =
-        grDevices::adjustcolor(
-          "white",
-          alpha.f = 0.96
-        )
+      "point",
+      x = anchor,
+      y = anchor_y,
+      color = COL$anchor,
+      shape = 16,
+      size = 3.5
     ) +
 
     annotate(
-
       "label",
+      x = pos$left_x,
+      y = top_y -
+        0.04 *
+        variance_span,
+      label = box1,
+      hjust = 0,
+      vjust = 1,
+      size = 2.8,
+      label.size = 0.25,
+      fill = grDevices::adjustcolor(
+        "white",
+        alpha.f = 0.96
+      )
+    ) +
 
-      x =
-        pos$stat_x,
-
-      y =
-        top_y *
-          0.70,
-
-      label =
-        box2,
-
-      hjust =
-        0,
-
-      vjust =
-        1,
-
-      size =
-        2.8,
-
-      label.size =
-        0.25,
-
-      fill =
-        grDevices::adjustcolor(
-          "white",
-          alpha.f = 0.96
-        )
+    annotate(
+      "label",
+      x = pos$stat_x,
+      y = top_y -
+        0.30 *
+        variance_span,
+      label = box2,
+      hjust = 0,
+      vjust = 1,
+      size = 2.8,
+      label.size = 0.25,
+      fill = grDevices::adjustcolor(
+        "white",
+        alpha.f = 0.96
+      )
     ) +
 
     labs(
-
-      title =
-        paste0(
-          comparison_name,
-          " ",
-          arm_name,
-          ": geometry"
-        ),
-
-      subtitle =
-        "Anchor is the bootstrap-stable right-tail curvature cutoff; grey points are d2 zero crossings",
-
-      x =
-        "Rank",
-
-      y =
-        "Smoothed log(1 + variance)"
+      title = paste0(
+        comparison_name,
+        " ",
+        arm_name,
+        ": geometry"
+      ),
+      subtitle = paste0(
+        "Bootstrap-stable curvature cutoff; grey points denote ",
+        "spline second-derivative zero crossings"
+      ),
+      x = "Rank",
+      y = "Smoothed log(1 + variance)"
     ) +
 
     theme_bw(
@@ -3262,190 +2956,106 @@ build_main_figure <- function(
     ) +
 
     theme(
-
-      panel.grid.minor =
-        element_blank(),
-
-      legend.position =
-        "none"
+      panel.grid.minor = element_blank(),
+      legend.position = "none"
     )
 
 
   # ---------------------------------------------------------------------------
-  # PANEL 2: FEATURE-WISE CORROBORATION
+  # PANEL 2: NB2-RELATED CORROBORATION
   # ---------------------------------------------------------------------------
 
   p2 <- ggplot() +
 
     annotate(
-
       "rect",
-
-      xmin =
-        left_min,
-
-      xmax =
-        left_max,
-
-      ymin =
-        -Inf,
-
-      ymax =
-        Inf,
-
-      fill =
-        COL$left_fill,
-
-      alpha =
-        0.70
+      xmin = left_min,
+      xmax = left_max,
+      ymin = -Inf,
+      ymax = Inf,
+      fill = COL$left_fill,
+      alpha = 0.70
     ) +
 
     annotate(
-
       "rect",
-
-      xmin =
-        right_min,
-
-      xmax =
-        right_max,
-
-      ymin =
-        -Inf,
-
-      ymax =
-        Inf,
-
-      fill =
-        COL$right_fill,
-
-      alpha =
-        0.70
+      xmin = right_min,
+      xmax = right_max,
+      ymin = -Inf,
+      ymax = Inf,
+      fill = COL$right_fill,
+      alpha = 0.70
     ) +
 
     geom_vline(
-
-      xintercept =
-        anchor,
-
-      color =
-        COL$anchor,
-
-      linewidth =
-        0.8
+      xintercept = anchor,
+      color = COL$anchor,
+      linewidth = 0.8
     ) +
 
     geom_line(
-
-      data =
-        nb_long,
-
-      aes(
+      data = nb_long,
+      mapping = aes(
         rank,
         value,
         color = metric
       ),
-
-      linewidth =
-        0.95
+      linewidth = 0.95
     ) +
 
     annotate(
-
       "label",
-
-      x =
-        pos$left_x,
-
-      y =
-        mid_y *
-          0.96,
-
-      label =
-        box3,
-
-      hjust =
-        0,
-
-      vjust =
-        1,
-
-      size =
-        2.8,
-
-      label.size =
-        0.25,
-
-      fill =
-        grDevices::adjustcolor(
-          "white",
-          alpha.f = 0.96
-        )
+      x = pos$left_x,
+      y = mid_top -
+        0.04 *
+        mid_span,
+      label = box3,
+      hjust = 0,
+      vjust = 1,
+      size = 2.8,
+      label.size = 0.25,
+      fill = grDevices::adjustcolor(
+        "white",
+        alpha.f = 0.96
+      )
     ) +
 
     annotate(
-
       "label",
-
-      x =
-        pos$stat_x,
-
-      y =
-        mid_y *
-          0.70,
-
-      label =
-        box4,
-
-      hjust =
-        0,
-
-      vjust =
-        1,
-
-      size =
-        2.8,
-
-      label.size =
-        0.25,
-
-      fill =
-        grDevices::adjustcolor(
-          "white",
-          alpha.f = 0.96
-        )
+      x = pos$stat_x,
+      y = mid_top -
+        0.30 *
+        mid_span,
+      label = box4,
+      hjust = 0,
+      vjust = 1,
+      size = 2.8,
+      label.size = 0.25,
+      fill = grDevices::adjustcolor(
+        "white",
+        alpha.f = 0.96
+      )
     ) +
 
     scale_color_manual(
-
-      values =
-        TRACE_COLORS,
-
-      breaks =
-        TRACE_LEVELS
+      values = TRACE_COLORS,
+      breaks = TRACE_LEVELS
     ) +
 
     labs(
-
-      title =
-        paste0(
-          comparison_name,
-          " ",
-          arm_name,
-          ": corroboration"
-        ),
-
-      subtitle =
-        "NB2-related quantities are evaluated only after geometric cutoff selection",
-
-      x =
-        "Rank",
-
-      y =
-        "NB2-related signal",
-
-      color =
-        NULL
+      title = paste0(
+        comparison_name,
+        " ",
+        arm_name,
+        ": corroboration"
+      ),
+      subtitle = paste0(
+        "NB2-related quantities are evaluated only after ",
+        "geometric cutoff selection"
+      ),
+      x = "Rank",
+      y = "NB2-related signal",
+      color = NULL
     ) +
 
     theme_bw(
@@ -3453,29 +3063,22 @@ build_main_figure <- function(
     ) +
 
     theme(
-
-      panel.grid.minor =
-        element_blank(),
-
-      legend.position =
-        "bottom"
+      panel.grid.minor = element_blank(),
+      legend.position = "bottom"
     )
 
 
   # ---------------------------------------------------------------------------
-  # PANEL 3: REGION SUMMARY
+  # PANEL 3: MATCHED REGION SUMMARY
   # ---------------------------------------------------------------------------
 
   summary_df <- data.frame(
-
     metric = factor(
-
       c(
         "NB2",
         "NB2-NB1",
         "alpha*mu"
       ),
-
       levels = rev(
         c(
           "NB2",
@@ -3486,114 +3089,72 @@ build_main_figure <- function(
     ),
 
     LEFT = c(
-
       region_summary$left_NB2,
-
       region_summary$left_gap,
-
       region_summary$left_alpha
     ),
 
     RIGHT = c(
-
       region_summary$right_NB2,
-
       region_summary$right_gap,
-
       region_summary$right_alpha
     ),
 
     stringsAsFactors = FALSE
   )
 
-
   p3 <- ggplot(
-
     summary_df,
-
     aes(
       y = metric
     )
   ) +
 
     geom_segment(
-
       aes(
-        x =
-          LEFT,
-
-        xend =
-          RIGHT,
-
-        yend =
-          metric
+        x = LEFT,
+        xend = RIGHT,
+        yend = metric
       ),
-
-      color =
-        "#7A7A7A",
-
-      linewidth =
-        0.8
+      color = "#7A7A7A",
+      linewidth = 0.8
     ) +
 
     geom_point(
-
       aes(
-        x =
-          LEFT,
-
-        color =
-          "LEFT"
+        x = LEFT,
+        color = "LEFT"
       ),
-
-      size =
-        3.4
+      size = 3.4
     ) +
 
     geom_point(
-
       aes(
-        x =
-          RIGHT,
-
-        color =
-          "RIGHT"
+        x = RIGHT,
+        color = "RIGHT"
       ),
-
-      size =
-        3.4
+      size = 3.4
     ) +
 
     scale_color_manual(
-
-      values =
-        REGION_COLORS,
-
-      breaks =
-        REGION_LEVELS
+      values = REGION_COLORS,
+      breaks = REGION_LEVELS
     ) +
 
     labs(
-
-      title =
-        paste0(
-          comparison_name,
-          " ",
-          arm_name,
-          ": summary"
-        ),
-
-      subtitle =
-        "Points farther right indicate stronger NB2-related corroboration",
-
-      x =
-        "Median",
-
-      y =
-        NULL,
-
-      color =
-        NULL
+      title = paste0(
+        comparison_name,
+        " ",
+        arm_name,
+        ": summary"
+      ),
+      subtitle = paste0(
+        "Matched-region medians; farther right indicates ",
+        "stronger NB2-related signal"
+      ),
+      x = "Median",
+      y = NULL,
+      color = NULL
     ) +
 
     theme_bw(
@@ -3601,39 +3162,30 @@ build_main_figure <- function(
     ) +
 
     theme(
-
-      panel.grid.minor =
-        element_blank(),
-
-      legend.position =
-        "bottom"
+      panel.grid.minor = element_blank(),
+      legend.position = "bottom"
     )
 
-
   save_three_panel_plot(
-
-    plot_list =
-      list(
-        p1,
-        p2,
-        p3
-      ),
-
-    filename =
-      out_file
+    plot_list = list(
+      p1,
+      p2,
+      p3
+    ),
+    filename = out_file
   )
 }
 
 
 # =============================================================================
-# ONE ANALYSIS TRACK
+# RUN ONE ANALYSIS TRACK
 # =============================================================================
 
 run_one_track <- function(
     comparison_name,
     arm_name,
-    rank_matrix,
-    metric_matrix,
+    count_mat_arm,
+    prepare_function,
     output_dir,
     track,
     fig_tag,
@@ -3643,114 +3195,82 @@ run_one_track <- function(
     seed) {
 
   total_n <- nrow(
-    rank_matrix
+    count_mat_arm
   )
 
-
-  # ---------------------------------------------------------------------------
-  # Output paths
-  # ---------------------------------------------------------------------------
+  prefix <- paste0(
+    comparison_name,
+    "_",
+    arm_name,
+    "_",
+    track
+  )
 
   stability_summary_path <- file.path(
-
     output_dir,
-
     paste0(
       "Table_StabilitySummary_",
-      comparison_name,
-      "_",
-      arm_name,
-      "_",
-      track,
+      prefix,
       ".csv"
     )
   )
-
 
   stability_bootstrap_path <- file.path(
-
     output_dir,
-
     paste0(
       "Table_StabilityBootstrap_",
-      comparison_name,
-      "_",
-      arm_name,
-      "_",
-      track,
+      prefix,
       ".csv"
     )
   )
 
+  candidate_path <- file.path(
+    output_dir,
+    paste0(
+      "Table_CandidateAnchors_",
+      prefix,
+      ".csv"
+    )
+  )
 
   zero_path <- file.path(
-
     output_dir,
-
     paste0(
       "Table_Zero_",
-      comparison_name,
-      "_",
-      arm_name,
-      "_",
-      track,
+      prefix,
       ".csv"
     )
   )
-
 
   valid_path <- file.path(
-
     output_dir,
-
     paste0(
       "Table_Valid_",
-      comparison_name,
-      "_",
-      arm_name,
-      "_",
-      track,
+      prefix,
       ".csv"
     )
   )
-
 
   rank_path <- file.path(
-
     output_dir,
-
     paste0(
       "Table_Rank_",
-      comparison_name,
-      "_",
-      arm_name,
-      "_",
-      track,
+      prefix,
       ".csv"
     )
   )
-
 
   cut_path <- file.path(
-
     output_dir,
-
     paste0(
       "Table_Cutoff_",
-      comparison_name,
-      "_",
-      arm_name,
-      "_",
-      track,
+      prefix,
       ".csv"
     )
   )
 
-
   fig_path <- file.path(
-
     output_dir,
-
     paste0(
       "Figure_",
       track,
@@ -3764,53 +3284,63 @@ run_one_track <- function(
 
 
   # ---------------------------------------------------------------------------
-  # Geometry stability
+  # Bootstrap stability
   # ---------------------------------------------------------------------------
 
   stability_obj <- assess_geometry_stability(
-
-    rank_matrix =
-      rank_matrix,
-
-    metric_matrix =
-      metric_matrix,
-
-    candidate_fractions =
-      MIN_FRACTION_GRID,
-
-    bootstrap_n =
-      BOOTSTRAP_N,
-
-    spar =
-      VAR_SPLINE_SPAR,
-
-    seed =
-      seed
+    count_mat_arm = count_mat_arm,
+    prepare_function = prepare_function,
+    candidate_fractions = MIN_FRACTION_GRID,
+    bootstrap_n = BOOTSTRAP_N,
+    spar = VAR_SPLINE_SPAR,
+    seed = seed,
+    cores = BOOTSTRAP_CORES
   )
 
-
   write.csv(
-
     stability_obj$stability_summary,
-
     stability_summary_path,
-
     row.names = FALSE
   )
 
+  write.csv(
+    stability_obj$bootstrap_df,
+    stability_bootstrap_path,
+    row.names = FALSE
+  )
 
   write.csv(
-
-    stability_obj$bootstrap_df,
-
-    stability_bootstrap_path,
-
+    stability_obj$original_candidates,
+    candidate_path,
     row.names = FALSE
   )
 
 
   # ---------------------------------------------------------------------------
-  # If no stable fraction exists, DO NOT force a cutoff.
+  # Full-data zero crossings are written regardless of whether stability passes
+  # ---------------------------------------------------------------------------
+
+  zero_out <- stability_obj$original_geometry$zero_df
+
+  if (nrow(zero_out) > 0L) {
+    zero_out$crossing_rank_rounded <- as.integer(
+      round(
+        zero_out$crossing_rank
+      )
+    )
+  } else {
+    zero_out$crossing_rank_rounded <- integer(0)
+  }
+
+  write.csv(
+    zero_out,
+    zero_path,
+    row.names = FALSE
+  )
+
+
+  # ---------------------------------------------------------------------------
+  # No stable solution: stop without forcing a cutoff
   # ---------------------------------------------------------------------------
 
   if (
@@ -3819,109 +3349,58 @@ run_one_track <- function(
     )
   ) {
 
-    write.csv(
-
-      data.frame(
-
-        comp =
-          comparison_name,
-
-        arm =
-          arm_name,
-
-        track =
-          track,
-
-        Status =
-          "UNSTABLE",
-
-        Reason =
-          "No candidate minimum fraction passed all bootstrap stability criteria.",
-
-        stringsAsFactors = FALSE
+    validation_row <- data.frame(
+      comp = comparison_name,
+      arm = arm_name,
+      track = track,
+      Status = "UNSTABLE",
+      Reason = paste0(
+        "No candidate minimum fraction satisfied all ",
+        "prespecified bootstrap stability criteria."
       ),
-
-      valid_path,
-
-      row.names = FALSE
-    )
-
-
-    fail_summary <- data.frame(
-
-      comp =
-        comparison_name,
-
-      arm =
-        arm_name,
-
-      track =
-        track,
-
-      rank_method =
-        rank_tag,
-
-      metric_matrix =
-        metric_name,
-
-      Status =
-        "UNSTABLE",
-
-      SelectedMinFraction =
-        NA_real_,
-
-      Anchor =
-        NA_integer_,
-
-      LeftSize =
-        NA_integer_,
-
-      RightSize =
-        NA_integer_,
-
-      left_NB2 =
-        NA_real_,
-
-      right_NB2 =
-        NA_real_,
-
-      diff_NB2 =
-        NA_real_,
-
-      left_gap =
-        NA_real_,
-
-      right_gap =
-        NA_real_,
-
-      diff_gap =
-        NA_real_,
-
-      left_alpha =
-        NA_real_,
-
-      right_alpha =
-        NA_real_,
-
-      diff_alpha =
-        NA_real_,
-
       stringsAsFactors = FALSE
     )
 
-
     write.csv(
-
-      fail_summary,
-
-      cut_path,
-
+      validation_row,
+      valid_path,
       row.names = FALSE
     )
 
+    fail_summary <- data.frame(
+      comp = comparison_name,
+      arm = arm_name,
+      track = track,
+      rank_method = rank_tag,
+      metric_matrix = metric_name,
+      Status = "UNSTABLE",
+      SelectedMinFraction = NA_real_,
+      Anchor = NA_integer_,
+      ActualRightFraction = NA_real_,
+      LeftSize = NA_integer_,
+      RightSize = NA_integer_,
+      left_NB2 = NA_real_,
+      right_NB2 = NA_real_,
+      diff_NB2 = NA_real_,
+      left_gap = NA_real_,
+      right_gap = NA_real_,
+      diff_gap = NA_real_,
+      left_alpha = NA_real_,
+      right_alpha = NA_real_,
+      diff_alpha = NA_real_,
+      Call_NB2 = NA_character_,
+      Call_Gap = NA_character_,
+      Call_Alpha = NA_character_,
+      stringsAsFactors = FALSE
+    )
+
+    write.csv(
+      fail_summary,
+      cut_path,
+      row.names = FALSE
+    )
 
     message(
-
       "[",
       track,
       "] ",
@@ -3931,19 +3410,12 @@ run_one_track <- function(
       " | UNSTABLE: no candidate fraction passed."
     )
 
-
     return(
-
       list(
-
-        summary =
-          fail_summary,
-
-        selected =
-          NULL,
-
-        stability_summary =
-          stability_obj$stability_summary
+        summary = fail_summary,
+        selected = NULL,
+        stability_summary = stability_obj$stability_summary,
+        prepared = stability_obj$original_prepared
       )
     )
   }
@@ -3955,99 +3427,65 @@ run_one_track <- function(
 
   selected_stability <- stability_obj$selected
 
-  selected_fraction <- selected_stability$min_fraction
-
-  anchor <- selected_stability$anchor
-
-  geometry <- stability_obj$original_geometry
-
-  rank_order <- geometry$rank_order
-
-  variance_df <- geometry$variance_df
-
-  zero_df <- geometry$zero_df
-
-
-  feature_df <- compute_ranked_feature_metrics(
-
-    metric_mat_arm =
-      metric_matrix,
-
-    rank_order =
-      rank_order
+  selected_fraction <- as.numeric(
+    selected_stability$min_fraction
   )
 
+  anchor <- as.integer(
+    selected_stability$anchor
+  )
+
+  geometry <- stability_obj$original_geometry
+  prepared <- stability_obj$original_prepared
+
+  rank_order <- geometry$rank_order
+  variance_df <- geometry$variance_df
+  zero_df <- geometry$zero_df
+
+  feature_df <- compute_ranked_feature_metrics(
+    metric_mat_arm = prepared$metric_matrix,
+    rank_order = rank_order
+  )
 
   feature_df$abs_pc1_loading <- geometry$abs_loadings[
     rank_order
   ]
 
-
   region_summary <- summarize_regions(
-
-    feature_df =
-      feature_df,
-
-    anchor_rank =
-      anchor,
-
-    total_n =
-      total_n
+    feature_df = feature_df,
+    anchor_rank = anchor,
+    total_n = total_n
   )
 
 
   # ---------------------------------------------------------------------------
-  # Validation
+  # Validate final result
   # ---------------------------------------------------------------------------
 
   validate_method_level(
-
-    feature_df =
-      feature_df,
-
-    zero_df =
-      zero_df,
-
-    anchor =
-      anchor,
-
-    selected_fraction =
-      selected_fraction,
-
-    selected_stability_row =
-      selected_stability,
-
-    region_summary =
-      region_summary,
-
-    total_n =
-      total_n
+    feature_df = feature_df,
+    zero_df = zero_df,
+    anchor = anchor,
+    selected_fraction = selected_fraction,
+    selected_stability_row = selected_stability,
+    region_summary = region_summary,
+    total_n = total_n
   )
 
 
   # ---------------------------------------------------------------------------
-  # Selected cutoff summary
+  # Selected-cutoff metadata
   # ---------------------------------------------------------------------------
 
   selected_df <- data.frame(
+    comp = comparison_name,
+    arm = arm_name,
+    track = track,
 
-    comp =
-      comparison_name,
+    rank_method = rank_tag,
+    metric_matrix = metric_name,
 
-    arm =
-      arm_name,
-
-    track =
-      track,
-
-    rank_method =
-      rank_tag,
-
-    metric_matrix =
-      metric_name,
-
-    Status =
-      "PASS",
+    Status = "PASS",
 
     SelectedMinFraction =
       selected_fraction,
@@ -4070,182 +3508,170 @@ run_one_track <- function(
     AnchorIQRFraction =
       selected_stability$anchor_iqr_fraction,
 
+    RightFractionIQR =
+      selected_stability$right_fraction_iqr,
+
     MedianJaccard =
       selected_stability$median_jaccard,
 
     stringsAsFactors = FALSE
   )
 
-
   cutoff_summary <- bind_cols(
-
     selected_df,
-
     region_summary
   ) %>%
-
     mutate(
+      LeftSize = left_n,
+      RightSize = right_n,
 
-      LeftSize =
-        region_summary$left_n,
+      Call_NB2 = ifelse(
+        diff_NB2 > 0,
+        "RIGHT",
+        "NOT_RIGHT"
+      ),
 
-      RightSize =
-        region_summary$right_n,
+      Call_Gap = ifelse(
+        diff_gap > 0,
+        "RIGHT",
+        "NOT_RIGHT"
+      ),
 
-      Call_NB2 =
-        ifelse(
-          diff_NB2 > 0,
-          "RIGHT",
-          "NOT_RIGHT"
-        ),
-
-      Call_Gap =
-        ifelse(
-          diff_gap > 0,
-          "RIGHT",
-          "NOT_RIGHT"
-        ),
-
-      Call_Alpha =
-        ifelse(
-          diff_alpha > 0,
-          "RIGHT",
-          "NOT_RIGHT"
-        )
+      Call_Alpha = ifelse(
+        diff_alpha > 0,
+        "RIGHT",
+        "NOT_RIGHT"
+      )
     )
 
 
   # ---------------------------------------------------------------------------
-  # Zero-crossing table
+  # Mark selected zero crossing
   # ---------------------------------------------------------------------------
 
-  zero_out <- zero_df %>%
+  zero_selected <- zero_df
 
-    mutate(
+  if (nrow(zero_selected) > 0L) {
 
-      crossing_rank_rounded =
-        as.integer(
-          round(
-            crossing_rank
-          )
-        ),
+    zero_selected$crossing_rank_rounded <- as.integer(
+      round(
+        zero_selected$crossing_rank
+      )
+    )
 
-      selected_anchor =
-        crossing_rank_rounded ==
+    zero_selected$selected_anchor <- (
+      zero_selected$crossing_rank_rounded ==
         anchor
     )
 
+  } else {
+
+    zero_selected$crossing_rank_rounded <- integer(0)
+    zero_selected$selected_anchor <- logical(0)
+  }
 
   write.csv(
-
-    zero_out,
-
+    zero_selected,
     zero_path,
-
     row.names = FALSE
   )
 
 
   # ---------------------------------------------------------------------------
-  # Validation table
+  # Validation output
   # ---------------------------------------------------------------------------
 
-  write.csv(
+  validation_row <- data.frame(
+    comp = comparison_name,
+    arm = arm_name,
+    track = track,
 
-    data.frame(
+    Status = "PASS",
 
-      comp =
-        comparison_name,
+    SelectedMinFraction =
+      selected_fraction,
 
-      arm =
-        arm_name,
+    Anchor =
+      anchor,
 
-      track =
-        track,
+    ActualRightFraction =
+      selected_stability$actual_right_fraction,
 
-      Status =
-        "PASS",
+    FractionRequirementMet =
+      selected_stability$actual_right_fraction >=
+      selected_fraction,
 
-      SelectedMinFraction =
-        selected_fraction,
+    BootstrapValidRate =
+      selected_stability$bootstrap_valid_rate,
 
-      Anchor =
-        anchor,
+    AnchorRecoveryRate =
+      selected_stability$anchor_recovery_rate,
 
-      ActualRightFraction =
-        selected_stability$actual_right_fraction,
+    AnchorIQRFraction =
+      selected_stability$anchor_iqr_fraction,
 
-      FractionRequirementMet =
-        selected_stability$actual_right_fraction >=
-        selected_fraction,
+    RightFractionIQR =
+      selected_stability$right_fraction_iqr,
 
-      BootstrapValidRate =
-        selected_stability$bootstrap_valid_rate,
+    MedianJaccard =
+      selected_stability$median_jaccard,
 
-      AnchorRecoveryRate =
-        selected_stability$anchor_recovery_rate,
+    LeftN =
+      region_summary$left_n,
 
-      AnchorIQRFraction =
-        selected_stability$anchor_iqr_fraction,
+    RightN =
+      region_summary$right_n,
 
-      MedianJaccard =
-        selected_stability$median_jaccard,
+    EqualRegionSize =
+      region_summary$left_n ==
+      region_summary$right_n,
 
-      LeftN =
-        region_summary$left_n,
-
-      RightN =
-        region_summary$right_n,
-
-      EqualRegionSize =
-        region_summary$left_n ==
-        region_summary$right_n,
-
-      AnchorIsZeroCrossing =
-        anchor %in%
-        as.integer(
-          round(
-            zero_df$crossing_rank
-          )
-        ),
-
-      stringsAsFactors = FALSE
-    ),
-
-    valid_path,
-
-    row.names = FALSE
-  )
-
-
-  # ---------------------------------------------------------------------------
-  # Rank-level table
-  # ---------------------------------------------------------------------------
-
-  write.csv(
-
-    feature_df %>%
-      left_join(
-        variance_df,
-        by = "rank"
+    AnchorIsZeroCrossing =
+      anchor %in%
+      as.integer(
+        round(
+          zero_df$crossing_rank
+        )
       ),
 
-    rank_path,
+    stringsAsFactors = FALSE
+  )
 
+  write.csv(
+    validation_row,
+    valid_path,
     row.names = FALSE
   )
 
 
   # ---------------------------------------------------------------------------
-  # Cutoff table
+  # Rank-level output
+  # ---------------------------------------------------------------------------
+
+  rank_output <- feature_df %>%
+    left_join(
+      variance_df,
+      by = "rank",
+      suffix = c(
+        "_feature_metric",
+        "_geometry"
+      )
+    )
+
+  write.csv(
+    rank_output,
+    rank_path,
+    row.names = FALSE
+  )
+
+
+  # ---------------------------------------------------------------------------
+  # Cutoff summary
   # ---------------------------------------------------------------------------
 
   write.csv(
-
     cutoff_summary,
-
     cut_path,
-
     row.names = FALSE
   )
 
@@ -4255,90 +3681,70 @@ run_one_track <- function(
   # ---------------------------------------------------------------------------
 
   build_main_figure(
-
-    comparison_name =
-      comparison_name,
-
-    arm_name =
-      arm_name,
-
-    variance_df =
-      variance_df,
-
-    zero_df =
-      zero_df,
-
-    feature_df =
-      feature_df,
-
-    anchor =
-      anchor,
-
-    selected_stability_row =
-      selected_stability,
-
-    region_summary =
-      region_summary,
-
-    out_file =
-      fig_path,
-
-    fig_tag =
-      fig_tag,
-
-    rank_tag =
-      rank_tag,
-
-    metric_tag =
-      metric_tag
+    comparison_name = comparison_name,
+    arm_name = arm_name,
+    variance_df = variance_df,
+    zero_df = zero_df,
+    feature_df = feature_df,
+    anchor = anchor,
+    selected_stability_row = selected_stability,
+    region_summary = region_summary,
+    out_file = fig_path,
+    fig_tag = fig_tag,
+    rank_tag = rank_tag,
+    metric_tag = metric_tag
   )
 
 
   message(
-
     "[",
     track,
     "] ",
     comparison_name,
     " ",
     arm_name,
-
     " | min_fraction=",
-    round(
-      selected_fraction,
-      4
+    sprintf(
+      "%.3f",
+      selected_fraction
     ),
-
     " | Anchor=",
     anchor,
-
     " | RIGHT n=",
     region_summary$right_n,
-
-    " | recovery=",
-    round(
-      selected_stability$anchor_recovery_rate,
-      3
+    " | valid=",
+    sprintf(
+      "%.3f",
+      selected_stability$bootstrap_valid_rate
     ),
-
+    " | recovery=",
+    sprintf(
+      "%.3f",
+      selected_stability$anchor_recovery_rate
+    ),
+    " | anchor_IQR/N=",
+    sprintf(
+      "%.4f",
+      selected_stability$anchor_iqr_fraction
+    ),
+    " | RIGHT_fraction_IQR=",
+    sprintf(
+      "%.4f",
+      selected_stability$right_fraction_iqr
+    ),
     " | Jaccard=",
-    round(
-      selected_stability$median_jaccard,
-      3
+    sprintf(
+      "%.3f",
+      selected_stability$median_jaccard
     )
   )
 
 
   list(
-
-    summary =
-      cutoff_summary,
-
-    selected =
-      selected_df,
-
-    stability_summary =
-      stability_obj$stability_summary
+    summary = cutoff_summary,
+    selected = selected_df,
+    stability_summary = stability_obj$stability_summary,
+    prepared = prepared
   )
 }
 
@@ -4348,15 +3754,14 @@ run_one_track <- function(
 # =============================================================================
 
 count_mat <- read_count_matrix(
-  COUNT_FILE
+  path = COUNT_FILE,
+  comparisons = COMPARISONS
 )
-
 
 message(
   "Using count file: ",
   COUNT_FILE
 )
-
 
 message(
   "Count matrix dimensions: ",
@@ -4366,7 +3771,6 @@ message(
   " samples"
 )
 
-
 message(
   "Candidate minimum fractions: ",
   paste(
@@ -4375,15 +3779,51 @@ message(
   )
 )
 
-
 message(
   "Bootstrap replicates per track: ",
   BOOTSTRAP_N
 )
 
+message(
+  "Bootstrap worker processes: ",
+  BOOTSTRAP_CORES
+)
+
+message(
+  "Stability criteria:"
+)
+
+message(
+  "  valid bootstrap rate >= ",
+  MIN_BOOTSTRAP_VALID_RATE
+)
+
+message(
+  "  Anchor recovery >= ",
+  MIN_ANCHOR_RECOVERY_RATE,
+  " within ",
+  ANCHOR_TOLERANCE_FRACTION *
+    100,
+  "% of rank axis"
+)
+
+message(
+  "  Anchor IQR/N <= ",
+  MAX_ANCHOR_IQR_FRACTION
+)
+
+message(
+  "  RIGHT-fraction IQR <= ",
+  MAX_RIGHT_FRACTION_IQR
+)
+
+message(
+  "  median Jaccard >= ",
+  MIN_MEDIAN_JACCARD
+)
+
 
 overall_rows <- list()
-
 overall_stability_rows <- list()
 
 
@@ -4399,20 +3839,12 @@ for (
   )
 
   dir.create(
-
     comp_dir,
-
     recursive = TRUE,
-
     showWarnings = FALSE
   )
 
-
-  pats <- COMPARISONS[
-    [
-      comparison_name
-    ]
-  ]
+  pats <- COMPARISONS[[comparison_name]]
 
 
   for (
@@ -4423,25 +3855,20 @@ for (
   ) {
 
     sample_idx <- grep(
-
       pats[[arm_name]],
-
       colnames(count_mat)
     )
 
-
-    if (
-      length(sample_idx) < 2L
-    ) {
-
+    if (length(sample_idx) < 2L) {
       stop(
         "Not enough samples for ",
         comparison_name,
         " ",
-        arm_name
+        arm_name,
+        ". Matched columns: ",
+        length(sample_idx)
       )
     }
-
 
     count_mat_arm <- count_mat[
       ,
@@ -4449,18 +3876,25 @@ for (
       drop = FALSE
     ]
 
+    message(
+      "------------------------------------------------------------"
+    )
 
-    # =========================================================================
-    # MAIN TRACK
-    # =========================================================================
-
-    main_rank_matrix <- normalize_cpm_log1p(
-      count_mat_arm
+    message(
+      comparison_name,
+      " ",
+      arm_name,
+      ": ",
+      ncol(count_mat_arm),
+      " samples"
     )
 
 
-    main_seed <- seed_from_label(
+    # =========================================================================
+    # MAIN MANUSCRIPT TRACK
+    # =========================================================================
 
+    main_seed <- seed_from_label(
       paste(
         comparison_name,
         arm_name,
@@ -4469,132 +3903,69 @@ for (
       )
     )
 
+    main_prepare_function <- function(x) {
+      prepare_main_matrices(x)
+    }
 
     main_res <- run_one_track(
-
-      comparison_name =
-        comparison_name,
-
-      arm_name =
-        arm_name,
-
-      rank_matrix =
-        main_rank_matrix,
-
-      metric_matrix =
-        count_mat_arm,
-
-      output_dir =
-        comp_dir,
-
-      track =
-        "Main",
-
-      fig_tag =
-        "Main",
-
-      rank_tag =
-        "Rank: CPM log1p",
-
-      metric_tag =
-        "Metrics: raw counts",
-
-      metric_name =
-        "raw_counts",
-
-      seed =
-        main_seed
+      comparison_name = comparison_name,
+      arm_name = arm_name,
+      count_mat_arm = count_mat_arm,
+      prepare_function = main_prepare_function,
+      output_dir = comp_dir,
+      track = "Main",
+      fig_tag = "Main",
+      rank_tag = "Rank: CPM log1p",
+      metric_tag = "Metrics: raw counts",
+      metric_name = "raw_counts",
+      seed = main_seed
     )
 
+    overall_rows[[
+      length(overall_rows) +
+        1L
+    ]] <- main_res$summary
 
-    overall_rows[
-      [
-        length(
-          overall_rows
-        ) +
-          1L
-      ]
-    ] <- main_res$summary
-
-
-    overall_stability_rows[
-      [
-        length(
-          overall_stability_rows
-        ) +
-          1L
-      ]
-    ] <- main_res$stability_summary %>%
-
+    overall_stability_rows[[
+      length(overall_stability_rows) +
+        1L
+    ]] <- main_res$stability_summary %>%
       mutate(
-
-        comp =
-          comparison_name,
-
-        arm =
-          arm_name,
-
-        track =
-          "Main",
-
-        .before =
-          1
+        comp = comparison_name,
+        arm = arm_name,
+        track = "Main",
+        .before = 1L
       )
 
 
     # =========================================================================
-    # DESEQ2 SUPPLEMENT
+    # DESEQ2 SUPPLEMENTARY TRACK
     # =========================================================================
 
-    if (
-      RUN_DESEQ2_SUPPLEMENT
-    ) {
-
-      deseq2_obj <- compute_deseq2_matrices(
-
-        count_mat_arm,
-
-        rank_method =
-          DESEQ2_RANK_METHOD
-      )
-
+    if (RUN_DESEQ2_SUPPLEMENT) {
 
       if (
-        is.null(
-          deseq2_obj
+        !requireNamespace(
+          "DESeq2",
+          quietly = TRUE
+        ) ||
+        !requireNamespace(
+          "SummarizedExperiment",
+          quietly = TRUE
         )
       ) {
 
         message(
-
-          "[DESeq2] skipped: package not available for ",
+          "[DESeq2] skipped for ",
           comparison_name,
           " ",
-          arm_name
+          arm_name,
+          ": required package not available."
         )
 
       } else {
 
-
-        deseq2_rank_tag <- switch(
-
-          deseq2_obj$rank_method_used,
-
-          vst =
-            "Rank: DESeq2 VST",
-
-          normalized_log1p =
-            "Rank: DESeq2 log1p",
-
-          normalized_log1p_fallback =
-            "Rank: DESeq2 log1p (VST fallback)",
-
-          "Rank: DESeq2 log1p"
-        )
-
-
         deseq2_seed <- seed_from_label(
-
           paste(
             comparison_name,
             arm_name,
@@ -4603,110 +3974,92 @@ for (
           )
         )
 
+        deseq2_prepare_function <- function(x) {
+
+          prepare_deseq2_matrices(
+            count_mat_arm = x,
+            rank_method = DESEQ2_RANK_METHOD
+          )
+        }
+
+        deseq2_rank_tag <- if (
+          DESEQ2_RANK_METHOD ==
+            "vst"
+        ) {
+
+          "Rank: DESeq2 VST"
+
+        } else {
+
+          "Rank: DESeq2 log1p"
+        }
 
         deseq2_res <- run_one_track(
-
-          comparison_name =
-            comparison_name,
-
-          arm_name =
-            arm_name,
-
-          rank_matrix =
-            deseq2_obj$ranking_matrix,
-
-          metric_matrix =
-            deseq2_obj$normalized_counts,
-
-          output_dir =
-            comp_dir,
-
-          track =
-            "DESeq2",
-
-          fig_tag =
-            "DESeq2 supplement",
-
-          rank_tag =
-            deseq2_rank_tag,
-
-          metric_tag =
-            "Metrics: DESeq2 normalized",
-
-          metric_name =
-            "deseq2_normalized_counts",
-
-          seed =
-            deseq2_seed
+          comparison_name = comparison_name,
+          arm_name = arm_name,
+          count_mat_arm = count_mat_arm,
+          prepare_function = deseq2_prepare_function,
+          output_dir = comp_dir,
+          track = "DESeq2",
+          fig_tag = "DESeq2 supplement",
+          rank_tag = deseq2_rank_tag,
+          metric_tag = "Metrics: DESeq2 normalized",
+          metric_name = "deseq2_normalized_counts",
+          seed = deseq2_seed
         )
 
 
-        write.csv(
+        # ---------------------------------------------------------------------
+        # Full-data DESeq2 size factors
+        # ---------------------------------------------------------------------
 
-          data.frame(
+        if (
+          !is.null(
+            deseq2_res$prepared$size_factors
+          )
+        ) {
 
-            sample =
-              names(
-                deseq2_obj$size_factors
+          size_factors <- deseq2_res$prepared$size_factors
+
+          write.csv(
+            data.frame(
+              sample = names(
+                size_factors
               ),
-
-            size_factor =
-              as.numeric(
-                deseq2_obj$size_factors
+              size_factor = as.numeric(
+                size_factors
               ),
-
-            stringsAsFactors = FALSE
-          ),
-
-          file.path(
-
-            comp_dir,
-
-            paste0(
-              "Table_SizeFactor_",
-              comparison_name,
-              "_",
-              arm_name,
-              ".csv"
-            )
-          ),
-
-          row.names = FALSE
-        )
+              stringsAsFactors = FALSE
+            ),
+            file.path(
+              comp_dir,
+              paste0(
+                "Table_SizeFactor_",
+                comparison_name,
+                "_",
+                arm_name,
+                ".csv"
+              )
+            ),
+            row.names = FALSE
+          )
+        }
 
 
-        overall_rows[
-          [
-            length(
-              overall_rows
-            ) +
-              1L
-          ]
-        ] <- deseq2_res$summary
+        overall_rows[[
+          length(overall_rows) +
+            1L
+        ]] <- deseq2_res$summary
 
-
-        overall_stability_rows[
-          [
-            length(
-              overall_stability_rows
-            ) +
-              1L
-          ]
-        ] <- deseq2_res$stability_summary %>%
-
+        overall_stability_rows[[
+          length(overall_stability_rows) +
+            1L
+        ]] <- deseq2_res$stability_summary %>%
           mutate(
-
-            comp =
-              comparison_name,
-
-            arm =
-              arm_name,
-
-            track =
-              "DESeq2",
-
-            .before =
-              1
+            comp = comparison_name,
+            arm = arm_name,
+            track = "DESeq2",
+            .before = 1L
           )
       }
     }
@@ -4715,23 +4068,19 @@ for (
 
 
 # =============================================================================
-# OVERALL OUTPUTS
+# OVERALL OUTPUT TABLES
 # =============================================================================
 
 overall_summary <- bind_rows(
   overall_rows
 )
 
-
 write.csv(
-
   overall_summary,
-
   file.path(
     OUT_ROOT,
     "Table_Overall_Cutoff.csv"
   ),
-
   row.names = FALSE
 )
 
@@ -4740,21 +4089,47 @@ overall_stability <- bind_rows(
   overall_stability_rows
 )
 
-
 write.csv(
-
   overall_stability,
-
   file.path(
     OUT_ROOT,
     "Table_Overall_Stability.csv"
   ),
-
   row.names = FALSE
 )
 
 
+# =============================================================================
+# FINAL COMPLETION MESSAGE
+# =============================================================================
+
 message(
-  "Done. Outputs written to: ",
+  "============================================================"
+)
+
+message(
+  "Analysis complete."
+)
+
+message(
+  "Outputs written to: ",
   OUT_ROOT
+)
+
+message(
+  "No fixed 5,000-feature reference was used."
+)
+
+message(
+  "Cutoffs were selected using variance geometry and bootstrap ",
+  "reproducibility before NB2-related corroboration."
+)
+
+message(
+  "Tracks failing all prespecified stability criteria were retained ",
+  "as UNSTABLE rather than being assigned a forced cutoff."
+)
+
+message(
+  "============================================================"
 )
