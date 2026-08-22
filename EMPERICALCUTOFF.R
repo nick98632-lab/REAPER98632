@@ -133,6 +133,10 @@ options(stringsAsFactors = FALSE)
 #
 #        alpha_hat = max((var_raw - mu_raw) / mu_raw^2, 0).
 #
+#    These NB2 / NB2-NB1 / alpha*mu quantities are descriptive moment-based
+#    corroboration metrics. They are not formal NB1-versus-NB2 likelihood
+#    tests and they are not used to select any boundary.
+#
 #
 # OUTPUTS
 # -------
@@ -144,14 +148,20 @@ options(stringsAsFactors = FALSE)
 #
 # Figure files:
 #   Figure_Overall_Divergence.png
-#   Figure_New_RT0_ZT6.png
-#   Figure_New_RT2_ZT8.png
-#   Figure_New_RT4_ZT10.png
-#   Figure_New_RT8_ZT14.png
-#   Figure_Original_RT0_ZT6.png
-#   Figure_Original_RT2_ZT8.png
-#   Figure_Original_RT4_ZT10.png
-#   Figure_Original_RT8_ZT14.png
+#       Overall mathematical explanation: raw-count variance geometry,
+#       cumulative PC1-NB divergence, shared c1/c2, Anchor/Terminal, and
+#       the 5,000-feature manuscript reference.
+#
+#   Figure_New_<TIMEPOINT>.png
+#       Time-point-specific raw-count variance, cumulative divergence, and
+#       clearly labeled post-boundary NB scaling corroboration.
+#
+#   Figure_Original_<TIMEPOINT>.png
+#       Rebuilt original-style geometry, matched LEFT/RIGHT raw-count
+#       corroboration, and compact LEFT-versus-RIGHT summary.
+#
+# Every panel explicitly labels curve meaning, boundary meaning, variance
+# source, region shading, and the 5,000-feature cutoff as REFERENCE ONLY.
 #
 # Tables:
 #   Table_Key_Results.csv
@@ -824,348 +834,1277 @@ build_overall_figure_data <- function(group_results, knot_fit) {
   )
 }
 
-add_divergence_regions <- function(p, c1, c2, reference_rank, N) {
-  p +
-    annotate("rect", xmin = 1, xmax = c1, ymin = -Inf, ymax = Inf, fill = COL$remainder, alpha = 0.55) +
-    annotate("rect", xmin = c1, xmax = c2, ymin = -Inf, ymax = Inf, fill = COL$interval, alpha = 0.46) +
-    annotate("rect", xmin = c2, xmax = N, ymin = -Inf, ymax = Inf, fill = COL$leading, alpha = 0.55) +
-    annotate("rect", xmin = reference_rank, xmax = N, ymin = -Inf, ymax = Inf, fill = COL$ref, alpha = 0.055) +
-    geom_vline(xintercept = c1, color = COL$c1, linetype = "dashed", linewidth = 0.70) +
-    geom_vline(xintercept = c2, color = COL$c2, linetype = "dashed", linewidth = 0.80) +
-    geom_vline(xintercept = reference_rank, color = COL$ref, linetype = "dotdash", linewidth = 0.80)
+# =============================================================================
+# FULLY LABELED MANUSCRIPT FIGURES
+# =============================================================================
+
+# Override the earlier theme with a version that makes figure keys and
+# method captions readable in exported manuscript figures.
+theme_manuscript <- function(base_size = 11.3) {
+  theme_classic(base_size = base_size) +
+    theme(
+      plot.title = element_text(face = "bold", size = base_size + 1.2),
+      plot.subtitle = element_text(size = base_size - 0.4, margin = margin(b = 5)),
+      plot.caption = element_text(
+        size = base_size - 1.45,
+        hjust = 0,
+        color = "#333333",
+        margin = margin(t = 5)
+      ),
+      axis.title = element_text(face = "bold"),
+      axis.text = element_text(color = "#333333"),
+      legend.position = "bottom",
+      legend.title = element_text(face = "bold"),
+      legend.text = element_text(size = base_size - 1.5),
+      legend.box = "vertical",
+      panel.border = element_rect(color = "#B7B7B7", fill = NA, linewidth = 0.45),
+      panel.grid = element_blank(),
+      plot.margin = margin(7, 9, 7, 9)
+    )
 }
 
-make_overall_divergence_figure <- function(overall_df, key_table, c1, c2, reference_rank, anchor_median, terminal_median, out_file) {
+divergence_region_df <- function(c1, c2, N) {
+  data.frame(
+    xmin = c(1, c1, c2),
+    xmax = c(c1, c2, N),
+    region = factor(
+      c("Remainder", "Divergence interval", "Leading-edge regime"),
+      levels = c("Remainder", "Divergence interval", "Leading-edge regime")
+    ),
+    stringsAsFactors = FALSE
+  )
+}
+
+add_divergence_region_shading <- function(p, c1, c2, N) {
+  region_df <- divergence_region_df(c1, c2, N)
+
+  p +
+    geom_rect(
+      data = region_df,
+      aes(
+        xmin = xmin,
+        xmax = xmax,
+        ymin = -Inf,
+        ymax = Inf,
+        fill = region
+      ),
+      inherit.aes = FALSE,
+      alpha = 0.48
+    ) +
+    scale_fill_manual(
+      name = "PC1-rank region",
+      values = c(
+        "Remainder" = COL$remainder,
+        "Divergence interval" = COL$interval,
+        "Leading-edge regime" = COL$leading
+      ),
+      drop = FALSE
+    ) +
+    annotate(
+      "text",
+      x = (1 + c1) / 2,
+      y = Inf,
+      label = "REMAINDER",
+      vjust = 1.35,
+      fontface = "bold",
+      size = 2.9,
+      color = "#2F5D62"
+    ) +
+    annotate(
+      "text",
+      x = (c1 + c2) / 2,
+      y = Inf,
+      label = "DIVERGENCE INTERVAL",
+      vjust = 1.35,
+      fontface = "bold",
+      size = 2.9,
+      color = "#8A6500"
+    ) +
+    annotate(
+      "text",
+      x = (c2 + N) / 2,
+      y = Inf,
+      label = "LEADING-EDGE REGIME",
+      vjust = 1.35,
+      fontface = "bold",
+      size = 2.9,
+      color = "#166B5D"
+    )
+}
+
+add_combined_line_scales <- function(
+    p,
+    color_values,
+    linetype_values,
+    breaks,
+    title = "Curves and boundaries") {
+
+  p +
+    scale_color_manual(
+      name = title,
+      values = color_values,
+      breaks = breaks,
+      drop = FALSE
+    ) +
+    scale_linetype_manual(
+      name = title,
+      values = linetype_values,
+      breaks = breaks,
+      drop = FALSE
+    ) +
+    guides(
+      fill = guide_legend(
+        order = 1,
+        nrow = 1
+      ),
+      color = guide_legend(
+        order = 2,
+        nrow = 2,
+        byrow = TRUE,
+        override.aes = list(linewidth = 1.1)
+      ),
+      linetype = guide_legend(
+        order = 2,
+        nrow = 2,
+        byrow = TRUE,
+        override.aes = list(linewidth = 1.1)
+      )
+    )
+}
+
+
+# =============================================================================
+# OVERALL / CONSENSUS FIGURE
+# =============================================================================
+
+make_overall_divergence_figure <- function(
+    overall_df,
+    key_table,
+    c1,
+    c2,
+    reference_rank,
+    anchor_median,
+    terminal_median,
+    out_file) {
+
   N <- nrow(overall_df)
 
-  pA <- ggplot(overall_df, aes(rank, raw_variance))
-  pA <- add_divergence_regions(pA, c1, c2, reference_rank, N)
+  boundary_df <- data.frame(
+    rank = c(
+      c1,
+      c2,
+      anchor_median,
+      terminal_median,
+      reference_rank
+    ),
+    key = c(
+      "c1: shared remainder/divergence boundary",
+      "c2: shared leading-edge start",
+      "Median Anchor across 8 arms",
+      "Median Terminal across 8 arms",
+      "5,000-feature manuscript cutoff (REFERENCE ONLY)"
+    ),
+    stringsAsFactors = FALSE
+  )
+
+  boundary_colors <- c(
+    "c1: shared remainder/divergence boundary" = COL$c1,
+    "c2: shared leading-edge start" = COL$c2,
+    "Median Anchor across 8 arms" = COL$anchor,
+    "Median Terminal across 8 arms" = COL$terminal,
+    "5,000-feature manuscript cutoff (REFERENCE ONLY)" = COL$ref
+  )
+
+  boundary_types <- c(
+    "c1: shared remainder/divergence boundary" = "dashed",
+    "c2: shared leading-edge start" = "longdash",
+    "Median Anchor across 8 arms" = "solid",
+    "Median Terminal across 8 arms" = "dotted",
+    "5,000-feature manuscript cutoff (REFERENCE ONLY)" = "dotdash"
+  )
+
+  # -----------------------------------------------------------------------
+  # Panel A: raw-count empirical variance
+  # -----------------------------------------------------------------------
+
+  a_curve <- "Median smoothed within-arm RAW-COUNT empirical variance"
+
+  a_colors <- c(
+    stats::setNames(COL$empirical, a_curve),
+    boundary_colors
+  )
+
+  a_types <- c(
+    stats::setNames("solid", a_curve),
+    boundary_types
+  )
+
+  a_breaks <- c(
+    a_curve,
+    "c1: shared remainder/divergence boundary",
+    "c2: shared leading-edge start",
+    "Median Anchor across 8 arms",
+    "Median Terminal across 8 arms",
+    "5,000-feature manuscript cutoff (REFERENCE ONLY)"
+  )
+
+  pA <- ggplot()
+  pA <- add_divergence_region_shading(pA, c1, c2, N)
+
   pA <- pA +
-    geom_vline(xintercept = anchor_median, color = COL$anchor, linetype = "solid", linewidth = 0.78) +
-    geom_vline(xintercept = terminal_median, color = COL$terminal, linetype = "dotted", linewidth = 0.88) +
-    geom_line(color = COL$empirical, linewidth = 1.25, lineend = "round") +
-    labs(
-      title = "A. PC1-ranked raw-count variance geometry",
-      subtitle = paste0("c1 = ", c1, "; c2 = ", c2, "; median Anchor = ", round(anchor_median),
-                        "; median Terminal = ", round(terminal_median), "; Ref = ", reference_rank, " (reference only)"),
-      x = "PC1 rank: low |loading|  ->  high |loading|",
-      y = "Smoothed log(1 + within-arm raw-count variance)"
+    geom_vline(
+      data = boundary_df,
+      aes(
+        xintercept = rank,
+        color = key,
+        linetype = key
+      ),
+      inherit.aes = FALSE,
+      linewidth = 0.86
     ) +
-    annotate(
-      "label",
-      x = round(0.025 * N),
-      y = Inf,
-      label = "Rank from log(1+CPM) PCA; Pᵢ=λ₁vᵢ₁²\nVariance shown: within-arm raw-count empirical variance",
-      hjust = 0, vjust = 1.15, size = 2.85, fill = "white"
+    geom_line(
+      data = overall_df,
+      aes(
+        x = rank,
+        y = raw_variance,
+        color = a_curve,
+        linetype = a_curve
+      ),
+      linewidth = 1.28,
+      lineend = "round"
+    ) +
+    labs(
+      title = "A. PC1-ranked raw-count empirical variance geometry",
+      subtitle = paste0(
+        "Shared c2 = ", c2,
+        " starts the data-derived leading-edge regime; Anchor/Terminal are curvature markers within that regime."
+      ),
+      x = "PC1 rank: low |loading|  ->  high |loading|",
+      y = "Smoothed log(1 + within-arm RAW-COUNT sample variance)",
+      caption = paste0(
+        "Variance source: within-arm empirical sample variance of RAW read counts. ",
+        "The second derivative is taken only on this smoothed raw-count variance curve. ",
+        "Starting immediately after c2, Anchor is the first y''(r)=0 sign-change crossing and Terminal is the second successive crossing. ",
+        "The manuscript 5,000-feature cutoff begins at rank ", reference_rank,
+        " and is shown as REFERENCE ONLY; it is not used to estimate c1, c2, Anchor, or Terminal."
+      )
     ) +
     theme_manuscript()
+
+  pA <- add_combined_line_scales(
+    pA,
+    color_values = a_colors,
+    linetype_values = a_types,
+    breaks = a_breaks,
+    title = "Variance curve and boundaries"
+  )
+
+  # -----------------------------------------------------------------------
+  # Panel B: cumulative masses and divergence
+  # -----------------------------------------------------------------------
 
   cumulative_long <- overall_df %>%
-    select(rank, F_P, F_E) %>%
-    pivot_longer(cols = c(F_P, F_E), names_to = "curve", values_to = "value") %>%
+    select(rank, F_P, F_E, D) %>%
+    pivot_longer(
+      cols = c(F_P, F_E, D),
+      names_to = "curve",
+      values_to = "value"
+    ) %>%
     mutate(
-      curve = factor(curve, levels = c("F_P", "F_E"),
-                     labels = c("PC1 variance mass F_P(r)", "NB excess-variance mass F_E(r)"))
-    )
-
-  pB <- ggplot()
-  pB <- add_divergence_regions(pB, c1, c2, reference_rank, N)
-  pB <- pB +
-    geom_vline(xintercept = anchor_median, color = COL$anchor, linetype = "solid", linewidth = 0.78) +
-    geom_vline(xintercept = terminal_median, color = COL$terminal, linetype = "dotted", linewidth = 0.88) +
-    geom_line(data = cumulative_long, aes(rank, value, color = curve), linewidth = 1.05, lineend = "round") +
-    geom_line(data = overall_df, aes(rank, D), color = COL$divergence, linewidth = 1.12, lineend = "round") +
-    geom_hline(yintercept = 0, linetype = "dotted", linewidth = 0.4) +
-    scale_color_manual(values = c(
-      "PC1 variance mass F_P(r)" = COL$pc1,
-      "NB excess-variance mass F_E(r)" = COL$nb
-    )) +
-    labs(
-      title = "B. Shared cumulative PC1-NB divergence",
-      subtitle = "NB excess variance uses pooled within-group empirical variance of DESeq2-normalized counts",
-      x = "PC1 rank",
-      y = "Cumulative mass / D(r)",
-      color = NULL
-    ) +
-    annotate(
-      "label",
-      x = round(0.025 * N),
-      y = 0.97,
-      label = "p(r)=P(r)/ΣP; q(r)=E(r)/ΣE; D(r)=F_E(r)-F_P(r)\nE=max(V_pool-μ_g,0); V_pool = pooled normalized-count variance",
-      hjust = 0, vjust = 1, size = 2.75, fill = "white"
-    ) +
-    theme_manuscript()
-
-  p_summary <- paste0(
-    "Empirical normalized-count scaling: E = α μ^p\n",
-    "Remainder p = ", sprintf("%.2f", key_table$p_remainder_median), "\n",
-    "Model leading edge p = ", sprintf("%.2f", key_table$p_model_leading_edge_median), "\n",
-    "Paper 5,000 p = ", sprintf("%.2f", key_table$p_paper_5000_median), " (reference only)"
-  )
-
-  pC <- ggplot(overall_df, aes(rank, D))
-  pC <- add_divergence_regions(pC, c1, c2, reference_rank, N)
-  pC <- pC +
-    geom_vline(xintercept = anchor_median, color = COL$anchor, linetype = "solid", linewidth = 0.78) +
-    geom_vline(xintercept = terminal_median, color = COL$terminal, linetype = "dotted", linewidth = 0.88) +
-    geom_line(color = COL$nb, linewidth = 0.80, alpha = 0.55, lineend = "round") +
-    geom_line(aes(y = D_fit), color = COL$fit, linewidth = 1.35, lineend = "round") +
-    geom_hline(yintercept = 0, linetype = "dotted", linewidth = 0.4) +
-    labs(
-      title = "C. Shared divergence boundaries and local Anchor-Terminal geometry",
-      subtitle = "c2 defines the broad leading-edge regime; first two successive y''(r)=0 crossings after c2 define Anchor and Terminal",
-      x = "PC1 rank",
-      y = "Cumulative divergence D(r)"
-    ) +
-    annotate(
-      "label",
-      x = round(0.025 * N),
-      y = Inf,
-      label = "D_g(x)=β₀g+β₁g x+γ₁g(x-c₁)₊+γ₂g(x-c₂)₊\nAnchor = first y''(r)=0 crossing after c2; Terminal = next successive crossing",
-      hjust = 0, vjust = 1.15, size = 2.7, fill = "white"
-    ) +
-    annotate(
-      "label",
-      x = round(0.69 * N),
-      y = -Inf,
-      label = p_summary,
-      hjust = 0, vjust = -0.10, size = 2.7, fill = "white"
-    ) +
-    theme_manuscript()
-
-  save_panels(list(pA, pB, pC), out_file, height_in = 11.6)
-}
-
-make_new_timepoint_figure <- function(comparison_name, mapping, group_results, timepoint_table, c1, c2, reference_rank, out_file) {
-  control_group <- unname(mapping[["control"]])
-  treatment_group <- unname(mapping[["treatment"]])
-
-  control <- group_results[[control_group]]$data %>%
-    mutate(arm = paste0("Control (", control_group, ")"))
-  treatment <- group_results[[treatment_group]]$data %>%
-    mutate(arm = paste0("Treatment (", treatment_group, ")"))
-
-  plot_df <- bind_rows(control, treatment)
-  N <- nrow(control)
-
-  arm_colors <- stats::setNames(
-    c(COL$control, COL$treatment),
-    c(paste0("Control (", control_group, ")"), paste0("Treatment (", treatment_group, ")"))
-  )
-
-  term_rows <- timepoint_table %>%
-    filter(comparison == comparison_name) %>%
-    mutate(
-      arm_label = ifelse(
-        arm == "control",
-        paste0("Control (", group, ")"),
-        paste0("Treatment (", group, ")")
+      curve = factor(
+        curve,
+        levels = c("F_P", "F_E", "D"),
+        labels = c(
+          "F_P(r): cumulative PC1 variance mass",
+          "F_E(r): cumulative NB excess-variance mass",
+          "D(r)=F_E(r)-F_P(r): cumulative divergence"
+        )
       )
     )
 
-  cutoff_df <- bind_rows(
-    data.frame(arm = term_rows$arm_label, event = "Anchor", rank = term_rows$anchor, stringsAsFactors = FALSE),
-    data.frame(arm = term_rows$arm_label, event = "Terminal", rank = term_rows$terminal, stringsAsFactors = FALSE)
+  b_curve_colors <- c(
+    "F_P(r): cumulative PC1 variance mass" = COL$pc1,
+    "F_E(r): cumulative NB excess-variance mass" = COL$nb,
+    "D(r)=F_E(r)-F_P(r): cumulative divergence" = COL$divergence
   )
 
-  pA <- ggplot(plot_df, aes(rank, display_log1p_raw_empirical_variance, color = arm))
-  pA <- add_divergence_regions(pA, c1, c2, reference_rank, N)
+  b_curve_types <- c(
+    "F_P(r): cumulative PC1 variance mass" = "solid",
+    "F_E(r): cumulative NB excess-variance mass" = "solid",
+    "D(r)=F_E(r)-F_P(r): cumulative divergence" = "solid"
+  )
+
+  b_colors <- c(
+    b_curve_colors,
+    boundary_colors
+  )
+
+  b_types <- c(
+    b_curve_types,
+    boundary_types
+  )
+
+  b_breaks <- c(
+    names(b_curve_colors),
+    "c1: shared remainder/divergence boundary",
+    "c2: shared leading-edge start",
+    "Median Anchor across 8 arms",
+    "Median Terminal across 8 arms",
+    "5,000-feature manuscript cutoff (REFERENCE ONLY)"
+  )
+
+  pB <- ggplot()
+  pB <- add_divergence_region_shading(pB, c1, c2, N)
+
+  pB <- pB +
+    geom_vline(
+      data = boundary_df,
+      aes(
+        xintercept = rank,
+        color = key,
+        linetype = key
+      ),
+      inherit.aes = FALSE,
+      linewidth = 0.86
+    ) +
+    geom_line(
+      data = cumulative_long,
+      aes(
+        x = rank,
+        y = value,
+        color = curve,
+        linetype = curve
+      ),
+      linewidth = 1.07,
+      lineend = "round"
+    ) +
+    geom_hline(
+      yintercept = 0,
+      color = "#555555",
+      linetype = "dotted",
+      linewidth = 0.40
+    ) +
+    labs(
+      title = "B. Cumulative PC1-NB variance-mass divergence",
+      subtitle = "Purpose: estimate shared c1/c2 by comparing where PC1 variance and normalized-count excess variance accumulate across rank.",
+      x = "PC1 rank",
+      y = "Cumulative variance mass / divergence",
+      caption = paste0(
+        "PC1 variance: P_i=lambda_1*v_i1^2, normalized as p(r)=P(r)/sum(P), with F_P(r)=sum_{j<=r}p(j). ",
+        "NB excess variance: E=max(V_pool-mu_g,0), where V_pool is pooled within-group empirical variance of DESeq2 size-factor-normalized counts; ",
+        "q(r)=E(r)/sum(E), F_E(r)=sum_{j<=r}q(j), and D(r)=F_E(r)-F_P(r). ",
+        "The shared two-knot model fitted to D(r) across all 8 arms estimates c1 and c2. ",
+        "The 5,000-feature reference does not enter this fit."
+      )
+    ) +
+    theme_manuscript()
+
+  pB <- add_combined_line_scales(
+    pB,
+    color_values = b_colors,
+    linetype_values = b_types,
+    breaks = b_breaks,
+    title = "Cumulative curves and boundaries"
+  )
+
+  # -----------------------------------------------------------------------
+  # Panel C: shared fit + explicit role of NB scaling
+  # -----------------------------------------------------------------------
+
+  c_obs <- "Observed median D(r) across 8 arms"
+  c_fit <- "Shared two-knot fitted D(r)"
+
+  c_colors <- c(
+    stats::setNames(COL$nb, c_obs),
+    stats::setNames(COL$fit, c_fit),
+    boundary_colors
+  )
+
+  c_types <- c(
+    stats::setNames("solid", c_obs),
+    stats::setNames("solid", c_fit),
+    boundary_types
+  )
+
+  c_breaks <- c(
+    c_obs,
+    c_fit,
+    "c1: shared remainder/divergence boundary",
+    "c2: shared leading-edge start",
+    "Median Anchor across 8 arms",
+    "Median Terminal across 8 arms",
+    "5,000-feature manuscript cutoff (REFERENCE ONLY)"
+  )
+
+  p_summary <- paste0(
+    "POST-BOUNDARY CORROBORATION ONLY\n",
+    "E = alpha * mu^p (pooled normalized-count variance)\n",
+    "Remainder median p = ", sprintf("%.2f", key_table$p_remainder_median), "\n",
+    "Data-derived leading-edge median p = ", sprintf("%.2f", key_table$p_model_leading_edge_median), "\n",
+    "Paper 5,000 median p = ", sprintf("%.2f", key_table$p_paper_5000_median), " (reference subset)\n",
+    "p closer to 1 = more NB1-like; p closer to 2 = more NB2-like"
+  )
+
+  pC <- ggplot()
+  pC <- add_divergence_region_shading(pC, c1, c2, N)
+
+  pC <- pC +
+    geom_vline(
+      data = boundary_df,
+      aes(
+        xintercept = rank,
+        color = key,
+        linetype = key
+      ),
+      inherit.aes = FALSE,
+      linewidth = 0.86
+    ) +
+    geom_line(
+      data = overall_df,
+      aes(
+        x = rank,
+        y = D,
+        color = c_obs,
+        linetype = c_obs
+      ),
+      linewidth = 0.88,
+      alpha = 0.60,
+      lineend = "round"
+    ) +
+    geom_line(
+      data = overall_df,
+      aes(
+        x = rank,
+        y = D_fit,
+        color = c_fit,
+        linetype = c_fit
+      ),
+      linewidth = 1.38,
+      lineend = "round"
+    ) +
+    geom_hline(
+      yintercept = 0,
+      color = "#555555",
+      linetype = "dotted",
+      linewidth = 0.40
+    ) +
+    annotate(
+      "label",
+      x = round(0.59 * N),
+      y = -Inf,
+      label = p_summary,
+      hjust = 0,
+      vjust = -0.10,
+      size = 2.55,
+      fill = "white"
+    ) +
+    labs(
+      title = "C. Shared two-knot divergence model and post-boundary NB scaling corroboration",
+      subtitle = "c1/c2 come from cumulative divergence; Anchor/Terminal come from raw-count curvature after c2; NB scaling is descriptive corroboration afterward.",
+      x = "PC1 rank",
+      y = "Cumulative divergence D(r)",
+      caption = paste0(
+        "Shared model: D_g(x)=beta_0g+beta_1g*x+gamma_1g*(x-c1)_+ + gamma_2g*(x-c2)_+. ",
+        "The NB exponent p is NOT used to choose any boundary. It characterizes mean-variance scaling only after regions are fixed. ",
+        "Likewise, the paper 5,000-feature cutoff is a reference subset only."
+      )
+    ) +
+    theme_manuscript()
+
+  pC <- add_combined_line_scales(
+    pC,
+    color_values = c_colors,
+    linetype_values = c_types,
+    breaks = c_breaks,
+    title = "Model curves and boundaries"
+  )
+
+  save_panels(
+    list(pA, pB, pC),
+    out_file,
+    height_in = 13.3
+  )
+}
+
+
+# =============================================================================
+# NEW TIME-POINT FIGURES
+# =============================================================================
+
+make_new_timepoint_figure <- function(
+    comparison_name,
+    mapping,
+    group_results,
+    timepoint_table,
+    c1,
+    c2,
+    reference_rank,
+    out_file) {
+
+  control_group <- unname(mapping[["control"]])
+  treatment_group <- unname(mapping[["treatment"]])
+
+  control_label <- paste0("Control (", control_group, ")")
+  treatment_label <- paste0("Treatment (", treatment_group, ")")
+
+  control <- group_results[[control_group]]$data
+  treatment <- group_results[[treatment_group]]$data
+  N <- nrow(control)
+
+  term_rows <- timepoint_table %>%
+    filter(comparison == comparison_name)
+
+  c_anchor <- term_rows$anchor[term_rows$group == control_group]
+  c_terminal <- term_rows$terminal[term_rows$group == control_group]
+  t_anchor <- term_rows$anchor[term_rows$group == treatment_group]
+  t_terminal <- term_rows$terminal[term_rows$group == treatment_group]
+
+  c_anchor_key <- paste0(control_group, " Anchor: first y''=0 after c2")
+  c_terminal_key <- paste0(control_group, " Terminal: second successive y''=0")
+  t_anchor_key <- paste0(treatment_group, " Anchor: first y''=0 after c2")
+  t_terminal_key <- paste0(treatment_group, " Terminal: second successive y''=0")
+
+  boundary_df <- data.frame(
+    rank = c(
+      c1,
+      c2,
+      c_anchor,
+      c_terminal,
+      t_anchor,
+      t_terminal,
+      reference_rank
+    ),
+    key = c(
+      "c1: shared remainder/divergence boundary",
+      "c2: shared leading-edge start",
+      c_anchor_key,
+      c_terminal_key,
+      t_anchor_key,
+      t_terminal_key,
+      "5,000-feature manuscript cutoff (REFERENCE ONLY)"
+    ),
+    stringsAsFactors = FALSE
+  )
+
+  boundary_colors <- c(
+    "c1: shared remainder/divergence boundary" = COL$c1,
+    "c2: shared leading-edge start" = COL$c2,
+    stats::setNames(COL$control, c_anchor_key),
+    stats::setNames(COL$control, c_terminal_key),
+    stats::setNames(COL$treatment, t_anchor_key),
+    stats::setNames(COL$treatment, t_terminal_key),
+    "5,000-feature manuscript cutoff (REFERENCE ONLY)" = COL$ref
+  )
+
+  boundary_types <- c(
+    "c1: shared remainder/divergence boundary" = "dashed",
+    "c2: shared leading-edge start" = "longdash",
+    stats::setNames("solid", c_anchor_key),
+    stats::setNames("dotted", c_terminal_key),
+    stats::setNames("solid", t_anchor_key),
+    stats::setNames("dotted", t_terminal_key),
+    "5,000-feature manuscript cutoff (REFERENCE ONLY)" = "dotdash"
+  )
+
+  # -----------------------------------------------------------------------
+  # Panel A
+  # -----------------------------------------------------------------------
+
+  control_curve <- paste0(control_label, ": smoothed RAW-count variance")
+  treatment_curve <- paste0(treatment_label, ": smoothed RAW-count variance")
+
+  a_colors <- c(
+    stats::setNames(COL$control, control_curve),
+    stats::setNames(COL$treatment, treatment_curve),
+    boundary_colors
+  )
+
+  a_types <- c(
+    stats::setNames("solid", control_curve),
+    stats::setNames("solid", treatment_curve),
+    boundary_types
+  )
+
+  a_breaks <- c(
+    control_curve,
+    treatment_curve,
+    "c1: shared remainder/divergence boundary",
+    "c2: shared leading-edge start",
+    c_anchor_key,
+    c_terminal_key,
+    t_anchor_key,
+    t_terminal_key,
+    "5,000-feature manuscript cutoff (REFERENCE ONLY)"
+  )
+
+  pA <- ggplot()
+  pA <- add_divergence_region_shading(pA, c1, c2, N)
+
   pA <- pA +
-    geom_vline(data = cutoff_df %>% filter(event == "Anchor"),
-               aes(xintercept = rank, color = arm), linetype = "solid", linewidth = 0.72, alpha = 0.86, show.legend = FALSE) +
-    geom_vline(data = cutoff_df %>% filter(event == "Terminal"),
-               aes(xintercept = rank, color = arm), linetype = "dotted", linewidth = 0.90, show.legend = FALSE) +
-    geom_line(linewidth = 1.15, lineend = "round") +
-    scale_color_manual(values = arm_colors) +
+    geom_vline(
+      data = boundary_df,
+      aes(
+        xintercept = rank,
+        color = key,
+        linetype = key
+      ),
+      inherit.aes = FALSE,
+      linewidth = 0.82
+    ) +
+    geom_line(
+      data = control,
+      aes(
+        x = rank,
+        y = display_log1p_raw_empirical_variance,
+        color = control_curve,
+        linetype = control_curve
+      ),
+      linewidth = 1.18,
+      lineend = "round"
+    ) +
+    geom_line(
+      data = treatment,
+      aes(
+        x = rank,
+        y = display_log1p_raw_empirical_variance,
+        color = treatment_curve,
+        linetype = treatment_curve
+      ),
+      linewidth = 1.18,
+      lineend = "round"
+    ) +
     labs(
       title = paste0("A. ", comparison_name, ": raw-count variance geometry"),
-      subtitle = paste0("c2 = ", c2,
-                        "; ", control_group, " A/T = ", term_rows$anchor[term_rows$group == control_group], "/", term_rows$terminal[term_rows$group == control_group],
-                        "; ", treatment_group, " A/T = ", term_rows$anchor[term_rows$group == treatment_group], "/", term_rows$terminal[term_rows$group == treatment_group],
-                        "; Ref = ", reference_rank, " (reference only)"),
+      subtitle = paste0(
+        "Shared c2 = ", c2,
+        "; ", control_group, " Anchor/Terminal = ", c_anchor, "/", c_terminal,
+        "; ", treatment_group, " Anchor/Terminal = ", t_anchor, "/", t_terminal, "."
+      ),
       x = "PC1 rank: low |loading|  ->  high |loading|",
-      y = "Smoothed log(1 + within-arm raw-count variance)",
-      color = NULL
-    ) +
-    annotate(
-      "label",
-      x = round(0.025 * N),
-      y = Inf,
-      label = "Second derivative is taken only on the smoothed raw-count variance curve\ny(r)=log(1+s²_raw(r)); Anchor/Terminal from first two successive y''=0 crossings after c2",
-      hjust = 0, vjust = 1.15, size = 2.75, fill = "white"
+      y = "Smoothed log(1 + within-arm RAW-COUNT sample variance)",
+      caption = paste0(
+        "Method: y(r)=smooth{log[1+s_raw^2(r)]}. The second derivative y''(r) is calculated from this RAW-count variance spline only. ",
+        "After shared c2, Anchor is the first sign-change zero crossing of y''(r); Terminal is the second successive crossing. ",
+        "The 5,000-feature manuscript cutoff at rank ", reference_rank, " is REFERENCE ONLY."
+      )
     ) +
     theme_manuscript()
 
-  pB <- ggplot(plot_df, aes(rank, display_D, color = arm))
-  pB <- add_divergence_regions(pB, c1, c2, reference_rank, N)
+  pA <- add_combined_line_scales(
+    pA,
+    color_values = a_colors,
+    linetype_values = a_types,
+    breaks = a_breaks,
+    title = "Arm curves and boundaries"
+  )
+
+  # -----------------------------------------------------------------------
+  # Panel B
+  # -----------------------------------------------------------------------
+
+  control_div <- paste0(control_label, ": D(r)=F_E-F_P")
+  treatment_div <- paste0(treatment_label, ": D(r)=F_E-F_P")
+
+  b_colors <- c(
+    stats::setNames(COL$control, control_div),
+    stats::setNames(COL$treatment, treatment_div),
+    boundary_colors
+  )
+
+  b_types <- c(
+    stats::setNames("solid", control_div),
+    stats::setNames("solid", treatment_div),
+    boundary_types
+  )
+
+  b_breaks <- c(
+    control_div,
+    treatment_div,
+    "c1: shared remainder/divergence boundary",
+    "c2: shared leading-edge start",
+    c_anchor_key,
+    c_terminal_key,
+    t_anchor_key,
+    t_terminal_key,
+    "5,000-feature manuscript cutoff (REFERENCE ONLY)"
+  )
+
+  pB <- ggplot()
+  pB <- add_divergence_region_shading(pB, c1, c2, N)
+
   pB <- pB +
-    geom_vline(data = cutoff_df %>% filter(event == "Anchor"),
-               aes(xintercept = rank, color = arm), linetype = "solid", linewidth = 0.72, alpha = 0.86, show.legend = FALSE) +
-    geom_vline(data = cutoff_df %>% filter(event == "Terminal"),
-               aes(xintercept = rank, color = arm), linetype = "dotted", linewidth = 0.90, show.legend = FALSE) +
-    geom_hline(yintercept = 0, linetype = "dotted", linewidth = 0.4) +
-    geom_line(linewidth = 1.18, lineend = "round") +
-    scale_color_manual(values = arm_colors) +
+    geom_vline(
+      data = boundary_df,
+      aes(
+        xintercept = rank,
+        color = key,
+        linetype = key
+      ),
+      inherit.aes = FALSE,
+      linewidth = 0.82
+    ) +
+    geom_hline(
+      yintercept = 0,
+      color = "#555555",
+      linetype = "dotted",
+      linewidth = 0.40
+    ) +
+    geom_line(
+      data = control,
+      aes(
+        x = rank,
+        y = display_D,
+        color = control_div,
+        linetype = control_div
+      ),
+      linewidth = 1.18,
+      lineend = "round"
+    ) +
+    geom_line(
+      data = treatment,
+      aes(
+        x = rank,
+        y = display_D,
+        color = treatment_div,
+        linetype = treatment_div
+      ),
+      linewidth = 1.18,
+      lineend = "round"
+    ) +
     labs(
-      title = paste0("B. ", comparison_name, ": cumulative PC1-NB divergence"),
-      subtitle = "c1/c2 are estimated from normalized-count excess variance versus PC1 variance mass",
+      title = paste0("B. ", comparison_name, ": cumulative PC1-NB variance-mass divergence"),
+      subtitle = "Purpose: visualize the variance-structure divergence used to estimate the shared c1/c2 regime boundaries.",
       x = "PC1 rank",
       y = "D(r) = F_E(r) - F_P(r)",
-      color = NULL
-    ) +
-    annotate(
-      "label",
-      x = round(0.025 * N),
-      y = Inf,
-      label = "PC1 variance: Pᵢ=λ₁vᵢ₁²\nNB excess variance: E=max(V_pool-μ_g,0), V_pool from DESeq2-normalized counts",
-      hjust = 0, vjust = 1.15, size = 2.8, fill = "white"
+      caption = paste0(
+        "F_P(r) is cumulative PC1 variance mass. F_E(r) is cumulative excess-variance mass derived from pooled within-group empirical variance ",
+        "of DESeq2 size-factor-normalized counts. Shared c1/c2 are estimated jointly across all 8 arms from D(r). ",
+        "Arm-specific Anchor/Terminal lines are overlaid afterward from the separate raw-count second-derivative analysis. ",
+        "The 5,000-feature cutoff remains reference only."
+      )
     ) +
     theme_manuscript()
 
+  pB <- add_combined_line_scales(
+    pB,
+    color_values = b_colors,
+    linetype_values = b_types,
+    breaks = b_breaks,
+    title = "Divergence curves and boundaries"
+  )
+
+  # -----------------------------------------------------------------------
+  # Panel C: explicitly described as corroboration, not boundary selection
+  # -----------------------------------------------------------------------
+
   p_rows <- term_rows %>%
-    select(arm_label, p_remainder, p_model_leading_edge, p_paper_5000) %>%
+    mutate(
+      arm_label = ifelse(
+        arm == "control",
+        control_label,
+        treatment_label
+      )
+    ) %>%
+    select(
+      arm_label,
+      p_remainder,
+      p_model_leading_edge,
+      p_paper_5000
+    ) %>%
     pivot_longer(
-      cols = c(p_remainder, p_model_leading_edge, p_paper_5000),
+      cols = c(
+        p_remainder,
+        p_model_leading_edge,
+        p_paper_5000
+      ),
       names_to = "region",
       values_to = "p"
     ) %>%
     mutate(
       region = factor(
         region,
-        levels = c("p_remainder", "p_model_leading_edge", "p_paper_5000"),
-        labels = c("Remainder", "Model leading edge", "Paper 5,000 (reference)")
+        levels = c(
+          "p_remainder",
+          "p_model_leading_edge",
+          "p_paper_5000"
+        ),
+        labels = c(
+          "Remainder (rank < c1)",
+          "Data-derived leading edge (rank > c2)",
+          "Paper terminal 5,000 (REFERENCE ONLY)"
+        )
       )
     )
 
-  pC <- ggplot(p_rows, aes(x = p, y = region, color = arm_label)) +
-    geom_vline(xintercept = 1, color = "#777777", linetype = "dashed", linewidth = 0.65) +
-    geom_vline(xintercept = 2, color = "#777777", linetype = "dotted", linewidth = 0.75) +
-    geom_point(size = 3.3) +
-    scale_color_manual(values = arm_colors) +
+  pC <- ggplot(
+    p_rows,
+    aes(
+      x = p,
+      y = region,
+      color = arm_label
+    )
+  ) +
+    geom_vline(
+      xintercept = 1,
+      color = "#555555",
+      linetype = "dashed",
+      linewidth = 0.68
+    ) +
+    geom_vline(
+      xintercept = 2,
+      color = "#555555",
+      linetype = "dotted",
+      linewidth = 0.78
+    ) +
+    geom_point(size = 3.5) +
+    scale_color_manual(
+      name = "Experimental arm",
+      values = c(
+        stats::setNames(COL$control, control_label),
+        stats::setNames(COL$treatment, treatment_label)
+      )
+    ) +
     labs(
-      title = paste0("C. ", comparison_name, ": normalized-count NB scaling"),
-      subtitle = "E = α μ^p using pooled within-group empirical variance of DESeq2-normalized counts",
-      x = "Empirical exponent p   (1 = NB1-like; 2 = NB2-like)",
-      y = NULL,
-      color = NULL
+      title = paste0("C. ", comparison_name, ": post-boundary NB mean-variance scaling"),
+      subtitle = "CORROBORATION ONLY — this panel does NOT determine c1, c2, Anchor, or Terminal.",
+      x = "Empirical exponent p in E = alpha * mu^p",
+      y = "Region being characterized",
+      caption = paste0(
+        "Variance source for E: pooled within-group empirical variance of DESeq2-normalized counts. ",
+        "Interpretation: p closer to 1 is more NB1-like; p closer to 2 is more NB2-like. ",
+        "This panel asks whether the independently defined regions differ in mean-variance scaling after all boundaries are fixed."
+      )
     ) +
     theme_manuscript()
 
-  save_panels(list(pA, pB, pC), out_file, height_in = 10.9)
+  save_panels(
+    list(pA, pB, pC),
+    out_file,
+    height_in = 13.3
+  )
 }
 
-make_original_arm_panels <- function(df, arm_label, c2, reference_rank, anchor, terminal) {
+
+# =============================================================================
+# ORIGINAL-STYLE FIGURES
+# =============================================================================
+
+add_original_region_shading <- function(
+    p,
+    left_min,
+    left_max,
+    anchor,
+    terminal,
+    N) {
+
+  region_df <- data.frame(
+    xmin = c(left_min, anchor, anchor),
+    xmax = c(left_max, N, terminal),
+    region = factor(
+      c(
+        "Matched LEFT comparator",
+        "RIGHT: Anchor to end",
+        "Anchor-Terminal curvature interval"
+      ),
+      levels = c(
+        "Matched LEFT comparator",
+        "RIGHT: Anchor to end",
+        "Anchor-Terminal curvature interval"
+      )
+    ),
+    stringsAsFactors = FALSE
+  )
+
+  p +
+    geom_rect(
+      data = region_df,
+      aes(
+        xmin = xmin,
+        xmax = xmax,
+        ymin = -Inf,
+        ymax = Inf,
+        fill = region
+      ),
+      inherit.aes = FALSE,
+      alpha = 0.50
+    ) +
+    scale_fill_manual(
+      name = "Original LEFT/RIGHT geometry",
+      values = c(
+        "Matched LEFT comparator" = COL$left_fill,
+        "RIGHT: Anchor to end" = COL$right_fill,
+        "Anchor-Terminal curvature interval" = COL$interval_fill
+      ),
+      drop = FALSE
+    ) +
+    annotate(
+      "text",
+      x = (left_min + left_max) / 2,
+      y = Inf,
+      label = "MATCHED LEFT",
+      vjust = 1.35,
+      fontface = "bold",
+      size = 2.9,
+      color = "#315A7D"
+    ) +
+    annotate(
+      "text",
+      x = (anchor + N) / 2,
+      y = Inf,
+      label = "RIGHT = ANCHOR TO END",
+      vjust = 1.35,
+      fontface = "bold",
+      size = 2.9,
+      color = "#3B6E36"
+    )
+}
+
+make_original_arm_panels <- function(
+    df,
+    arm_label,
+    c2,
+    reference_rank,
+    anchor,
+    terminal) {
+
   N <- nrow(df)
   idx <- get_left_right_indices(N, anchor)
+
   left_idx <- idx$left_idx
   right_idx <- idx$right_idx
   region_summary <- summarize_original_regions(df, anchor)
 
   left_min <- min(left_idx)
   left_max <- max(left_idx)
-  right_min <- min(right_idx)
-  right_max <- max(right_idx)
+  right_n <- length(right_idx)
 
-  box1 <- paste0(
-    arm_label, "\n",
-    "c2 = ", c2,
-    " | Anchor = ", anchor,
-    " | Ref = ", reference_rank, " (reference only)",
-    " | Terminal = ", terminal, "\n",
-    "LEFT n = ", region_summary$left_n,
-    " | RIGHT n = ", region_summary$right_n
-  )
-
-  box2 <- paste0(
-    "LEFT NB2 = ", round(region_summary$left_NB2, 3), "\n",
-    "RIGHT NB2 = ", round(region_summary$right_NB2, 3), "\n",
-    "LEFT NB2-NB1 = ", round(region_summary$left_gap, 3), "\n",
-    "RIGHT NB2-NB1 = ", round(region_summary$right_gap, 3), "\n",
-    "LEFT alpha*mu = ", round(region_summary$left_alpha, 3), "\n",
-    "RIGHT alpha*mu = ", round(region_summary$right_alpha, 3)
-  )
-
-  p1 <- ggplot(df, aes(rank, display_log1p_raw_empirical_variance)) +
-    annotate("rect", xmin = left_min, xmax = left_max, ymin = -Inf, ymax = Inf, fill = COL$left_fill, alpha = 0.70) +
-    annotate("rect", xmin = right_min, xmax = right_max, ymin = -Inf, ymax = Inf, fill = COL$right_fill, alpha = 0.70) +
-    annotate("rect", xmin = anchor, xmax = terminal, ymin = -Inf, ymax = Inf, fill = COL$interval_fill, alpha = 0.18) +
-    geom_vline(xintercept = c2, color = COL$c2, linetype = "dashed", linewidth = 0.70) +
-    geom_vline(xintercept = anchor, color = COL$anchor, linetype = "solid", linewidth = 0.82) +
-    geom_vline(xintercept = reference_rank, color = COL$ref, linetype = "dotdash", linewidth = 0.78) +
-    geom_vline(xintercept = terminal, color = COL$terminal, linetype = "dotted", linewidth = 0.90) +
-    geom_line(color = COL$empirical, linewidth = 1.02, lineend = "round") +
-    labs(
-      title = paste0(arm_label, ": geometry"),
-      subtitle = "Raw-count variance curve; y''(r)=0 crossings after c2 define Anchor and Terminal",
-      x = "PC1 rank",
-      y = "Smoothed log(1 + raw-count variance)"
-    ) +
-    annotate(
-      "label",
-      x = round(0.03 * N), y = Inf,
-      label = box1,
-      hjust = 0, vjust = 1.15, size = 2.65, fill = "white"
-    ) +
-    theme_manuscript()
-
-  nb_long <- df %>%
-    select(rank, NB2, NB2_NB1, alpha_mu) %>%
-    pivot_longer(cols = c(NB2, NB2_NB1, alpha_mu), names_to = "metric", values_to = "value") %>%
-    mutate(
-      metric = factor(metric, levels = c("NB2", "NB2_NB1", "alpha_mu"),
-                      labels = c("NB2", "NB2-NB1", "alpha*mu"))
-    )
-
-  p2 <- ggplot() +
-    annotate("rect", xmin = left_min, xmax = left_max, ymin = -Inf, ymax = Inf, fill = COL$left_fill, alpha = 0.70) +
-    annotate("rect", xmin = right_min, xmax = right_max, ymin = -Inf, ymax = Inf, fill = COL$right_fill, alpha = 0.70) +
-    annotate("rect", xmin = anchor, xmax = terminal, ymin = -Inf, ymax = Inf, fill = COL$interval_fill, alpha = 0.18) +
-    geom_vline(xintercept = c2, color = COL$c2, linetype = "dashed", linewidth = 0.70) +
-    geom_vline(xintercept = anchor, color = COL$anchor, linetype = "solid", linewidth = 0.82) +
-    geom_vline(xintercept = reference_rank, color = COL$ref, linetype = "dotdash", linewidth = 0.78) +
-    geom_vline(xintercept = terminal, color = COL$terminal, linetype = "dotted", linewidth = 0.90) +
-    geom_line(data = nb_long, aes(rank, value, color = metric), linewidth = 0.95) +
-    scale_color_manual(values = c("NB2" = COL$nb2, "NB2-NB1" = COL$nbgap, "alpha*mu" = COL$alphamu)) +
-    labs(
-      title = paste0(arm_label, ": corroboration"),
-      subtitle = "RIGHT = [Anchor, N]; LEFT = matched equal-sized block immediately to the left",
-      x = "PC1 rank",
-      y = "Raw-count NB-related signal",
-      color = NULL
-    ) +
-    annotate(
-      "label",
-      x = round(0.03 * N), y = Inf,
-      label = box2,
-      hjust = 0, vjust = 1.15, size = 2.65, fill = "white"
-    ) +
-    theme_manuscript()
-
-  summary_df <- data.frame(
-    metric = factor(c("NB2", "NB2-NB1", "alpha*mu"), levels = rev(c("NB2", "NB2-NB1", "alpha*mu"))),
-    LEFT = c(region_summary$left_NB2, region_summary$left_gap, region_summary$left_alpha),
-    RIGHT = c(region_summary$right_NB2, region_summary$right_gap, region_summary$right_alpha),
+  boundary_df <- data.frame(
+    rank = c(
+      c2,
+      anchor,
+      terminal,
+      reference_rank
+    ),
+    key = c(
+      "c2: data-derived leading-edge start",
+      "Anchor: first raw-variance y''=0 crossing after c2",
+      "Terminal: second successive raw-variance y''=0 crossing",
+      "5,000-feature manuscript cutoff (REFERENCE ONLY)"
+    ),
     stringsAsFactors = FALSE
   )
 
-  p3 <- ggplot(summary_df, aes(y = metric)) +
-    geom_segment(aes(x = LEFT, xend = RIGHT, yend = metric), color = "#7A7A7A", linewidth = 0.80) +
-    geom_point(aes(x = LEFT, color = "LEFT"), size = 3.3) +
-    geom_point(aes(x = RIGHT, color = "RIGHT"), size = 3.3) +
-    scale_color_manual(values = c("LEFT" = "#5B8FD1", "RIGHT" = "#43A047")) +
+  boundary_colors <- c(
+    "c2: data-derived leading-edge start" = COL$c2,
+    "Anchor: first raw-variance y''=0 crossing after c2" = COL$anchor,
+    "Terminal: second successive raw-variance y''=0 crossing" = COL$terminal,
+    "5,000-feature manuscript cutoff (REFERENCE ONLY)" = COL$ref
+  )
+
+  boundary_types <- c(
+    "c2: data-derived leading-edge start" = "longdash",
+    "Anchor: first raw-variance y''=0 crossing after c2" = "solid",
+    "Terminal: second successive raw-variance y''=0 crossing" = "dotted",
+    "5,000-feature manuscript cutoff (REFERENCE ONLY)" = "dotdash"
+  )
+
+  # -----------------------------------------------------------------------
+  # Original panel 1: raw-count geometry
+  # -----------------------------------------------------------------------
+
+  raw_curve <- "Smoothed within-arm RAW-COUNT empirical variance"
+
+  p1_colors <- c(
+    stats::setNames(COL$empirical, raw_curve),
+    boundary_colors
+  )
+
+  p1_types <- c(
+    stats::setNames("solid", raw_curve),
+    boundary_types
+  )
+
+  p1_breaks <- c(
+    raw_curve,
+    "c2: data-derived leading-edge start",
+    "Anchor: first raw-variance y''=0 crossing after c2",
+    "Terminal: second successive raw-variance y''=0 crossing",
+    "5,000-feature manuscript cutoff (REFERENCE ONLY)"
+  )
+
+  p1 <- ggplot()
+  p1 <- add_original_region_shading(
+    p1,
+    left_min = left_min,
+    left_max = left_max,
+    anchor = anchor,
+    terminal = terminal,
+    N = N
+  )
+
+  p1 <- p1 +
+    geom_vline(
+      data = boundary_df,
+      aes(
+        xintercept = rank,
+        color = key,
+        linetype = key
+      ),
+      inherit.aes = FALSE,
+      linewidth = 0.86
+    ) +
+    geom_line(
+      data = df,
+      aes(
+        x = rank,
+        y = display_log1p_raw_empirical_variance,
+        color = raw_curve,
+        linetype = raw_curve
+      ),
+      linewidth = 1.06,
+      lineend = "round"
+    ) +
     labs(
-      title = paste0(arm_label, ": summary"),
-      subtitle = "Original-style LEFT versus RIGHT corroboration",
-      x = "Median",
-      y = NULL,
-      color = NULL
+      title = paste0(arm_label, ": original-style raw-count variance geometry"),
+      subtitle = paste0(
+        "c2 = ", c2,
+        "; Anchor = ", anchor,
+        "; Terminal = ", terminal,
+        "; RIGHT n = ", right_n,
+        "; manuscript 5,000 reference = ", reference_rank, "."
+      ),
+      x = "PC1 rank: low |loading|  ->  high |loading|",
+      y = "Smoothed log(1 + within-arm RAW-COUNT sample variance)",
+      caption = paste0(
+        "The same second-derivative curve provides both markers: after c2, Anchor is the first y''(r)=0 sign-change crossing; ",
+        "Terminal is the second successive crossing. RIGHT=[Anchor,N]. LEFT is the immediately preceding equal-sized rank block. ",
+        "The 5,000-feature cutoff is REFERENCE ONLY and does not select Anchor, Terminal, LEFT, or RIGHT."
+      )
     ) +
     theme_manuscript()
 
-  list(p1, p2, p3)
+  p1 <- add_combined_line_scales(
+    p1,
+    color_values = p1_colors,
+    linetype_values = p1_types,
+    breaks = p1_breaks,
+    title = "Variance curve and boundaries"
+  )
+
+  # -----------------------------------------------------------------------
+  # Original panel 2: legacy NB-related corroboration signals
+  # -----------------------------------------------------------------------
+
+  nb_long <- df %>%
+    select(
+      rank,
+      NB2,
+      NB2_NB1,
+      alpha_mu
+    ) %>%
+    pivot_longer(
+      cols = c(
+        NB2,
+        NB2_NB1,
+        alpha_mu
+      ),
+      names_to = "metric",
+      values_to = "value"
+    ) %>%
+    mutate(
+      metric = factor(
+        metric,
+        levels = c(
+          "NB2",
+          "NB2_NB1",
+          "alpha_mu"
+        ),
+        labels = c(
+          "NB2 excess signal",
+          "NB2-NB1 contrast",
+          "alpha*mu signal"
+        )
+      )
+    )
+
+  metric_colors <- c(
+    "NB2 excess signal" = COL$nb2,
+    "NB2-NB1 contrast" = COL$nbgap,
+    "alpha*mu signal" = COL$alphamu
+  )
+
+  metric_types <- c(
+    "NB2 excess signal" = "solid",
+    "NB2-NB1 contrast" = "solid",
+    "alpha*mu signal" = "solid"
+  )
+
+  p2_colors <- c(
+    metric_colors,
+    boundary_colors
+  )
+
+  p2_types <- c(
+    metric_types,
+    boundary_types
+  )
+
+  p2_breaks <- c(
+    "NB2 excess signal",
+    "NB2-NB1 contrast",
+    "alpha*mu signal",
+    "c2: data-derived leading-edge start",
+    "Anchor: first raw-variance y''=0 crossing after c2",
+    "Terminal: second successive raw-variance y''=0 crossing",
+    "5,000-feature manuscript cutoff (REFERENCE ONLY)"
+  )
+
+  p2 <- ggplot()
+  p2 <- add_original_region_shading(
+    p2,
+    left_min = left_min,
+    left_max = left_max,
+    anchor = anchor,
+    terminal = terminal,
+    N = N
+  )
+
+  p2 <- p2 +
+    geom_vline(
+      data = boundary_df,
+      aes(
+        xintercept = rank,
+        color = key,
+        linetype = key
+      ),
+      inherit.aes = FALSE,
+      linewidth = 0.86
+    ) +
+    geom_line(
+      data = nb_long,
+      aes(
+        x = rank,
+        y = value,
+        color = metric,
+        linetype = metric
+      ),
+      linewidth = 0.92
+    ) +
+    labs(
+      title = paste0(arm_label, ": original LEFT/RIGHT NB-related corroboration"),
+      subtitle = "Purpose: describe how the independently selected RIGHT region differs from its matched LEFT comparator after boundaries are fixed.",
+      x = "PC1 rank",
+      y = "Descriptive RAW-COUNT NB-related signal",
+      caption = paste0(
+        "NB2 excess signal = log[1+max(s_raw^2-mu_raw,0)]. ",
+        "NB2-NB1 contrast = NB2 excess signal - log(1+mu_raw). ",
+        "alpha_hat=max[(s_raw^2-mu_raw)/mu_raw^2,0], and alpha*mu signal=log(1+alpha_hat*mu_raw). ",
+        "These are descriptive moment-based corroboration metrics, NOT formal NB1-versus-NB2 likelihood tests and NOT boundary-selection statistics."
+      )
+    ) +
+    theme_manuscript()
+
+  p2 <- add_combined_line_scales(
+    p2,
+    color_values = p2_colors,
+    linetype_values = p2_types,
+    breaks = p2_breaks,
+    title = "NB-related signals and boundaries"
+  )
+
+  # -----------------------------------------------------------------------
+  # Original panel 3: matched LEFT versus RIGHT summary
+  # -----------------------------------------------------------------------
+
+  summary_df <- data.frame(
+    metric = factor(
+      c(
+        "NB2 excess signal",
+        "NB2-NB1 contrast",
+        "alpha*mu signal"
+      ),
+      levels = rev(
+        c(
+          "NB2 excess signal",
+          "NB2-NB1 contrast",
+          "alpha*mu signal"
+        )
+      )
+    ),
+    LEFT = c(
+      region_summary$left_NB2,
+      region_summary$left_gap,
+      region_summary$left_alpha
+    ),
+    RIGHT = c(
+      region_summary$right_NB2,
+      region_summary$right_gap,
+      region_summary$right_alpha
+    ),
+    stringsAsFactors = FALSE
+  )
+
+  p3 <- ggplot(
+    summary_df,
+    aes(y = metric)
+  ) +
+    geom_segment(
+      aes(
+        x = LEFT,
+        xend = RIGHT,
+        yend = metric
+      ),
+      color = "#7A7A7A",
+      linewidth = 0.82
+    ) +
+    geom_point(
+      aes(
+        x = LEFT,
+        color = "Matched LEFT"
+      ),
+      size = 3.5
+    ) +
+    geom_point(
+      aes(
+        x = RIGHT,
+        color = "RIGHT: Anchor to end"
+      ),
+      size = 3.5
+    ) +
+    scale_color_manual(
+      name = "Comparison block",
+      values = c(
+        "Matched LEFT" = "#5B8FD1",
+        "RIGHT: Anchor to end" = "#43A047"
+      )
+    ) +
+    labs(
+      title = paste0(arm_label, ": matched LEFT versus RIGHT summary"),
+      subtitle = paste0(
+        "RIGHT begins at Anchor = ", anchor,
+        "; LEFT contains the same number of immediately preceding ranks (n = ", right_n, ")."
+      ),
+      x = "Median descriptive signal",
+      y = "Metric",
+      caption = "This compact panel summarizes the original LEFT-versus-RIGHT corroboration after Anchor is selected independently of the 5,000-feature reference."
+    ) +
+    theme_manuscript()
+
+  list(
+    p1,
+    p2,
+    p3
+  )
 }
 
-make_original_comparison_figure <- function(comparison_name, mapping, group_results, c2, reference_rank, out_file) {
+make_original_comparison_figure <- function(
+    comparison_name,
+    mapping,
+    group_results,
+    c2,
+    reference_rank,
+    out_file) {
+
   control_group <- unname(mapping[["control"]])
   treatment_group <- unname(mapping[["treatment"]])
 
@@ -1175,7 +2114,12 @@ make_original_comparison_figure <- function(comparison_name, mapping, group_resu
   plots <- c(
     make_original_arm_panels(
       df = control$data,
-      arm_label = paste0(comparison_name, " Control (", control_group, ")"),
+      arm_label = paste0(
+        comparison_name,
+        " Control (",
+        control_group,
+        ")"
+      ),
       c2 = c2,
       reference_rank = reference_rank,
       anchor = control$anchor,
@@ -1183,7 +2127,12 @@ make_original_comparison_figure <- function(comparison_name, mapping, group_resu
     ),
     make_original_arm_panels(
       df = treatment$data,
-      arm_label = paste0(comparison_name, " Treatment (", treatment_group, ")"),
+      arm_label = paste0(
+        comparison_name,
+        " Treatment (",
+        treatment_group,
+        ")"
+      ),
       c2 = c2,
       reference_rank = reference_rank,
       anchor = treatment$anchor,
@@ -1191,7 +2140,11 @@ make_original_comparison_figure <- function(comparison_name, mapping, group_resu
     )
   )
 
-  save_panels(plots, out_file, height_in = 20.4)
+  save_panels(
+    plots,
+    out_file,
+    height_in = 24.0
+  )
 }
 
 
