@@ -1,214 +1,74 @@
 #!/usr/bin/env Rscript
 
 # =============================================================================
-# FINAL MANUSCRIPT PIPELINE — JOURNAL REVIEW VERSION
-# EVS + DESeq2 + empirical-null calibration + higher criticism + HBFSS
+# SEQUENCE MANUSCRIPT ANALYSIS
+# WTTS-Seq PAS analysis with eigenvector splitting, DESeq2, apeglm,
+# empirical-null calibration, higher criticism, HBFSS, and 3'aTWAS overlap
 # =============================================================================
 #
-# This script is written as a manuscript supplement and a runnable analysis
-# pipeline. The scientific explanations are intentionally extensive, but the
-# executable export path is intentionally lean: the final run writes result
-# tables, compact summary tables, and journal-ready manuscript figures only.
-# The figure set is restricted to discovery volcanoes, PCA support, EVS loading
-# support, empirical/HBFSS support, and discovery-count summaries.
+# ANALYSIS UNIT
+# Each OrigID is analyzed as an individual polyadenylation-site (PAS) feature.
+# Gene symbols are retained as annotation and are not used to collapse PASs
+# before differential-expression testing.
 #
-# -----------------------------------------------------------------------------
-# STUDY UNIT
-# -----------------------------------------------------------------------------
-# The unit of analysis is the PAS feature represented by OrigID in the WTTS-Seq
-# count matrix. Gene Symbol is retained only as annotation. The pipeline does
-# not collapse PAS features to genes before modeling.
+# COMPARISONS
+#   RT0 vs ZT6
+#   RT2 vs ZT8
+#   RT4 vs ZT10
+#   RT8 vs ZT14
 #
-# -----------------------------------------------------------------------------
-# PAIRWISE COMPARISONS
-# -----------------------------------------------------------------------------
-# Four matched circadian comparisons are evaluated:
+# ANALYSIS VIEWS PER COMPARISON
+#   Original (No EVS)
+#   NormEVS Lead
+#   NormEVS Rem
+#   RawEVS Lead
+#   RawEVS Rem
 #
-#   RT0_ZT6
-#   RT2_ZT8
-#   RT4_ZT10
-#   RT8_ZT14
+# EIGENVECTOR SPLITTING
+# NormEVS uses DESeq2 median-of-ratios normalized counts before PCA. RawEVS
+# uses raw counts before PCA. Within each condition, prcomp is applied directly
+# to the corresponding feature-by-sample matrix, absolute PC1 feature loadings
+# are ranked, and the 5,000 highest-loading PASs are selected. PASs present in
+# both condition-specific top-5,000 sets are Joint; PASs present in only one set
+# are Disjoint. Joint plus both Disjoint sets form the Leading Edge. All other
+# PASs form the Remainder. Downstream DESeq2 always receives raw counts for the
+# selected PAS subset and estimates its own size factors and dispersions.
 #
-# Each comparison uses the same two-level condition design:
+# DIFFERENTIAL EXPRESSION AND EFFECT TESTS
+# DESeq2 uses design ~ condition with trt relative to untrt. Standard DESeq2 is
+# the two-sided Wald test with Benjamini-Hochberg FDR < 0.10. Strong composite-
+# null testing uses greaterAbs with lfcThreshold = 1 and BH FDR < 0.10. Weak
+# composite-null testing uses lessAbs with lfcThreshold = 1 and BH FDR < 0.10.
+# A weak composite-null pass is counted as a final weak discovery only when it
+# also passes HBFSS. Log2 fold changes used for effect magnitude and HBFSS are
+# shrunken with apeglm.
 #
-#   design = ~ condition
+# EMPIRICAL NULL, HIGHER CRITICISM, AND HBFSS
+# Finite DESeq2 Wald statistics are calibrated with fdrtool using a normal
+# empirical-null model. HBFSS uses the resulting empirical p-values. Higher
+# criticism is applied to the sorted empirical p-values to obtain HCp. With the
+# manuscript LFC boundary c = 1:
 #
-# where:
+#   Htau = -log10(HCp) * c
+#   HBFSS = |apeglm LFC| * [-log10(empirical p)]
 #
-#   untrt = control arm
-#   trt   = treatment arm
+# A PAS is HBFSS-significant when HBFSS > Htau. HCp is used to derive Htau and
+# is not imposed as an additional significance gate.
 #
-# -----------------------------------------------------------------------------
-# EVS TRACKS
-# -----------------------------------------------------------------------------
-# The script deliberately evaluates two eigenvector-splitting tracks:
+# VOLCANO FIGURES
+# Volcano x-axis: apeglm-shrunken log2 fold change.
+# Volcano y-axis: -log10(empirical p).
+# HBFSS-positive PASs are purple; marker shape records overlap with Standard,
+# Strong, or Weak DESeq2 support. Weak-only composite-null passes remain visible
+# but are not counted as final weak discoveries. Each volcano labels at most the
+# top 20 final significant PASs.
 #
-#   1. NormEVS
-#      The full comparison matrix is normalized with DESeq2 median-of-ratios
-#      size factors before condition-specific PCA / PC1-loading ranking.
-#
-#   2. RawEVS
-#      Condition-specific PCA / PC1-loading ranking is performed directly on
-#      raw counts, without normalization before eigenvector splitting.
-#
-# For each track, the EVS step ONLY selects feature IDs for the leading-edge
-# and remainder split. The downstream DESeq2 input is always the raw count
-# subset corresponding to those feature IDs. DESeq2 is then fit independently
-# to Raw, Lead, and Rem datasets, including its own size-factor normalization
-# after the split. Thus NormEVS versus RawEVS compares only the data used for
-# PC1-loading ranking before the split, not the downstream DESeq2 modeling or
-# normalization framework.
-#
-# -----------------------------------------------------------------------------
-# DATASETS PRODUCED PER COMPARISON AND PER EVS TRACK
-# -----------------------------------------------------------------------------
-#
-#   Raw dataset:
-#     the full comparison count matrix.
-#
-#   Leading-edge dataset:
-#     exactly the top 5,000 PAS features by absolute PC1 loading are selected
-#     independently from the treatment and control condition eigenvectors. Joint
-#     passes (in both top-5,000 sets) and disjoint passes (unique to either set)
-#     are combined to form the leading edge.
-#
-#   Remainder dataset:
-#     all PAS features not present in either condition-specific top-5,000 set.
-#
-# EVS follows the supplied Figure 1 / Figure 1B workflow: median-of-ratios
-# normalization precedes PCA in the normalized track; PCA is performed with
-# prcomp, PC1 loadings are converted to absolute values, and the highest 5,000
-# loadings are selected separately in each condition. No adaptive top-N
-# reduction and no pre-PCA log2(x + 1) transformation are used. RawEVS applies
-# the same PCA/ranking/splitting rule directly to the raw-count matrix.
-#
-# -----------------------------------------------------------------------------
-# DESEQ2, EMPIRICAL-NULL CALIBRATION, AND FINAL DECISION RULES
-# -----------------------------------------------------------------------------
-# DESeq2 is fit independently to the Original, Leading-edge, and Remainder
-# datasets. For the EVS-derived datasets, the split is defined either from
-# DESeq2-normalized counts (NormEVS) or raw counts (RawEVS), but downstream
-# DESeq2 always receives the corresponding raw-count subset and performs its own
-# size-factor normalization.
-#
-# The finite DESeq2 Wald statistics are calibrated with the Strimmer fdrtool
-# empirical-null model. The fdrtool empirical-null p-values are the p-values used
-# in the HBFSS calculation. Higher criticism is applied to the sorted empirical
-# p-values:
-#
-#   HCp = fdrtool::hc.thresh(sort(empirical_p))
-#
-# The dataset-specific HBFSS cutoff is derived from HCp and the manuscript
-# effect boundary c = 1:
-#
-#   Htau = |-log10(HCp)| * c
-#
-# HBFSS is calculated from the apeglm-shrunken log2 fold change:
-#
-#   HBFSS_i = |apeglm_LFC_i| * [-log10(empirical_p_i)]
-#
-# A PAS is HBFSS-significant when:
-#
-#   HBFSS_i > Htau
-#
-# There is NO additional padj/q-value gate on HBFSS and HCp is NOT applied as a
-# second independent significance requirement. HCp is the empirical threshold
-# used to derive Htau. The volcano therefore shows both the HCp reference line
-# and the HBFSS hyperbolic decision boundary:
-#
-#   y = Htau / |x|
-#
-# where x is the apeglm-shrunken log2 fold change and
-# y = -log10(empirical_p).
-#
-# -----------------------------------------------------------------------------
-# DESEQ2 EFFECT DEFINITIONS
-# -----------------------------------------------------------------------------
-# Let beta denote the apeglm-shrunken log2 fold change used for manuscript
-# effect interpretation and let c = lfc_boundary = 1.0.
-#
-# Standard DESeq2:
-#   DESeq2 Wald test with explicit Benjamini-Hochberg adjustment.
-#   Significant when padj < 0.10 and |apeglm_LFC| >= 1.
-#
-# Strong composite-null hypothesis (Strong CNH):
-#   H0,strong : |beta| <= 1
-#   HA,strong : |beta| >  1
-#   DESeq2: altHypothesis = "greaterAbs", lfcThreshold = 1
-#   Pass when resGA_padj < 0.10 and |apeglm_LFC| >= 1.
-#
-# Weak composite-null hypothesis (Weak CNH):
-#   H0,weak : |beta| >= 1
-#   HA,weak : |beta| <  1
-#   DESeq2: altHypothesis = "lessAbs", lfcThreshold = 1
-#   Pass when resLA_padj < 0.10 and |apeglm_LFC| < 1.
-#
-# A Weak CNH pass is NOT treated as a final significant weak-effect discovery by
-# itself. Final weak-effect significance requires independent HBFSS support:
-#
-#   weak_significant = weak_cnh_flag & hbfss_flag
-#
-# Thus weak-effect PASs can be inspected as Weak CNH passes, while only the
-# HBFSS-overlapping subset enters the significant-site tables and Weak discovery
-# counts.
-#
-# -----------------------------------------------------------------------------
-# HBFSS / DESEQ2 OVERLAP AND VOLCANO DISPLAY
-# -----------------------------------------------------------------------------
-# Method flags are deliberately kept non-mutually-exclusive for counting:
-#
-#   standard_flag
-#   strong_cnh_flag
-#   weak_cnh_flag
-#   hbfss_flag
-#
-# Overlap is:
-#
-#   hbfss_flag & (standard_flag | strong_cnh_flag | weak_cnh_flag)
-#
-# Final significant sites are those supported by HBFSS, Standard DESeq2, or
-# Strong CNH. Weak CNH contributes to final significance only through
-# weak_cnh_flag & hbfss_flag.
-#
-# Volcano display preserves this logic. All HBFSS-positive points, including
-# HBFSS overlaps, use the HBFSS purple color. Marker shape identifies the
-# overlapping DESeq2 class:
-#
-#   HBFSS-only        = purple star
-#   HBFSS ∩ Weak      = purple triangle
-#   HBFSS ∩ Strong    = purple square
-#   HBFSS ∩ Standard  = purple diamond
-#
-# Non-HBFSS Strong and Standard discoveries retain red and green markers.
-# Weak-CNH-only passes are shown in blue for transparency but are explicitly
-# labeled as unsupported weak passes and are excluded from final significant
-# tables/counts. Background is gray.
-#
-# Each volcano labels at most the top 20 FINAL significant PASs (gene symbol
-# when available, otherwise PAS/feature ID). The concise plot annotation reports:
-#
-#   H = total HBFSS
-#   Std = Standard DESeq2
-#   Str = Strong CNH
-#   Wk = HBFSS-supported Weak CNH
-#   Ovlp = HBFSS ∩ any DESeq2 class
-#   HCp = higher-criticism empirical-p threshold
-#   Htau = dataset-specific HBFSS cutoff
-#
-# -----------------------------------------------------------------------------
-# EXPORT RULES
-# -----------------------------------------------------------------------------
-# All tables begin with Table_.
-# All figures begin with Figure_.
-# Files are written into:
-#
-#   exports/manuscript_final_clean
-#
-# This directory is inside the GitHub repository when the script is run from the
-# repository or from /root/REAPER98632. At the end, the script writes a manifest
-# and stages the exports with git add when a git repository is detected.
-# Committing and pushing are available but disabled by default.
-#
+# 3'aTWAS COMPARISON
+# After all WTTS analyses and manuscript figures are complete, human 3'aTWAS
+# gene symbols are mapped to rat orthologs. Standard DESeq2 and HBFSS are then
+# compared independently for TWAS-gene overlap in every analysis view. The TWAS
+# exports identify overlapping human genes, rat orthologs, PASs, method support,
+# and whether the WTTS gene is represented by multiple PAS features.
 # =============================================================================
 
 required_packages <- c(
@@ -264,16 +124,20 @@ options(stringsAsFactors = FALSE)
 count_file_candidates <- c(
   "WTTS-Seq_2022.2_DE_raw_read_numbers.csv",
   file.path("data", "WTTS-Seq_2022.2_DE_raw_read_numbers.csv"),
-  "/root/REAPER98632/data/WTTS-Seq_2022.2_DE_raw_read_numbers.csv"
+  "/root/REAPER98632/data/WTTS-Seq_2022.2_DE_raw_read_numbers.csv",
+  "WTTS-Seq_2022.2_DE_raw_read_numbers(20260822-183312).csv",
+  "/mnt/data/WTTS-Seq_2022.2_DE_raw_read_numbers(20260822-183312).csv"
 )
-
-run_twas_overlap <- FALSE
 
 twas_file_candidates <- c(
   "3aTWAS_genes_of_11_brain_disorders.csv",
   file.path("data", "3aTWAS_genes_of_11_brain_disorders.csv"),
-  "/root/REAPER98632/data/3aTWAS_genes_of_11_brain_disorders.csv"
+  "/root/REAPER98632/data/3aTWAS_genes_of_11_brain_disorders.csv",
+  "/mnt/data/3aTWAS_genes_of_11_brain_disorders.csv"
 )
+
+TWAS_TARGET_SPECIES <- "rat"
+TWAS_ORTHOLOG_MIN_SUPPORT <- 3L
 
 # DESeq2 standard and composite-null tests use explicit Benjamini-Hochberg
 # adjustment at 10%. HBFSS does not use DESeq2 padj/q-values as a decision gate.
@@ -293,30 +157,20 @@ base_theme_size <- 10
 n_top_labels_volcano <- 20L
 
 # Manuscript export behavior. When TRUE, the script writes only the focused
-# paper-ready figure panels into exports/manuscript_final_clean/manuscript_figures.
+# paper-ready figure panels into exports/sequence_manuscript_final/manuscript_figures.
 # Tables are deliberately concise: significant sites plus compact method/count
 # summaries, with the unsplit Original dataset represented once.
 EXPORT_ONLY_PAPER_FIGURES <- TRUE
 EXPORT_SUPPORT_FIGURES <- TRUE
 
-# Git export behavior.
-# The script always writes exports into the repository exports folder when it
-# can detect the repository. Staging is enabled by default. Commit and push are
-# disabled by default so that the user can review output before publishing.
-GIT_STAGE_EXPORTS <- TRUE
-GIT_COMMIT_EXPORTS <- FALSE
-GIT_PUSH_EXPORTS <- FALSE
-GIT_COMMIT_MESSAGE <- "Refresh final manuscript EVS HBFSS exports"
-
 # -----------------------------------------------------------------------------
-# Decision-rule audit notes for manuscript review
+# Statistical decision rules
 # -----------------------------------------------------------------------------
-# DESeq2 padj is explicitly Benjamini-Hochberg adjusted at 10% for Standard,
-# Strong CNH, and Weak CNH tests. This is BH FDR control (not Bonferroni/Holm).
+# Standard, Strong CNH, and Weak CNH tests use Benjamini-Hochberg FDR control at 10%.
 #
-# HBFSS is mathematically separate from those DESeq2 adjusted-p decisions:
+# HBFSS uses the dataset-specific score threshold:
 #
-#   standard_flag = padj < 0.10 and |apeglm_LFC| >= 1
+#   standard_flag = padj < 0.10
 #   strong_cnh_flag = greaterAbs padj < 0.10 and |apeglm_LFC| >= 1
 #   weak_cnh_flag = lessAbs padj < 0.10 and |apeglm_LFC| < 1
 #   hbfss_flag = HBFSS > Htau
@@ -486,8 +340,12 @@ repo_root <- find_repo_root()
 output_dir <- file.path(
   repo_root,
   "exports",
-  "manuscript_final_clean"
+  "sequence_manuscript_final"
 )
+
+if (dir.exists(output_dir)) {
+  unlink(output_dir, recursive = TRUE, force = TRUE)
+}
 
 dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
 
@@ -499,41 +357,6 @@ paper_registry <- list()
 registry_key <- function(comparison_name, track_key) {
   paste(comparison_name, track_key, sep = "__")
 }
-
-clean_manuscript_figure_exports <- function() {
-  old_files <- list.files(
-    paper_fig_dir,
-    pattern = "^Figure_Manuscript_.*\\.png$",
-    full.names = TRUE
-  )
-
-  if (length(old_files) > 0L) {
-    unlink(old_files)
-  }
-
-  invisible(TRUE)
-}
-
-clean_manuscript_table_exports <- function() {
-  old_files <- list.files(
-    output_dir,
-    pattern = "^Table_.*\\.csv$",
-    full.names = TRUE,
-    recursive = TRUE
-  )
-
-  if (length(old_files) > 0L) {
-    unlink(old_files)
-  }
-
-  old_methods <- file.path(output_dir, "Methods_Statistical_Decision_Rules.txt")
-  if (file.exists(old_methods)) {
-    unlink(old_methods)
-  }
-
-  invisible(TRUE)
-}
-
 
 should_write_figure <- function(path) {
   if (!isTRUE(EXPORT_ONLY_PAPER_FIGURES)) {
@@ -677,9 +500,6 @@ pretty_dataset_label <- function(dataset_name) {
   paste(comparison_name, pretty_dataset_type(dataset_key), sep = " | ")
 }
 
-clean_gene_set <- function(x) {
-  unique(tolower(trimws(x[!is.na(x) & x != ""])))
-}
 
 make_design_formula <- function(coldata) {
   ~ condition
@@ -748,44 +568,12 @@ run_empirical_null_fdrtool <- function(stat_vec, dataset_name) {
     )
   }
 
-  fit <- tryCatch(
-    fdrtool::fdrtool(
-      stat_vec,
-      statistic = "normal",
-      plot = FALSE,
-      verbose = FALSE,
-      cutoff.method = "fndr",
-      pct0 = 0.75
-    ),
-    error = function(e1) {
-      message(
-        sprintf(
-          "[%s] Primary fdrtool call failed: %s",
-          dataset_name,
-          conditionMessage(e1)
-        )
-      )
-
-      tryCatch(
-        fdrtool::fdrtool(
-          as.vector(stat_vec),
-          statistic = "normal",
-          plot = FALSE,
-          verbose = FALSE,
-          cutoff.method = "pct0",
-          pct0 = 0.75
-        ),
-        error = function(e2) {
-          stop(
-            sprintf(
-              "[%s] fdrtool failed after retry: %s",
-              dataset_name,
-              conditionMessage(e2)
-            )
-          )
-        }
-      )
-    }
+  fit <- fdrtool::fdrtool(
+    stat_vec,
+    statistic = "normal",
+    plot = FALSE,
+    verbose = FALSE,
+    cutoff.method = "fndr"
   )
 
   fit$pval <- clip_probabilities(fit$pval)
@@ -1048,61 +836,6 @@ write_export_manifest <- function(root_dir) {
   manifest
 }
 
-git_run <- function(args) {
-  tryCatch(
-    system2("git", args = args, stdout = TRUE, stderr = TRUE),
-    error = function(e) {
-      message("Git command failed: ", paste(args, collapse = " "))
-      message(conditionMessage(e))
-      character(0)
-    }
-  )
-}
-
-finalize_git_exports <- function(root_dir, repo_root) {
-  if (!dir.exists(file.path(repo_root, ".git"))) {
-    message("No .git directory detected. Exports were written but not staged.")
-    return(invisible(FALSE))
-  }
-
-  oldwd <- getwd()
-  on.exit(setwd(oldwd), add = TRUE)
-  setwd(repo_root)
-
-  rel_export_dir <- sub(
-    paste0("^", normalizePath(repo_root, winslash = "/", mustWork = TRUE), "/"),
-    "",
-    normalizePath(root_dir, winslash = "/", mustWork = TRUE)
-  )
-
-  if (isTRUE(GIT_STAGE_EXPORTS)) {
-    git_run(c("add", rel_export_dir))
-
-    script_path <- get_script_path()
-    if (!is.na(script_path) && file.exists(script_path)) {
-      git_run(c("add", script_path))
-    }
-
-    message("Git status after staging exports:")
-    print(git_run(c("status", "--short")))
-  }
-
-  if (isTRUE(GIT_COMMIT_EXPORTS)) {
-    git_run(c("commit", "-m", GIT_COMMIT_MESSAGE))
-  }
-
-  if (isTRUE(GIT_PUSH_EXPORTS)) {
-    branch <- trimws(system2("git", c("branch", "--show-current"), stdout = TRUE))
-    if (nzchar(branch)) {
-      git_run(c("push", "origin", branch))
-    } else {
-      message("Could not determine current branch; skipping git push.")
-    }
-  }
-
-  invisible(TRUE)
-}
-
 # =============================================================================
 # SECTION 2 OF 5
 # IMPORT COUNT MATRIX AND ANNOTATION
@@ -1207,24 +940,53 @@ OrigID_Symbol <- OrigID_Symbol %>%
     gene_symbol = dplyr::na_if(gene_symbol, "")
   )
 
-if (run_twas_overlap) {
-  twas_file <- resolve_existing_file(twas_file_candidates, "TWAS file")
 
-  TWAS_Seq <- read.csv(
-    twas_file,
-    header = TRUE,
-    stringsAsFactors = FALSE
-  )
 
-  TWAS_Seq <- as.data.frame(TWAS_Seq)
 
-  if (ncol(TWAS_Seq) < 4L) {
-    stop("TWAS file must contain at least 4 columns.")
-  }
+# -----------------------------------------------------------------------------
+# Gene/PAS annotation used by the final 3'aTWAS analysis
+# -----------------------------------------------------------------------------
 
-  TWAS_data <- TWAS_Seq[, c(1, 4), drop = FALSE]
-  colnames(TWAS_data) <- c("source_id", "gene_symbol")
+valid_gene_symbol <- function(x) {
+  x <- trimws(as.character(x))
+  !is.na(x) & nzchar(x) & x != "-" & grepl("[A-Za-z0-9]", x)
 }
+
+gene_key <- function(x) {
+  x <- trimws(as.character(x))
+  x[!valid_gene_symbol(x)] <- NA_character_
+  toupper(x)
+}
+
+collapse_unique <- function(x, sep = "; ") {
+  x <- unique(trimws(as.character(x)))
+  x <- x[!is.na(x) & nzchar(x)]
+  if (!length(x)) return(NA_character_)
+  paste(sort(x), collapse = sep)
+}
+
+safe_min_numeric <- function(x) {
+  x <- suppressWarnings(as.numeric(x))
+  x <- x[is.finite(x)]
+  if (!length(x)) NA_real_ else min(x)
+}
+
+safe_max_numeric <- function(x) {
+  x <- suppressWarnings(as.numeric(x))
+  x <- x[is.finite(x)]
+  if (!length(x)) NA_real_ else max(x)
+}
+
+WTTS_gene_pas_summary <- OrigID_Symbol %>%
+  dplyr::mutate(gene_key = gene_key(gene_symbol)) %>%
+  dplyr::filter(!is.na(gene_key)) %>%
+  dplyr::group_by(gene_key) %>%
+  dplyr::summarise(
+    WTTS_Gene = dplyr::first(gene_symbol[valid_gene_symbol(gene_symbol)]),
+    WTTS_PAS_n = dplyr::n_distinct(feature_id),
+    .groups = "drop"
+  ) %>%
+  dplyr::mutate(APA_multi_PAS = WTTS_PAS_n >= 2L)
 
 # =============================================================================
 # SECTION 3 OF 5
@@ -1688,9 +1450,7 @@ run_core_analysis <- function(count_mat, coldata, dataset_name, annot_df) {
     abs(res_df$lfc_shrunk) >= lfc_boundary
 
   res_df$standard_significant <- !is.na(res_df$padj) &
-    res_df$padj < standard_alpha_level &
-    !is.na(res_df$lfc_shrunk) &
-    abs(res_df$lfc_shrunk) >= lfc_boundary
+    res_df$padj < standard_alpha_level
 
   res_df$standard_flag <- res_df$standard_significant
 
@@ -2328,95 +2088,7 @@ run_one_evs_track <- function(comparison_name, track_key, count_matrix, coldata,
   # Cross-dataset diagnostic panels are intentionally omitted from final
   # manuscript export; final paper panels are built at the end of the run.
 
-  if (run_twas_overlap) {
-    twas_genes <- clean_gene_set(TWAS_data$gene_symbol)
 
-    get_twas_overlap <- function(result_df, dataset_nm, cmp_name, out_dir, mode = c("union", "standard_only", "hbfss_only")) {
-      mode <- match.arg(mode)
-
-      sig_df <- switch(
-        mode,
-        union = subset(result_df, final_significant_flag),
-        standard_only = subset(result_df, standard_flag),
-        hbfss_only = subset(result_df, hbfss_flag)
-      )
-
-      sig_df$gene_symbol_clean <- tolower(trimws(sig_df$gene_symbol))
-
-      overlap_df <- subset(
-        sig_df,
-        gene_symbol_clean %in% twas_genes
-      )
-
-      summary_df <- data.frame(
-        comparison_name = cmp_name,
-        dataset_name = dataset_nm,
-        selection_mode = mode,
-        n_selected_features = nrow(sig_df),
-        n_overlap_features = nrow(overlap_df),
-        n_overlap_genes = length(unique(overlap_df$gene_symbol_clean)),
-        stringsAsFactors = FALSE
-      )
-
-      mode_tag <- switch(
-        mode,
-        union = "Union",
-        standard_only = "StdOnly",
-        hbfss_only = "HBFSSOnly"
-      )
-
-      write.csv(
-        overlap_df,
-        file.path(
-          out_dir,
-          paste0("Table_", dataset_nm, "_TWAS_", mode_tag, ".csv")
-        ),
-        row.names = FALSE
-      )
-
-      write.csv(
-        summary_df,
-        file.path(
-          out_dir,
-          paste0("Table_", dataset_nm, "_TWAS_", mode_tag, "_Summary.csv")
-        ),
-        row.names = FALSE
-      )
-
-      summary_df
-    }
-
-    twas_summaries <- dplyr::bind_rows(
-      lapply(names(analysis_results), function(nm) {
-        full_nm <- paste(
-          comparison_name,
-          unname(track_short[track_key]),
-          nm,
-          sep = "_"
-        )
-
-        dplyr::bind_rows(
-          get_twas_overlap(analysis_results[[nm]]$results, full_nm, comparison_name, tab_dir, "union"),
-          get_twas_overlap(analysis_results[[nm]]$results, full_nm, comparison_name, tab_dir, "standard_only"),
-          get_twas_overlap(analysis_results[[nm]]$results, full_nm, comparison_name, tab_dir, "hbfss_only")
-        )
-      })
-    )
-
-    save_csv(
-      twas_summaries,
-      file.path(
-        tab_dir,
-        paste0(
-          "Table_",
-          comparison_name,
-          "_",
-          unname(track_short[track_key]),
-          "_TWAS_Summary.csv"
-        )
-      )
-    )
-  }
 
   sm_list <- lapply(analysis_results, `[[`, "summary")
   sm_list <- Filter(function(x) is.data.frame(x) && nrow(x) > 0, sm_list)
@@ -2621,29 +2293,46 @@ build_overall_manuscript_summary <- function() {
 
 write_methods_note <- function() {
   methods_text <- c(
-    "Statistical decision rules",
+    "# Manuscript Methods",
     "",
-    "Eigenvector splitting followed the supplied Figure 1 / Figure 1B workflow. For NormEVS, the full comparison raw-count matrix was normalized by DESeq2 median-of-ratios size factors before EVS; RawEVS omitted this pre-split normalization.",
-    sprintf("Within each EVS track, treatment and control samples were decomposed separately by prcomp; absolute PC1 feature loadings were ranked and exactly the top %d PASs from each condition were selected. No pre-PCA log2 transformation and no adaptive reduction of top-N were used.", top_n_target),
-    "Top-set intersection defined Joint passes; condition-specific set differences defined Disjoint passes; Joint plus both Disjoint sets formed the Leading Edge, and every other PAS formed the Remainder.",
-    "PAS features were modeled with DESeq2 using design ~ condition. Log2 fold changes used for effect interpretation and HBFSS were shrunken with apeglm.",
-    sprintf("Standard DESeq2 significance required BH-adjusted padj < %.2f and |apeglm LFC| >= %.1f.", standard_alpha_level, lfc_boundary),
-    sprintf("Strong CNH used DESeq2 greaterAbs with lfcThreshold = %.1f and required BH-adjusted padj < %.2f plus |apeglm LFC| >= %.1f.", lfc_boundary, alpha_level, lfc_boundary),
-    sprintf("Weak CNH used DESeq2 lessAbs with lfcThreshold = %.1f and BH-adjusted padj < %.2f plus |apeglm LFC| < %.1f; a weak-effect PAS was counted as a final significant weak discovery only when it also passed HBFSS.", lfc_boundary, alpha_level, lfc_boundary),
-    "Finite DESeq2 Wald statistics were calibrated with the Strimmer fdrtool empirical-null model; its empirical-null p-values were used in HBFSS.",
-    sprintf("For each dataset, HCp was obtained with hc.thresh(sorted empirical p-values), Htau = |-log10(HCp)| x %.1f, and HBFSS = |apeglm LFC| x [-log10(empirical p)].", lfc_boundary),
-    "HBFSS significance required HBFSS > Htau. No DESeq2 padj/q-value, no separate empirical-p <= HCp gate, and no additional upper validity cutoff on HCp were imposed; HCp was used directly to derive Htau whenever hc.thresh returned a valid probability in (0, 1].",
-    "HBFSS/DESeq2 overlap was defined as HBFSS plus any Standard, Strong CNH, or Weak CNH support. On volcano plots all HBFSS-positive sites are purple; marker shape identifies Standard, Strong, or Weak overlap. Weak-CNH-only passes are blue but are excluded from final significant-site tables.",
-    sprintf("Each volcano labels at most the top %d final significant PASs, using gene symbol when available and PAS ID otherwise.", n_top_labels_volcano),
-    "The five manuscript analysis views per comparison are Original (No EVS), NormEVS Lead, NormEVS Rem, RawEVS Lead, and RawEVS Rem. EVS preprocessing affects only PC1-based feature membership; downstream DESeq2 always uses the corresponding raw-count subset and performs its own size-factor normalization."
+    "## Study unit and comparisons",
+    "The analytical unit was the polyadenylation-site (PAS) feature defined by OrigID in the WTTS-Seq raw-count matrix. PASs were retained as separate observations throughout differential testing; gene symbols were used as annotation. Four pairwise comparisons were analyzed: RT0 versus ZT6, RT2 versus ZT8, RT4 versus ZT10, and RT8 versus ZT14.",
+    "",
+    "## Eigenvector splitting",
+    sprintf("For normalized eigenvector splitting (NormEVS), DESeq2 median-of-ratios size factors were estimated from the complete raw-count matrix for each pairwise comparison and normalized counts were used directly for PCA. For raw eigenvector splitting (RawEVS), the raw-count matrix was used directly for PCA. Within each condition, prcomp was applied to the transposed feature-by-sample matrix with centering and without scaling. Absolute PC1 feature loadings were ranked, and the %d highest-loading PASs were selected independently from the RT and ZT condition eigenvectors.", top_n_target),
+    "PASs contained in both condition-specific top-loading sets were classified as Joint. PASs contained in only one condition-specific set were classified as Disjoint for that condition. Joint and both Disjoint sets were combined to define the Leading Edge; all remaining PASs defined the Remainder. The five manuscript views were Original (No EVS), NormEVS Lead, NormEVS Rem, RawEVS Lead, and RawEVS Rem. EVS determined PAS membership only; each downstream DESeq2 fit received the corresponding raw-count subset.",
+    "",
+    "## DESeq2 model and normalization",
+    "Each analysis view was modeled independently with DESeq2 using a negative-binomial generalized linear model with design ~ condition and the ZT/untrt arm as reference. DESeq2 estimated median-of-ratios size factors, gene-wise dispersions, the mean-dispersion relationship, final dispersion estimates, and Wald statistics for the RT/trt coefficient.",
+    "",
+    "## Log2 fold-change shrinkage",
+    "Log2 fold changes were shrunken with apeglm and the apeglm-shrunken log2 fold change was used for effect magnitude, HBFSS calculation, direction, plotting, and reporting.",
+    "",
+    "## Standard and composite-null DESeq2 tests",
+    sprintf("Standard DESeq2 significance was defined by the ordinary two-sided Wald test with Benjamini-Hochberg adjusted p-value < %.2f.", standard_alpha_level),
+    sprintf("Strong-effect composite-null testing used DESeq2 altHypothesis='greaterAbs' with lfcThreshold=%.1f and Benjamini-Hochberg adjusted p-value < %.2f; reported Strong PASs were in the |apeglm LFC| >= %.1f region.", lfc_boundary, alpha_level, lfc_boundary),
+    sprintf("Weak-effect composite-null testing used DESeq2 altHypothesis='lessAbs' with lfcThreshold=%.1f and Benjamini-Hochberg adjusted p-value < %.2f; reported Weak-CNH passes were in the |apeglm LFC| < %.1f region. A Weak-CNH pass was counted as a final weak-effect discovery only when the same PAS also passed HBFSS.", lfc_boundary, alpha_level, lfc_boundary),
+    "",
+    "## Empirical-null calibration and higher criticism",
+    "Finite DESeq2 Wald statistics were calibrated with fdrtool using statistic='normal' and cutoff.method='fndr'. The resulting empirical-null p-values were used for HBFSS. Higher criticism was applied to the sorted empirical p-values with fdrtool::hc.thresh to obtain the dataset-specific HCp threshold.",
+    "",
+    "## Hybrid Bayesian-frequentist significance score",
+    sprintf("For each PAS, HBFSS = |apeglm LFC| x [-log10(empirical p)]. With the effect boundary c=%.1f, the dataset-specific HBFSS threshold was Htau = -log10(HCp) x c. A PAS was HBFSS-significant when HBFSS > Htau. HCp entered the decision rule through Htau and was not applied as a second p-value gate.", lfc_boundary),
+    "",
+    "## Method overlap and final weak-effect rule",
+    "Standard, Strong, Weak-CNH, and HBFSS flags were retained independently. HBFSS overlap was defined as an HBFSS-positive PAS that also passed Standard, Strong, or Weak-CNH testing. Final significant PAS tables contain HBFSS, Standard, or Strong discoveries; Weak-CNH contributes as a final Weak discovery only through Weak-CNH x HBFSS overlap.",
+    "",
+    "## Volcano plots and manuscript summaries",
+    sprintf("Volcano plots use apeglm-shrunken log2 fold change on the x-axis and -log10(empirical p) on the y-axis. The vertical effect boundaries are +/-%.1f. The horizontal dotted reference is -log10(HCp), and the HBFSS score boundary is y = Htau/|x|. HBFSS-positive PASs share the HBFSS color, while marker shape identifies HBFSS overlap with Standard, Strong, or Weak-CNH support. Weak-CNH-only PASs are displayed separately and are not counted as final weak discoveries. At most %d final significant PASs are labeled per volcano.", lfc_boundary, n_top_labels_volcano),
+    "Per-comparison tables report only final significant PASs and the statistics used for the decision rules: PAS, gene, apeglm LFC, empirical p, HBFSS, HCp, Htau, Standard BH-adjusted p-value, Strong BH-adjusted p-value, Weak BH-adjusted p-value, and method support. Summary tables report the exact number of HBFSS, Standard, Strong, Weak, and overlap discoveries for each analysis view.",
+    "",
+    "## 3'aTWAS ortholog overlap",
+    sprintf("After completion of all WTTS analyses, human gene symbols from the supplied 3'aTWAS study were mapped to rat ortholog symbols with babelgene::orthologs(species='%s', human=TRUE, min_support=%d, top=TRUE). For every comparison and each of the five analysis views, TWAS orthologs were intersected independently with Standard DESeq2 and HBFSS-positive WTTS genes.", TWAS_TARGET_SPECIES, TWAS_ORTHOLOG_MIN_SUPPORT),
+    "TWAS overlap tables report the human TWAS gene, rat ortholog, TWAS disease summary, significant WTTS PASs, Standard and HBFSS support, and PAS multiplicity. APA_multi_PAS indicates that the rat gene is represented by at least two distinct PAS features in the WTTS dataset; DE_multi_PAS indicates that at least two TWAS-overlap PASs from that gene were significant by Standard and/or HBFSS within the same comparison and analysis view.",
+    ""
   )
 
-  writeLines(
-    methods_text,
-    con = file.path(output_dir, "Methods_Statistical_Decision_Rules.txt"),
-    useBytes = TRUE
-  )
-
+  writeLines(methods_text, file.path(output_dir, "Methods_Manuscript.md"), useBytes = TRUE)
   invisible(TRUE)
 }
 
@@ -3488,7 +3177,539 @@ save_paper_support_figures <- function(summary_df) {
   invisible(TRUE)
 }
 
-clean_manuscript_table_exports()
+
+# =============================================================================
+# FINAL 3'aTWAS ORTHOLOG COMPARISON
+# =============================================================================
+
+ensure_babelgene <- function() {
+  if (requireNamespace("babelgene", quietly = TRUE)) {
+    return(invisible(TRUE))
+  }
+
+  message("Installing CRAN package 'babelgene' for the final 3'aTWAS ortholog stage...")
+  try(
+    utils::install.packages(
+      "babelgene",
+      repos = "https://cloud.r-project.org",
+      quiet = TRUE
+    ),
+    silent = TRUE
+  )
+
+  if (!requireNamespace("babelgene", quietly = TRUE)) {
+    stop(
+      "The final 3'aTWAS ortholog stage requires the CRAN package 'babelgene'. ",
+      "Install it with install.packages('babelgene') and rerun the script."
+    )
+  }
+
+  invisible(TRUE)
+}
+
+read_twas_study <- function(path) {
+  twas <- utils::read.csv(
+    path,
+    skip = 1,
+    header = TRUE,
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+
+  assert_required_columns(
+    twas,
+    c("Disease", "PANEL", "Transcript ID", "Gene symbol", "3'aTWAS.Z", "3'aTWAS.P"),
+    object_name = "3'aTWAS file"
+  )
+
+  twas %>%
+    dplyr::transmute(
+      Disease = trimws(as.character(Disease)),
+      Panel = trimws(as.character(PANEL)),
+      TWAS_Transcript = trimws(as.character(`Transcript ID`)),
+      Human_TWAS_Gene = trimws(as.character(`Gene symbol`)),
+      TWAS_Z = suppressWarnings(as.numeric(`3'aTWAS.Z`)),
+      TWAS_P = suppressWarnings(as.numeric(`3'aTWAS.P`)),
+      COLOC_PP4 = if ("COLOC.PP4" %in% names(twas)) suppressWarnings(as.numeric(COLOC.PP4)) else NA_real_
+    ) %>%
+    dplyr::filter(valid_gene_symbol(Human_TWAS_Gene))
+}
+
+build_twas_ortholog_map <- function(twas) {
+  ensure_babelgene()
+
+  human_genes <- sort(unique(twas$Human_TWAS_Gene))
+
+  orth <- babelgene::orthologs(
+    genes = human_genes,
+    species = TWAS_TARGET_SPECIES,
+    human = TRUE,
+    min_support = TWAS_ORTHOLOG_MIN_SUPPORT,
+    top = TRUE
+  )
+
+  orth <- as.data.frame(orth, stringsAsFactors = FALSE)
+
+  assert_required_columns(
+    orth,
+    c("human_symbol", "symbol", "support_n"),
+    object_name = "babelgene ortholog output"
+  )
+
+  orth_best <- data.frame(
+    Human_TWAS_Gene = as.character(orth$human_symbol),
+    Rat_Ortholog = as.character(orth$symbol),
+    Ortholog_support_n = suppressWarnings(as.integer(orth$support_n)),
+    Ortholog_support = if ("support" %in% names(orth)) as.character(orth$support) else NA_character_,
+    stringsAsFactors = FALSE
+  ) %>%
+    dplyr::filter(valid_gene_symbol(Rat_Ortholog)) %>%
+    dplyr::arrange(Human_TWAS_Gene, dplyr::desc(Ortholog_support_n), Rat_Ortholog) %>%
+    dplyr::distinct(Human_TWAS_Gene, .keep_all = TRUE)
+
+  data.frame(
+    Human_TWAS_Gene = human_genes,
+    stringsAsFactors = FALSE
+  ) %>%
+    dplyr::left_join(orth_best, by = "Human_TWAS_Gene") %>%
+    dplyr::mutate(gene_key = gene_key(Rat_Ortholog))
+}
+
+build_twas_rat_metadata <- function(twas, mapping) {
+  mapped <- twas %>%
+    dplyr::left_join(mapping, by = "Human_TWAS_Gene") %>%
+    dplyr::filter(!is.na(gene_key))
+
+  mapped %>%
+    dplyr::group_by(gene_key) %>%
+    dplyr::summarise(
+      Rat_Ortholog = dplyr::first(Rat_Ortholog[valid_gene_symbol(Rat_Ortholog)]),
+      Human_TWAS_Genes = collapse_unique(Human_TWAS_Gene),
+      TWAS_Diseases = collapse_unique(Disease),
+      TWAS_Panels_n = dplyr::n_distinct(Panel),
+      TWAS_Records_n = dplyr::n(),
+      TWAS_min_P = safe_min_numeric(TWAS_P),
+      TWAS_max_abs_Z = safe_max_numeric(abs(TWAS_Z)),
+      TWAS_max_COLOC_PP4 = safe_max_numeric(COLOC_PP4),
+      Ortholog_support_n = safe_max_numeric(Ortholog_support_n),
+      .groups = "drop"
+    ) %>%
+    dplyr::left_join(WTTS_gene_pas_summary, by = "gene_key")
+}
+
+collect_twas_analysis_results <- function() {
+  views <- comparison_analysis_views()
+  rows <- list()
+
+  for (comparison_name in as.character(comparison_table$comparison_name)) {
+    for (i in seq_len(nrow(views))) {
+      track_key <- views$track_key[i]
+      dataset_key <- views$dataset_key[i]
+      df <- get_registered_result(comparison_name, track_key, dataset_key)
+
+      if (is.null(df) || !nrow(df)) next
+
+      pas <- if ("orig_id" %in% names(df)) as.character(df$orig_id) else as.character(df$feature_id)
+      bad_pas <- is.na(pas) | !nzchar(trimws(pas))
+      pas[bad_pas] <- as.character(df$feature_id[bad_pas])
+
+      rows[[length(rows) + 1L]] <- data.frame(
+        Comparison = comparison_name,
+        Analysis = analysis_view_label(track_key, dataset_key),
+        feature_id = as.character(df$feature_id),
+        PAS = pas,
+        WTTS_Gene = as.character(df$gene_symbol),
+        gene_key = gene_key(df$gene_symbol),
+        Apeglm_LFC = suppressWarnings(as.numeric(df$lfc_shrunk)),
+        Standard_padj = suppressWarnings(as.numeric(df$padj)),
+        Empirical_p = suppressWarnings(as.numeric(df$empirical_p)),
+        HBFSS = suppressWarnings(as.numeric(df$HBFSS)),
+        HCp = suppressWarnings(as.numeric(df$hc_p_threshold_dataset)),
+        Htau = suppressWarnings(as.numeric(df$hbfss_threshold_dataset)),
+        Standard = !is.na(df$standard_flag) & df$standard_flag,
+        HBFSS_sig = !is.na(df$hbfss_flag) & df$hbfss_flag,
+        stringsAsFactors = FALSE
+      )
+    }
+  }
+
+  if (!length(rows)) return(data.frame())
+
+  dplyr::bind_rows(rows) %>%
+    dplyr::filter(!is.na(gene_key))
+}
+
+build_twas_overlap_pas_table <- function(all_results, twas_rat_meta) {
+  if (!nrow(all_results) || !nrow(twas_rat_meta)) return(data.frame())
+
+  all_results %>%
+    dplyr::filter(Standard | HBFSS_sig) %>%
+    dplyr::inner_join(twas_rat_meta, by = "gene_key") %>%
+    dplyr::rename(HBFSS_score = HBFSS) %>%
+    dplyr::mutate(
+      Both_methods = Standard & HBFSS_sig,
+      Method_support = dplyr::case_when(
+        Both_methods ~ "Both",
+        Standard ~ "Standard only",
+        HBFSS_sig ~ "HBFSS only",
+        TRUE ~ NA_character_
+      ),
+      Analysis = factor(Analysis, levels = c(
+        "Original (No EVS)",
+        "NormEVS Lead", "NormEVS Rem",
+        "RawEVS Lead", "RawEVS Rem"
+      ))
+    ) %>%
+    dplyr::transmute(
+      Comparison,
+      Analysis = as.character(Analysis),
+      PAS,
+      Rat_Ortholog,
+      Human_TWAS_Genes,
+      TWAS_Diseases,
+      Method_support,
+      Standard,
+      HBFSS = HBFSS_sig,
+      Apeglm_LFC,
+      Standard_padj,
+      Empirical_p,
+      HBFSS_score,
+      HCp,
+      Htau,
+      WTTS_PAS_n,
+      APA_multi_PAS,
+      TWAS_min_P,
+      TWAS_max_abs_Z,
+      TWAS_max_COLOC_PP4,
+      Ortholog_support_n
+    ) %>%
+    dplyr::arrange(
+      Comparison,
+      factor(Analysis, levels = c(
+        "Original (No EVS)",
+        "NormEVS Lead", "NormEVS Rem",
+        "RawEVS Lead", "RawEVS Rem"
+      )),
+      Rat_Ortholog,
+      PAS
+    )
+}
+
+build_twas_overlap_gene_table <- function(pas_table) {
+  if (!nrow(pas_table)) return(data.frame())
+
+  pas_table %>%
+    dplyr::mutate(
+      Standard_flag = Standard,
+      HBFSS_flag = HBFSS
+    ) %>%
+    dplyr::group_by(
+      Comparison,
+      Analysis,
+      Rat_Ortholog,
+      Human_TWAS_Genes,
+      TWAS_Diseases,
+      WTTS_PAS_n,
+      APA_multi_PAS,
+      TWAS_min_P,
+      TWAS_max_abs_Z,
+      TWAS_max_COLOC_PP4,
+      Ortholog_support_n
+    ) %>%
+    dplyr::summarise(
+      Standard = any(Standard_flag, na.rm = TRUE),
+      HBFSS = any(HBFSS_flag, na.rm = TRUE),
+      Standard_PAS_n = dplyr::n_distinct(PAS[Standard_flag]),
+      HBFSS_PAS_n = dplyr::n_distinct(PAS[HBFSS_flag]),
+      Shared_PAS_n = dplyr::n_distinct(PAS[Standard_flag & HBFSS_flag]),
+      Union_significant_PAS_n = dplyr::n_distinct(PAS),
+      Significant_PAS_IDs = collapse_unique(PAS),
+      Best_abs_Apeglm_LFC = safe_max_numeric(abs(Apeglm_LFC)),
+      Min_Standard_padj = safe_min_numeric(Standard_padj[Standard_flag]),
+      Max_HBFSS = safe_max_numeric(HBFSS_score[HBFSS_flag]),
+      Min_HBFSS_empirical_p = safe_min_numeric(Empirical_p[HBFSS_flag]),
+      HCp = dplyr::first(HCp),
+      Htau = dplyr::first(Htau),
+      .groups = "drop"
+    ) %>%
+    dplyr::mutate(
+      Both_methods = Standard & HBFSS,
+      Method_support = dplyr::case_when(
+        Both_methods ~ "Both",
+        Standard ~ "Standard only",
+        HBFSS ~ "HBFSS only",
+        TRUE ~ NA_character_
+      ),
+      DE_multi_PAS = Union_significant_PAS_n >= 2L,
+      Analysis = factor(Analysis, levels = c(
+        "Original (No EVS)",
+        "NormEVS Lead", "NormEVS Rem",
+        "RawEVS Lead", "RawEVS Rem"
+      ))
+    ) %>%
+    dplyr::arrange(Comparison, Analysis, Rat_Ortholog) %>%
+    dplyr::mutate(Analysis = as.character(Analysis))
+}
+
+build_twas_overlap_summary <- function(gene_table) {
+  analysis_levels <- c(
+    "Original (No EVS)",
+    "NormEVS Lead", "NormEVS Rem",
+    "RawEVS Lead", "RawEVS Rem"
+  )
+
+  grid <- expand.grid(
+    Comparison = as.character(comparison_table$comparison_name),
+    Analysis = analysis_levels,
+    stringsAsFactors = FALSE
+  )
+
+  if (!nrow(gene_table)) {
+    out <- grid
+    zero_cols <- c(
+      "TWAS_Standard_genes",
+      "TWAS_HBFSS_genes",
+      "TWAS_Both_genes",
+      "TWAS_Standard_only_genes",
+      "TWAS_HBFSS_only_genes",
+      "TWAS_Union_genes",
+      "TWAS_Standard_APA_genes",
+      "TWAS_HBFSS_APA_genes",
+      "TWAS_DE_multi_PAS_genes"
+    )
+    for (nm in zero_cols) out[[nm]] <- 0L
+    return(out)
+  }
+
+  observed <- gene_table %>%
+    dplyr::group_by(Comparison, Analysis) %>%
+    dplyr::summarise(
+      TWAS_Standard_genes = sum(Standard, na.rm = TRUE),
+      TWAS_HBFSS_genes = sum(HBFSS, na.rm = TRUE),
+      TWAS_Both_genes = sum(Both_methods, na.rm = TRUE),
+      TWAS_Standard_only_genes = sum(Standard & !HBFSS, na.rm = TRUE),
+      TWAS_HBFSS_only_genes = sum(HBFSS & !Standard, na.rm = TRUE),
+      TWAS_Union_genes = dplyr::n(),
+      TWAS_Standard_APA_genes = sum(Standard & APA_multi_PAS, na.rm = TRUE),
+      TWAS_HBFSS_APA_genes = sum(HBFSS & APA_multi_PAS, na.rm = TRUE),
+      TWAS_DE_multi_PAS_genes = sum(DE_multi_PAS, na.rm = TRUE),
+      .groups = "drop"
+    )
+
+  count_cols <- setdiff(names(observed), c("Comparison", "Analysis"))
+
+  out <- grid %>%
+    dplyr::left_join(observed, by = c("Comparison", "Analysis"))
+
+  for (nm in count_cols) {
+    out[[nm]][is.na(out[[nm]])] <- 0L
+    out[[nm]] <- as.integer(out[[nm]])
+  }
+
+  out %>%
+    dplyr::mutate(Analysis = factor(Analysis, levels = analysis_levels)) %>%
+    dplyr::arrange(Comparison, Analysis) %>%
+    dplyr::mutate(Analysis = as.character(Analysis))
+}
+
+plot_twas_method_comparison <- function(summary_df) {
+  if (!nrow(summary_df)) return(invisible(NULL))
+
+  analysis_levels <- c(
+    "Original (No EVS)",
+    "NormEVS Lead", "NormEVS Rem",
+    "RawEVS Lead", "RawEVS Rem"
+  )
+
+  plot_df <- dplyr::bind_rows(
+    data.frame(
+      Comparison = summary_df$Comparison,
+      Analysis = summary_df$Analysis,
+      Category = "Standard only",
+      TWAS_genes = summary_df$TWAS_Standard_only_genes,
+      stringsAsFactors = FALSE
+    ),
+    data.frame(
+      Comparison = summary_df$Comparison,
+      Analysis = summary_df$Analysis,
+      Category = "HBFSS only",
+      TWAS_genes = summary_df$TWAS_HBFSS_only_genes,
+      stringsAsFactors = FALSE
+    ),
+    data.frame(
+      Comparison = summary_df$Comparison,
+      Analysis = summary_df$Analysis,
+      Category = "Both methods",
+      TWAS_genes = summary_df$TWAS_Both_genes,
+      stringsAsFactors = FALSE
+    )
+  ) %>%
+    dplyr::mutate(
+      Analysis = factor(Analysis, levels = analysis_levels),
+      Category = factor(
+        Category,
+        levels = c("Standard only", "HBFSS only", "Both methods")
+      )
+    )
+
+  p <- ggplot2::ggplot(
+    plot_df,
+    ggplot2::aes(x = Analysis, y = TWAS_genes, fill = Category)
+  ) +
+    ggplot2::geom_col(
+      position = ggplot2::position_dodge(width = 0.76),
+      width = 0.68
+    ) +
+    ggplot2::geom_text(
+      ggplot2::aes(label = TWAS_genes),
+      position = ggplot2::position_dodge(width = 0.76),
+      vjust = -0.25,
+      size = 2.6
+    ) +
+    ggplot2::facet_wrap(~ Comparison, ncol = 2, scales = "free_y") +
+    ggplot2::scale_fill_manual(
+      values = c(
+        "Standard only" = plot_palette$standard,
+        "HBFSS only" = plot_palette$hbfss,
+        "Both methods" = "#1F78B4"
+      ),
+      name = NULL
+    ) +
+    ggplot2::labs(
+      title = "3'aTWAS ortholog overlap: Standard DESeq2 versus HBFSS",
+      x = NULL,
+      y = "Unique TWAS ortholog genes"
+    ) +
+    manuscript_theme() +
+    ggplot2::theme(
+      axis.text.x = ggplot2::element_text(angle = 25, hjust = 1),
+      legend.position = "bottom"
+    )
+
+  save_grob(
+    p,
+    file.path(paper_fig_dir, "Figure_Manuscript_TWAS_Method_Comparison.png"),
+    width = 14.0,
+    height = 8.8
+  )
+
+  invisible(p)
+}
+
+plot_twas_gene_support <- function(gene_table) {
+  if (!nrow(gene_table)) return(invisible(NULL))
+
+  analysis_levels <- c(
+    "Original (No EVS)",
+    "NormEVS Lead", "NormEVS Rem",
+    "RawEVS Lead", "RawEVS Rem"
+  )
+
+  standard_long <- gene_table[gene_table$Standard, , drop = FALSE]
+  hbfss_long <- gene_table[gene_table$HBFSS, , drop = FALSE]
+
+  standard_long$Method <- "Standard DESeq2"
+  standard_long$Significant_PAS_n <- standard_long$Standard_PAS_n
+
+  hbfss_long$Method <- "HBFSS"
+  hbfss_long$Significant_PAS_n <- hbfss_long$HBFSS_PAS_n
+
+  long <- dplyr::bind_rows(standard_long, hbfss_long) %>%
+    dplyr::mutate(
+      Method = factor(Method, levels = c("Standard DESeq2", "HBFSS")),
+      Analysis = factor(Analysis, levels = analysis_levels),
+      Gene_label = paste0(
+        Rat_Ortholog,
+        " [", Human_TWAS_Genes, "]",
+        ifelse(APA_multi_PAS, " *", "")
+      )
+    )
+
+  if (!nrow(long)) return(invisible(NULL))
+
+  long$Gene_label <- factor(long$Gene_label, levels = sort(unique(long$Gene_label)))
+
+  p <- ggplot2::ggplot(
+    long,
+    ggplot2::aes(
+      x = Analysis,
+      y = Gene_label,
+      color = Method,
+      shape = Method,
+      size = Significant_PAS_n
+    )
+  ) +
+    ggplot2::geom_point(
+      position = ggplot2::position_dodge(width = 0.42),
+      alpha = 0.92,
+      stroke = 0.45
+    ) +
+    ggplot2::facet_wrap(~ Comparison, ncol = 2, scales = "free_y") +
+    ggplot2::scale_color_manual(
+      values = c("Standard DESeq2" = plot_palette$standard, "HBFSS" = plot_palette$hbfss),
+      name = NULL
+    ) +
+    ggplot2::scale_shape_manual(
+      values = c("Standard DESeq2" = 18, "HBFSS" = 8),
+      name = NULL
+    ) +
+    ggplot2::scale_size_continuous(range = c(2.0, 5.5), name = "Significant PASs") +
+    ggplot2::labs(
+      title = "3'aTWAS ortholog genes identified in WTTS-Seq",
+      subtitle = "* rat gene is represented by at least two WTTS PAS features",
+      x = NULL,
+      y = "Rat ortholog [human TWAS gene]"
+    ) +
+    manuscript_theme() +
+    ggplot2::theme(
+      axis.text.x = ggplot2::element_text(angle = 25, hjust = 1),
+      axis.text.y = ggplot2::element_text(size = 6.8),
+      legend.position = "bottom"
+    )
+
+  max_genes <- max(table(long$Comparison))
+  height <- min(24, max(8.0, 5.0 + 0.18 * max_genes))
+
+  save_grob(
+    p,
+    file.path(paper_fig_dir, "Figure_Manuscript_TWAS_Gene_Support.png"),
+    width = 15.0,
+    height = height
+  )
+
+  invisible(p)
+}
+
+run_twas_overlap_analysis <- function() {
+  twas_file <- resolve_existing_file(twas_file_candidates, "3'aTWAS file")
+  message("Running final 3'aTWAS ortholog overlap: ", twas_file)
+
+  twas <- read_twas_study(twas_file)
+  mapping <- build_twas_ortholog_map(twas)
+  rat_meta <- build_twas_rat_metadata(twas, mapping)
+  all_results <- collect_twas_analysis_results()
+
+  pas_table <- build_twas_overlap_pas_table(all_results, rat_meta)
+  gene_table <- build_twas_overlap_gene_table(pas_table)
+  summary_table <- build_twas_overlap_summary(gene_table)
+
+  twas_dir <- file.path(output_dir, "TWAS")
+  dir.create(twas_dir, recursive = TRUE, showWarnings = FALSE)
+
+  save_csv(pas_table, file.path(twas_dir, "Table_TWAS_Overlap_PAS.csv"))
+  save_csv(gene_table, file.path(twas_dir, "Table_TWAS_Overlap_Genes.csv"))
+  save_csv(summary_table, file.path(twas_dir, "Table_TWAS_Overlap_Summary.csv"))
+
+  plot_twas_method_comparison(summary_table)
+  plot_twas_gene_support(gene_table)
+
+  invisible(list(
+    mapping = mapping,
+    pas = pas_table,
+    genes = gene_table,
+    summary = summary_table
+  ))
+}
 
 comparison_inputs <- lapply(seq_len(nrow(comparison_table)), function(i) {
   prepare_comparison_data(
@@ -3551,7 +3772,6 @@ if (nrow(overall_summary) > 0L) {
 }
 
 write_methods_note()
-clean_manuscript_figure_exports()
 
 tryCatch(
   {
@@ -3572,12 +3792,20 @@ if (length(failed_comparisons) > 0L) {
   )
 }
 
+# Final analytical stage: compare Standard DESeq2 and HBFSS with 3'aTWAS rat orthologs.
+twas_completed <- FALSE
+if (length(failed_comparisons) == 0L) {
+  twas_results <- run_twas_overlap_analysis()
+  twas_completed <- TRUE
+}
+
+writeLines(
+  capture.output(sessionInfo()),
+  file.path(output_dir, "SessionInfo.txt")
+)
+
 manifest_df <- write_export_manifest(output_dir)
 
-finalize_git_exports(
-  root_dir = output_dir,
-  repo_root = repo_root
-)
 
 cat("\n=====================================================\n")
 cat("Pipeline complete.\n")
@@ -3585,6 +3813,7 @@ cat("Repository root:\n")
 cat(repo_root, "\n")
 cat("Output directory:\n")
 cat(output_dir, "\n")
+cat("3'aTWAS overlap: ", ifelse(twas_completed, "complete", "not run"), "\n", sep = "")
 cat("Exported files:\n")
 cat(nrow(manifest_df), "\n")
 cat("=====================================================\n\n")
