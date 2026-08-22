@@ -11,7 +11,7 @@ options(stringsAsFactors = FALSE)
 
 # =============================================================================
 # FINAL MANUSCRIPT ANALYSIS
-# PC1-NB LEADING-EDGE REGIME + PARETO-OPTIMIZED EIGENVECTOR SPLITTING
+# PC1-NB LEADING-EDGE REGIME + CHANGEPOINT-OPTIMIZED EIGENVECTOR SPLITTING
 # =============================================================================
 #
 # The historical top-5,000 value is NEVER used to fit c1, c2, Anchor,
@@ -110,24 +110,45 @@ options(stringsAsFactors = FALSE)
 #     maximize G(k)
 #     minimize X(k)
 #
-# No arbitrary penalty weight is introduced.  We first retain the Pareto
-# frontier.  Within that frontier, the reproducible knee is the point with
-# maximum separation between normalized benefit and normalized cost:
+# We first retain only non-dominated Pareto-frontier points.  We then estimate
+# the transition in the EMPIRICAL gain-versus-crossing relationship rather
+# than assigning a user-chosen contamination penalty.
 #
-#     knee_score(k) = G_norm(k) - X_norm(k)
+# On the Pareto frontier, fit the continuous two-segment model:
 #
-# This is equivalent, up to a constant factor, to maximum perpendicular
-# separation above the equal-gain/equal-cost diagonal after both objectives
-# are normalized to [0,1].  Ties choose the larger k.
+#     G(X) = beta0 + beta1*X + gamma*(X - tau)+
 #
-# Pair-specific knees are reported for diagnosis.  A SINGLE common manuscript
-# cutoff is obtained by pooling counts across all four comparisons at each k:
+# where (u)+ = max(u,0).  Therefore:
+#
+#     slope before tau = beta1
+#     slope after  tau = beta1 + gamma
+#
+# Candidate tau values are observed interior Pareto-frontier crossing counts.
+# At least three frontier observations are required on each side so each local
+# trend is empirically supported rather than being determined by an endpoint.
+# The selected tau minimizes BIC among shape-valid fits with nonnegative slopes
+# and a lower post-breakpoint slope:
+#
+#     slope_after < slope_before
+#
+# This identifies the point where expanding k begins to return fewer additional
+# legitimate Joint/eligible-Disjoint sites per additional site crossing the
+# opposite-arm c2 boundary.  No contamination percentage, normalized weight,
+# or arbitrary gain-minus-cost penalty enters the cutoff selection.
+#
+# For diagnosis, the segmented model is also compared with a single linear
+# G-versus-X model.  Delta_BIC = BIC_linear - BIC_segmented; positive values
+# favor the change-point model.  The best segmented approximation is still
+# returned if the linear model has lower BIC, but a warning/flag is emitted.
+#
+# Pair-specific change-points are reported for diagnosis.  A SINGLE common
+# manuscript cutoff is obtained by pooling counts across all four comparisons:
 #
 #     G_total(k) = sum_m G_m(k)
 #     X_total(k) = sum_m X_m(k)
 #
-# and selecting the knee of the pooled Pareto frontier.  This makes one common
-# cutoff data-derived while allowing the four time points to contribute.
+# and fitting the same Pareto-frontier change-point model to the pooled curve.
+# The observed frontier point at tau supplies the selected common k*.
 #
 # FINAL SITE SET
 # --------------
@@ -1407,10 +1428,11 @@ mark_pareto_frontier <- function(
   )
 }
 
-select_pareto_knee <- function(
+select_pareto_changepoint <- function(
     scan_df,
     good_col = "good_n",
-    cost_col = "cross_n") {
+    cost_col = "cross_n",
+    min_segment_points = 3L) {
 
   marked <- mark_pareto_frontier(
     scan_df,
@@ -1418,59 +1440,297 @@ select_pareto_knee <- function(
     cost_col = cost_col
   )
 
-  frontier <- marked$frontier
+  frontier <- marked$frontier %>%
+    arrange(cost, good, k)
 
-  if (nrow(frontier) == 1L) {
-    chosen <- frontier[1L, , drop = FALSE]
-    chosen$good_norm <- 1
-    chosen$cost_norm <- 0
-    chosen$knee_score <- 1
-  } else {
-    good_range <- range(frontier$good, na.rm = TRUE)
-    cost_range <- range(frontier$cost, na.rm = TRUE)
+  n <- nrow(frontier)
 
-    if (diff(good_range) == 0) {
-      frontier$good_norm <- 1
-    } else {
-      frontier$good_norm <- (
-        frontier$good - good_range[1L]
-      ) / diff(good_range)
-    }
-
-    if (diff(cost_range) == 0) {
-      frontier$cost_norm <- 0
-    } else {
-      frontier$cost_norm <- (
-        frontier$cost - cost_range[1L]
-      ) / diff(cost_range)
-    }
-
-    frontier$knee_score <- (
-      frontier$good_norm - frontier$cost_norm
+  if (n < (2L * min_segment_points + 1L)) {
+    stop(
+      "Too few unique Pareto-frontier coordinates for a two-segment ",
+      "change-point fit. Need at least ",
+      2L * min_segment_points + 1L,
+      "; found ",
+      n,
+      "."
     )
-
-    best_score <- max(
-      frontier$knee_score,
-      na.rm = TRUE
-    )
-
-    candidate <- frontier %>%
-      filter(
-        abs(knee_score - best_score) < 1e-12
-      ) %>%
-      arrange(
-        desc(good),
-        cost,
-        desc(k)
-      )
-
-    chosen <- candidate[1L, , drop = FALSE]
   }
 
+  x <- as.numeric(frontier$cost)
+  y <- as.numeric(frontier$good)
+
+  if (any(!is.finite(x)) || any(!is.finite(y))) {
+    stop("Non-finite Pareto-frontier values encountered.")
+  }
+
+  if (any(diff(x) <= 0)) {
+    stop(
+      "Pareto-frontier crossing counts must be strictly increasing after ",
+      "duplicate-cost reduction."
+    )
+  }
+
+  # -----------------------------------------------------------------------
+  # Single-line reference model G = b0 + b1*X.
+  # BIC is used only to assess whether a two-segment description is supported.
+  # -----------------------------------------------------------------------
+
+  X_linear <- cbind(
+    intercept = 1,
+    x = x
+  )
+
+  linear_fit <- stats::lm.fit(
+    x = X_linear,
+    y = y
+  )
+
+  rss_linear <- sum(linear_fit$residuals^2)
+  rss_linear <- max(rss_linear, .Machine$double.eps)
+
+  bic_linear <- (
+    n * log(rss_linear / n) +
+    2 * log(n)
+  )
+
+  # -----------------------------------------------------------------------
+  # Exhaustive continuous broken-stick fit.
+  #
+  # For each observed interior breakpoint tau, the model matrix is:
+  #
+  #   [1, X, (X-tau)+]
+  #
+  # Cross-products are calculated from cumulative sums, so scanning every
+  # admissible breakpoint is O(n), not O(n^2).
+  # -----------------------------------------------------------------------
+
+  total_x <- sum(x)
+  total_x2 <- sum(x^2)
+  total_y <- sum(y)
+  total_xy <- sum(x * y)
+  total_y2 <- sum(y^2)
+
+  tail_x <- rev(cumsum(rev(x)))
+  tail_x2 <- rev(cumsum(rev(x^2)))
+  tail_y <- rev(cumsum(rev(y)))
+  tail_xy <- rev(cumsum(rev(x * y)))
+
+  candidate_idx <- seq.int(
+    min_segment_points,
+    n - min_segment_points
+  )
+
+  candidate_rows <- vector(
+    "list",
+    length(candidate_idx)
+  )
+
+  for (jj in seq_along(candidate_idx)) {
+    i <- candidate_idx[jj]
+    tau <- x[i]
+
+    # h=(X-tau)+ is nonzero only for observations strictly right of tau.
+    n_right <- n - i
+
+    sx_right <- tail_x[i + 1L]
+    sx2_right <- tail_x2[i + 1L]
+    sy_right <- tail_y[i + 1L]
+    sxy_right <- tail_xy[i + 1L]
+
+    sum_h <- sx_right - n_right * tau
+    sum_xh <- sx2_right - tau * sx_right
+    sum_h2 <- (
+      sx2_right -
+      2 * tau * sx_right +
+      n_right * tau^2
+    )
+    sum_hy <- sxy_right - tau * sy_right
+
+    XtX <- matrix(
+      c(
+        n, total_x, sum_h,
+        total_x, total_x2, sum_xh,
+        sum_h, sum_xh, sum_h2
+      ),
+      nrow = 3L,
+      byrow = TRUE
+    )
+
+    Xty <- c(
+      total_y,
+      total_xy,
+      sum_hy
+    )
+
+    beta <- tryCatch(
+      solve(XtX, Xty),
+      error = function(e) rep(NA_real_, 3L)
+    )
+
+    if (any(!is.finite(beta))) {
+      candidate_rows[[jj]] <- data.frame(
+        frontier_index = i,
+        tau = tau,
+        k = frontier$k[i],
+        rss = Inf,
+        bic = Inf,
+        slope_before = NA_real_,
+        slope_after = NA_real_,
+        slope_change = NA_real_,
+        shape_valid = FALSE,
+        stringsAsFactors = FALSE
+      )
+
+      next
+    }
+
+    rss <- total_y2 - sum(beta * Xty)
+    rss <- max(rss, .Machine$double.eps)
+
+    # Breakpoint tau is also estimated, so the segmented BIC counts four
+    # parameters: intercept, pre-slope, slope change, and breakpoint.
+    bic <- (
+      n * log(rss / n) +
+      4 * log(n)
+    )
+
+    slope_before <- beta[2L]
+    slope_after <- beta[2L] + beta[3L]
+
+    shape_valid <- (
+      is.finite(slope_before) &&
+      is.finite(slope_after) &&
+      slope_before >= 0 &&
+      slope_after >= 0 &&
+      slope_after < slope_before
+    )
+
+    candidate_rows[[jj]] <- data.frame(
+      frontier_index = i,
+      tau = tau,
+      k = frontier$k[i],
+      rss = rss,
+      bic = bic,
+      slope_before = slope_before,
+      slope_after = slope_after,
+      slope_change = slope_after - slope_before,
+      shape_valid = shape_valid,
+      beta0 = beta[1L],
+      beta1 = beta[2L],
+      gamma = beta[3L],
+      stringsAsFactors = FALSE
+    )
+  }
+
+  candidates <- bind_rows(candidate_rows)
+
+  valid <- candidates %>%
+    filter(
+      shape_valid,
+      is.finite(bic)
+    )
+
+  shape_supported <- nrow(valid) > 0L
+
+  if (shape_supported) {
+    chosen <- valid %>%
+      arrange(
+        bic,
+        desc(k)
+      ) %>%
+      slice(1L)
+  } else {
+    warning(
+      "No Pareto-frontier breakpoint produced the expected decreasing ",
+      "gain-per-crossing slope. Using the minimum-BIC segmented ",
+      "approximation and flagging shape_supported=FALSE."
+    )
+
+    chosen <- candidates %>%
+      filter(is.finite(bic)) %>%
+      arrange(
+        bic,
+        desc(k)
+      ) %>%
+      slice(1L)
+  }
+
+  if (nrow(chosen) != 1L) {
+    stop("No finite Pareto change-point model could be fit.")
+  }
+
+  i_star <- as.integer(chosen$frontier_index[1L])
+  tau_star <- chosen$tau[1L]
   k_star <- as.integer(chosen$k[1L])
 
+  beta0 <- chosen$beta0[1L]
+  beta1 <- chosen$beta1[1L]
+  gamma <- chosen$gamma[1L]
+
+  fitted_good <- (
+    beta0 +
+    beta1 * x +
+    gamma * pmax(x - tau_star, 0)
+  )
+
+  frontier$segmented_fit_good <- fitted_good
+  frontier$marginal_good_per_cross <- c(
+    NA_real_,
+    diff(y) / diff(x)
+  )
+  frontier$is_changepoint <- seq_len(n) == i_star
+
+  delta_bic <- bic_linear - chosen$bic[1L]
+  bic_supports_segmented <- is.finite(delta_bic) && delta_bic > 0
+
+  if (!bic_supports_segmented) {
+    warning(
+      "The selected segmented Pareto model does not improve BIC over a ",
+      "single linear gain-versus-crossing model (Delta_BIC=",
+      signif(delta_bic, 5),
+      "). Treat the breakpoint as descriptive unless additional support is ",
+      "established."
+    )
+  }
+
   out <- marked$scan
-  out$is_selected_knee <- out$k == k_star
+
+  frontier_key <- paste(
+    frontier$cost,
+    frontier$good,
+    sep = "::"
+  )
+
+  out_key <- paste(
+    out[[cost_col]],
+    out[[good_col]],
+    sep = "::"
+  )
+
+  m <- match(
+    out_key,
+    frontier_key
+  )
+
+  out$segmented_fit_good <- frontier$segmented_fit_good[m]
+  out$marginal_good_per_cross <- frontier$marginal_good_per_cross[m]
+  out$is_selected_changepoint <- out$k == k_star
+
+  # Scalar diagnostics repeated in the scan make the exported optimization
+  # table self-contained and easy to audit.
+  out$breakpoint_cross_n <- tau_star
+  out$slope_before_breakpoint <- chosen$slope_before[1L]
+  out$slope_after_breakpoint <- chosen$slope_after[1L]
+  out$slope_ratio_after_before <- ifelse(
+    chosen$slope_before[1L] > 0,
+    chosen$slope_after[1L] / chosen$slope_before[1L],
+    NA_real_
+  )
+  out$bic_linear <- bic_linear
+  out$bic_segmented <- chosen$bic[1L]
+  out$delta_BIC_linear_minus_segmented <- delta_bic
+  out$shape_supported <- shape_supported
+  out$bic_supports_segmented <- bic_supports_segmented
 
   zero_idx <- which(out[[cost_col]] == 0)
 
@@ -1483,10 +1743,23 @@ select_pareto_knee <- function(
   list(
     scan = out,
     frontier = frontier,
+    candidates = candidates,
     selected_k = k_star,
-    selected_good = chosen$good[1L],
-    selected_cost = chosen$cost[1L],
-    selected_knee_score = chosen$knee_score[1L],
+    selected_good = frontier$good[i_star],
+    selected_cost = frontier$cost[i_star],
+    breakpoint_cross_n = tau_star,
+    slope_before = chosen$slope_before[1L],
+    slope_after = chosen$slope_after[1L],
+    slope_ratio_after_before = ifelse(
+      chosen$slope_before[1L] > 0,
+      chosen$slope_after[1L] / chosen$slope_before[1L],
+      NA_real_
+    ),
+    bic_linear = bic_linear,
+    bic_segmented = chosen$bic[1L],
+    delta_BIC = delta_bic,
+    shape_supported = shape_supported,
+    bic_supports_segmented = bic_supports_segmented,
     max_zero_crossing_k = zero_max_k
   )
 }
@@ -1931,10 +2204,22 @@ build_timepoint_table <- function(
       treatment_terminal =
         group_results[[treatment_group]]$terminal,
 
-      pairwise_pareto_k =
+      pairwise_changepoint_k =
         pair_opt$selected_k,
-      pairwise_knee_score =
-        pair_opt$selected_knee_score,
+      pairwise_breakpoint_cross_n =
+        pair_opt$breakpoint_cross_n,
+      pairwise_slope_before =
+        pair_opt$slope_before,
+      pairwise_slope_after =
+        pair_opt$slope_after,
+      pairwise_slope_ratio_after_before =
+        pair_opt$slope_ratio_after_before,
+      pairwise_delta_BIC =
+        pair_opt$delta_BIC,
+      pairwise_shape_supported =
+        pair_opt$shape_supported,
+      pairwise_BIC_supports_segmented =
+        pair_opt$bic_supports_segmented,
       pairwise_max_zero_crossing_k =
         pair_opt$max_zero_crossing_k,
 
@@ -2021,8 +2306,20 @@ build_key_table <- function(
     global_selected_k = global_opt$selected_k,
     global_selected_cutoff_rank =
       rank_cutoff_from_k(N, global_opt$selected_k),
-    global_knee_score =
-      global_opt$selected_knee_score,
+    global_breakpoint_cross_n =
+      global_opt$breakpoint_cross_n,
+    global_slope_before =
+      global_opt$slope_before,
+    global_slope_after =
+      global_opt$slope_after,
+    global_slope_ratio_after_before =
+      global_opt$slope_ratio_after_before,
+    global_delta_BIC =
+      global_opt$delta_BIC,
+    global_shape_supported =
+      global_opt$shape_supported,
+    global_BIC_supports_segmented =
+      global_opt$bic_supports_segmented,
     global_max_zero_crossing_k =
       global_opt$max_zero_crossing_k,
 
@@ -2040,11 +2337,11 @@ build_key_table <- function(
       global_row$good_fraction,
 
     pairwise_k_min =
-      min(timepoint_table$pairwise_pareto_k),
+      min(timepoint_table$pairwise_changepoint_k),
     pairwise_k_median =
-      median(timepoint_table$pairwise_pareto_k),
+      median(timepoint_table$pairwise_changepoint_k),
     pairwise_k_max =
-      max(timepoint_table$pairwise_pareto_k),
+      max(timepoint_table$pairwise_changepoint_k),
 
     paper_reference_k = paper_k,
     paper_reference_cutoff_rank =
@@ -2217,7 +2514,12 @@ make_cutoff_panel <- function(
 
   frontier <- scan_df %>%
     filter(is_pareto) %>%
-    arrange(cross_n, good_n)
+    arrange(cross_n, good_n, k) %>%
+    distinct(
+      cross_n,
+      good_n,
+      .keep_all = TRUE
+    )
 
   p <- ggplot(
     scan_df,
@@ -2228,27 +2530,37 @@ make_cutoff_panel <- function(
   ) +
     geom_path(
       aes(group = 1),
-      linewidth = 0.55,
-      alpha = 0.40
+      linewidth = 0.48,
+      alpha = 0.28
     ) +
     geom_path(
       data = frontier,
       aes(group = 1),
-      linewidth = 1.15
+      linewidth = 1.05
+    ) +
+    geom_line(
+      data = frontier %>%
+        filter(is.finite(segmented_fit_good)),
+      aes(
+        y = segmented_fit_good,
+        group = 1
+      ),
+      linewidth = 0.95,
+      linetype = "dashed"
     ) +
     geom_point(
       data = selected,
-      size = 3.6,
+      size = 3.8,
       shape = 18
     ) +
     labs(
       title = title_text,
       subtitle = paste0(
-        "Pareto knee k*=",
+        "Change-point k*=",
         selected_k,
-        "; 5k shown as reference"
+        "; 5k reference"
       ),
-      x = "Outside leading edge",
+      x = "Sites outside opposite-arm leading-edge regime",
       y = "Joint + eligible disjoint"
     ) +
     theme_manuscript() +
@@ -2529,12 +2841,12 @@ make_overall_figure <- function(
     ) +
     theme_manuscript()
 
-  # C. Pareto cutoff optimization.
+  # C. Data-derived cutoff change-point.
   pC <- make_cutoff_panel(
     scan_df = global_scan,
     selected_k = selected_k,
     paper_k = paper_k,
-    title_text = "C. Global cutoff optimization"
+    title_text = "C. Global cutoff change-point"
   )
 
   # D. Post-boundary NB scaling.
@@ -2947,7 +3259,7 @@ make_timepoint_figure <- function(
     ) +
     theme_manuscript()
 
-  # C. Pair-specific Pareto optimization.
+  # C. Pair-specific cutoff change-point.
   pC <- make_cutoff_panel(
     scan_df = pair_scan,
     selected_k = pair_optimum$selected_k,
@@ -2955,12 +3267,12 @@ make_timepoint_figure <- function(
     title_text = paste0(
       "C. ",
       comparison_name,
-      " cutoff optimization"
+      " cutoff change-point"
     )
   ) +
     labs(
       subtitle = paste0(
-        "Pair knee=",
+        "Pair change-point=",
         pair_optimum$selected_k,
         "; global k*=",
         global_k,
@@ -3201,7 +3513,7 @@ for (g in names(group_results)) {
 }
 
 # -------------------------------------------------------------------------
-# Exhaustive pairwise cutoff scans.
+# Exhaustive pairwise cutoff scans and Pareto change-point fits.
 # -------------------------------------------------------------------------
 
 message(
@@ -3234,7 +3546,7 @@ for (comparison_name in names(COMPARISONS)) {
     treatment_group = treatment_group
   )
 
-  opt <- select_pareto_knee(
+  opt <- select_pareto_changepoint(
     scan,
     good_col = "good_n",
     cost_col = "cross_n"
@@ -3245,12 +3557,18 @@ for (comparison_name in names(COMPARISONS)) {
 
   message(
     comparison_name,
-    ": pair Pareto knee k*=",
+    ": pair change-point k*=",
     opt$selected_k,
     "; good=",
     opt$selected_good,
     "; crossings=",
     opt$selected_cost,
+    "; slope before=",
+    signif(opt$slope_before, 4),
+    "; slope after=",
+    signif(opt$slope_after, 4),
+    "; Delta_BIC=",
+    signif(opt$delta_BIC, 5),
     "; max zero-crossing k=",
     ifelse(
       is.na(opt$max_zero_crossing_k),
@@ -3261,14 +3579,14 @@ for (comparison_name in names(COMPARISONS)) {
 }
 
 # -------------------------------------------------------------------------
-# Global common cutoff: aggregate objectives across all four comparisons.
+# Global common cutoff: pooled Pareto change-point across all four comparisons.
 # -------------------------------------------------------------------------
 
 global_scan_raw <- aggregate_global_cutoff_scan(
   pair_scans
 )
 
-global_opt <- select_pareto_knee(
+global_opt <- select_pareto_changepoint(
   global_scan_raw,
   good_col = "good_n",
   cost_col = "cross_n"
@@ -3281,11 +3599,24 @@ GLOBAL_CUTOFF_RANK <- rank_cutoff_from_k(
 )
 
 message(
-  "GLOBAL Pareto knee k*=",
+  "GLOBAL change-point k*=",
   GLOBAL_K,
   " (cutoff rank ",
   GLOBAL_CUTOFF_RANK,
+  "; crossing breakpoint ",
+  global_opt$breakpoint_cross_n,
   ")"
+)
+
+message(
+  "Global gain-per-crossing slope: ",
+  signif(global_opt$slope_before, 5),
+  " before -> ",
+  signif(global_opt$slope_after, 5),
+  " after; Delta_BIC=",
+  signif(global_opt$delta_BIC, 6),
+  "; segmented BIC supported=",
+  global_opt$bic_supports_segmented
 )
 
 message(
@@ -3592,13 +3923,13 @@ if (!zip_ok) {
 # =============================================================================
 
 message("============================================================")
-message("FINAL PC1-NB / PARETO CUTOFF ANALYSIS COMPLETE")
+message("FINAL PC1-NB / CHANGEPOINT CUTOFF ANALYSIS COMPLETE")
 message("Shared c1 = ", C1)
 message("Shared c2 = ", C2)
 message("c2-defined leading-edge size per arm = ", N - C2)
 
 message(
-  "Pairwise Pareto knees: ",
+  "Pairwise change-points: ",
   paste(
     names(pair_optima),
     vapply(
@@ -3612,11 +3943,20 @@ message(
 )
 
 message(
-  "GLOBAL Pareto knee k* = ",
+  "GLOBAL change-point k* = ",
   GLOBAL_K,
   " (rank >= ",
   GLOBAL_CUTOFF_RANK,
   ")"
+)
+
+message(
+  "Change-point slopes (good sites per outside site): ",
+  signif(global_opt$slope_before, 5),
+  " before -> ",
+  signif(global_opt$slope_after, 5),
+  " after; Delta_BIC=",
+  signif(global_opt$delta_BIC, 6)
 )
 
 global_selected_row <- global_opt$scan %>%
