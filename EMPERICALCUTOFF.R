@@ -1,127 +1,111 @@
 #!/usr/bin/env Rscript
 
 # =============================================================================
-# SEQUENCE / HBFSS SIMULATION VALIDATION - METHOD-ALIGNED FINAL SCRIPT
-#
-# Purpose:
-#   Standalone simulation comparing DESeq2 Wald/BH and DESeq2 composite-null
-#   approaches against empirical-null / higher-criticism HBFSS calls.
-#
-# Key definitions preserved:
-#   DESeq2 uses Wald p-values and DESeq2's intrinsic BH-adjusted p-values.
-#   DESeq2 strong/weak arms use DESeq2 composite null tests:
-#       greaterAbs for strong effects
-#       lessAbs for sub-boundary effects
-#   fdrtool estimates empirical p-values from the Wald statistics.
-#   higher criticism chooses one empirical-p threshold per simulated dataset.
-#   HBFSS = abs(apeglm-shrunken log2FC) * -log10(empirical p).
-#   HBFSS cutoff = -log10(HC p-threshold) * LFC boundary.
-#
-# Main outputs are direct, interpretable figures rather than large walls of
-# boxplots. The script is self-contained and does not depend on the main
-# manuscript pipeline.
+# SEQUENCE FINAL MANUSCRIPT PIPELINE
+# Complete clean rewrite: DESeq2 + fixed top-N EVS + empirical-null HC/HBFSS
+# =============================================================================
+# This script is intentionally organized as a single executable manuscript
+# pipeline. It does four things only:
+#   1. Imports the WTTS-Seq raw count matrix.
+#   2. Runs Original, NormEVS-Leading, NormEVS-Remainder, RawEVS-Leading,
+#      and RawEVS-Remainder DESeq2/HBFSS analyses for each comparison.
+#   3. Exports result tables, summaries, manuscript figures, session info,
+#      methods notes, and a manifest.
+#   4. Commits and pushes the manuscript script and outputs to GitHub after
+#      successful completion.
 # =============================================================================
 
 options(stringsAsFactors = FALSE)
 options(width = 140)
 
 # =============================================================================
-# SETTINGS
+# USER SETTINGS
 # =============================================================================
 
+count_file_candidates <- c(
+  file.path("data", "WTTS-Seq_2022.2_DE_raw_read_numbers.csv"),
+  "WTTS-Seq_2022.2_DE_raw_read_numbers.csv"
+)
+
 output_folder_name <- "manuscript_final_clean"
-simulation_folder_name <- "simulation_validation"
-reset_simulation_dir <- TRUE
-
-# Run both the existing simulation validation and the empirical dual-cutoff
-# analysis in one script.
-run_simulation_validation_block <- TRUE
-run_empirical_dual_cutoff_block <- TRUE
-
-# Empirical WTTS analysis.
-empirical_folder_name <- "dual_cutoff_empirical"
-empirical_count_file <- file.path("data", "WTTS-Seq_2022.2_DE_raw_read_numbers.csv")
-
-# The two prespecified top-k depths to compare.
-empirical_cutoffs <- c(
-  Cutoff_5000 = 5000L,
-  Cutoff_4077 = 4077L
-)
-
-empirical_group_patterns <- c(
-  RT0  = "^R0_",
-  ZT6  = "^ZT6_",
-  RT2  = "^R2_",
-  ZT8  = "^ZT8_",
-  RT4  = "^R4_",
-  ZT10 = "^ZT10_",
-  RT8  = "^R8_",
-  ZT14 = "^ZT14_"
-)
-
-empirical_comparisons <- list(
-  RT0_ZT6  = c(control = "RT0", treatment = "ZT6"),
-  RT2_ZT8  = c(control = "RT2", treatment = "ZT8"),
-  RT4_ZT10 = c(control = "RT4", treatment = "ZT10"),
-  RT8_ZT14 = c(control = "RT8", treatment = "ZT14")
-)
-
-reset_empirical_dir <- TRUE
+reset_output_dir <- FALSE
 
 alpha_standard <- 0.10
 alpha_strong <- 0.10
 alpha_weak <- 0.10
 lfc_boundary <- 1.0
 
-hc_invalid_below <- 0.001
+# Fixed top-N EVS. The union of treatment top-N and control top-N is the Leading Edge.
+evs_top_n <- 5000L
+evs_modes <- c("NormEVS", "RawEVS")
+
+# Empirical-null / HC behavior. If strict_empirical_null = TRUE, fdrtool failure stops the run.
+strict_empirical_null <- TRUE
 hc_invalid_at_or_above <- 0.95
 calculation_p_floor <- .Machine$double.xmin
 plot_p_floor <- 1e-16
-strict_empirical_null <- FALSE
 
-simulation_seed <- as.integer(Sys.getenv("SEQUENCE_SIM_SEED", "42"))
-simulation_n_features <- as.integer(Sys.getenv("SEQUENCE_SIM_FEATURES", "1000"))
-simulation_n_samples_per_group <- as.integer(Sys.getenv("SEQUENCE_SIM_SAMPLES_PER_GROUP", "6"))
-simulation_n_reps <- as.integer(Sys.getenv("SEQUENCE_SIM_REPS", "20"))
-simulation_progress_every <- as.integer(Sys.getenv("SEQUENCE_SIM_PROGRESS_EVERY", "1"))
-simulation_checkpoint_every <- as.integer(Sys.getenv("SEQUENCE_SIM_CHECKPOINT_EVERY", "10"))
-simulation_rep_timeout_seconds <- as.numeric(Sys.getenv("SEQUENCE_SIM_REP_TIMEOUT_SECONDS", "240"))
-
-simulation_base_mean <- 200
-simulation_dispersion_null <- 0.10
-simulation_dispersion_de <- 0.15
-simulation_de_fractions <- c(0.05, 0.10)
-simulation_lfc_magnitudes <- c(0.50, 1.00, 2.00)
-simulation_weak_lfc_min <- 0.20
-simulation_weak_lfc_max <- 0.80
-simulation_null_inflation <- c(0.00, 0.10)
-simulation_fit_type <- "local"
-
-figure_dpi <- as.integer(Sys.getenv("SEQUENCE_SIM_DPI", "600"))
-figure_width_twocol <- 6.7
-base_theme_size <- 7
+# Figure behavior.
+figure_dpi <- 600
+base_theme_size <- 9
 export_pdf_also <- TRUE
-export_tiff_also <- TRUE
-stamp_figures <- FALSE
+save_individual_figures <- TRUE
+label_top_n_total <- 8L
+label_top_n_per_class <- 2L
 
-# Git is optional. Default FALSE to avoid turning a successful simulation into a
-# failed run because of credentials/network state. Set SEQUENCE_GIT_PUSH=true to push.
-git_push_after_success <- tolower(Sys.getenv("SEQUENCE_GIT_PUSH", "false")) %in% c("1", "true", "yes", "y")
-git_remote_name <- Sys.getenv("SEQUENCE_GIT_REMOTE", "origin")
-git_branch_name <- Sys.getenv("SEQUENCE_GIT_BRANCH", NA_character_)
-git_commit_message <- Sys.getenv(
-  "SEQUENCE_GIT_COMMIT_MESSAGE",
-  paste0("Update SEQUENCE simulation validation outputs ", format(Sys.time(), "%Y-%m-%d %H:%M:%S"))
+# GitHub push behavior. The push step runs only after all analysis and figure
+# export checks complete successfully.
+git_push_after_success <- TRUE
+git_remote_name <- "origin"
+git_commit_message <- paste0("Update SEQUENCE manuscript outputs ", format(Sys.time(), "%Y-%m-%d %H:%M:%S"))
+git_pull_rebase_before_push <- TRUE
+
+# =============================================================================
+# STUDY DESIGN
+# =============================================================================
+
+sample_metadata <- data.frame(
+  id = c(
+    "R0_1", "R0_2", "R0_3", "R0_4", "R0_5",
+    "ZT6_1", "ZT6_2", "ZT6_3", "ZT6_4", "ZT6_5",
+    "R2_1", "R2_2", "R2_3", "R2_4", "R2_5",
+    "ZT8_1", "ZT8_2", "ZT8_3", "ZT8_4", "ZT8_5",
+    "R4_1", "R4_2", "R4_3", "R4_4", "R4_5",
+    "ZT10_1", "ZT10_2", "ZT10_3", "ZT10_4", "ZT10_5",
+    "R8_1", "R8_2", "R8_3", "R8_4", "R8_5",
+    "ZT14_1", "ZT14_2", "ZT14_3", "ZT14_4", "ZT14_5"
+  ),
+  condition = c(
+    rep("trt", 5), rep("untrt", 5),
+    rep("trt", 5), rep("untrt", 5),
+    rep("trt", 5), rep("untrt", 5),
+    rep("trt", 5), rep("untrt", 5)
+  ),
+  stringsAsFactors = FALSE
+)
+rownames(sample_metadata) <- sample_metadata$id
+sample_metadata$condition <- factor(sample_metadata$condition, levels = c("untrt", "trt"))
+
+comparison_table <- data.frame(
+  comparison_name = c("RT0_ZT6", "RT2_ZT8", "RT4_ZT10", "RT8_ZT14"),
+  treatment_prefix = c("R0", "R2", "R4", "R8"),
+  control_prefix = c("ZT6", "ZT8", "ZT10", "ZT14"),
+  stringsAsFactors = FALSE
 )
 
 # =============================================================================
 # PACKAGES
 # =============================================================================
 
-required_packages <- c("DESeq2", "apeglm", "fdrtool", "ggplot2", "dplyr", "tidyr", "scales", "grid")
+required_packages <- c(
+  "DESeq2", "apeglm", "fdrtool", "ggplot2", "ggrepel", "dplyr",
+  "gridExtra", "grid", "scales", "S4Vectors", "SummarizedExperiment"
+)
+
 missing_packages <- required_packages[
   !vapply(required_packages, requireNamespace, logical(1), quietly = TRUE)
 ]
+
 if (length(missing_packages) > 0L) {
   stop("Install missing package(s): ", paste(missing_packages, collapse = ", "), call. = FALSE)
 }
@@ -131,13 +115,44 @@ suppressPackageStartupMessages({
   library(apeglm)
   library(fdrtool)
   library(ggplot2)
+  library(ggrepel)
   library(dplyr)
-  library(scales)
+  library(gridExtra)
   library(grid)
+  library(scales)
+  library(S4Vectors)
+  library(SummarizedExperiment)
 })
 
 # =============================================================================
-# PATHS / LOGGING
+# CONSTANTS FOR DISPLAY
+# =============================================================================
+
+class_levels <- c("BG", "Weak", "Strong", "Std", "HBFSS")
+class_labels <- c(
+  BG = "Background",
+  Weak = "Weak effect",
+  Strong = "Strong effect",
+  Std = "Standard DESeq2",
+  HBFSS = "HBFSS-only"
+)
+class_colors <- c(
+  BG = "#BDBDBD",
+  Weak = "#0072B2",
+  Strong = "#E31A1C",
+  Std = "#33A02C",
+  HBFSS = "#6A3D9A"
+)
+class_shapes <- c(BG = 21, Weak = 24, Strong = 22, Std = 23, HBFSS = 25)
+class_sizes <- c(BG = 0.55, Weak = 1.10, Strong = 1.15, Std = 1.10, HBFSS = 1.15)
+class_alphas <- c(BG = 0.24, Weak = 0.92, Strong = 0.95, Std = 0.90, HBFSS = 0.95)
+
+threshold_color <- "#A65628"
+treatment_color <- "#1F78B4"
+control_color <- "#4D4D4D"
+
+# =============================================================================
+# PATHS, LOGGING, AND GENERAL HELPERS
 # =============================================================================
 
 script_path <- function() {
@@ -148,78 +163,45 @@ script_path <- function() {
 }
 
 find_repo_root <- function() {
-  starts <- unique(c(dirname(script_path()), getwd()))
-  starts <- starts[!is.na(starts) & dir.exists(starts)]
-  for (start in starts) {
+  candidates <- unique(c(dirname(script_path()), getwd()))
+  candidates <- candidates[!is.na(candidates) & dir.exists(candidates)]
+
+  walk_up <- function(start) {
     current <- normalizePath(start, winslash = "/", mustWork = TRUE)
     repeat {
       if (dir.exists(file.path(current, ".git"))) return(current)
+      if (file.exists(file.path(current, "data", "WTTS-Seq_2022.2_DE_raw_read_numbers.csv"))) return(current)
       parent <- dirname(current)
       if (identical(parent, current)) break
       current <- parent
     }
+    NA_character_
   }
+
+  hits <- vapply(candidates, walk_up, character(1))
+  hits <- hits[!is.na(hits)]
+  if (length(hits) > 0L) return(hits[1])
   normalizePath(getwd(), winslash = "/", mustWork = TRUE)
 }
 
 repo_root <- find_repo_root()
 output_dir <- file.path(repo_root, "exports", output_folder_name)
-simulation_dir <- file.path(output_dir, simulation_folder_name)
-figures_dir <- file.path(simulation_dir, "figures")
-figures_png_dir <- file.path(figures_dir, "png")
-figures_pdf_dir <- file.path(figures_dir, "pdf")
-figures_tiff_dir <- file.path(figures_dir, "tiff")
-log_file <- file.path(simulation_dir, "Simulation_Log.txt")
-status_file <- file.path(simulation_dir, "Simulation_Status.txt")
+figure_dir <- file.path(output_dir, "manuscript_figures")
+log_file <- file.path(output_dir, "Pipeline_Log.txt")
 
-if (isTRUE(reset_simulation_dir) && dir.exists(simulation_dir)) {
-  unlink(simulation_dir, recursive = TRUE, force = TRUE)
+if (isTRUE(reset_output_dir) && dir.exists(output_dir)) {
+  unlink(output_dir, recursive = TRUE, force = TRUE)
 }
-for (d in c(simulation_dir, figures_png_dir, figures_pdf_dir, figures_tiff_dir)) {
-  dir.create(d, recursive = TRUE, showWarnings = FALSE)
-}
+
+dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(figure_dir, recursive = TRUE, showWarnings = FALSE)
 
 log_message <- function(...) {
-  line <- paste0("[", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "] ", paste0(...))
+  txt <- paste0(...)
+  stamp <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
+  line <- paste0("[", stamp, "] ", txt)
   message(line)
   cat(line, "\n", file = log_file, append = TRUE)
-}
-
-write_status <- function(status, detail = "") {
-  writeLines(
-    c(
-      paste0("status=", status),
-      paste0("time=", format(Sys.time(), "%Y-%m-%d %H:%M:%S")),
-      paste0("detail=", detail)
-    ),
-    status_file
-  )
-}
-
-repo_relative <- function(path) {
-  root <- normalizePath(repo_root, winslash = "/", mustWork = TRUE)
-  full <- normalizePath(path, winslash = "/", mustWork = FALSE)
-  prefix <- paste0(root, "/")
-  if (startsWith(full, prefix)) return(substr(full, nchar(prefix) + 1L, nchar(full)))
-  full
-}
-
-save_csv <- function(x, path) {
-  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
-  write.csv(x, path, row.names = FALSE)
-  invisible(path)
-}
-
-run_with_elapsed_timeout <- function(expr, timeout_seconds) {
-  timeout_seconds <- suppressWarnings(as.numeric(timeout_seconds[1]))
-  if (!is.finite(timeout_seconds) || is.na(timeout_seconds) || timeout_seconds <= 0) return(force(expr))
-
-  try(base::setTimeLimit(cpu = Inf, elapsed = timeout_seconds, transient = TRUE), silent = TRUE)
-  on.exit({
-    try(base::setTimeLimit(cpu = Inf, elapsed = Inf, transient = FALSE), silent = TRUE)
-  }, add = TRUE)
-
-  force(expr)
 }
 
 cleanup_rplots_pdf <- function() {
@@ -227,57 +209,44 @@ cleanup_rplots_pdf <- function() {
   if (file.exists(stray)) unlink(stray, force = TRUE)
 }
 
-positive_integer <- function(x, default, label) {
-  y <- suppressWarnings(as.integer(x[1]))
-  if (!is.finite(y) || is.na(y) || y < 1L) {
-    warning(label, " was invalid; using ", default, ".", call. = FALSE)
-    return(as.integer(default))
+resolve_file <- function(candidates, label) {
+  full_candidates <- unique(c(file.path(repo_root, candidates), candidates))
+  hits <- full_candidates[file.exists(full_candidates)]
+  if (length(hits) == 0L) {
+    stop("Could not find ", label, ". Tried: ", paste(full_candidates, collapse = " | "), call. = FALSE)
   }
-  as.integer(y)
+  normalizePath(hits[1], winslash = "/", mustWork = TRUE)
 }
 
-simulation_seed <- positive_integer(simulation_seed, 42L, "simulation_seed")
-simulation_n_features <- positive_integer(simulation_n_features, 1000L, "simulation_n_features")
-simulation_n_samples_per_group <- positive_integer(simulation_n_samples_per_group, 6L, "simulation_n_samples_per_group")
-simulation_n_reps <- positive_integer(simulation_n_reps, 20L, "simulation_n_reps")
-simulation_progress_every <- positive_integer(simulation_progress_every, 1L, "simulation_progress_every")
-simulation_checkpoint_every <- positive_integer(simulation_checkpoint_every, 10L, "simulation_checkpoint_every")
-simulation_rep_timeout_seconds <- suppressWarnings(as.numeric(simulation_rep_timeout_seconds[1]))
-if (!is.finite(simulation_rep_timeout_seconds) || is.na(simulation_rep_timeout_seconds) || simulation_rep_timeout_seconds < 30) simulation_rep_timeout_seconds <- 240
-figure_dpi <- positive_integer(figure_dpi, 600L, "figure_dpi")
-
-# =============================================================================
-# NUMERIC HELPERS
-# =============================================================================
-
-finite_vals <- function(x) {
-  y <- suppressWarnings(as.numeric(x))
-  y[is.finite(y) & !is.na(y)]
+stop_missing_columns <- function(df, required, label) {
+  missing <- setdiff(required, colnames(df))
+  if (length(missing) > 0L) {
+    stop(label, " missing column(s): ", paste(missing, collapse = ", "), call. = FALSE)
+  }
 }
 
-mean_finite <- function(x) {
-  v <- finite_vals(x)
-  if (!length(v)) NA_real_ else mean(v)
+clean_count_column <- function(x) {
+  suppressWarnings(as.numeric(gsub(",", "", trimws(as.character(x)), fixed = TRUE)))
 }
 
-median_finite <- function(x) {
-  v <- finite_vals(x)
-  if (!length(v)) NA_real_ else stats::median(v)
-}
+as_integer_count_matrix <- function(x, label) {
+  row_ids <- rownames(x)
+  col_ids <- colnames(x)
+  mat <- as.matrix(x)
+  suppressWarnings(storage.mode(mat) <- "numeric")
 
-min_finite <- function(x) {
-  v <- finite_vals(x)
-  if (!length(v)) NA_real_ else min(v)
-}
+  if (any(is.na(mat) | !is.finite(mat))) stop(label, " has NA or non-finite count values.", call. = FALSE)
+  if (any(mat < 0)) stop(label, " has negative count values.", call. = FALSE)
 
-max_finite <- function(x) {
-  v <- finite_vals(x)
-  if (!length(v)) NA_real_ else max(v)
-}
+  rounded <- round(mat)
+  if (any(abs(mat - rounded) > 1e-6)) {
+    warning(label, " had non-integer count values; values were rounded for DESeq2.", call. = FALSE)
+  }
 
-quantile_finite <- function(x, prob) {
-  v <- finite_vals(x)
-  if (!length(v)) NA_real_ else as.numeric(stats::quantile(v, probs = prob, names = FALSE, type = 7, na.rm = TRUE))
+  storage.mode(rounded) <- "integer"
+  rownames(rounded) <- row_ids
+  colnames(rounded) <- col_ids
+  rounded
 }
 
 clip_probability <- function(x, floor_value = calculation_p_floor) {
@@ -288,202 +257,382 @@ clip_probability <- function(x, floor_value = calculation_p_floor) {
   y
 }
 
-safe_neglog10 <- function(p, floor_value = plot_p_floor) {
-  -log10(clip_probability(p, floor_value = floor_value))
-}
-
-as_integer_count_matrix <- function(x, label) {
-  row_ids <- rownames(x)
-  col_ids <- colnames(x)
-  mat <- as.matrix(x)
-  suppressWarnings(storage.mode(mat) <- "numeric")
-  if (any(is.na(mat) | !is.finite(mat))) stop(label, " has NA or non-finite count values.", call. = FALSE)
-  if (any(mat < 0)) stop(label, " has negative count values.", call. = FALSE)
-  rounded <- round(mat)
-  storage.mode(rounded) <- "integer"
-  rownames(rounded) <- row_ids
-  colnames(rounded) <- col_ids
-  rounded
-}
-
-# =============================================================================
-# LABELS / THEME
-# =============================================================================
-
-method_label_map <- c(
-  DESeq2_BH = "DESeq2 BH",
-  DESeq2_Strong = "DESeq2 greaterAbs",
-  DESeq2_Weak = "DESeq2 weak composite",
-  Empirical_BH = "Empirical BH",
-  HBFSS_All = "HBFSS all",
-  HBFSS_Strong = "HBFSS strong",
-  HBFSS_Weak = "HBFSS weak"
-)
-
-# Okabe-Ito / grayscale-conscious choices.
-method_color_map <- c(
-  DESeq2_BH = "#000000",
-  DESeq2_Strong = "#D55E00",
-  DESeq2_Weak = "#E69F00",
-  Empirical_BH = "#0072B2",
-  HBFSS_All = "#009E73",
-  HBFSS_Strong = "#009E73",
-  HBFSS_Weak = "#56B4E9"
-)
-
-lfc_label <- function(lfc_magnitude, profile) {
-  if (identical(as.character(profile), "weak_mixture")) {
-    paste0("Weak mix\n|LFC| ", simulation_weak_lfc_min, "-", simulation_weak_lfc_max)
-  } else {
-    paste0("Fixed\n|LFC| ", formatC(as.numeric(lfc_magnitude), format = "fg", digits = 3))
-  }
-}
-
-inflation_label <- function(x) {
-  ifelse(as.numeric(x) > 0, paste0(as.numeric(x) * 100, "% null inflation"), "No null inflation")
-}
-
-condition_label <- function(lfc, infl, de) {
-  paste(gsub("\n", " ", lfc), infl, paste0(de * 100, "% DE"), sep = " | ")
-}
-
-figure_stamp <- function() {
-  if (!isTRUE(stamp_figures)) return(NULL)
-  sha <- tryCatch(
-    system2("git", args = c("-C", repo_root, "rev-parse", "--short", "HEAD"), stdout = TRUE, stderr = FALSE),
-    error = function(e) NA_character_
+format_compact_number <- function(x, digits = 3) {
+  y <- suppressWarnings(as.numeric(x))
+  out <- rep("NA", length(y))
+  ok <- is.finite(y) & !is.na(y)
+  ay <- abs(y[ok])
+  val <- y[ok]
+  out[ok] <- ifelse(
+    ay >= 1e9, paste0(signif(val / 1e9, digits), "B"),
+    ifelse(
+      ay >= 1e6, paste0(signif(val / 1e6, digits), "M"),
+      ifelse(
+        ay >= 1e3, paste0(signif(val / 1e3, digits), "K"),
+        ifelse(ay > 0 & ay < 0.001, formatC(val, format = "e", digits = digits - 1), as.character(signif(val, digits)))
+      )
+    )
   )
-  sha <- if (length(sha) > 0L && !is.na(sha[1])) sha[1] else "NA"
-  paste0("seed: ", simulation_seed, " | git: ", sha)
+  out
+}
+
+safe_csv_name <- function(...) {
+  paste0(gsub("[^A-Za-z0-9_.-]+", "_", paste(..., sep = "_")), ".csv")
+}
+
+save_csv <- function(df, path) {
+  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
+  write.csv(df, path, row.names = FALSE)
+  invisible(path)
+}
+
+analysis_table_path <- function(comparison_name, analysis_label, table_label) {
+  path <- file.path(output_dir, comparison_name, analysis_label, "tables")
+  dir.create(path, recursive = TRUE, showWarnings = FALSE)
+  file.path(path, safe_csv_name("Table", comparison_name, analysis_label, table_label))
+}
+
+rename_columns_existing <- function(df, map) {
+  old_names <- names(map)
+  hit <- old_names[old_names %in% names(df)]
+  if (length(hit) > 0L) names(df)[match(hit, names(df))] <- unname(map[hit])
+  df
 }
 
 manuscript_theme <- function() {
   theme_bw(base_size = base_theme_size) +
     theme(
-      plot.title = element_text(face = "bold", size = 8.5, hjust = 0.5),
-      plot.subtitle = element_text(size = 7, hjust = 0.5),
-      plot.caption = element_text(size = 5.5, hjust = 1),
-      axis.title = element_text(face = "bold", size = 7),
-      axis.text = element_text(color = "black", size = 6),
+      plot.title = element_text(face = "bold", size = base_theme_size + 0.5, hjust = 0.5),
+      plot.subtitle = element_text(size = base_theme_size - 1.2, hjust = 0.5),
+      plot.caption = element_text(size = base_theme_size - 3.5, color = "grey30", hjust = 0.5),
+      axis.title = element_text(face = "bold", size = base_theme_size - 0.1),
+      axis.text = element_text(color = "black", size = base_theme_size - 0.8),
       legend.position = "bottom",
-      legend.title = element_blank(),
-      legend.text = element_text(size = 6),
+      legend.title = element_text(face = "bold", size = base_theme_size - 0.2),
+      legend.text = element_text(size = base_theme_size - 0.4),
+      legend.spacing.x = unit(4, "pt"),
       panel.grid.minor = element_blank(),
-      panel.grid.major = element_line(linewidth = 0.20, color = "grey88"),
-      strip.text = element_text(face = "bold", size = 6.2),
-      plot.margin = margin(4, 5, 4, 4)
+      panel.grid.major = element_line(linewidth = 0.25, color = "grey88"),
+      strip.text = element_text(face = "bold", size = base_theme_size - 0.2),
+      plot.margin = margin(6, 8, 6, 6)
     )
 }
 
-# =============================================================================
-# FIGURE EXPORT
-# =============================================================================
+is_grid_object <- function(x) {
+  inherits(x, c("grob", "gtable", "gTree"))
+}
 
-check_nonempty_file <- function(path, label) {
-  if (!file.exists(path)) stop(label, " was not written: ", path, call. = FALSE)
-  file_size <- suppressWarnings(file.info(path)$size)
-  if (!is.finite(file_size) || is.na(file_size) || file_size <= 0) {
-    stop(label, " is empty: ", path, call. = FALSE)
+draw_to_device <- function(plot_obj) {
+  grid::grid.newpage()
+  if (inherits(plot_obj, "ggplot")) {
+    print(plot_obj)
+  } else if (is_grid_object(plot_obj)) {
+    grid::grid.draw(plot_obj)
+  } else {
+    stop("Unsupported figure object class: ", paste(class(plot_obj), collapse = ", "), call. = FALSE)
   }
+}
+
+save_figure <- function(plot_obj, path, width, height, export_pdf = export_pdf_also) {
+  if (is.null(plot_obj)) return(invisible(NULL))
+  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
+
+  ok_png <- FALSE
+  ok_pdf <- FALSE
+
+  tryCatch({
+    if (inherits(plot_obj, "ggplot")) {
+      ggplot2::ggsave(
+        filename = path,
+        plot = plot_obj,
+        width = width,
+        height = height,
+        units = "in",
+        dpi = figure_dpi,
+        bg = "white",
+        limitsize = FALSE
+      )
+    } else {
+      grDevices::png(filename = path, width = width, height = height, units = "in", res = figure_dpi, bg = "white")
+      on.exit(grDevices::dev.off(), add = TRUE)
+      draw_to_device(plot_obj)
+      grDevices::dev.off()
+      on.exit(NULL, add = FALSE)
+    }
+    ok_png <- TRUE
+  }, error = function(e) {
+    stop("PNG figure export failed for ", basename(path), ": ", conditionMessage(e), call. = FALSE)
+  })
+
+  if (isTRUE(export_pdf)) {
+    pdf_path <- sub("\\.[^.]+$", ".pdf", path)
+    tryCatch({
+      grDevices::pdf(file = pdf_path, width = width, height = height, onefile = TRUE, useDingbats = FALSE)
+      on.exit(grDevices::dev.off(), add = TRUE)
+      draw_to_device(plot_obj)
+      grDevices::dev.off()
+      on.exit(NULL, add = FALSE)
+      ok_pdf <- TRUE
+    }, error = function(e) {
+      stop("PDF figure export failed for ", basename(pdf_path), ": ", conditionMessage(e), call. = FALSE)
+    })
+  }
+
+  log_message("Figure saved: ", path, if (ok_pdf) " + PDF" else "")
+  invisible(ok_png)
+}
+
+safe_save_figure <- function(plot_obj, path, width, height) {
+  tryCatch({
+    save_figure(plot_obj, path, width, height)
+    data.frame(file = basename(path), status = "saved", error_message = NA_character_, stringsAsFactors = FALSE)
+  }, error = function(e) {
+    log_message("FIGURE FAILED: ", basename(path), " | ", conditionMessage(e))
+    data.frame(file = basename(path), status = "failed", error_message = conditionMessage(e), stringsAsFactors = FALSE)
+  })
+}
+
+get_shared_legend <- function(p) {
+  if (is.null(p)) return(NULL)
+  grob <- ggplotGrob(p + theme(legend.position = "bottom"))
+  idx <- which(vapply(grob$grobs, function(x) x$name, character(1)) == "guide-box")
+  if (length(idx) == 0L) return(NULL)
+  grob$grobs[[idx[1]]]
+}
+
+arrange_with_one_legend <- function(plot_list, title, ncol) {
+  plot_list <- Filter(Negate(is.null), plot_list)
+  if (length(plot_list) == 0L) return(NULL)
+
+  legend <- get_shared_legend(plot_list[[1]])
+  body <- do.call(
+    gridExtra::arrangeGrob,
+    c(lapply(plot_list, function(p) p + theme(legend.position = "none")), list(ncol = ncol))
+  )
+  title_grob <- grid::textGrob(title, gp = grid::gpar(fontface = "bold", cex = 1.00))
+
+  if (is.null(legend)) return(gridExtra::arrangeGrob(body, ncol = 1, top = title_grob))
+  gridExtra::arrangeGrob(body, legend, ncol = 1, heights = c(12, 0.95), top = title_grob)
+}
+
+write_run_session_info <- function() {
+  writeLines(capture.output(sessionInfo()), file.path(output_dir, "SessionInfo.txt"))
   invisible(TRUE)
 }
 
-save_figure <- function(plot_obj, figure_name, width = figure_width_twocol, height = 4.8) {
-  if (is.null(plot_obj) || !inherits(plot_obj, "ggplot")) {
-    stop("Invalid plot object for ", figure_name, call. = FALSE)
-  }
-
-  root_png <- file.path(simulation_dir, paste0(figure_name, ".png"))
-  png_path <- file.path(figures_png_dir, paste0(figure_name, ".png"))
-  pdf_path <- file.path(figures_pdf_dir, paste0(figure_name, ".pdf"))
-  tiff_path <- file.path(figures_tiff_dir, paste0(figure_name, ".tiff"))
-
-  ggplot2::ggsave(
-    filename = png_path,
-    plot = plot_obj,
-    width = width,
-    height = height,
-    units = "in",
-    dpi = figure_dpi,
-    bg = "white",
-    limitsize = FALSE
-  )
-  check_nonempty_file(png_path, "PNG figure")
-  file.copy(png_path, root_png, overwrite = TRUE)
-  check_nonempty_file(root_png, "Root PNG figure")
-
-  if (isTRUE(export_pdf_also)) {
-    ggplot2::ggsave(
-      filename = pdf_path,
-      plot = plot_obj,
-      width = width,
-      height = height,
-      units = "in",
-      bg = "white",
-      limitsize = FALSE
-    )
-    check_nonempty_file(pdf_path, "PDF figure")
-  } else {
-    pdf_path <- NA_character_
-  }
-
-  tiff_status <- "not_requested"
-  tiff_error <- NA_character_
-  if (isTRUE(export_tiff_also)) {
-    tiff_status <- tryCatch({
-      grDevices::tiff(filename = tiff_path, width = width, height = height, units = "in", res = figure_dpi, compression = "lzw")
-      print(plot_obj)
-      grDevices::dev.off()
-      check_nonempty_file(tiff_path, "TIFF figure")
-      "saved"
-    }, error = function(e) {
-      try(grDevices::dev.off(), silent = TRUE)
-      tiff_error <<- conditionMessage(e)
-      log_message("TIFF export failed for ", figure_name, ": ", tiff_error)
-      "failed"
-    })
-  } else {
-    tiff_path <- NA_character_
-  }
-
-  data.frame(
-    figure = figure_name,
-    png_file = repo_relative(root_png),
-    png_archive_file = repo_relative(png_path),
-    pdf_file = if (isTRUE(export_pdf_also)) repo_relative(pdf_path) else NA_character_,
-    tiff_file = if (isTRUE(export_tiff_also) && identical(tiff_status, "saved")) repo_relative(tiff_path) else NA_character_,
-    tiff_status = tiff_status,
-    tiff_error = tiff_error,
-    status = "saved",
-    error_message = NA_character_,
-    stringsAsFactors = FALSE
-  )
+fail_pipeline <- function(message_text, status = 1L) {
+  try(write_run_session_info(), silent = TRUE)
+  try(cleanup_rplots_pdf(), silent = TRUE)
+  log_message(message_text)
+  quit(save = "no", status = status, runLast = FALSE)
 }
 
-safe_save_figure <- function(plot_obj, figure_name, width = figure_width_twocol, height = 4.8) {
-  tryCatch(
-    save_figure(plot_obj, figure_name, width = width, height = height),
-    error = function(e) {
-      msg <- conditionMessage(e)
-      log_message("Figure export failed for ", figure_name, ": ", msg)
-      data.frame(
-        figure = figure_name,
-        png_file = NA_character_,
-        png_archive_file = NA_character_,
-        pdf_file = NA_character_,
-        tiff_file = NA_character_,
-        tiff_status = if (isTRUE(export_tiff_also)) "not_attempted" else "not_requested",
-        tiff_error = NA_character_,
-        status = "failed",
-        error_message = msg,
-        stringsAsFactors = FALSE
-      )
-    }
+options(error = function() {
+  try(write_run_session_info(), silent = TRUE)
+  try(cleanup_rplots_pdf(), silent = TRUE)
+  traceback(2)
+  quit(save = "no", status = 1L, runLast = FALSE)
+})
+
+# =============================================================================
+# DATA IMPORT
+# =============================================================================
+
+read_count_data <- function() {
+  count_file <- resolve_file(count_file_candidates, "WTTS count matrix")
+  log_message("Using count file: ", count_file)
+  log_message("Output directory: ", output_dir)
+
+  raw <- read.csv(count_file, header = TRUE, stringsAsFactors = FALSE, check.names = FALSE)
+  raw <- as.data.frame(raw, stringsAsFactors = FALSE)
+
+  stop_missing_columns(raw, c("OrigID", "Symbol"), "Count matrix")
+  stop_missing_columns(raw, sample_metadata$id, "Count matrix")
+
+  raw$OrigID <- trimws(as.character(raw$OrigID))
+  raw$Symbol <- trimws(as.character(raw$Symbol))
+
+  for (sample_id in sample_metadata$id) {
+    raw[[sample_id]] <- clean_count_column(raw[[sample_id]])
+  }
+
+  count_block <- raw[, sample_metadata$id, drop = FALSE]
+  keep <- !is.na(raw$OrigID) & nzchar(raw$OrigID) & rowSums(is.na(count_block)) == 0
+  raw <- raw[keep, , drop = FALSE]
+
+  raw$feature_id <- make.unique(raw$OrigID, sep = "_dup")
+  rownames(raw) <- raw$feature_id
+
+  annotation <- data.frame(
+    feature_id = raw$feature_id,
+    orig_id = raw$OrigID,
+    gene_symbol = ifelse(nzchar(raw$Symbol), raw$Symbol, NA_character_),
+    stringsAsFactors = FALSE
+  )
+  annotation <- dplyr::distinct(annotation, feature_id, .keep_all = TRUE)
+
+  list(count_df = raw, annotation_df = annotation)
+}
+
+input_data <- read_count_data()
+count_df <- input_data$count_df
+annotation_df <- input_data$annotation_df
+
+prepare_comparison <- function(i) {
+  row <- comparison_table[i, , drop = FALSE]
+  treatment_ids <- sample_metadata$id[grepl(paste0("^", row$treatment_prefix, "_"), sample_metadata$id)]
+  control_ids <- sample_metadata$id[grepl(paste0("^", row$control_prefix, "_"), sample_metadata$id)]
+  sample_ids <- c(treatment_ids, control_ids)
+
+  if (length(treatment_ids) < 2L || length(control_ids) < 2L) {
+    stop("Comparison ", row$comparison_name, " does not have enough treatment/control samples.", call. = FALSE)
+  }
+
+  coldata <- sample_metadata[sample_ids, "condition", drop = FALSE]
+  counts_mat <- count_df[, sample_ids, drop = FALSE]
+  rownames(counts_mat) <- count_df$feature_id
+  counts_mat <- as_integer_count_matrix(counts_mat, paste0(row$comparison_name, " count matrix"))
+
+  if (!identical(colnames(counts_mat), rownames(coldata))) {
+    stop("Sample order mismatch for ", row$comparison_name, call. = FALSE)
+  }
+
+  list(comparison_name = row$comparison_name, count_matrix = counts_mat, coldata = coldata)
+}
+
+# =============================================================================
+# EVS
+# =============================================================================
+
+make_vst_matrix <- function(count_matrix, coldata) {
+  dds <- DESeqDataSetFromMatrix(countData = count_matrix, colData = coldata, design = ~ condition)
+  dds <- dds[rowSums(counts(dds)) > 0, ]
+  dds <- estimateSizeFactors(dds)
+
+  transformed <- tryCatch(
+    as.matrix(SummarizedExperiment::assay(DESeq2::vst(dds, blind = TRUE))),
+    error = function(e) NULL
+  )
+
+  if (is.null(transformed)) {
+    transformed <- log2(as.matrix(DESeq2::counts(dds, normalized = TRUE)) + 1)
+  }
+
+  storage.mode(transformed) <- "numeric"
+  transformed
+}
+
+get_evs_matrix <- function(count_matrix, coldata, mode) {
+  if (identical(mode, "RawEVS")) {
+    mat <- matrix(as.numeric(count_matrix), nrow = nrow(count_matrix), dimnames = dimnames(count_matrix))
+    return(log2(mat + 1))
+  }
+  if (identical(mode, "NormEVS")) return(make_vst_matrix(count_matrix, coldata))
+  stop("Unknown EVS mode: ", mode, call. = FALSE)
+}
+
+condition_pc1_rank <- function(evs_matrix, sample_ids, condition_label) {
+  x <- evs_matrix[, sample_ids, drop = FALSE]
+  storage.mode(x) <- "numeric"
+
+  keep <- rowSums(is.finite(x) & !is.na(x)) == ncol(x)
+  keep <- keep & apply(x, 1, stats::var, na.rm = TRUE) > 0
+  if (!any(keep)) stop("No variable EVS features for ", condition_label, ".", call. = FALSE)
+
+  x <- x[keep, , drop = FALSE]
+  pca <- stats::prcomp(t(x), center = TRUE, scale. = FALSE)
+  loading <- pca$rotation[, 1]
+  pc1_score_variance <- as.numeric(pca$sdev[1]^2)
+
+  rank_df <- data.frame(
+    feature_id = names(loading),
+    pc1_loading = as.numeric(loading),
+    pc1_loading_abs = abs(as.numeric(loading)),
+    pc1_score_variance = pc1_score_variance,
+    pc1_variance_contribution = as.numeric(loading)^2 * pc1_score_variance,
+    stringsAsFactors = FALSE
+  )
+
+  rank_df <- rank_df[order(rank_df$pc1_loading_abs, decreasing = TRUE), , drop = FALSE]
+  rank_df$evs_rank <- seq_len(nrow(rank_df))
+  top_n_used <- min(evs_top_n, nrow(rank_df))
+  rank_df$evs_selected <- rank_df$evs_rank <= top_n_used
+  rank_df$top_n_used <- top_n_used
+  rank_df$loading_cutoff_at_top_n <- rank_df$pc1_loading_abs[top_n_used]
+  rank_df$pc1_contribution_cutoff_at_top_n <- rank_df$pc1_variance_contribution[top_n_used]
+
+  list(pca = pca, rank_df = rank_df, top_n_used = top_n_used)
+}
+
+build_evs_split <- function(count_matrix, coldata, comparison_name, mode) {
+  evs_matrix <- get_evs_matrix(count_matrix, coldata, mode)
+  treatment_samples <- rownames(coldata)[coldata$condition == "trt"]
+  control_samples <- rownames(coldata)[coldata$condition == "untrt"]
+  all_features <- rownames(count_matrix)
+
+  trt <- condition_pc1_rank(evs_matrix, treatment_samples, "Treatment")
+  ctl <- condition_pc1_rank(evs_matrix, control_samples, "Control")
+
+  trt_top <- trt$rank_df$feature_id[trt$rank_df$evs_selected]
+  ctl_top <- ctl$rank_df$feature_id[ctl$rank_df$evs_selected]
+
+  leading_ids <- intersect(union(trt_top, ctl_top), all_features)
+  remainder_ids <- setdiff(all_features, leading_ids)
+
+  if (length(leading_ids) == 0L) stop("EVS leading edge is empty for ", comparison_name, " ", mode, ".", call. = FALSE)
+  if (length(remainder_ids) == 0L) {
+    stop(
+      "EVS remainder is empty for ", comparison_name, " ", mode,
+      ". Fixed evs_top_n=", evs_top_n, " selected every feature. Reduce evs_top_n explicitly.",
+      call. = FALSE
+    )
+  }
+
+  trt_rank <- trt$rank_df
+  ctl_rank <- ctl$rank_df
+  names(trt_rank)[names(trt_rank) != "feature_id"] <- paste0("trt_", names(trt_rank)[names(trt_rank) != "feature_id"])
+  names(ctl_rank)[names(ctl_rank) != "feature_id"] <- paste0("ctl_", names(ctl_rank)[names(ctl_rank) != "feature_id"])
+
+  joint_rank <- data.frame(feature_id = all_features, stringsAsFactors = FALSE) %>%
+    left_join(trt_rank, by = "feature_id") %>%
+    left_join(ctl_rank, by = "feature_id") %>%
+    mutate(
+      in_leading_edge = feature_id %in% leading_ids,
+      in_remainder = feature_id %in% remainder_ids
+    ) %>%
+    left_join(annotation_df, by = "feature_id")
+
+  summary <- data.frame(
+    comparison_name = comparison_name,
+    evs_mode = mode,
+    evs_cutoff_mode = "fixed_top_n_union",
+    top_n_target = evs_top_n,
+    treatment_top_n_used = trt$top_n_used,
+    control_top_n_used = ctl$top_n_used,
+    treatment_loading_cutoff = trt$rank_df$loading_cutoff_at_top_n[1],
+    control_loading_cutoff = ctl$rank_df$loading_cutoff_at_top_n[1],
+    leading_edge_n = length(leading_ids),
+    remainder_n = length(remainder_ids),
+    evs_input = ifelse(mode == "NormEVS", "DESeq2 VST matrix", "log2(raw counts + 1) matrix"),
+    stringsAsFactors = FALSE
+  )
+
+  list(
+    comparison_name = comparison_name,
+    evs_mode = mode,
+    treatment_rank = trt,
+    control_rank = ctl,
+    joint_rank = joint_rank,
+    summary = summary,
+    leading_ids = leading_ids,
+    remainder_ids = remainder_ids,
+    leading_matrix = count_matrix[leading_ids, , drop = FALSE],
+    remainder_matrix = count_matrix[remainder_ids, , drop = FALSE]
   )
 }
 
 # =============================================================================
-# EMPIRICAL NULL / HC
+# DESEQ2 + EMPIRICAL NULL + HC/HBFSS
 # =============================================================================
 
 condition_coef_name <- function(dds) {
@@ -512,7 +661,14 @@ fit_empirical_null <- function(statistic, label) {
 
   run_fit <- function(method) {
     fit <- tryCatch(
-      fdrtool::fdrtool(z, statistic = "normal", plot = FALSE, verbose = FALSE, cutoff.method = method, pct0 = 0.75),
+      fdrtool::fdrtool(
+        z,
+        statistic = "normal",
+        plot = FALSE,
+        verbose = FALSE,
+        cutoff.method = method,
+        pct0 = 0.75
+      ),
       error = function(e) NULL
     )
     if (is.null(fit)) return(NULL)
@@ -528,4042 +684,1136 @@ fit_empirical_null <- function(statistic, label) {
     method_used <- "pct0"
     fit <- run_fit("pct0")
   }
+
   if (is.null(fit)) {
-    if (isTRUE(strict_empirical_null)) stop(label, ": empirical-null fit failed.", call. = FALSE)
+    if (isTRUE(strict_empirical_null)) {
+      stop(label, ": fdrtool empirical-null fit failed with fndr and pct0.", call. = FALSE)
+    }
     method_used <- "theoretical_normal_fallback"
     p_raw <- 2 * stats::pnorm(-abs(z))
     fit <- list(pval = p_raw, qval = p.adjust(p_raw, method = "BH"), lfdr = rep(NA_real_, length(z)))
   }
 
-  empirical_p <- rep(NA_real_, length(statistic))
+  n <- length(statistic)
+  empirical_p <- rep(NA_real_, n)
+  empirical_q <- rep(NA_real_, n)
+  empirical_lfdr <- rep(NA_real_, n)
+
+  qval <- if (!is.null(fit$qval) && length(fit$qval) == length(z)) fit$qval else rep(NA_real_, length(z))
+  lfdr <- if (!is.null(fit$lfdr) && length(fit$lfdr) == length(z)) fit$lfdr else rep(NA_real_, length(z))
+
   empirical_p[valid] <- clip_probability(fit$pval)
-  empirical_bh <- rep(NA_real_, length(statistic))
+  empirical_q[valid] <- clip_probability(qval)
+  empirical_lfdr[valid] <- suppressWarnings(as.numeric(lfdr))
+
+  empirical_bh <- rep(NA_real_, n)
   ok <- !is.na(empirical_p) & is.finite(empirical_p)
   empirical_bh[ok] <- p.adjust(empirical_p[ok], method = "BH")
 
-  list(empirical_p = empirical_p, empirical_bh = empirical_bh, empirical_null_method = method_used)
+  list(
+    empirical_p = empirical_p,
+    empirical_q = empirical_q,
+    empirical_lfdr = empirical_lfdr,
+    empirical_bh = empirical_bh,
+    empirical_null_method = method_used
+  )
 }
 
 hc_threshold <- function(empirical_p) {
   p <- sort(clip_probability(empirical_p), decreasing = FALSE, na.last = NA)
   if (length(p) < 5L) return(NA_real_)
-  threshold <- tryCatch(suppressWarnings(as.numeric(fdrtool::hc.thresh(p)[1])), error = function(e) NA_real_)
+
+  threshold <- tryCatch(
+    suppressWarnings(as.numeric(fdrtool::hc.thresh(p)[1])),
+    error = function(e) NA_real_
+  )
+
   if (!is.finite(threshold) || is.na(threshold) || threshold <= 0 || threshold >= 1) return(NA_real_)
-  if (threshold < hc_invalid_below) return(NA_real_)
   if (threshold >= hc_invalid_at_or_above) return(NA_real_)
   threshold
 }
 
-# =============================================================================
-# SIMULATION ENGINE
-# =============================================================================
+classify_results <- function(df, hc_p, hbfss_cutoff) {
+  df$standard_flag <- !is.na(df$padj) &
+    df$padj < alpha_standard &
+    !is.na(df$lfc_shrunk) &
+    abs(df$lfc_shrunk) >= lfc_boundary
 
-simulate_sequence_counts <- function(n_features, n_samples, base_mean, disp_null, de_fraction, lfc_magnitude, disp_de, lfc_profile = c("fixed", "weak_mixture")) {
-  lfc_profile <- match.arg(lfc_profile)
-  n_de <- max(2L, min(n_features - 2L, round(n_features * de_fraction)))
-  feature_id <- paste0("sim_feature_", seq_len(n_features))
-  de_id <- sample(seq_len(n_features), n_de, replace = FALSE)
+  df$strong_alt_flag <- !is.na(df$greaterAbs_padj) &
+    df$greaterAbs_padj < alpha_strong &
+    !is.na(df$lfc_shrunk) &
+    abs(df$lfc_shrunk) >= lfc_boundary
 
-  base_mu <- pmax(stats::rgamma(n_features, shape = 2.5, scale = base_mean / 2.5), 2)
-  dispersion <- rep(disp_null, n_features)
-  dispersion[de_id] <- disp_de
-  dispersion <- pmin(pmax(dispersion * exp(stats::rnorm(n_features, mean = 0, sd = 0.25)), 0.01), 1.50)
+  df$lessAbs_alt_flag <- !is.na(df$lessAbs_padj) &
+    df$lessAbs_padj < alpha_weak &
+    !is.na(df$lfc_shrunk) &
+    abs(df$lfc_shrunk) < lfc_boundary
 
-  direction <- sample(c(-1, 1), n_de, replace = TRUE)
-  abs_lfc <- if (identical(lfc_profile, "weak_mixture")) {
-    stats::runif(n_de, min = simulation_weak_lfc_min, max = simulation_weak_lfc_max)
-  } else {
-    rep(lfc_magnitude, n_de)
-  }
-  true_lfc <- rep(0, n_features)
-  true_lfc[de_id] <- direction * abs_lfc
+  df$hc_pass <- !is.na(hc_p) &
+    !is.na(df$empirical_p) &
+    is.finite(df$empirical_p) &
+    df$empirical_p <= hc_p
 
-  control_mu <- base_mu
-  treatment_mu <- base_mu * 2^true_lfc
-  control_lib <- exp(stats::rnorm(n_samples, mean = 0, sd = 0.12))
-  treatment_lib <- exp(stats::rnorm(n_samples, mean = 0, sd = 0.12))
-  control_lib <- control_lib / exp(mean(log(control_lib)))
-  treatment_lib <- treatment_lib / exp(mean(log(treatment_lib)))
-
-  generate_group <- function(mu, lib_factor, dispersion_vector) {
-    out <- matrix(0L, nrow = length(mu), ncol = length(lib_factor))
-    for (j in seq_along(lib_factor)) {
-      out[, j] <- stats::rnbinom(n = length(mu), mu = pmax(mu * lib_factor[j], 1e-3), size = 1 / dispersion_vector)
-    }
-    out
-  }
-
-  counts_mat <- cbind(generate_group(control_mu, control_lib, dispersion), generate_group(treatment_mu, treatment_lib, dispersion))
-  storage.mode(counts_mat) <- "integer"
-  rownames(counts_mat) <- feature_id
-  colnames(counts_mat) <- c(paste0("ctrl_", seq_len(n_samples)), paste0("trt_", seq_len(n_samples)))
-
-  truth <- data.frame(
-    feature_id = feature_id,
-    is_de = seq_len(n_features) %in% de_id,
-    true_lfc = true_lfc,
-    true_abs_lfc = abs(true_lfc),
-    true_cusp = seq_len(n_features) %in% de_id & abs(true_lfc) > 0 & abs(true_lfc) < lfc_boundary,
-    true_strong = seq_len(n_features) %in% de_id & abs(true_lfc) >= lfc_boundary,
-    base_mean = base_mu,
-    dispersion = dispersion,
-    simulation_profile = lfc_profile,
-    stringsAsFactors = FALSE
-  )
-
-  list(counts = counts_mat, truth = truth)
-}
-
-inflate_null_wald_statistics <- function(wald, is_de, inflation_fraction, inflation_sd = 1.75) {
-  if (!is.finite(inflation_fraction) || inflation_fraction <= 0) return(wald)
-  out <- wald
-  null_idx <- which(!is_de & is.finite(out) & !is.na(out))
-  n_inflate <- round(length(null_idx) * inflation_fraction)
-  if (n_inflate <= 0L) return(out)
-  target <- sample(null_idx, n_inflate, replace = FALSE)
-  out[target] <- stats::rnorm(n_inflate, mean = 0, sd = inflation_sd)
-  out
-}
-
-simulation_metrics <- function(predicted, actual) {
-  predicted <- !is.na(predicted) & predicted
-  actual <- !is.na(actual) & actual
-  tp <- sum(predicted & actual)
-  fp <- sum(predicted & !actual)
-  fn <- sum(!predicted & actual)
-  tn <- sum(!predicted & !actual)
-  precision <- if ((tp + fp) == 0) NA_real_ else tp / (tp + fp)
-  recall <- if ((tp + fn) == 0) NA_real_ else tp / (tp + fn)
-  specificity <- if ((tn + fp) == 0) NA_real_ else tn / (tn + fp)
-  fdr <- if ((tp + fp) == 0) NA_real_ else fp / (tp + fp)
-  f1 <- if (is.na(precision) || is.na(recall) || (precision + recall) == 0) NA_real_ else 2 * precision * recall / (precision + recall)
-  data.frame(tp = tp, fp = fp, fn = fn, tn = tn, precision = precision, recall = recall, specificity = specificity, f1 = f1, fdr = fdr, discovery_count = sum(predicted), truth_count = sum(actual), stringsAsFactors = FALSE)
-}
-
-simulation_metric_row <- function(template, method, truth_target, predicted, actual, hc_p, hbfss_cutoff, empirical_null_method) {
-  cbind(
-    template,
-    data.frame(method = method, truth_target = truth_target, hc_p_threshold = hc_p, hbfss_cutoff = hbfss_cutoff, hc_valid = is.finite(hc_p) & !is.na(hc_p), empirical_null_method = empirical_null_method, stringsAsFactors = FALSE),
-    simulation_metrics(predicted, actual)
-  )
-}
-
-sequence_simulation_analysis <- function(sim_obj, null_inflation) {
-  counts_mat <- as_integer_count_matrix(sim_obj$counts, "simulation DESeq2 input")
-  n_samp <- as.integer(ncol(counts_mat) / 2L)
-  coldata <- data.frame(condition = factor(c(rep("untrt", n_samp), rep("trt", n_samp)), levels = c("untrt", "trt")), row.names = colnames(counts_mat))
-
-  dds <- DESeqDataSetFromMatrix(countData = counts_mat, colData = coldata, design = ~ condition)
-  dds <- dds[rowSums(counts(dds)) > 0, ]
-  if (nrow(dds) < 5L) stop("Simulation DESeq2 object has fewer than five nonzero features after filtering.", call. = FALSE)
-  dds <- DESeq(dds, betaPrior = FALSE, quiet = TRUE, fitType = simulation_fit_type)
-  coef_name <- condition_coef_name(dds)
-
-  standard <- results(dds, contrast = c("condition", "trt", "untrt"), alpha = alpha_standard)
-  greater_abs <- results(dds, contrast = c("condition", "trt", "untrt"), lfcThreshold = lfc_boundary, altHypothesis = "greaterAbs", alpha = alpha_strong)
-  less_abs <- results(dds, contrast = c("condition", "trt", "untrt"), lfcThreshold = lfc_boundary, altHypothesis = "lessAbs", alpha = alpha_weak)
-  shrunk <- lfcShrink(dds, coef = coef_name, type = "apeglm", quiet = TRUE)
-
-  df <- as.data.frame(standard)
-  df$feature_id <- rownames(df)
-  df$lfc_shrunk <- as.data.frame(shrunk)$log2FoldChange
-  df$greaterAbs_padj <- as.data.frame(greater_abs)$padj
-  df$lessAbs_padj <- as.data.frame(less_abs)$padj
-  df <- left_join(df, sim_obj$truth, by = "feature_id")
-  df$is_de[is.na(df$is_de)] <- FALSE
-  df$true_cusp[is.na(df$true_cusp)] <- FALSE
-  df$true_strong[is.na(df$true_strong)] <- FALSE
-
-  inflated_wald <- inflate_null_wald_statistics(df$stat, df$is_de, null_inflation)
-  empirical <- fit_empirical_null(inflated_wald, "simulation")
-
-  df$empirical_p <- empirical$empirical_p
-  df$empirical_bh <- empirical$empirical_bh
-  df$neglog10_empirical_p_calc <- safe_neglog10(df$empirical_p, floor_value = calculation_p_floor)
-
-  hc_p <- hc_threshold(df$empirical_p)
-  hbfss_cutoff <- if (is.na(hc_p)) NA_real_ else -log10(hc_p) * lfc_boundary
-
-  df$hc_pass <- !is.na(hc_p) & !is.na(df$empirical_p) & is.finite(df$empirical_p) & df$empirical_p <= hc_p
   df$HBFSS <- abs(df$lfc_shrunk) * df$neglog10_empirical_p_calc
 
-  # DESeq2 standard Wald/BH call. No LFC filter is applied here by design;
-  # LFC-boundary questions are tested by the composite-null strong/cusp arms.
-  df$DESeq2_BH_sig <- !is.na(df$padj) & df$padj < alpha_standard
-  df$DESeq2_Strong_sig <- !is.na(df$greaterAbs_padj) & df$greaterAbs_padj < alpha_strong & !is.na(df$lfc_shrunk) & abs(df$lfc_shrunk) >= lfc_boundary
-  df$DESeq2_Weak_sig <- !is.na(df$lessAbs_padj) & df$lessAbs_padj < alpha_weak & !is.na(df$lfc_shrunk) & abs(df$lfc_shrunk) < lfc_boundary
-  df$Empirical_BH_sig <- !is.na(df$empirical_bh) & df$empirical_bh < alpha_standard
+  df$hbfss_raw_flag <- !is.na(hbfss_cutoff) &
+    !is.na(df$HBFSS) &
+    is.finite(df$HBFSS) &
+    df$HBFSS >= hbfss_cutoff &
+    df$hc_pass
 
-  # HBFSS calls from empirical p-values and higher criticism.
-  df$HBFSS_All_sig <- !is.na(hbfss_cutoff) & !is.na(df$HBFSS) & is.finite(df$HBFSS) & df$HBFSS >= hbfss_cutoff & df$hc_pass
-  df$HBFSS_Strong_sig <- df$HBFSS_All_sig & !is.na(df$greaterAbs_padj) & df$greaterAbs_padj < alpha_strong & !is.na(df$lfc_shrunk) & abs(df$lfc_shrunk) >= lfc_boundary
-  df$HBFSS_Weak_sig <- df$hc_pass & !is.na(df$lessAbs_padj) & df$lessAbs_padj < alpha_weak & !is.na(df$lfc_shrunk) & abs(df$lfc_shrunk) < lfc_boundary
+  df$strong_flag <- df$strong_alt_flag
+  df$hbfss_flag <- df$standard_flag | df$hbfss_raw_flag
+  df$weak_region_hbfss_flag <- df$lessAbs_alt_flag & df$hbfss_raw_flag
+  df$weak_flag <- df$weak_region_hbfss_flag
 
-  list(results = df, hc_p = hc_p, hbfss_cutoff = hbfss_cutoff, empirical_null_method = empirical$empirical_null_method)
+  df$display_strong <- df$strong_flag
+  df$display_standard <- df$standard_flag & !df$display_strong
+  df$display_weak <- df$weak_flag & !df$display_strong & !df$display_standard
+  df$display_hbfss <- df$hbfss_flag & !df$standard_flag & !df$display_weak & !df$display_strong
+
+  df$final_class <- "BG"
+  df$final_class[df$display_hbfss] <- "HBFSS"
+  df$final_class[df$display_weak] <- "Weak"
+  df$final_class[df$display_standard] <- "Std"
+  df$final_class[df$display_strong] <- "Strong"
+  df$final_class <- factor(df$final_class, levels = class_levels)
+  df
 }
 
-build_metric_rows <- function(out, template) {
-  df <- out$results
-  bind_rows(
-    simulation_metric_row(template, "DESeq2_BH", "all_de", df$DESeq2_BH_sig, df$is_de, out$hc_p, out$hbfss_cutoff, out$empirical_null_method),
-    simulation_metric_row(template, "Empirical_BH", "all_de", df$Empirical_BH_sig, df$is_de, out$hc_p, out$hbfss_cutoff, out$empirical_null_method),
-    simulation_metric_row(template, "HBFSS_All", "all_de", df$HBFSS_All_sig, df$is_de, out$hc_p, out$hbfss_cutoff, out$empirical_null_method),
-    simulation_metric_row(template, "DESeq2_Strong", "strong_de", df$DESeq2_Strong_sig, df$true_strong, out$hc_p, out$hbfss_cutoff, out$empirical_null_method),
-    simulation_metric_row(template, "HBFSS_Strong", "strong_de", df$HBFSS_Strong_sig, df$true_strong, out$hc_p, out$hbfss_cutoff, out$empirical_null_method),
-    simulation_metric_row(template, "DESeq2_Weak", "cusp_lfc", df$DESeq2_Weak_sig, df$true_cusp, out$hc_p, out$hbfss_cutoff, out$empirical_null_method),
-    simulation_metric_row(template, "HBFSS_Weak", "cusp_lfc", df$HBFSS_Weak_sig, df$true_cusp, out$hc_p, out$hbfss_cutoff, out$empirical_null_method)
-  )
-}
-
-# =============================================================================
-# SUMMARIES
-# =============================================================================
-
-summarise_metrics <- function(metric_long) {
-  metric_long %>%
-    group_by(de_fraction, lfc_magnitude, simulation_profile, null_inflation, lfc_label, de_label, inflation_label, condition_label, method, truth_target, empirical_null_method) %>%
-    summarise(
-      n_replicates = n(),
-      precision_mean = mean_finite(precision), precision_median = median_finite(precision), precision_q25 = quantile_finite(precision, 0.25), precision_q75 = quantile_finite(precision, 0.75),
-      recall_mean = mean_finite(recall), recall_median = median_finite(recall), recall_q25 = quantile_finite(recall, 0.25), recall_q75 = quantile_finite(recall, 0.75),
-      f1_mean = mean_finite(f1), f1_median = median_finite(f1), f1_q25 = quantile_finite(f1, 0.25), f1_q75 = quantile_finite(f1, 0.75),
-      fdr_mean = mean_finite(fdr), fdr_median = median_finite(fdr), fdr_q25 = quantile_finite(fdr, 0.25), fdr_q75 = quantile_finite(fdr, 0.75),
-      discovery_count_mean = mean_finite(discovery_count), discovery_count_median = median_finite(discovery_count), discovery_count_q25 = quantile_finite(discovery_count, 0.25), discovery_count_q75 = quantile_finite(discovery_count, 0.75),
-      truth_count_mean = mean_finite(truth_count),
-      hc_valid_fraction = mean(as.numeric(hc_valid), na.rm = TRUE),
-      hc_p_threshold_median = median_finite(hc_p_threshold),
-      hbfss_cutoff_median = median_finite(hbfss_cutoff),
-      .groups = "drop"
-    )
-}
-
-summarise_qc <- function(metric_long) {
-  metric_long %>%
-    group_by(de_fraction, lfc_magnitude, simulation_profile, null_inflation, lfc_label, de_label, inflation_label, condition_label, replicate, empirical_null_method) %>%
-    summarise(hc_p_threshold = first(hc_p_threshold), hbfss_cutoff = first(hbfss_cutoff), hc_valid = first(hc_valid), .groups = "drop") %>%
-    group_by(de_fraction, lfc_magnitude, simulation_profile, null_inflation, lfc_label, de_label, inflation_label, condition_label, empirical_null_method) %>%
-    summarise(
-      n_replicates = n(),
-      hc_valid_fraction = mean(as.numeric(hc_valid), na.rm = TRUE),
-      hc_p_threshold_min = min_finite(ifelse(hc_valid, hc_p_threshold, NA_real_)),
-      hc_p_threshold_median = median_finite(ifelse(hc_valid, hc_p_threshold, NA_real_)),
-      hc_p_threshold_max = max_finite(ifelse(hc_valid, hc_p_threshold, NA_real_)),
-      hbfss_cutoff_median = median_finite(ifelse(hc_valid, hbfss_cutoff, NA_real_)),
-      .groups = "drop"
-    )
-}
-
-comparison_summary <- function(summary_df, target, baseline_method, test_method) {
-  base <- summary_df %>%
-    filter(truth_target == target, method == baseline_method) %>%
-    select(de_fraction, lfc_magnitude, simulation_profile, null_inflation, lfc_label, de_label, inflation_label, condition_label,
-           baseline_precision = precision_mean, baseline_recall = recall_mean, baseline_f1 = f1_mean, baseline_fdr = fdr_mean, baseline_discovery_count = discovery_count_mean, baseline_truth_count = truth_count_mean)
-  test <- summary_df %>%
-    filter(truth_target == target, method == test_method) %>%
-    select(de_fraction, lfc_magnitude, simulation_profile, null_inflation, lfc_label, de_label, inflation_label, condition_label,
-           test_precision = precision_mean, test_recall = recall_mean, test_f1 = f1_mean, test_fdr = fdr_mean, test_discovery_count = discovery_count_mean, test_truth_count = truth_count_mean)
-  out <- inner_join(base, test, by = c("de_fraction", "lfc_magnitude", "simulation_profile", "null_inflation", "lfc_label", "de_label", "inflation_label", "condition_label"))
-  if (nrow(out) == 0L) return(out)
-  out$delta_precision <- out$test_precision - out$baseline_precision
-  out$delta_recall <- out$test_recall - out$baseline_recall
-  out$delta_f1 <- out$test_f1 - out$baseline_f1
-  out$delta_fdr <- out$test_fdr - out$baseline_fdr
-  out$delta_discovery_count <- out$test_discovery_count - out$baseline_discovery_count
-  out$baseline_method <- baseline_method
-  out$test_method <- test_method
-  out$truth_target <- target
-  out
-}
-
-# =============================================================================
-# FIGURES
-# =============================================================================
-
-metric_labels <- c(f1 = "F1", recall = "Recall", precision = "Precision", fdr = "Observed FDR", discovery_count = "Discovery count")
-
-stack_metric_summary <- function(summary_df, methods, target, metrics) {
-  df <- summary_df[summary_df$method %in% methods & summary_df$truth_target == target & summary_df$truth_count_mean > 0, , drop = FALSE]
-  if (nrow(df) == 0L) return(data.frame())
-  bind_rows(lapply(metrics, function(m) {
-    data.frame(
-      lfc_label = df$lfc_label,
-      de_label = df$de_label,
-      inflation_label = df$inflation_label,
-      condition_label = df$condition_label,
-      method = df$method,
-      method_label = unname(method_label_map[df$method]),
-      metric = m,
-      metric_label = unname(metric_labels[m]),
-      value = df[[paste0(m, "_median")]],
-      q25 = df[[paste0(m, "_q25")]],
-      q75 = df[[paste0(m, "_q75")]],
-      stringsAsFactors = FALSE
-    )
-  }))
-}
-
-plot_delta_heatmap <- function(delta_df, title, subtitle) {
-  if (nrow(delta_df) == 0L) return(NULL)
-  plot_df <- bind_rows(
-    data.frame(condition_label = delta_df$condition_label, metric = "ΔF1", value = delta_df$delta_f1),
-    data.frame(condition_label = delta_df$condition_label, metric = "ΔRecall", value = delta_df$delta_recall),
-    data.frame(condition_label = delta_df$condition_label, metric = "ΔPrecision", value = delta_df$delta_precision),
-    data.frame(condition_label = delta_df$condition_label, metric = "ΔFDR", value = delta_df$delta_fdr),
-    data.frame(condition_label = delta_df$condition_label, metric = "ΔDiscoveries", value = delta_df$delta_discovery_count)
-  )
-  plot_df$condition_label <- factor(plot_df$condition_label, levels = rev(unique(delta_df$condition_label)))
-  plot_df$metric <- factor(plot_df$metric, levels = c("ΔF1", "ΔRecall", "ΔPrecision", "ΔFDR", "ΔDiscoveries"))
-  lim <- max(abs(plot_df$value), na.rm = TRUE)
-  if (!is.finite(lim) || is.na(lim) || lim <= 0) lim <- 1
-  ggplot(plot_df, aes(x = metric, y = condition_label, fill = value)) +
-    geom_tile(color = "white", linewidth = 0.25) +
-    geom_text(aes(label = formatC(value, format = "f", digits = 2)), size = 2.0) +
-    scale_fill_gradient2(low = "#B2182B", mid = "white", high = "#2166AC", midpoint = 0, limits = c(-lim, lim), name = "Delta") +
-    labs(title = title, subtitle = subtitle, x = NULL, y = NULL, caption = figure_stamp()) +
-    manuscript_theme() +
-    theme(axis.text.y = element_text(size = 5.2))
-}
-
-plot_head_to_head <- function(summary_df, methods, target, metrics, title, subtitle) {
-  plot_df <- stack_metric_summary(summary_df, methods, target, metrics)
-  if (nrow(plot_df) == 0L) return(NULL)
-  plot_df$method_label <- factor(plot_df$method_label, levels = unname(method_label_map[methods]))
-  plot_df$metric_label <- factor(plot_df$metric_label, levels = unname(metric_labels[metrics]))
-  dodge <- position_dodge(width = 0.45)
-  p <- ggplot(plot_df, aes(x = de_label, y = value, fill = method_label, color = method_label, group = method_label)) +
-    geom_crossbar(aes(ymin = q25, ymax = q75), width = 0.35, fatten = 1.1, position = dodge, linewidth = 0.25, alpha = 0.85) +
-    facet_grid(metric_label ~ inflation_label + lfc_label, scales = "free_y") +
-    scale_fill_manual(values = unname(method_color_map[methods]), breaks = unname(method_label_map[methods])) +
-    scale_color_manual(values = unname(method_color_map[methods]), breaks = unname(method_label_map[methods])) +
-    labs(title = title, subtitle = subtitle, x = "DE fraction", y = "Median with IQR", caption = figure_stamp()) +
-    manuscript_theme()
-  if (all(metrics %in% c("f1", "recall", "precision", "fdr"))) {
-    p <- p + scale_y_continuous(labels = scales::label_percent(accuracy = 1))
-  }
-  p
-}
-
-plot_hc_qc <- function(qc_df, value_col, title, subtitle, fill_label) {
-  if (nrow(qc_df) == 0L) return(NULL)
-  plot_df <- qc_df
-  plot_df$value <- plot_df[[value_col]]
-  ggplot(plot_df, aes(x = de_label, y = inflation_label, fill = value)) +
-    geom_tile(color = "white", linewidth = 0.25) +
-    geom_text(aes(label = formatC(value, format = "f", digits = 2)), size = 2.0) +
-    facet_wrap(~ lfc_label, nrow = 1) +
-    scale_fill_gradient(low = "white", high = "#0072B2", name = fill_label) +
-    labs(title = title, subtitle = subtitle, x = "DE fraction", y = NULL, caption = figure_stamp()) +
-    manuscript_theme()
-}
-
-# =============================================================================
-# MAIN RUN
-# =============================================================================
-
-run_simulation_validation <- function() {
-  set.seed(simulation_seed)
-  fixed_grid <- expand.grid(de_fraction = simulation_de_fractions, lfc_magnitude = simulation_lfc_magnitudes, null_inflation = simulation_null_inflation, simulation_profile = "fixed", stringsAsFactors = FALSE)
-  weak_grid <- expand.grid(de_fraction = simulation_de_fractions, lfc_magnitude = NA_real_, null_inflation = simulation_null_inflation, simulation_profile = "weak_mixture", stringsAsFactors = FALSE)
-  sim_grid <- bind_rows(fixed_grid, weak_grid)
-  total_runs <- nrow(sim_grid) * simulation_n_reps
-
-  log_message("Simulation started: ", total_runs, " planned runs")
-  write_status("running", paste0("0/", total_runs))
-
-  metric_rows <- list()
-  failure_rows <- list()
-  run_index <- 0L
-  start_time <- Sys.time()
-  checkpoint_path <- file.path(simulation_dir, "Simulation_RunMetrics_Checkpoint.csv")
-  # Checkpoints append only newly completed replicate blocks. Do not re-bind/rewrite the full accumulated list each checkpoint.
-  last_checkpoint_metric_index <- 0L
-
-  for (grid_i in seq_len(nrow(sim_grid))) {
-    grid_row <- sim_grid[grid_i, , drop = FALSE]
-    for (rep_i in seq_len(simulation_n_reps)) {
-      run_index <- run_index + 1L
-      current_lfc_label <- ifelse(is.na(grid_row$lfc_magnitude), "weak_mixture", as.character(grid_row$lfc_magnitude))
-      elapsed <- as.numeric(difftime(Sys.time(), start_time, units = "mins"))
-      eta <- elapsed * (total_runs - run_index) / max(run_index, 1L)
-      progress_detail <- paste0(
-        run_index, "/", total_runs,
-        " | profile=", grid_row$simulation_profile,
-        " | LFC=", current_lfc_label,
-        " | DE=", grid_row$de_fraction,
-        " | null_inflation=", grid_row$null_inflation,
-        " | rep=", rep_i,
-        " | timeout=", simulation_rep_timeout_seconds, " sec",
-        " | elapsed=", signif(elapsed, 3), " min",
-        " | ETA=", signif(eta, 3), " min"
-      )
-      write_status("running", paste0("started ", progress_detail))
-      if (run_index %% simulation_progress_every == 0L || run_index == 1L || run_index == total_runs) {
-        log_message("Simulation progress: ", progress_detail)
-      }
-
-      template <- data.frame(de_fraction = grid_row$de_fraction, lfc_magnitude = grid_row$lfc_magnitude, simulation_profile = grid_row$simulation_profile, null_inflation = grid_row$null_inflation, replicate = rep_i, stringsAsFactors = FALSE)
-      template$lfc_label <- lfc_label(template$lfc_magnitude, template$simulation_profile)
-      template$de_label <- paste0(template$de_fraction * 100, "% DE")
-      template$inflation_label <- inflation_label(template$null_inflation)
-      template$condition_label <- condition_label(template$lfc_label, template$inflation_label, template$de_fraction)
-
-      out <- tryCatch({
-        run_with_elapsed_timeout({
-          sim_obj <- simulate_sequence_counts(simulation_n_features, simulation_n_samples_per_group, simulation_base_mean, simulation_dispersion_null, grid_row$de_fraction, grid_row$lfc_magnitude, simulation_dispersion_de, grid_row$simulation_profile)
-          sequence_simulation_analysis(sim_obj, null_inflation = grid_row$null_inflation)
-        }, simulation_rep_timeout_seconds)
-      }, error = function(e) {
-        failure_rows[[length(failure_rows) + 1L]] <<- cbind(template, data.frame(error_message = conditionMessage(e), stringsAsFactors = FALSE))
-        write_status("running", paste0("failed ", run_index, "/", total_runs, " | ", conditionMessage(e)))
-        NULL
-      })
-      if (is.null(out)) next
-      metric_rows[[length(metric_rows) + 1L]] <- build_metric_rows(out, template)
-      write_status("running", paste0("completed ", run_index, "/", total_runs, " | successful_replicates=", length(metric_rows), " | failures=", length(failure_rows)))
-      if ((run_index %% simulation_checkpoint_every == 0L || run_index == total_runs) &&
-          length(metric_rows) > last_checkpoint_metric_index) {
-        checkpoint_rows <- metric_rows[(last_checkpoint_metric_index + 1L):length(metric_rows)]
-        checkpoint_df <- bind_rows(checkpoint_rows)
-        utils::write.table(
-          checkpoint_df,
-          file = checkpoint_path,
-          sep = ",",
-          row.names = FALSE,
-          col.names = !file.exists(checkpoint_path),
-          append = file.exists(checkpoint_path),
-          quote = TRUE,
-          qmethod = "double"
-        )
-        last_checkpoint_metric_index <- length(metric_rows)
-      }
-    }
-  }
-
-  failures <- if (length(failure_rows) > 0L) bind_rows(failure_rows) else data.frame()
-  save_csv(failures, file.path(simulation_dir, "Simulation_Failures.csv"))
-  metrics <- if (length(metric_rows) > 0L) bind_rows(metric_rows) else data.frame()
-  if (nrow(metrics) == 0L) stop("Simulation produced no successful replicates.", call. = FALSE)
-
-  metric_summary <- summarise_metrics(metrics)
-  qc_summary <- summarise_qc(metrics)
-  save_csv(metrics, file.path(simulation_dir, "Simulation_RunMetrics_Long.csv"))
-  save_csv(metric_summary, file.path(simulation_dir, "Simulation_Condition_Method_Summary.csv"))
-  save_csv(qc_summary, file.path(simulation_dir, "Simulation_HC_QC_Summary.csv"))
-  if (file.exists(checkpoint_path)) unlink(checkpoint_path, force = TRUE)
-
-  delta_all <- comparison_summary(metric_summary, "all_de", "DESeq2_BH", "HBFSS_All")
-  delta_strong <- comparison_summary(metric_summary, "strong_de", "DESeq2_Strong", "HBFSS_Strong")
-  delta_weak <- comparison_summary(metric_summary, "cusp_lfc", "DESeq2_Weak", "HBFSS_Weak")
-  save_csv(delta_all, file.path(simulation_dir, "Simulation_Delta_All_HBFSSvsDESeq2.csv"))
-  save_csv(delta_strong, file.path(simulation_dir, "Simulation_Delta_Strong_HBFSSvsDESeq2Composite.csv"))
-  save_csv(delta_weak, file.path(simulation_dir, "Simulation_Delta_Weak_HBFSSvsDESeq2Composite.csv"))
-
-  figures <- bind_rows(
-    safe_save_figure(plot_delta_heatmap(delta_all, "All-DE performance: HBFSS versus DESeq2 BH", "Positive values favor HBFSS; positive ΔFDR indicates additional false-discovery cost"), "Figure_01_AllDE_DeltaHeatmap", 6.7, 5.2),
-    safe_save_figure(plot_head_to_head(metric_summary, c("DESeq2_Strong", "HBFSS_Strong"), "strong_de", c("f1", "recall", "precision", "fdr"), "Strong-effect comparison", "DESeq2 greaterAbs composite-null calls versus HBFSS strong calls"), "Figure_02_StrongEffect_HeadToHead", 6.7, 5.4),
-    safe_save_figure(plot_head_to_head(metric_summary, c("DESeq2_Weak", "HBFSS_Weak"), "cusp_lfc", c("f1", "recall", "precision", "fdr"), "Composite-null cusp comparison", "DESeq2 lessAbs composite-null calls versus HC-supported HBFSS cusp calls"), "Figure_03_CompositeCusp_HeadToHead", 6.7, 5.4),
-    safe_save_figure(plot_hc_qc(qc_summary, "hc_valid_fraction", "Higher-criticism threshold validity", "Fraction of replicates with usable HC threshold", "Valid fraction"), "Figure_04_HC_Validity", 6.7, 3.0),
-    safe_save_figure(plot_hc_qc(qc_summary, "hbfss_cutoff_median", "Median HBFSS cutoff", "HC-derived HBFSS cutoff by simulation condition", "Median cutoff"), "Figure_05_HBFSS_Cutoff", 6.7, 3.0)
-  )
-  save_csv(figures, file.path(simulation_dir, "Figure_Export_Status.csv"))
-  failed_figures <- figures[figures$status != "saved", , drop = FALSE]
-  if (nrow(failed_figures) > 0L) {
-    save_csv(failed_figures, file.path(simulation_dir, "Figure_Export_Failures.csv"))
-    stop("One or more required figures failed to export. See Figure_Export_Failures.csv.", call. = FALSE)
-  }
-
-  list(metrics = metrics, metric_summary = metric_summary, qc_summary = qc_summary, delta_all = delta_all, delta_strong = delta_strong, delta_weak = delta_weak, failures = failures, figures = figures)
-}
-
-
-# =============================================================================
-# EMPIRICAL DUAL-CUTOFF ANALYSIS
-# =============================================================================
-#
-# PURPOSE
-# -------
-# Run the same empirical downstream analysis twice:
-#
-#   1. top-5,000 sites selected independently from control and treatment PC1
-#      rankings;
-#   2. top-4,077 sites selected independently from the same rankings.
-#
-# For each cutoff k:
-#
-#   S_C(k) = control top-k features by |PC1 loading|
-#   S_T(k) = treatment top-k features by |PC1 loading|
-#
-#   Joint      = S_C(k) intersection S_T(k)
-#   Disjoint C = S_C(k) \ S_T(k)
-#   Disjoint T = S_T(k) \ S_C(k)
-#
-#   Leading-edge union = S_C(k) union S_T(k)
-#
-# Each cutoff-specific union is then analyzed independently with the same
-# DESeq2 / apeglm / empirical-null / higher-criticism / HBFSS pipeline.
-# This produces directly comparable significant-site counts, site lists,
-# figures, and tables for k=5,000 and k=4,077.
-#
-# The comparison module then contrasts the two cutoff-specific outputs.
-# =============================================================================
-
-
-# -----------------------------------------------------------------------------
-# Empirical paths
-# -----------------------------------------------------------------------------
-
-empirical_root <- file.path(
-  output_dir,
-  empirical_folder_name
-)
-
-comparison_root <- file.path(
-  empirical_root,
-  "Cutoff_Comparison"
-)
-
-
-# -----------------------------------------------------------------------------
-# Empirical input and PC1 ranking
-# -----------------------------------------------------------------------------
-
-read_empirical_count_matrix <- function(
-    path,
-    group_patterns) {
-
-  if (!file.exists(path)) {
-    stop(
-      "Empirical count file does not exist: ",
-      path,
-      call. = FALSE
-    )
-  }
-
-  raw_df <- read.csv(
-    path,
-    check.names = FALSE,
-    stringsAsFactors = FALSE
-  )
-
-  if (
-    nrow(raw_df) < 2L ||
-    ncol(raw_df) < 2L
-  ) {
-    stop(
-      "Empirical count file is empty or malformed.",
-      call. = FALSE
-    )
-  }
-
-  sample_idx <- sort(
-    unique(
-      unlist(
-        lapply(
-          group_patterns,
-          function(pattern) {
-            grep(
-              pattern,
-              colnames(raw_df)
-            )
-          }
-        )
-      )
-    )
-  )
-
-  if (length(sample_idx) == 0L) {
-    stop(
-      "No empirical sample columns matched empirical_group_patterns.",
-      call. = FALSE
-    )
-  }
-
-  if (1L %in% sample_idx) {
-    stop(
-      "Column 1 matched a sample pattern; column 1 must contain feature IDs.",
-      call. = FALSE
-    )
-  }
-
-  count_df <- raw_df[
-    ,
-    sample_idx,
-    drop = FALSE
-  ]
-
-  count_mat <- do.call(
-    cbind,
-    lapply(
-      count_df,
-      function(x) {
-        suppressWarnings(
-          as.numeric(
-            trimws(
-              as.character(x)
-            )
-          )
-        )
-      }
-    )
-  )
-
-  colnames(count_mat) <- colnames(
-    count_df
-  )
-
-  storage.mode(count_mat) <- "numeric"
-
-  n_bad <- sum(
-    !is.finite(
-      count_mat
-    )
-  )
-
-  if (n_bad > 0L) {
-    log_message(
-      "Empirical counts: replacing ",
-      n_bad,
-      " non-finite entries with 0."
-    )
-
-    count_mat[
-      !is.finite(
-        count_mat
-      )
-    ] <- 0
-  }
-
-  count_mat <- pmax(
-    count_mat,
-    0
-  )
-
-  feature_ids <- trimws(
-    as.character(
-      raw_df[[1L]]
-    )
-  )
-
-  blank <- (
-    is.na(feature_ids) |
-    feature_ids == ""
-  )
-
-  if (any(blank)) {
-    feature_ids[
-      blank
-    ] <- paste0(
-      "__feature_row_",
-      which(blank)
-    )
-  }
-
-  feature_ids <- make.unique(
-    feature_ids,
-    sep = "__dup_"
-  )
-
-  rownames(
-    count_mat
-  ) <- feature_ids
-
-  keep <- (
-    rowSums(
-      count_mat
-    ) > 0
-  )
-
-  count_mat <- count_mat[
-    keep,
-    ,
-    drop = FALSE
-  ]
-
-  if (nrow(count_mat) < 10L) {
-    stop(
-      "Fewer than 10 nonzero empirical features remain.",
-      call. = FALSE
-    )
-  }
-
-  count_mat
-}
-
-
-assign_empirical_groups <- function(
-    sample_names,
-    group_patterns) {
-
-  assigned <- rep(
-    NA_character_,
-    length(sample_names)
-  )
-
-  for (
-    group_name in
-    names(group_patterns)
-  ) {
-    idx <- grep(
-      group_patterns[[
-        group_name
-      ]],
-      sample_names
-    )
-
-    if (
-      length(idx) > 0L &&
-      any(
-        !is.na(
-          assigned[
-            idx
-          ]
-        )
-      )
-    ) {
-      stop(
-        "At least one empirical sample matched more than one group pattern.",
-        call. = FALSE
-      )
-    }
-
-    assigned[
-      idx
-    ] <- group_name
-  }
-
-  if (any(is.na(assigned))) {
-    stop(
-      "Unassigned empirical samples: ",
-      paste(
-        sample_names[
-          is.na(assigned)
-        ],
-        collapse = ", "
-      ),
-      call. = FALSE
-    )
-  }
-
-  factor(
-    assigned,
-    levels = names(
-      group_patterns
-    )
-  )
-}
-
-
-normalize_cpm_log1p_empirical <- function(
-    count_mat_arm) {
-
-  lib_size <- colSums(
-    count_mat_arm,
-    na.rm = TRUE
-  )
-
-  lib_size[
-    !is.finite(lib_size) |
-    lib_size <= 0
-  ] <- 1
-
-  cpm <- sweep(
-    count_mat_arm,
-    2L,
-    lib_size / 1e6,
-    "/"
-  )
-
-  log1p(
-    cpm
-  )
-}
-
-
-compute_empirical_pc1_rank <- function(
-    count_mat_arm,
-    group_name) {
-
-  rank_matrix <- normalize_cpm_log1p_empirical(
-    count_mat_arm
-  )
-
-  pca <- stats::prcomp(
-    t(
-      rank_matrix
-    ),
-    center = TRUE,
-    scale. = FALSE,
-    rank. = 1
-  )
-
-  loading <- pca$rotation[
-    ,
-    1L
-  ]
-
-  loading[
-    !is.finite(
-      loading
-    )
-  ] <- 0
-
-  abs_loading <- abs(
-    loading
-  )
-
-  rank_order <- order(
-    abs_loading,
-    decreasing = FALSE
-  )
-
-  data.frame(
-    feature_id =
-      rownames(
-        count_mat_arm
-      )[
-        rank_order
-      ],
-
-    group =
-      group_name,
-
-    rank =
-      seq_along(
-        rank_order
-      ),
-
-    pc1_loading =
-      loading[
-        rank_order
-      ],
-
-    abs_pc1_loading =
-      abs_loading[
-        rank_order
-      ],
-
-    stringsAsFactors = FALSE
-  )
-}
-
-
-make_rank_map_empirical <- function(
-    rank_df) {
-
-  stats::setNames(
-    rank_df$rank,
-    rank_df$feature_id
-  )
-}
-
-
-build_cutoff_selection <- function(
-    control_rank,
-    treatment_rank,
-    k,
-    comparison_name,
-    control_group,
-    treatment_group) {
-
-  N <- nrow(
-    control_rank
-  )
-
-  if (
-    nrow(treatment_rank) != N ||
-    !setequal(
-      control_rank$feature_id,
-      treatment_rank$feature_id
-    )
-  ) {
-    stop(
-      "Control/treatment rank tables are incompatible for ",
-      comparison_name,
-      ".",
-      call. = FALSE
-    )
-  }
-
-  if (
-    k < 1L ||
-    k > N
-  ) {
-    stop(
-      "Invalid cutoff k=",
-      k,
-      " for ",
-      comparison_name,
-      ".",
-      call. = FALSE
-    )
-  }
-
-  control_top <- tail(
-    control_rank$feature_id,
-    k
-  )
-
-  treatment_top <- tail(
-    treatment_rank$feature_id,
-    k
-  )
-
-  union_ids <- union(
-    control_top,
-    treatment_top
-  )
-
-  rank_control <- make_rank_map_empirical(
-    control_rank
-  )
-
-  rank_treatment <- make_rank_map_empirical(
-    treatment_rank
-  )
-
-  in_control <- (
-    union_ids %in%
-    control_top
-  )
-
-  in_treatment <- (
-    union_ids %in%
-    treatment_top
-  )
-
-  class <- ifelse(
-    in_control &
-    in_treatment,
-    "Joint",
-    ifelse(
-      in_control,
-      paste0(
-        "Disjoint ",
-        control_group
-      ),
-      paste0(
-        "Disjoint ",
-        treatment_group
-      )
-    )
-  )
-
-  data.frame(
-    comparison =
-      comparison_name,
-
-    cutoff_k =
-      as.integer(k),
-
-    control_group =
-      control_group,
-
-    treatment_group =
-      treatment_group,
-
-    feature_id =
-      union_ids,
-
-    membership =
-      class,
-
-    control_top_k =
-      in_control,
-
-    treatment_top_k =
-      in_treatment,
-
-    control_rank =
-      unname(
-        rank_control[
-          union_ids
-        ]
-      ),
-
-    treatment_rank =
-      unname(
-        rank_treatment[
-          union_ids
-        ]
-      ),
-
-    control_abs_pc1_loading =
-      stats::setNames(
-        control_rank$abs_pc1_loading,
-        control_rank$feature_id
-      )[
-        union_ids
-      ],
-
-    treatment_abs_pc1_loading =
-      stats::setNames(
-        treatment_rank$abs_pc1_loading,
-        treatment_rank$feature_id
-      )[
-        union_ids
-      ],
-
-    stringsAsFactors = FALSE
-  )
-}
-
-
-# -----------------------------------------------------------------------------
-# Empirical DESeq2 / HBFSS analysis
-# -----------------------------------------------------------------------------
-
-fit_empirical_deseq <- function(
-    dds,
-    label) {
-
-  fit_types <- unique(
-    c(
-      simulation_fit_type,
-      "parametric",
-      "mean"
-    )
-  )
-
-  last_error <- NULL
-
-  for (
-    ft in fit_types
-  ) {
-    fit <- tryCatch(
-      DESeq2::DESeq(
-        dds,
-        betaPrior = FALSE,
-        quiet = TRUE,
-        fitType = ft
-      ),
-      error = function(e) {
-        last_error <<- e
-        NULL
-      }
-    )
-
-    if (!is.null(fit)) {
-      return(
-        list(
-          dds = fit,
-          fit_type = ft
-        )
-      )
-    }
-  }
-
-  stop(
-    label,
-    ": DESeq2 failed for fit types ",
-    paste(
-      fit_types,
-      collapse = ", "
-    ),
-    if (!is.null(last_error)) {
-      paste0(
-        ". Last error: ",
-        conditionMessage(
-          last_error
-        )
-      )
-    } else {
-      ""
-    },
-    call. = FALSE
-  )
-}
-
-
-run_empirical_cutoff_comparison <- function(
-    count_mat,
-    group_labels,
-    selection_df,
-    comparison_name,
-    control_group,
-    treatment_group,
-    cutoff_k) {
-
-  selected_ids <- selection_df$feature_id
-
-  control_idx <- which(
-    as.character(
-      group_labels
-    ) ==
-    control_group
-  )
-
-  treatment_idx <- which(
-    as.character(
-      group_labels
-    ) ==
-    treatment_group
-  )
-
-  if (
-    length(control_idx) < 2L ||
-    length(treatment_idx) < 2L
-  ) {
-    stop(
-      comparison_name,
-      ": fewer than two samples in one arm.",
-      call. = FALSE
-    )
-  }
-
-  pair_idx <- c(
-    control_idx,
-    treatment_idx
-  )
-
-  pair_counts <- count_mat[
-    selected_ids,
-    pair_idx,
-    drop = FALSE
-  ]
-
-  pair_counts <- as_integer_count_matrix(
-    pair_counts,
-    paste0(
-      comparison_name,
-      " cutoff ",
-      cutoff_k,
-      " DESeq2 input"
-    )
-  )
-
-  condition <- factor(
-    c(
-      rep(
-        "untrt",
-        length(control_idx)
-      ),
-      rep(
-        "trt",
-        length(treatment_idx)
-      )
-    ),
-    levels = c(
-      "untrt",
-      "trt"
-    )
-  )
-
-  coldata <- data.frame(
-    condition = condition,
-    row.names = colnames(
-      pair_counts
-    )
-  )
-
-  dds <- DESeq2::DESeqDataSetFromMatrix(
-    countData = pair_counts,
+run_deseq2_hbfss <- function(count_matrix, coldata, comparison_name, analysis_label, dataset_key) {
+  label <- paste(comparison_name, analysis_label, sep = "_")
+  log_message("DESeq2/HBFSS: ", label, " | features=", nrow(count_matrix))
+
+  dds <- DESeqDataSetFromMatrix(
+    countData = as_integer_count_matrix(count_matrix, paste0(label, " DESeq2 input")),
     colData = coldata,
     design = ~ condition
   )
 
-  keep <- (
-    rowSums(
-      DESeq2::counts(
-        dds
-      )
-    ) > 0
-  )
+  dds <- dds[rowSums(counts(dds)) > 0, ]
+  dds <- DESeq(dds, betaPrior = FALSE, quiet = TRUE)
+  coef_name <- condition_coef_name(dds)
 
-  dds <- dds[
-    keep,
-  ]
-
-  if (nrow(dds) < 20L) {
-    stop(
-      comparison_name,
-      " cutoff ",
-      cutoff_k,
-      ": fewer than 20 nonzero selected features.",
-      call. = FALSE
-    )
-  }
-
-  fit <- fit_empirical_deseq(
+  standard <- results(dds, contrast = c("condition", "trt", "untrt"), alpha = alpha_standard)
+  strong <- results(
     dds,
-    paste0(
-      comparison_name,
-      " cutoff ",
-      cutoff_k
-    )
-  )
-
-  dds <- fit$dds
-
-  coef_name <- condition_coef_name(
-    dds
-  )
-
-  standard <- DESeq2::results(
-    dds,
-    contrast = c(
-      "condition",
-      "trt",
-      "untrt"
-    ),
-    alpha = alpha_standard
-  )
-
-  greater_abs <- DESeq2::results(
-    dds,
-    contrast = c(
-      "condition",
-      "trt",
-      "untrt"
-    ),
+    contrast = c("condition", "trt", "untrt"),
     lfcThreshold = lfc_boundary,
     altHypothesis = "greaterAbs",
     alpha = alpha_strong
   )
-
-  less_abs <- DESeq2::results(
+  weak <- results(
     dds,
-    contrast = c(
-      "condition",
-      "trt",
-      "untrt"
-    ),
+    contrast = c("condition", "trt", "untrt"),
     lfcThreshold = lfc_boundary,
     altHypothesis = "lessAbs",
     alpha = alpha_weak
   )
+  shrunk <- lfcShrink(dds, coef = coef_name, type = "apeglm", quiet = TRUE)
 
-  shrunk <- DESeq2::lfcShrink(
-    dds,
-    coef = coef_name,
-    type = "apeglm",
-    quiet = TRUE
+  df <- as.data.frame(standard)
+  df$feature_id <- rownames(df)
+
+  empirical <- fit_empirical_null(df$stat, label)
+  df$empirical_p <- empirical$empirical_p
+  df$empirical_q <- empirical$empirical_q
+  df$empirical_lfdr <- empirical$empirical_lfdr
+  df$empirical_bh <- empirical$empirical_bh
+  df$empirical_null_method <- empirical$empirical_null_method
+
+  df$empirical_p_calc <- clip_probability(df$empirical_p, floor_value = calculation_p_floor)
+  df$empirical_p_plot <- clip_probability(df$empirical_p, floor_value = plot_p_floor)
+  df$neglog10_empirical_p_calc <- -log10(df$empirical_p_calc)
+  df$neglog10_empirical_p_plot <- -log10(df$empirical_p_plot)
+  df$neglog10_empirical_p <- df$neglog10_empirical_p_plot
+
+  strong_df <- data.frame(
+    feature_id = rownames(strong),
+    greaterAbs_pvalue = strong$pvalue,
+    greaterAbs_padj = strong$padj,
+    stringsAsFactors = FALSE
   )
-
-  df <- as.data.frame(
-    standard
+  weak_df <- data.frame(
+    feature_id = rownames(weak),
+    lessAbs_pvalue = weak$pvalue,
+    lessAbs_padj = weak$padj,
+    stringsAsFactors = FALSE
   )
-
-  df$feature_id <- rownames(
-    df
-  )
-
-  shrunk_df <- as.data.frame(
-    shrunk
-  )
-
-  df$lfc_shrunk <-
-    shrunk_df[
-      df$feature_id,
-      "log2FoldChange"
-    ]
-
-  greater_df <- as.data.frame(
-    greater_abs
-  )
-
-  less_df <- as.data.frame(
-    less_abs
-  )
-
-  df$greaterAbs_padj <-
-    greater_df[
-      df$feature_id,
-      "padj"
-    ]
-
-  df$lessAbs_padj <-
-    less_df[
-      df$feature_id,
-      "padj"
-    ]
-
-  norm_counts <- DESeq2::counts(
-    dds,
-    normalized = TRUE
-  )
-
-  df$control_mean_normalized <-
-    rowMeans(
-      norm_counts[
-        df$feature_id,
-        seq_along(
-          control_idx
-        ),
-        drop = FALSE
-      ],
-      na.rm = TRUE
-    )
-
-  df$treatment_mean_normalized <-
-    rowMeans(
-      norm_counts[
-        df$feature_id,
-        length(control_idx) +
-          seq_along(
-            treatment_idx
-          ),
-        drop = FALSE
-      ],
-      na.rm = TRUE
-    )
-
-  empirical <- fit_empirical_null(
-    df$stat,
-    paste0(
-      comparison_name,
-      " cutoff ",
-      cutoff_k
-    )
-  )
-
-  df$empirical_p <-
-    empirical$empirical_p
-
-  df$empirical_bh <-
-    empirical$empirical_bh
-
-  df$neglog10_empirical_p_calc <-
-    safe_neglog10(
-      df$empirical_p,
-      floor_value =
-        calculation_p_floor
-    )
-
-  hc_p <- hc_threshold(
-    df$empirical_p
-  )
-
-  hbfss_cutoff <- if (
-    is.na(hc_p)
-  ) {
-    NA_real_
-  } else {
-    -log10(
-      hc_p
-    ) *
-      lfc_boundary
-  }
-
-  df$hc_pass <- (
-    !is.na(hc_p) &
-    !is.na(
-      df$empirical_p
-    ) &
-    is.finite(
-      df$empirical_p
-    ) &
-    df$empirical_p <=
-      hc_p
-  )
-
-  df$HBFSS <- (
-    abs(
-      df$lfc_shrunk
-    ) *
-    df$neglog10_empirical_p_calc
-  )
-
-  df$DESeq2_BH_sig <- (
-    !is.na(
-      df$padj
-    ) &
-    df$padj <
-      alpha_standard
-  )
-
-  df$DESeq2_Strong_sig <- (
-    !is.na(
-      df$greaterAbs_padj
-    ) &
-    df$greaterAbs_padj <
-      alpha_strong &
-    !is.na(
-      df$lfc_shrunk
-    ) &
-    abs(
-      df$lfc_shrunk
-    ) >=
-      lfc_boundary
-  )
-
-  df$DESeq2_Weak_sig <- (
-    !is.na(
-      df$lessAbs_padj
-    ) &
-    df$lessAbs_padj <
-      alpha_weak &
-    !is.na(
-      df$lfc_shrunk
-    ) &
-    abs(
-      df$lfc_shrunk
-    ) <
-      lfc_boundary
-  )
-
-  df$Empirical_BH_sig <- (
-    !is.na(
-      df$empirical_bh
-    ) &
-    df$empirical_bh <
-      alpha_standard
-  )
-
-  df$HBFSS_All_sig <- (
-    !is.na(
-      hbfss_cutoff
-    ) &
-    !is.na(
-      df$HBFSS
-    ) &
-    is.finite(
-      df$HBFSS
-    ) &
-    df$HBFSS >=
-      hbfss_cutoff &
-    df$hc_pass
-  )
-
-  df$HBFSS_Strong_sig <- (
-    df$HBFSS_All_sig &
-    !is.na(
-      df$greaterAbs_padj
-    ) &
-    df$greaterAbs_padj <
-      alpha_strong &
-    !is.na(
-      df$lfc_shrunk
-    ) &
-    abs(
-      df$lfc_shrunk
-    ) >=
-      lfc_boundary
-  )
-
-  df$HBFSS_Weak_sig <- (
-    df$hc_pass &
-    !is.na(
-      df$lessAbs_padj
-    ) &
-    df$lessAbs_padj <
-      alpha_weak &
-    !is.na(
-      df$lfc_shrunk
-    ) &
-    abs(
-      df$lfc_shrunk
-    ) <
-      lfc_boundary
-  )
-
-  df <- dplyr::left_join(
-    df,
-    selection_df,
-    by = "feature_id"
-  )
-
-  df$comparison <-
-    comparison_name
-
-  df$cutoff_k <-
-    as.integer(
-      cutoff_k
-    )
-
-  df$control_group <-
-    control_group
-
-  df$treatment_group <-
-    treatment_group
-
-  df$hc_p_threshold <-
-    hc_p
-
-  df$hbfss_cutoff <-
-    hbfss_cutoff
-
-  df$empirical_null_method <-
-    empirical$empirical_null_method
-
-  df$deseq_fit_type <-
-    fit$fit_type
-
-  df$any_significant <- (
-    df$DESeq2_BH_sig |
-    df$DESeq2_Strong_sig |
-    df$DESeq2_Weak_sig |
-    df$Empirical_BH_sig |
-    df$HBFSS_All_sig |
-    df$HBFSS_Strong_sig |
-    df$HBFSS_Weak_sig
+  shrink_df <- data.frame(
+    feature_id = rownames(shrunk),
+    lfc_shrunk = as.data.frame(shrunk)$log2FoldChange,
+    stringsAsFactors = FALSE
   )
 
   df <- df %>%
-    arrange(
-      desc(
-        HBFSS
-      )
-    )
+    left_join(strong_df, by = "feature_id") %>%
+    left_join(weak_df, by = "feature_id") %>%
+    left_join(shrink_df, by = "feature_id") %>%
+    left_join(annotation_df, by = "feature_id")
 
-  list(
-    results = df,
-    hc_p = hc_p,
-    hbfss_cutoff = hbfss_cutoff,
-    empirical_null_method =
-      empirical$empirical_null_method,
-    deseq_fit_type =
-      fit$fit_type
+  hc_p <- hc_threshold(df$empirical_p)
+  hbfss_cutoff <- if (is.na(hc_p)) NA_real_ else -log10(hc_p) * lfc_boundary
+  df <- classify_results(df, hc_p, hbfss_cutoff)
+
+  normalized_counts <- as.data.frame(counts(dds, normalized = TRUE))
+  normalized_counts$feature_id <- rownames(normalized_counts)
+
+  dispersion_df <- as.data.frame(S4Vectors::mcols(dds))
+  dispersion_df$feature_id <- rownames(dispersion_df)
+  keep_disp <- intersect(c("feature_id", "dispGeneEst", "dispFit", "dispersion", "dispIter", "dispOutlier"), colnames(dispersion_df))
+  dispersion_df <- dispersion_df[, keep_disp, drop = FALSE]
+
+  df <- df %>%
+    left_join(normalized_counts, by = "feature_id") %>%
+    left_join(dispersion_df, by = "feature_id")
+
+  df$comparison_name <- comparison_name
+  df$analysis_label <- analysis_label
+  df$dataset_key <- dataset_key
+  df$hc_p_threshold_dataset <- hc_p
+  df$hbfss_threshold_dataset <- hbfss_cutoff
+  df$regulation_direction <- ifelse(
+    is.na(df$lfc_shrunk),
+    NA_character_,
+    ifelse(df$lfc_shrunk > 0, "upregulated", ifelse(df$lfc_shrunk < 0, "downregulated", "no_change"))
+  )
+
+  preferred <- c(
+    "comparison_name", "analysis_label", "dataset_key",
+    "feature_id", "orig_id", "gene_symbol",
+    "baseMean", "log2FoldChange", "lfc_shrunk", "regulation_direction",
+    "stat", "pvalue", "padj",
+    "greaterAbs_pvalue", "greaterAbs_padj", "lessAbs_pvalue", "lessAbs_padj",
+    "empirical_null_method", "empirical_p", "empirical_p_calc", "empirical_p_plot",
+    "empirical_bh", "empirical_q", "empirical_lfdr",
+    "neglog10_empirical_p_calc", "neglog10_empirical_p_plot", "neglog10_empirical_p",
+    "HBFSS", "hc_p_threshold_dataset", "hbfss_threshold_dataset",
+    "hc_pass", "standard_flag", "strong_alt_flag", "strong_flag",
+    "lessAbs_alt_flag", "weak_region_hbfss_flag", "weak_flag",
+    "hbfss_raw_flag", "hbfss_flag",
+    "display_standard", "display_strong", "display_weak", "display_hbfss", "final_class"
+  )
+  df <- df[, c(intersect(preferred, colnames(df)), setdiff(colnames(df), preferred)), drop = FALSE]
+
+  summary <- data.frame(
+    comparison_name = comparison_name,
+    analysis_label = analysis_label,
+    dataset_key = dataset_key,
+    n_features = nrow(df),
+    n_lessAbs_alt = sum(df$lessAbs_alt_flag, na.rm = TRUE),
+    n_weak = sum(df$weak_region_hbfss_flag, na.rm = TRUE),
+    n_strong_alt = sum(df$strong_alt_flag, na.rm = TRUE),
+    n_strong = sum(df$strong_flag, na.rm = TRUE),
+    n_standard = sum(df$standard_flag, na.rm = TRUE),
+    n_hbfss_raw = sum(df$hbfss_raw_flag, na.rm = TRUE),
+    n_hbfss_total = sum(df$hbfss_flag, na.rm = TRUE),
+    n_hbfss_overlap_standard = sum(df$hbfss_flag & df$standard_flag, na.rm = TRUE),
+    n_hbfss_only = sum(df$hbfss_flag & !df$standard_flag, na.rm = TRUE),
+    n_display_weak = sum(df$display_weak, na.rm = TRUE),
+    n_display_strong = sum(df$display_strong, na.rm = TRUE),
+    n_display_standard = sum(df$display_standard, na.rm = TRUE),
+    n_display_hbfss = sum(df$display_hbfss, na.rm = TRUE),
+    hc_p_threshold = hc_p,
+    hbfss_threshold = hbfss_cutoff,
+    empirical_null_method = unique(df$empirical_null_method)[1],
+    alpha_standard = alpha_standard,
+    alpha_strong = alpha_strong,
+    alpha_weak = alpha_weak,
+    lfc_boundary = lfc_boundary,
+    stringsAsFactors = FALSE
+  )
+
+  list(dds = dds, results = df, summary = summary)
+}
+
+concise_analysis_summary <- function(df) {
+  map <- c(
+    comparison_name = "comparison", analysis_label = "analysis", dataset_key = "dataset",
+    n_features = "n_features", n_lessAbs_alt = "lessAbs_significant",
+    n_weak = "weak_effect_hbfss_region", n_strong_alt = "greaterAbs_significant",
+    n_strong = "strong_effect", n_standard = "standard_effect",
+    n_hbfss_raw = "hbfss_raw_geometric", n_hbfss_total = "hbfss_total",
+    n_hbfss_overlap_standard = "hbfss_overlap_standard", n_hbfss_only = "hbfss_only",
+    n_display_weak = "display_weak_effect", n_display_strong = "display_strong_effect",
+    n_display_standard = "display_standard_only", n_display_hbfss = "display_hbfss_only",
+    hc_p_threshold = "hc_p_threshold", hbfss_threshold = "hbfss_cutoff",
+    empirical_null_method = "empirical_null_method", alpha_standard = "wald_bh_alpha",
+    alpha_strong = "greaterAbs_bh_alpha", alpha_weak = "lessAbs_bh_alpha", lfc_boundary = "lfc_boundary"
+  )
+  out <- rename_columns_existing(df, map)
+  keep <- c(
+    "comparison", "analysis", "dataset", "n_features",
+    "lessAbs_significant", "weak_effect_hbfss_region", "greaterAbs_significant", "strong_effect",
+    "standard_effect", "hbfss_raw_geometric", "hbfss_total", "hbfss_overlap_standard", "hbfss_only",
+    "display_weak_effect", "display_strong_effect", "display_standard_only", "display_hbfss_only",
+    "hc_p_threshold", "hbfss_cutoff", "empirical_null_method",
+    "wald_bh_alpha", "greaterAbs_bh_alpha", "lessAbs_bh_alpha", "lfc_boundary"
+  )
+  out[, intersect(keep, names(out)), drop = FALSE]
+}
+
+concise_evs_summary <- function(df) {
+  map <- c(
+    comparison_name = "comparison", evs_mode = "evs_mode", evs_cutoff_mode = "evs_cutoff_mode",
+    top_n_target = "top_n_target", treatment_top_n_used = "treatment_top_n",
+    control_top_n_used = "control_top_n", treatment_loading_cutoff = "treatment_loading_cutoff",
+    control_loading_cutoff = "control_loading_cutoff", leading_edge_n = "leading_edge_features",
+    remainder_n = "remainder_features", evs_input = "input_matrix"
+  )
+  out <- rename_columns_existing(df, map)
+  keep <- c(
+    "comparison", "evs_mode", "evs_cutoff_mode", "top_n_target",
+    "treatment_top_n", "control_top_n", "treatment_loading_cutoff", "control_loading_cutoff",
+    "leading_edge_features", "remainder_features", "input_matrix"
+  )
+  out[, intersect(keep, names(out)), drop = FALSE]
+}
+
+# =============================================================================
+# VOLCANO FIGURES
+# =============================================================================
+
+volcano_data <- function(df) {
+  plot_df <- df[
+    is.finite(df$lfc_shrunk) & !is.na(df$lfc_shrunk) &
+      is.finite(df$neglog10_empirical_p) & !is.na(df$neglog10_empirical_p),
+    ,
+    drop = FALSE
+  ]
+
+  plot_df$gene_label <- ifelse(
+    !is.na(plot_df$gene_symbol) & nzchar(trimws(plot_df$gene_symbol)),
+    trimws(plot_df$gene_symbol),
+    as.character(plot_df$feature_id)
+  )
+
+  duplicate_gene_label <- duplicated(plot_df$gene_label) | duplicated(plot_df$gene_label, fromLast = TRUE)
+  has_feature_id <- !is.na(plot_df$feature_id) & nzchar(trimws(as.character(plot_df$feature_id)))
+  plot_df$gene_label <- ifelse(
+    duplicate_gene_label & has_feature_id & plot_df$gene_label != as.character(plot_df$feature_id),
+    paste0(plot_df$gene_label, " [", plot_df$feature_id, "]"),
+    plot_df$gene_label
+  )
+
+  plot_df$final_class <- factor(as.character(plot_df$final_class), levels = class_levels)
+
+  draw_order <- c(BG = 1, HBFSS = 2, Weak = 3, Std = 4, Strong = 5)
+  plot_df$draw_order <- unname(draw_order[as.character(plot_df$final_class)])
+  plot_df$draw_order[is.na(plot_df$draw_order)] <- 1
+  plot_df[order(plot_df$draw_order, plot_df$neglog10_empirical_p), , drop = FALSE]
+}
+
+volcano_labels <- function(plot_df) {
+  labels <- plot_df[as.character(plot_df$final_class) != "BG", , drop = FALSE]
+  if (nrow(labels) == 0L) return(labels)
+
+  labels <- labels[!duplicated(labels$gene_label), , drop = FALSE]
+  class_priority <- c("Strong", "Weak", "Std", "HBFSS")
+  picked <- list()
+
+  for (cls in class_priority) {
+    sub <- labels[as.character(labels$final_class) == cls, , drop = FALSE]
+    if (nrow(sub) == 0L) next
+    sub <- sub[order(-sub$HBFSS, sub$empirical_p, -abs(sub$lfc_shrunk), na.last = TRUE), , drop = FALSE]
+    picked[[cls]] <- sub[seq_len(min(label_top_n_per_class, nrow(sub))), , drop = FALSE]
+  }
+
+  labels <- if (length(picked) > 0L) do.call(rbind, picked) else labels[0, , drop = FALSE]
+  if (nrow(labels) == 0L) return(labels)
+  labels <- labels[order(match(as.character(labels$final_class), class_priority), -labels$HBFSS, labels$empirical_p, na.last = TRUE), , drop = FALSE]
+  labels[seq_len(min(label_top_n_total, nrow(labels))), , drop = FALSE]
+}
+
+hbfss_boundary <- function(plot_df, hc_p, hbfss_cutoff, y_limit) {
+  if (!is.finite(hbfss_cutoff) || is.na(hbfss_cutoff) || hbfss_cutoff <= 0) return(NULL)
+  hc_y <- if (!is.na(hc_p) && is.finite(hc_p) && hc_p > 0 && hc_p < 1) -log10(hc_p) else NA_real_
+  x_limit <- max(abs(plot_df$lfc_shrunk), lfc_boundary * 1.1, na.rm = TRUE)
+  x_start <- max(0.05, hbfss_cutoff / max(y_limit, 1e-6))
+  if (!is.finite(x_limit) || x_start >= x_limit) return(NULL)
+
+  x_abs <- seq(x_start, x_limit, length.out = 600)
+  y <- hbfss_cutoff / x_abs
+  if (!is.na(hc_y) && is.finite(hc_y)) y <- pmax(y, hc_y)
+  keep <- is.finite(y) & y >= 0 & y <= y_limit
+  if (!any(keep)) return(NULL)
+
+  x_abs <- x_abs[keep]
+  y <- y[keep]
+  rbind(
+    data.frame(x = -rev(x_abs), y = rev(y), stringsAsFactors = FALSE),
+    data.frame(x = x_abs, y = y, stringsAsFactors = FALSE)
   )
 }
 
-
-# -----------------------------------------------------------------------------
-# Empirical summaries
-# -----------------------------------------------------------------------------
-
-empirical_method_spec <- data.frame(
-  method = c(
-    "DESeq2_BH_sig",
-    "Empirical_BH_sig",
-    "HBFSS_All_sig",
-    "DESeq2_Strong_sig",
-    "HBFSS_Strong_sig",
-    "DESeq2_Weak_sig",
-    "HBFSS_Weak_sig"
-  ),
-
-  method_label = c(
-    "DESeq2 BH",
-    "Empirical BH",
-    "HBFSS all",
-    "DESeq2 greaterAbs",
-    "HBFSS strong",
-    "DESeq2 weak composite",
-    "HBFSS weak"
-  ),
-
-  family = c(
-    "All effects",
-    "All effects",
-    "All effects",
-    "Strong effects",
-    "Strong effects",
-    "Sub-boundary",
-    "Sub-boundary"
-  ),
-
-  stringsAsFactors = FALSE
-)
-
-
-summarize_empirical_result <- function(
-    result_obj,
-    selection_df,
-    cutoff_name) {
-
-  df <- result_obj$results
-
-  selected_union_n <- nrow(
-    selection_df
-  )
-
-  membership_counts <- table(
-    selection_df$membership
-  )
-
-  rows <- lapply(
-    seq_len(
-      nrow(
-        empirical_method_spec
-      )
-    ),
-    function(i) {
-
-      method_col <-
-        empirical_method_spec$method[
-          i
-        ]
-
-      sig <- (
-        !is.na(
-          df[[
-            method_col
-          ]]
-        ) &
-        df[[
-          method_col
-        ]]
-      )
-
-      data.frame(
-        cutoff_name =
-          cutoff_name,
-
-        cutoff_k =
-          unique(
-            df$cutoff_k
-          )[1L],
-
-        comparison =
-          unique(
-            df$comparison
-          )[1L],
-
-        control_group =
-          unique(
-            df$control_group
-          )[1L],
-
-        treatment_group =
-          unique(
-            df$treatment_group
-          )[1L],
-
-        method =
-          method_col,
-
-        method_label =
-          empirical_method_spec$method_label[
-            i
-          ],
-
-        family =
-          empirical_method_spec$family[
-            i
-          ],
-
-        selected_union_n =
-          selected_union_n,
-
-        joint_n =
-          sum(
-            selection_df$membership ==
-              "Joint"
-          ),
-
-        disjoint_control_n =
-          sum(
-            selection_df$membership ==
-              paste0(
-                "Disjoint ",
-                unique(
-                  df$control_group
-                )[1L]
-              )
-          ),
-
-        disjoint_treatment_n =
-          sum(
-            selection_df$membership ==
-              paste0(
-                "Disjoint ",
-                unique(
-                  df$treatment_group
-                )[1L]
-              )
-          ),
-
-        significant_n =
-          sum(
-            sig,
-            na.rm = TRUE
-          ),
-
-        significant_fraction =
-          if (
-            nrow(df) > 0L
-          ) {
-            sum(
-              sig,
-              na.rm = TRUE
-            ) /
-              nrow(df)
-          } else {
-            NA_real_
-          },
-
-        significant_joint_n =
-          sum(
-            sig &
-            df$membership ==
-              "Joint",
-            na.rm = TRUE
-          ),
-
-        significant_disjoint_control_n =
-          sum(
-            sig &
-            df$membership ==
-              paste0(
-                "Disjoint ",
-                unique(
-                  df$control_group
-                )[1L]
-              ),
-            na.rm = TRUE
-          ),
-
-        significant_disjoint_treatment_n =
-          sum(
-            sig &
-            df$membership ==
-              paste0(
-                "Disjoint ",
-                unique(
-                  df$treatment_group
-                )[1L]
-              ),
-            na.rm = TRUE
-          ),
-
-        hc_p_threshold =
-          result_obj$hc_p,
-
-        hbfss_cutoff =
-          result_obj$hbfss_cutoff,
-
-        empirical_null_method =
-          result_obj$empirical_null_method,
-
-        deseq_fit_type =
-          result_obj$deseq_fit_type,
-
-        stringsAsFactors =
-          FALSE
-      )
-    }
-  )
-
-  dplyr::bind_rows(
-    rows
-  )
-}
-
-
-summarize_selection_composition <- function(
-    selections,
-    cutoff_name,
-    cutoff_k) {
-
-  dplyr::bind_rows(
-    lapply(
-      names(
-        selections
-      ),
-      function(comparison_name) {
-        x <- selections[[
-          comparison_name
-        ]]
-
-        counts <- as.data.frame(
-          table(
-            x$membership
-          ),
-          stringsAsFactors = FALSE
-        )
-
-        colnames(
-          counts
-        ) <- c(
-          "membership",
-          "n"
-        )
-
-        counts$cutoff_name <-
-          cutoff_name
-
-        counts$cutoff_k <-
-          cutoff_k
-
-        counts$comparison <-
-          comparison_name
-
-        counts
-      }
-    )
-  )
-}
-
-
-# -----------------------------------------------------------------------------
-# Empirical figure export
-# -----------------------------------------------------------------------------
-
-save_empirical_figure <- function(
-    plot_obj,
-    root_dir,
-    figure_name,
-    width = 7.2,
-    height = 4.8) {
-
-  if (
-    is.null(plot_obj) ||
-    !inherits(
-      plot_obj,
-      "ggplot"
-    )
-  ) {
-    stop(
-      "Invalid empirical plot object for ",
-      figure_name,
-      ".",
-      call. = FALSE
-    )
-  }
-
-  png_dir <- file.path(
-    root_dir,
-    "figures",
-    "png"
-  )
-
-  pdf_dir <- file.path(
-    root_dir,
-    "figures",
-    "pdf"
-  )
-
-  tiff_dir <- file.path(
-    root_dir,
-    "figures",
-    "tiff"
-  )
-
-  for (
-    d in c(
-      png_dir,
-      pdf_dir,
-      tiff_dir
-    )
-  ) {
-    dir.create(
-      d,
-      recursive = TRUE,
-      showWarnings = FALSE
-    )
-  }
-
-  root_png <- file.path(
-    root_dir,
-    paste0(
-      figure_name,
-      ".png"
-    )
-  )
-
-  png_path <- file.path(
-    png_dir,
-    paste0(
-      figure_name,
-      ".png"
-    )
-  )
-
-  pdf_path <- file.path(
-    pdf_dir,
-    paste0(
-      figure_name,
-      ".pdf"
-    )
-  )
-
-  tiff_path <- file.path(
-    tiff_dir,
-    paste0(
-      figure_name,
-      ".tiff"
-    )
-  )
-
-  ggplot2::ggsave(
-    filename = png_path,
-    plot = plot_obj,
-    width = width,
-    height = height,
-    units = "in",
-    dpi = figure_dpi,
-    bg = "white",
-    limitsize = FALSE
-  )
-
-  file.copy(
-    png_path,
-    root_png,
-    overwrite = TRUE
-  )
-
-  if (isTRUE(export_pdf_also)) {
-    ggplot2::ggsave(
-      filename = pdf_path,
-      plot = plot_obj,
-      width = width,
-      height = height,
-      units = "in",
-      bg = "white",
-      limitsize = FALSE
-    )
-  }
-
-  if (isTRUE(export_tiff_also)) {
-    try(
-      {
-        grDevices::tiff(
-          filename = tiff_path,
-          width = width,
-          height = height,
-          units = "in",
-          res = figure_dpi,
-          compression = "lzw"
-        )
-
-        print(
-          plot_obj
-        )
-
-        grDevices::dev.off()
-      },
-      silent = TRUE
-    )
-  }
-
-  invisible(
-    root_png
-  )
-}
-
-
-cutoff_color_map <- c(
-  "Cutoff 5,000" = "#E69F00",
-  "Cutoff 4,077" = "#CC79A7"
-)
-
-
-membership_palette <- c(
-  "Joint" = "#D55E00",
-  "Disjoint control" = "#0072B2",
-  "Disjoint treatment" = "#009E73"
-)
-
-
-plot_empirical_discovery_counts <- function(
-    summary_df,
-    cutoff_k) {
-
-  plot_df <- summary_df
-
-  plot_df$method_label <- factor(
-    plot_df$method_label,
-    levels = empirical_method_spec$method_label
-  )
-
-  plot_df$family <- factor(
-    plot_df$family,
-    levels = c(
-      "All effects",
-      "Strong effects",
-      "Sub-boundary"
-    )
-  )
-
-  ggplot(
-    plot_df,
-    aes(
-      x = comparison,
-      y = significant_n,
-      fill = method_label
-    )
-  ) +
-    geom_col(
-      position = position_dodge(
-        width = 0.78
-      ),
-      width = 0.70
-    ) +
-    facet_wrap(
-      ~ family,
-      scales = "free_y",
-      ncol = 1
-    ) +
-    scale_fill_manual(
-      values = c(
-        "DESeq2 BH" = "#000000",
-        "Empirical BH" = "#0072B2",
-        "HBFSS all" = "#009E73",
-        "DESeq2 greaterAbs" = "#D55E00",
-        "HBFSS strong" = "#009E73",
-        "DESeq2 weak composite" = "#E69F00",
-        "HBFSS weak" = "#56B4E9"
-      ),
-      breaks = levels(
-        plot_df$method_label
-      )
-    ) +
-    labs(
-      title = paste0(
-        "Significant sites — top-",
-        format(
-          cutoff_k,
-          big.mark = ","
-        ),
-        " cutoff"
-      ),
-      x = NULL,
-      y = "Significant sites",
-      fill = NULL
-    ) +
-    manuscript_theme() +
-    theme(
-      axis.text.x =
-        element_text(
-          angle = 20,
-          hjust = 1
-        )
-    )
-}
-
-
-plot_selection_composition <- function(
-    selection_summary,
-    cutoff_k) {
-
-  plot_df <- selection_summary %>%
-    mutate(
-      membership_plot = case_when(
-        membership == "Joint" ~
-          "Joint",
-        grepl(
-          "^Disjoint",
-          membership
-        ) &
-          grepl(
-            "RT",
-            membership
-          ) ~
-          "Disjoint control",
-        TRUE ~
-          "Disjoint treatment"
-      )
-    )
-
-  # Determine control/treatment direction from each comparison rather than
-  # relying on group-name prefixes.
-  for (
-    cmp in unique(
-      plot_df$comparison
-    )
-  ) {
-    mapping <- empirical_comparisons[[
-      cmp
-    ]]
-
-    control_label <- paste0(
-      "Disjoint ",
-      unname(
-        mapping[[
-          "control"
-        ]]
-      )
-    )
-
-    treatment_label <- paste0(
-      "Disjoint ",
-      unname(
-        mapping[[
-          "treatment"
-        ]]
-      )
-    )
-
-    plot_df$membership_plot[
-      plot_df$comparison == cmp &
-      plot_df$membership == control_label
-    ] <- "Disjoint control"
-
-    plot_df$membership_plot[
-      plot_df$comparison == cmp &
-      plot_df$membership == treatment_label
-    ] <- "Disjoint treatment"
-  }
-
-  plot_df$membership_plot <- factor(
-    plot_df$membership_plot,
-    levels = c(
-      "Joint",
-      "Disjoint control",
-      "Disjoint treatment"
-    )
-  )
-
-  ggplot(
-    plot_df,
-    aes(
-      x = comparison,
-      y = n,
-      fill = membership_plot
-    )
-  ) +
-    geom_col(
-      width = 0.72
-    ) +
-    scale_fill_manual(
-      values =
-        membership_palette
-    ) +
-    labs(
-      title = paste0(
-        "Leading-edge union composition — top-",
-        format(
-          cutoff_k,
-          big.mark = ","
-        )
-      ),
-      x = NULL,
-      y = "Selected sites",
-      fill = NULL
-    ) +
-    manuscript_theme() +
-    theme(
-      axis.text.x =
-        element_text(
-          angle = 20,
-          hjust = 1
-        )
-    )
-}
-
-
-plot_hbfss_significant_composition <- function(
-    result_list,
-    cutoff_k) {
-
-  rows <- lapply(
-    names(
-      result_list
-    ),
-    function(cmp) {
-
-      df <- result_list[[
-        cmp
-      ]]$results
-
-      sig <- df[
-        !is.na(
-          df$HBFSS_All_sig
-        ) &
-        df$HBFSS_All_sig,
-        ,
-        drop = FALSE
-      ]
-
-      if (nrow(sig) == 0L) {
-        return(
-          NULL
-        )
-      }
-
-      out <- as.data.frame(
-        table(
-          sig$membership
-        ),
-        stringsAsFactors = FALSE
-      )
-
-      colnames(
-        out
-      ) <- c(
-        "membership",
-        "n"
-      )
-
-      out$comparison <-
-        cmp
-
-      out
-    }
-  )
-
-  plot_df <- bind_rows(
-    rows
-  )
-
-  if (nrow(plot_df) == 0L) {
-    return(
-      ggplot() +
-        annotate(
-          "text",
-          x = 1,
-          y = 1,
-          label = "No HBFSS significant sites"
-        ) +
-        theme_void() +
-        labs(
-          title = paste0(
-            "HBFSS significant-site composition — top-",
-            format(
-              cutoff_k,
-              big.mark = ","
-            )
-          )
-        )
-    )
-  }
-
-  plot_df$membership_plot <- "Joint"
-
-  for (
-    cmp in unique(
-      plot_df$comparison
-    )
-  ) {
-    mapping <- empirical_comparisons[[
-      cmp
-    ]]
-
-    control_label <- paste0(
-      "Disjoint ",
-      unname(
-        mapping[[
-          "control"
-        ]]
-      )
-    )
-
-    treatment_label <- paste0(
-      "Disjoint ",
-      unname(
-        mapping[[
-          "treatment"
-        ]]
-      )
-    )
-
-    plot_df$membership_plot[
-      plot_df$comparison == cmp &
-      plot_df$membership == control_label
-    ] <- "Disjoint control"
-
-    plot_df$membership_plot[
-      plot_df$comparison == cmp &
-      plot_df$membership == treatment_label
-    ] <- "Disjoint treatment"
-  }
-
-  plot_df$membership_plot <- factor(
-    plot_df$membership_plot,
-    levels = c(
-      "Joint",
-      "Disjoint control",
-      "Disjoint treatment"
-    )
-  )
-
-  ggplot(
-    plot_df,
-    aes(
-      x = comparison,
-      y = n,
-      fill = membership_plot
-    )
-  ) +
-    geom_col(
-      width = 0.72
-    ) +
-    scale_fill_manual(
-      values =
-        membership_palette
-    ) +
-    labs(
-      title = paste0(
-        "HBFSS significant-site composition — top-",
-        format(
-          cutoff_k,
-          big.mark = ","
-        )
-      ),
-      x = NULL,
-      y = "HBFSS significant sites",
-      fill = NULL
-    ) +
-    manuscript_theme() +
-    theme(
-      axis.text.x =
-        element_text(
-          angle = 20,
-          hjust = 1
-        )
-    )
-}
-
-
-plot_hbfss_geometry_empirical <- function(
-    result_list,
-    cutoff_k) {
-
-  point_rows <- list()
-  boundary_rows <- list()
-
-  for (
-    cmp in names(
-      result_list
-    )
-  ) {
-    obj <- result_list[[
-      cmp
-    ]]
-
-    df <- obj$results %>%
-      mutate(
-        abs_lfc =
-          abs(
-            lfc_shrunk
-          ),
-
-        neglog10_emp =
-          safe_neglog10(
-            empirical_p,
-            floor_value =
-              plot_p_floor
-          ),
-
-        HBFSS_call =
-          ifelse(
-            HBFSS_All_sig,
-            "HBFSS significant",
-            "Not significant"
-          )
-      )
-
-    point_rows[[
-      cmp
-    ]] <- df
-
-    if (
-      is.finite(
-        obj$hbfss_cutoff
-      ) &&
-      !is.na(
-        obj$hbfss_cutoff
-      )
-    ) {
-      xmax <- max(
-        df$abs_lfc[
-          is.finite(
-            df$abs_lfc
-          )
-        ],
-        na.rm = TRUE
-      )
-
-      xmin <- max(
-        0.05,
-        min(
-          df$abs_lfc[
-            is.finite(
-              df$abs_lfc
-            ) &
-            df$abs_lfc >
-              0
-          ],
-          na.rm = TRUE
-        )
-      )
-
-      if (
-        is.finite(xmax) &&
-        is.finite(xmin) &&
-        xmax > xmin
-      ) {
-        xseq <- seq(
-          xmin,
-          xmax,
-          length.out = 250L
-        )
-
-        boundary_rows[[
-          cmp
-        ]] <- data.frame(
-          comparison =
-            cmp,
-
-          abs_lfc =
-            xseq,
-
-          boundary_y =
-            obj$hbfss_cutoff /
-            xseq,
-
-          stringsAsFactors =
-            FALSE
-        )
-      }
-    }
-  }
-
-  plot_df <- bind_rows(
-    point_rows
-  )
-
-  boundary_df <- bind_rows(
-    boundary_rows
+plot_volcano <- function(df, title) {
+  plot_df <- volcano_data(df)
+  if (nrow(plot_df) == 0L) stop("No finite rows for volcano plot: ", title, call. = FALSE)
+
+  label_df <- volcano_labels(plot_df)
+  hc_p <- suppressWarnings(as.numeric(plot_df$hc_p_threshold_dataset[1]))
+  hbfss_cutoff <- suppressWarnings(as.numeric(plot_df$hbfss_threshold_dataset[1]))
+  hc_y <- if (!is.na(hc_p) && is.finite(hc_p) && hc_p > 0 && hc_p < 1) -log10(hc_p) else NA_real_
+  y_limit <- max(plot_df$neglog10_empirical_p, hc_y, na.rm = TRUE) * 1.06
+  if (!is.finite(y_limit) || y_limit <= 0) y_limit <- 1
+
+  boundary <- hbfss_boundary(plot_df, hc_p, hbfss_cutoff, y_limit)
+  x_min <- min(plot_df$lfc_shrunk, na.rm = TRUE)
+  x_max <- max(plot_df$lfc_shrunk, na.rm = TRUE)
+  x_span <- max(x_max - x_min, 1e-6)
+  threshold_label_y <- if (!is.na(hc_y) && is.finite(hc_y)) max(0.06 * y_limit, hc_y - 0.06 * y_limit) else 0.08 * y_limit
+
+  caption <- paste0(
+    "Weak=", sum(df$weak_flag, na.rm = TRUE),
+    "  Strong=", sum(df$strong_flag, na.rm = TRUE),
+    "  Std=", sum(df$standard_flag, na.rm = TRUE),
+    "  HBFSS total=", sum(df$hbfss_flag, na.rm = TRUE),
+    "  HBFSS-only=", sum(df$display_hbfss, na.rm = TRUE)
   )
 
   p <- ggplot(
     plot_df,
     aes(
-      x = abs_lfc,
-      y = neglog10_emp
+      x = lfc_shrunk,
+      y = neglog10_empirical_p,
+      color = final_class,
+      fill = final_class,
+      shape = final_class,
+      size = final_class,
+      alpha = final_class
     )
   ) +
-    geom_point(
-      aes(
-        color = HBFSS_call
+    geom_point(stroke = 0.32) +
+    geom_vline(xintercept = c(-lfc_boundary, lfc_boundary), linetype = "dashed", linewidth = 0.50, color = threshold_color) +
+    geom_vline(xintercept = 0, linewidth = 0.30, color = "grey55") +
+    scale_color_manual(values = class_colors, breaks = class_levels, labels = class_labels[class_levels], drop = FALSE, name = NULL) +
+    scale_fill_manual(values = class_colors, breaks = class_levels, labels = class_labels[class_levels], drop = FALSE, name = NULL) +
+    scale_shape_manual(values = class_shapes, breaks = class_levels, labels = class_labels[class_levels], drop = FALSE, name = NULL) +
+    scale_size_manual(values = class_sizes, breaks = class_levels, guide = "none") +
+    scale_alpha_manual(values = class_alphas, breaks = class_levels, guide = "none") +
+    guides(
+      color = guide_legend(
+        override.aes = list(
+          shape = unname(class_shapes[class_levels]),
+          color = unname(class_colors[class_levels]),
+          fill = unname(class_colors[class_levels]),
+          size = rep(3.4, length(class_levels)),
+          alpha = rep(1, length(class_levels)),
+          stroke = rep(0.80, length(class_levels))
+        ),
+        nrow = 1,
+        byrow = TRUE
       ),
-      alpha = 0.52,
-      size = 0.85
+      fill = "none", shape = "none", size = "none", alpha = "none"
     ) +
-    facet_wrap(
-      ~ comparison,
-      scales = "free",
-      ncol = 2
-    ) +
-    scale_color_manual(
-      values = c(
-        "Not significant" =
-          "#BDBDBD",
-        "HBFSS significant" =
-          "#009E73"
-      )
-    ) +
-    labs(
-      title = paste0(
-        "HBFSS geometry — top-",
-        format(
-          cutoff_k,
-          big.mark = ","
-        )
-      ),
-      x = "|Apeglm-shrunken log2FC|",
-      y = expression(
-        -log[10](
-          empirical~p
-        )
-      ),
-      color = NULL
-    ) +
+    labs(title = title, x = "Shrunken log2 fold change", y = expression(-log[10]("empirical p")), caption = caption) +
+    coord_cartesian(ylim = c(0, y_limit), clip = "off") +
     manuscript_theme()
 
-  if (nrow(boundary_df) > 0L) {
+  if (!is.na(hc_y) && is.finite(hc_y)) {
     p <- p +
-      geom_line(
-        data =
-          boundary_df,
-        aes(
-          x =
-            abs_lfc,
-          y =
-            boundary_y
-        ),
-        inherit.aes = FALSE,
-        color = "#D55E00",
-        linewidth = 0.65
+      geom_hline(yintercept = hc_y, linetype = "dotted", linewidth = 0.60, color = threshold_color) +
+      annotate(
+        "text", x = x_min + 0.03 * x_span, y = threshold_label_y,
+        label = paste0("HC p=", signif(hc_p, 3)), hjust = 0, vjust = 1,
+        size = 1.90, color = threshold_color
       )
+  }
+
+  if (!is.null(boundary)) {
+    p <- p + geom_line(data = boundary, aes(x = x, y = y), inherit.aes = FALSE, color = class_colors[["HBFSS"]], linewidth = 0.75)
+  }
+
+  if (!is.na(hbfss_cutoff) && is.finite(hbfss_cutoff)) {
+    p <- p + annotate(
+      "text", x = x_min + 0.34 * x_span, y = threshold_label_y,
+      label = paste0("HBFSS cutoff=", signif(hbfss_cutoff, 3)), hjust = 0, vjust = 1,
+      size = 1.90, color = class_colors[["HBFSS"]]
+    )
+  }
+
+  if (nrow(label_df) > 0L) {
+    p <- p + ggrepel::geom_text_repel(
+      data = label_df,
+      aes(x = lfc_shrunk, y = neglog10_empirical_p, label = gene_label, color = final_class),
+      inherit.aes = FALSE,
+      show.legend = FALSE,
+      size = 1.45,
+      seed = 1,
+      max.overlaps = Inf,
+      force = 0.85,
+      force_pull = 0.22,
+      box.padding = 0.20,
+      point.padding = 0.10,
+      min.segment.length = 0,
+      segment.alpha = 0.50,
+      segment.size = 0.22
+    )
   }
 
   p
 }
 
+# =============================================================================
+# PCA AND EVS FIGURES
+# =============================================================================
 
-# -----------------------------------------------------------------------------
-# Run one cutoff branch
-# -----------------------------------------------------------------------------
+pca_support_components <- function(fit_obj) {
+  dds <- fit_obj$dds
+  if (is.null(dds)) return(NULL)
 
-run_one_empirical_cutoff <- function(
-    cutoff_name,
-    cutoff_k,
-    count_mat,
-    group_labels,
-    pc1_rankings) {
-
-  cutoff_root <- file.path(
-    empirical_root,
-    cutoff_name
+  x <- tryCatch(
+    as.matrix(SummarizedExperiment::assay(DESeq2::vst(dds, blind = TRUE))),
+    error = function(e) NULL
   )
+  if (is.null(x)) x <- log2(as.matrix(DESeq2::counts(dds, normalized = TRUE)) + 1)
+  storage.mode(x) <- "numeric"
 
-  tables_dir <- file.path(
-    cutoff_root,
-    "tables"
+  keep <- rowSums(is.finite(x) & !is.na(x)) == ncol(x)
+  keep <- keep & apply(x, 1, stats::var, na.rm = TRUE) > 0
+  x <- x[keep, , drop = FALSE]
+  if (nrow(x) < 2L || ncol(x) < 3L) return(NULL)
+
+  pca <- stats::prcomp(t(x), center = TRUE, scale. = FALSE)
+  total_variance <- sum(pca$sdev^2)
+  var_pct <- round((pca$sdev^2 / total_variance) * 100, 1)
+
+  pca_df <- data.frame(
+    sample_id = rownames(pca$x),
+    PC1 = pca$x[, 1],
+    PC2 = pca$x[, 2],
+    condition = as.character(SummarizedExperiment::colData(dds)[rownames(pca$x), "condition"]),
+    stringsAsFactors = FALSE
   )
+  pca_df$condition <- factor(ifelse(pca_df$condition == "trt", "Treatment", "Control"), levels = c("Control", "Treatment"))
 
-  per_comparison_dir <- file.path(
-    tables_dir,
-    "per_comparison"
+  list(
+    pca = pca,
+    var_pct = var_pct,
+    pca_df = pca_df,
+    score_variance = c(PC1 = stats::var(pca_df$PC1, na.rm = TRUE), PC2 = stats::var(pca_df$PC2, na.rm = TRUE))
   )
+}
 
-  if (
-    dir.exists(
-      cutoff_root
-    )
-  ) {
-    unlink(
-      cutoff_root,
-      recursive = TRUE,
-      force = TRUE
-    )
-  }
+plot_pca_support <- function(fit_obj, title) {
+  comp <- pca_support_components(fit_obj)
+  if (is.null(comp)) return(NULL)
 
-  dir.create(
-    per_comparison_dir,
-    recursive = TRUE,
-    showWarnings = FALSE
+  pca_df <- comp$pca_df
+  var_pct <- comp$var_pct
+
+  ggplot(pca_df, aes(PC1, PC2, label = sample_id, shape = condition, fill = condition)) +
+    geom_hline(yintercept = 0, linewidth = 0.22, linetype = "dashed", color = "grey70") +
+    geom_vline(xintercept = 0, linewidth = 0.22, linetype = "dashed", color = "grey70") +
+    geom_point(size = 2.2, color = "white", stroke = 0.45) +
+    ggrepel::geom_text_repel(
+      size = 1.9,
+      max.overlaps = 12,
+      force = 0.7,
+      box.padding = 0.18,
+      point.padding = 0.10,
+      min.segment.length = 0,
+      segment.alpha = 0.42,
+      segment.size = 0.14
+    ) +
+    scale_shape_manual(values = c(Control = 21, Treatment = 24), drop = FALSE, name = NULL) +
+    scale_fill_manual(values = c(Control = control_color, Treatment = treatment_color), drop = FALSE, name = NULL) +
+    labs(title = title, x = paste0("PC1 ", var_pct[1], "%"), y = paste0("PC2 ", var_pct[2], "%")) +
+    manuscript_theme()
+}
+
+analysis_label_pretty <- function(analysis_label) {
+  if (analysis_label == "Raw") return("Original")
+  if (grepl("^Lead_", analysis_label)) return(paste("Lead", sub("^Lead_", "", analysis_label)))
+  if (grepl("^Rem_", analysis_label)) return(paste("Remainder", sub("^Rem_", "", analysis_label)))
+  analysis_label
+}
+
+extract_pca_variance_rows <- function(fit_obj, comparison_name, analysis_label) {
+  comp <- pca_support_components(fit_obj)
+  if (is.null(comp)) return(NULL)
+
+  dataset_group <- if (analysis_label == "Raw") "Original" else if (grepl("^Lead_", analysis_label)) "Lead" else if (grepl("^Rem_", analysis_label)) "Remainder" else analysis_label
+  evs_mode <- if (analysis_label == "Raw") "Original" else sub("^[^_]+_", "", analysis_label)
+
+  data.frame(
+    comparison_name = comparison_name,
+    analysis_label = analysis_label,
+    analysis_pretty = analysis_label_pretty(analysis_label),
+    dataset_group = factor(dataset_group, levels = c("Original", "Lead", "Remainder")),
+    evs_mode = factor(evs_mode, levels = c("Original", evs_modes)),
+    component = factor(c("PC1", "PC2"), levels = c("PC1", "PC2")),
+    variance_explained_pct = as.numeric(comp$var_pct[c(1, 2)]),
+    score_variance = as.numeric(comp$score_variance[c("PC1", "PC2")]),
+    stringsAsFactors = FALSE
   )
+}
 
-  selections <- list()
-  results <- list()
-  summaries <- list()
+pca_pc1_evs_plot_df <- function(pca_var_df) {
+  if (nrow(pca_var_df) == 0L) return(data.frame())
 
-  for (
-    comparison_name in
-    names(
-      empirical_comparisons
-    )
-  ) {
-    mapping <- empirical_comparisons[[
-      comparison_name
-    ]]
+  pc1 <- pca_var_df[pca_var_df$component == "PC1", , drop = FALSE]
+  original_rows <- pc1[pc1$dataset_group == "Original" & pc1$evs_mode == "Original", , drop = FALSE]
+  split_rows <- pc1[pc1$dataset_group %in% c("Lead", "Remainder") & pc1$evs_mode %in% evs_modes, , drop = FALSE]
+  if (nrow(original_rows) == 0L || nrow(split_rows) == 0L) return(data.frame())
 
-    control_group <- unname(
-      mapping[[
-        "control"
-      ]]
-    )
+  out_rows <- list()
+  for (mode_name in evs_modes) {
+    for (comp_name in unique(as.character(split_rows$comparison_name))) {
+      original_one <- original_rows[original_rows$comparison_name == comp_name, , drop = FALSE]
+      split_one <- split_rows[split_rows$comparison_name == comp_name & as.character(split_rows$evs_mode) == mode_name, , drop = FALSE]
+      if (nrow(original_one) == 0L || nrow(split_one) == 0L) next
 
-    treatment_group <- unname(
-      mapping[[
-        "treatment"
-      ]]
-    )
+      original_one <- original_one[1, , drop = FALSE]
+      original_one$evs_mode <- mode_name
+      original_one$analysis_label <- paste0("Original_for_", mode_name)
+      original_one$analysis_pretty <- "Original"
 
-    selection <- build_cutoff_selection(
-      control_rank =
-        pc1_rankings[[
-          control_group
-        ]],
-
-      treatment_rank =
-        pc1_rankings[[
-          treatment_group
-        ]],
-
-      k =
-        cutoff_k,
-
-      comparison_name =
-        comparison_name,
-
-      control_group =
-        control_group,
-
-      treatment_group =
-        treatment_group
-    )
-
-    log_message(
-      cutoff_name,
-      " ",
-      comparison_name,
-      ": selected union=",
-      nrow(
-        selection
-      ),
-      " (Joint=",
-      sum(
-        selection$membership ==
-          "Joint"
-      ),
-      ")."
-    )
-
-    result <- run_empirical_cutoff_comparison(
-      count_mat =
-        count_mat,
-
-      group_labels =
-        group_labels,
-
-      selection_df =
-        selection,
-
-      comparison_name =
-        comparison_name,
-
-      control_group =
-        control_group,
-
-      treatment_group =
-        treatment_group,
-
-      cutoff_k =
-        cutoff_k
-    )
-
-    summary <- summarize_empirical_result(
-      result_obj =
-        result,
-
-      selection_df =
-        selection,
-
-      cutoff_name =
-        cutoff_name
-    )
-
-    selections[[
-      comparison_name
-    ]] <- selection
-
-    results[[
-      comparison_name
-    ]] <- result
-
-    summaries[[
-      comparison_name
-    ]] <- summary
-
-    save_csv(
-      selection,
-      file.path(
-        per_comparison_dir,
-        paste0(
-          "Selection_",
-          comparison_name,
-          ".csv"
-        )
-      )
-    )
-
-    save_csv(
-      result$results,
-      file.path(
-        per_comparison_dir,
-        paste0(
-          "Results_",
-          comparison_name,
-          ".csv"
-        )
-      )
-    )
-
-    save_csv(
-      result$results[
-        result$results$any_significant,
-        ,
-        drop = FALSE
-      ],
-      file.path(
-        per_comparison_dir,
-        paste0(
-          "Significant_AnyMethod_",
-          comparison_name,
-          ".csv"
-        )
-      )
-    )
-
-    save_csv(
-      result$results[
-        !is.na(
-          result$results$HBFSS_All_sig
-        ) &
-        result$results$HBFSS_All_sig,
-        ,
-        drop = FALSE
-      ],
-      file.path(
-        per_comparison_dir,
-        paste0(
-          "Significant_HBFSS_",
-          comparison_name,
-          ".csv"
-        )
-      )
-    )
-  }
-
-  summary_df <- bind_rows(
-    summaries
-  )
-
-  selection_df <- bind_rows(
-    selections
-  )
-
-  all_results <- bind_rows(
-    lapply(
-      results,
-      function(z) {
-        z$results
-      }
-    )
-  )
-
-  composition_df <-
-    summarize_selection_composition(
-      selections =
-        selections,
-      cutoff_name =
-        cutoff_name,
-      cutoff_k =
-        cutoff_k
-    )
-
-  save_csv(
-    summary_df,
-    file.path(
-      tables_dir,
-      "Summary_Significant_Sites.csv"
-    )
-  )
-
-  save_csv(
-    composition_df,
-    file.path(
-      tables_dir,
-      "Selection_Composition.csv"
-    )
-  )
-
-  save_csv(
-    selection_df,
-    file.path(
-      tables_dir,
-      "All_Selected_Sites.csv"
-    )
-  )
-
-  save_csv(
-    all_results,
-    file.path(
-      tables_dir,
-      "All_Results.csv"
-    )
-  )
-
-  save_csv(
-    all_results[
-      all_results$any_significant,
-      ,
-      drop = FALSE
-    ],
-    file.path(
-      tables_dir,
-      "All_Significant_Sites_AnyMethod.csv"
-    )
-  )
-
-  save_csv(
-    all_results[
-      !is.na(
-        all_results$HBFSS_All_sig
-      ) &
-      all_results$HBFSS_All_sig,
-      ,
-      drop = FALSE
-    ],
-    file.path(
-      tables_dir,
-      "All_Significant_Sites_HBFSS.csv"
-    )
-  )
-
-  # Manuscript figures for this cutoff.
-  save_empirical_figure(
-    plot_empirical_discovery_counts(
-      summary_df,
-      cutoff_k
-    ),
-    cutoff_root,
-    "Figure_01_Significant_Site_Counts",
-    width = 7.3,
-    height = 6.4
-  )
-
-  save_empirical_figure(
-    plot_selection_composition(
-      composition_df,
-      cutoff_k
-    ),
-    cutoff_root,
-    "Figure_02_LeadingEdge_Composition",
-    width = 7.0,
-    height = 4.3
-  )
-
-  save_empirical_figure(
-    plot_hbfss_significant_composition(
-      results,
-      cutoff_k
-    ),
-    cutoff_root,
-    "Figure_03_HBFSS_Significant_Composition",
-    width = 7.0,
-    height = 4.3
-  )
-
-  save_empirical_figure(
-    plot_hbfss_geometry_empirical(
-      results,
-      cutoff_k
-    ),
-    cutoff_root,
-    "Figure_04_HBFSS_Geometry",
-    width = 7.2,
-    height = 6.2
-  )
-
-  methods_lines <- c(
-    paste0(
-      "Cutoff: top-",
-      format(
-        cutoff_k,
-        big.mark = ","
-      ),
-      " per condition."
-    ),
-    "",
-    "Sites were ranked independently in each condition by ascending absolute PC1 loading; the terminal top-k sites were selected from each condition and combined as Joint + Disjoint control + Disjoint treatment.",
-    "Each cutoff-specific union was analyzed independently by DESeq2. Apeglm provided shrunken log2 fold changes. Empirical p-values were estimated from DESeq2 Wald statistics with fdrtool, higher criticism selected an empirical-p threshold, and HBFSS was defined as abs(shrunken log2FC) * -log10(empirical p).",
-    paste0(
-      "DESeq2 BH alpha = ",
-      alpha_standard,
-      "; strong/composite alpha = ",
-      alpha_strong,
-      "; sub-boundary alpha = ",
-      alpha_weak,
-      "; LFC boundary = ",
-      lfc_boundary,
-      "."
-    )
-  )
-
-  writeLines(
-    methods_lines,
-    file.path(
-      cutoff_root,
-      "Methods.txt"
-    )
-  )
-
-  # Zip each cutoff folder while preserving the normal directory.
-  zip_path <- file.path(
-    empirical_root,
-    paste0(
-      cutoff_name,
-      ".zip"
-    )
-  )
-
-  if (
-    file.exists(
-      zip_path
-    )
-  ) {
-    unlink(
-      zip_path
-    )
-  }
-
-  old_wd <- getwd()
-
-  tryCatch(
-    {
-      setwd(
-        empirical_root
-      )
-
-      cutoff_files <- list.files(
-        cutoff_name,
-        recursive = TRUE,
-        full.names = TRUE,
-        all.files = FALSE,
-        no.. = TRUE
-      )
-
-      if (length(cutoff_files) > 0L) {
-        utils::zip(
-          zipfile =
-            zip_path,
-          files =
-            cutoff_files
-        )
-      }
-    },
-    finally = {
-      setwd(
-        old_wd
-      )
+      block <- bind_rows(original_one, split_one)
+      original_variance <- suppressWarnings(as.numeric(original_one$score_variance[1]))
+      block$original_pc1_score_variance <- original_variance
+      block$pc1_score_variance <- suppressWarnings(as.numeric(block$score_variance))
+      block$pc1_score_variance_ratio_to_original <- if (is.finite(original_variance) && original_variance > 0) block$pc1_score_variance / original_variance else NA_real_
+      block$pc1_score_variance_percent_of_original <- 100 * block$pc1_score_variance_ratio_to_original
+      block$dataset_group <- factor(as.character(block$dataset_group), levels = c("Original", "Lead", "Remainder"))
+      block$evs_mode <- factor(as.character(block$evs_mode), levels = evs_modes)
+      out_rows[[length(out_rows) + 1L]] <- block
     }
-  )
-
-  list(
-    cutoff_name =
-      cutoff_name,
-
-    cutoff_k =
-      cutoff_k,
-
-    root =
-      cutoff_root,
-
-    selections =
-      selections,
-
-    results =
-      results,
-
-    summary =
-      summary_df,
-
-    composition =
-      composition_df,
-
-    all_results =
-      all_results
-  )
-}
-
-
-# -----------------------------------------------------------------------------
-# Cross-cutoff comparison
-# -----------------------------------------------------------------------------
-
-build_cutoff_comparison_table <- function(
-    cutoff_runs) {
-
-  all_summary <- bind_rows(
-    lapply(
-      cutoff_runs,
-      function(z) {
-        z$summary
-      }
-    )
-  )
-
-  wide <- all_summary %>%
-    select(
-      cutoff_name,
-      cutoff_k,
-      comparison,
-      method,
-      method_label,
-      family,
-      selected_union_n,
-      significant_n,
-      significant_fraction
-    ) %>%
-    tidyr::pivot_wider(
-      names_from =
-        cutoff_name,
-      values_from = c(
-        cutoff_k,
-        selected_union_n,
-        significant_n,
-        significant_fraction
-      )
-    )
-
-  if (
-    all(
-      c(
-        "significant_n_Cutoff_5000",
-        "significant_n_Cutoff_4077"
-      ) %in%
-      colnames(
-        wide
-      )
-    )
-  ) {
-    wide$delta_significant_4077_minus_5000 <-
-      wide$significant_n_Cutoff_4077 -
-      wide$significant_n_Cutoff_5000
-
-    wide$ratio_significant_4077_to_5000 <-
-      ifelse(
-        wide$significant_n_Cutoff_5000 >
-          0,
-        wide$significant_n_Cutoff_4077 /
-          wide$significant_n_Cutoff_5000,
-        NA_real_
-      )
   }
 
-  list(
-    long =
-      all_summary,
-    wide =
-      wide
-  )
+  if (length(out_rows) == 0L) return(data.frame())
+  bind_rows(out_rows)
 }
 
+plot_pc1_evs_variance_absolute <- function(pca_var_df) {
+  plot_df <- pca_pc1_evs_plot_df(pca_var_df)
+  if (nrow(plot_df) == 0L) return(NULL)
 
-build_hbfss_set_overlap <- function(
-    cutoff_runs) {
+  plot_df$pc1_score_variance <- pmax(suppressWarnings(as.numeric(plot_df$pc1_score_variance)), 0)
 
-  comparisons <- names(
-    empirical_comparisons
-  )
-
-  rows <- list()
-
-  for (
-    cmp in comparisons
-  ) {
-    a <- cutoff_runs[[
-      "Cutoff_5000"
-    ]]$results[[
-      cmp
-    ]]$results
-
-    b <- cutoff_runs[[
-      "Cutoff_4077"
-    ]]$results[[
-      cmp
-    ]]$results
-
-    set5000 <- a$feature_id[
-      !is.na(
-        a$HBFSS_All_sig
-      ) &
-      a$HBFSS_All_sig
-    ]
-
-    set4077 <- b$feature_id[
-      !is.na(
-        b$HBFSS_All_sig
-      ) &
-      b$HBFSS_All_sig
-    ]
-
-    shared <- intersect(
-      set5000,
-      set4077
-    )
-
-    only5000 <- setdiff(
-      set5000,
-      set4077
-    )
-
-    only4077 <- setdiff(
-      set4077,
-      set5000
-    )
-
-    union_set <- union(
-      set5000,
-      set4077
-    )
-
-    rows[[
-      cmp
-    ]] <- data.frame(
-      comparison =
-        cmp,
-
-      significant_5000_n =
-        length(
-          set5000
-        ),
-
-      significant_4077_n =
-        length(
-          set4077
-        ),
-
-      shared_n =
-        length(
-          shared
-        ),
-
-      only_5000_n =
-        length(
-          only5000
-        ),
-
-      only_4077_n =
-        length(
-          only4077
-        ),
-
-      union_n =
-        length(
-          union_set
-        ),
-
-      jaccard =
-        if (
-          length(
-            union_set
-          ) > 0L
-        ) {
-          length(
-            shared
-          ) /
-            length(
-              union_set
-            )
-        } else {
-          NA_real_
-        },
-
-      stringsAsFactors =
-        FALSE
-    )
-  }
-
-  bind_rows(
-    rows
-  )
-}
-
-
-build_site_level_cutoff_comparison <- function(
-    cutoff_runs) {
-
-  rows <- list()
-
-  for (
-    cmp in names(
-      empirical_comparisons
-    )
-  ) {
-    a <- cutoff_runs[[
-      "Cutoff_5000"
-    ]]$results[[
-      cmp
-    ]]$results %>%
-      select(
-        feature_id,
-        membership_5000 =
-          membership,
-        HBFSS_5000 =
-          HBFSS,
-        empirical_p_5000 =
-          empirical_p,
-        lfc_shrunk_5000 =
-          lfc_shrunk,
-        HBFSS_sig_5000 =
-          HBFSS_All_sig,
-        DESeq2_BH_sig_5000 =
-          DESeq2_BH_sig
-      )
-
-    b <- cutoff_runs[[
-      "Cutoff_4077"
-    ]]$results[[
-      cmp
-    ]]$results %>%
-      select(
-        feature_id,
-        membership_4077 =
-          membership,
-        HBFSS_4077 =
-          HBFSS,
-        empirical_p_4077 =
-          empirical_p,
-        lfc_shrunk_4077 =
-          lfc_shrunk,
-        HBFSS_sig_4077 =
-          HBFSS_All_sig,
-        DESeq2_BH_sig_4077 =
-          DESeq2_BH_sig
-      )
-
-    out <- full_join(
-      a,
-      b,
-      by = "feature_id"
-    )
-
-    out$comparison <-
-      cmp
-
-    out$selected_5000 <-
-      !is.na(
-        out$membership_5000
-      )
-
-    out$selected_4077 <-
-      !is.na(
-        out$membership_4077
-      )
-
-    rows[[
-      cmp
-    ]] <- out
-  }
-
-  bind_rows(
-    rows
-  )
-}
-
-
-plot_cutoff_discovery_comparison <- function(
-    comparison_long) {
-
-  plot_df <- comparison_long %>%
-    mutate(
-      cutoff_label =
-        ifelse(
-          cutoff_name ==
-            "Cutoff_5000",
-          "Cutoff 5,000",
-          "Cutoff 4,077"
-        ),
-
-      method_label = factor(
-        method_label,
-        levels =
-          empirical_method_spec$method_label
-      )
-    )
-
-  ggplot(
-    plot_df,
-    aes(
-      x = comparison,
-      y = significant_n,
-      fill = cutoff_label
-    )
-  ) +
-    geom_col(
-      position =
-        position_dodge(
-          width = 0.74
-        ),
-      width = 0.66
+  ggplot(plot_df, aes(dataset_group, pc1_score_variance, fill = dataset_group)) +
+    geom_col(width = 0.70, color = "grey25", linewidth = 0.16) +
+    geom_text(aes(label = format_compact_number(pc1_score_variance, digits = 3)), vjust = -0.25, size = 1.65, color = "grey20") +
+    facet_grid(evs_mode ~ comparison_name, scales = "free_y") +
+    scale_y_continuous(
+      trans = scales::pseudo_log_trans(base = 10),
+      labels = function(x) format_compact_number(x, digits = 3),
+      expand = expansion(mult = c(0.02, 0.18))
     ) +
-    facet_wrap(
-      ~ method_label,
-      scales = "free_y",
-      ncol = 3
-    ) +
-    scale_fill_manual(
-      values =
-        cutoff_color_map
-    ) +
+    scale_fill_manual(values = c(Original = "#9E9E9E", Lead = "#E31A1C", Remainder = "#1F78B4"), drop = FALSE, name = NULL) +
     labs(
-      title =
-        "Significant-site counts by cutoff",
-      x =
-        NULL,
-      y =
-        "Significant sites",
-      fill =
-        NULL
+      title = "PC1 score variance by dataset after EVS",
+      x = NULL,
+      y = "PC1 score variance, absolute scale",
+      caption = "Original, EVS leading edge, and EVS remainder are compared directly."
     ) +
     manuscript_theme() +
-    theme(
-      axis.text.x =
-        element_text(
-          angle = 25,
-          hjust = 1
-        )
-    )
+    theme(strip.text = element_text(size = base_theme_size - 0.6), axis.text.x = element_text(size = base_theme_size - 0.9))
 }
 
+pc1_variance_contribution_rows <- function(expr_matrix, sample_ids, scope_label) {
+  x <- expr_matrix[, sample_ids, drop = FALSE]
+  storage.mode(x) <- "numeric"
+  keep <- rowSums(is.finite(x) & !is.na(x)) == ncol(x)
+  keep <- keep & apply(x, 1, stats::var, na.rm = TRUE) > 0
+  x <- x[keep, , drop = FALSE]
+  if (nrow(x) < 2L || ncol(x) < 3L) return(data.frame())
 
-plot_cutoff_delta <- function(
-    comparison_wide) {
+  pca <- stats::prcomp(t(x), center = TRUE, scale. = FALSE)
+  loading <- as.numeric(pca$rotation[, 1])
+  pc1_score_variance <- as.numeric(pca$sdev[1]^2)
 
-  if (
-    !"delta_significant_4077_minus_5000" %in%
-    colnames(
-      comparison_wide
-    )
-  ) {
-    return(
-      NULL
-    )
+  data.frame(
+    feature_id = rownames(pca$rotation),
+    scope = scope_label,
+    pc1_loading = loading,
+    pc1_loading_abs = abs(loading),
+    pc1_score_variance = pc1_score_variance,
+    pc1_variance_contribution = loading^2 * pc1_score_variance,
+    stringsAsFactors = FALSE
+  )
+}
+
+evs_loading_distribution_rows <- function(full_count_matrix, evs_obj, coldata, comparison_name, mode) {
+  extract_one <- function(mat, dataset_group) {
+    source_matrix <- get_evs_matrix(mat, coldata, mode)
+    trt_ids <- rownames(coldata)[coldata$condition == "trt"]
+    ctl_ids <- rownames(coldata)[coldata$condition == "untrt"]
+    all_ids <- rownames(coldata)
+
+    bind_rows(
+      pc1_variance_contribution_rows(source_matrix, all_ids, "All"),
+      pc1_variance_contribution_rows(source_matrix, ctl_ids, "Control"),
+      pc1_variance_contribution_rows(source_matrix, trt_ids, "Treatment")
+    ) %>%
+      mutate(comparison_name = comparison_name, evs_mode = mode, dataset_group = dataset_group)
   }
 
-  plot_df <- comparison_wide %>%
-    mutate(
-      direction =
-        ifelse(
-          delta_significant_4077_minus_5000 >=
-            0,
-          "More with 4,077",
-          "More with 5,000"
-        ),
+  out <- bind_rows(
+    extract_one(full_count_matrix, "Original"),
+    extract_one(evs_obj$leading_matrix, "Lead"),
+    extract_one(evs_obj$remainder_matrix, "Remainder")
+  )
 
-      method_label = factor(
-        method_label,
-        levels =
-          empirical_method_spec$method_label
-      )
-    )
+  cutoff_rows <- data.frame(
+    comparison_name = comparison_name,
+    evs_mode = mode,
+    scope = c("Treatment", "Control"),
+    pc1_loading_cutoff = c(evs_obj$summary$treatment_loading_cutoff[1], evs_obj$summary$control_loading_cutoff[1]),
+    pc1_score_variance = c(as.numeric(evs_obj$treatment_rank$pca$sdev[1]^2), as.numeric(evs_obj$control_rank$pca$sdev[1]^2)),
+    stringsAsFactors = FALSE
+  )
+  cutoff_rows$pc1_variance_contribution_cutoff <- cutoff_rows$pc1_loading_cutoff^2 * cutoff_rows$pc1_score_variance
+  cutoff_rows$dataset_group <- "Original"
 
-  ggplot(
-    plot_df,
-    aes(
-      x = comparison,
-      y =
-        delta_significant_4077_minus_5000,
-      fill =
-        direction
-    )
-  ) +
-    geom_hline(
-      yintercept = 0,
-      linewidth = 0.35,
-      color = "#555555"
-    ) +
-    geom_col(
-      width = 0.68
-    ) +
-    facet_wrap(
-      ~ method_label,
-      scales = "free_y",
-      ncol = 3
-    ) +
-    scale_fill_manual(
-      values = c(
-        "More with 4,077" =
-          "#CC79A7",
-        "More with 5,000" =
-          "#E69F00"
-      )
-    ) +
+  attr(out, "cutoffs") <- cutoff_rows
+  out
+}
+
+plot_loading_histograms <- function(load_df, title_text) {
+  if (nrow(load_df) == 0L) return(NULL)
+  cutoff_df <- attr(load_df, "cutoffs")
+  if (is.null(cutoff_df)) cutoff_df <- data.frame()
+
+  load_df$evs_mode <- factor(load_df$evs_mode, levels = evs_modes)
+  load_df$dataset_group <- factor(load_df$dataset_group, levels = c("Original", "Lead", "Remainder"))
+  load_df$scope <- factor(load_df$scope, levels = c("All", "Control", "Treatment"))
+  load_df$pc1_variance_contribution <- pmax(suppressWarnings(as.numeric(load_df$pc1_variance_contribution)), 0)
+
+  if (nrow(cutoff_df) > 0L) {
+    cutoff_df$evs_mode <- factor(cutoff_df$evs_mode, levels = evs_modes)
+    cutoff_df$dataset_group <- factor(cutoff_df$dataset_group, levels = c("Original", "Lead", "Remainder"))
+    cutoff_df$scope <- factor(cutoff_df$scope, levels = c("All", "Control", "Treatment"))
+  }
+
+  p <- ggplot(load_df, aes(pc1_variance_contribution, color = scope, fill = scope)) +
+    geom_histogram(bins = 60, position = "identity", alpha = 0.32, linewidth = 0.22, boundary = 0) +
+    facet_grid(evs_mode + dataset_group ~ comparison_name, scales = "free_y") +
+    scale_x_continuous(trans = scales::pseudo_log_trans(base = 10), labels = function(x) format_compact_number(x, digits = 3)) +
+    scale_color_manual(values = c(All = "#7570B3", Control = control_color, Treatment = treatment_color), breaks = c("All", "Control", "Treatment"), drop = FALSE, name = NULL) +
+    scale_fill_manual(values = c(All = "#7570B3", Control = control_color, Treatment = treatment_color), breaks = c("All", "Control", "Treatment"), drop = FALSE, name = NULL) +
+    guides(color = guide_legend(override.aes = list(fill = c("#7570B3", control_color, treatment_color), alpha = 0.85, linewidth = 0.8)), fill = "none") +
     labs(
-      title =
-        "Change in significant sites: 4,077 minus 5,000",
-      x =
-        NULL,
-      y =
-        expression(
-          Delta~"significant sites"
-        ),
-      fill =
-        NULL
+      title = title_text,
+      x = "Per-feature contribution to PC1 score variance",
+      y = "Feature frequency",
+      caption = "Dashed vertical lines mark fixed top-N treatment/control EVS loading cutoffs in the original EVS input space only."
     ) +
     manuscript_theme() +
-    theme(
-      axis.text.x =
-        element_text(
-          angle = 25,
-          hjust = 1
-        )
+    theme(legend.position = "bottom", strip.text = element_text(size = base_theme_size - 0.8), axis.text = element_text(size = base_theme_size - 1.0))
+
+  if (nrow(cutoff_df) > 0L) {
+    p <- p + geom_vline(
+      data = cutoff_df,
+      aes(xintercept = pc1_variance_contribution_cutoff, color = scope),
+      inherit.aes = FALSE,
+      linetype = "dashed",
+      linewidth = 0.38,
+      alpha = 0.85
     )
+  }
+
+  p
 }
 
+plot_discovery_counts <- function(summary_df) {
+  analysis_levels <- c("Raw", "Lead_NormEVS", "Lead_RawEVS", "Rem_NormEVS", "Rem_RawEVS")
+  analysis_labels <- c(
+    Raw = "Original",
+    Lead_NormEVS = "Lead NormEVS",
+    Lead_RawEVS = "Lead RawEVS",
+    Rem_NormEVS = "Remainder NormEVS",
+    Rem_RawEVS = "Remainder RawEVS"
+  )
 
-plot_hbfss_overlap <- function(
-    overlap_df) {
+  required <- c("comparison_name", "analysis_label", "dataset_key", "n_display_weak", "n_display_strong", "n_display_standard", "n_display_hbfss")
+  missing <- setdiff(required, names(summary_df))
+  if (length(missing) > 0L) stop("Discovery-count plot missing summary column(s): ", paste(missing, collapse = ", "), call. = FALSE)
 
-  plot_df <- overlap_df %>%
-    select(
-      comparison,
-      shared_n,
-      only_5000_n,
-      only_4077_n
-    ) %>%
-    tidyr::pivot_longer(
-      cols = c(
-        shared_n,
-        only_5000_n,
-        only_4077_n
-      ),
-      names_to =
-        "category",
-      values_to =
-        "n"
-    ) %>%
-    mutate(
-      category = factor(
-        category,
-        levels = c(
-          "shared_n",
-          "only_5000_n",
-          "only_4077_n"
-        ),
-        labels = c(
-          "Shared",
-          "5,000 only",
-          "4,077 only"
-        )
-      )
+  long_df <- bind_rows(lapply(seq_len(nrow(summary_df)), function(i) {
+    row <- summary_df[i, , drop = FALSE]
+    data.frame(
+      comparison_name = row$comparison_name,
+      analysis_label = row$analysis_label,
+      dataset_key = row$dataset_key,
+      Class = factor(c("Weak", "Strong", "Std", "HBFSS"), levels = c("Weak", "Strong", "Std", "HBFSS")),
+      Count = as.numeric(c(row$n_display_weak, row$n_display_strong, row$n_display_standard, row$n_display_hbfss)),
+      stringsAsFactors = FALSE
     )
+  }))
 
-  ggplot(
-    plot_df,
-    aes(
-      x = comparison,
-      y = n,
-      fill = category
-    )
-  ) +
-    geom_col(
-      width = 0.72
-    ) +
-    scale_fill_manual(
-      values = c(
-        "Shared" =
-          "#009E73",
-        "5,000 only" =
-          "#E69F00",
-        "4,077 only" =
-          "#CC79A7"
-      )
-    ) +
+  long_df$comparison_name <- factor(long_df$comparison_name, levels = comparison_table$comparison_name)
+  long_df$analysis_label <- factor(long_df$analysis_label, levels = analysis_levels, labels = analysis_labels[analysis_levels])
+
+  save_csv(rename_columns_existing(long_df, c(comparison_name = "comparison", analysis_label = "analysis", dataset_key = "dataset", Class = "class", Count = "count")), file.path(output_dir, "Counts_Long.csv"))
+
+  max_count <- max(long_df$Count, na.rm = TRUE)
+  count_breaks <- c(0, 1, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000)
+  count_breaks <- count_breaks[count_breaks <= max_count * 1.15 | count_breaks <= 10]
+
+  ggplot(long_df, aes(analysis_label, Count, fill = Class)) +
+    geom_col(position = position_dodge(width = 0.82), width = 0.72, color = "grey25", linewidth = 0.14) +
+    facet_wrap(~ comparison_name, ncol = length(comparison_table$comparison_name)) +
+    scale_y_continuous(trans = scales::pseudo_log_trans(base = 10), breaks = count_breaks, labels = function(x) format_compact_number(x, digits = 3), expand = expansion(mult = c(0.02, 0.15))) +
+    scale_fill_manual(values = class_colors[c("Weak", "Strong", "Std", "HBFSS")], breaks = c("Weak", "Strong", "Std", "HBFSS"), labels = c(Weak = "Weak effect", Strong = "Strong effect", Std = "Standard-only", HBFSS = "HBFSS-only"), drop = FALSE, name = NULL) +
     labs(
-      title =
-        "HBFSS significant-site overlap",
-      x =
-        NULL,
-      y =
-        "Significant sites",
-      fill =
-        NULL
+      title = "Significant feature counts",
+      x = NULL,
+      y = "Final display-class count, pseudo-log scale",
+      caption = "Counts are mutually exclusive final display classes matching the volcano legend."
     ) +
     manuscript_theme() +
-    theme(
-      axis.text.x =
-        element_text(
-          angle = 20,
-          hjust = 1
-        )
-    )
+    theme(axis.text.x = element_text(angle = 35, hjust = 1, size = base_theme_size - 1.5), strip.text = element_text(size = base_theme_size - 0.7))
 }
-
-
-run_dual_cutoff_empirical <- function() {
-
-  log_message(
-    "Dual-cutoff empirical analysis started."
-  )
-
-  if (
-    isTRUE(
-      reset_empirical_dir
-    ) &&
-    dir.exists(
-      empirical_root
-    )
-  ) {
-    unlink(
-      empirical_root,
-      recursive = TRUE,
-      force = TRUE
-    )
-  }
-
-  dir.create(
-    empirical_root,
-    recursive = TRUE,
-    showWarnings = FALSE
-  )
-
-  count_path <- if (
-    grepl(
-      "^/",
-      empirical_count_file
-    )
-  ) {
-    empirical_count_file
-  } else {
-    file.path(
-      repo_root,
-      empirical_count_file
-    )
-  }
-
-  count_mat <- read_empirical_count_matrix(
-    count_path,
-    empirical_group_patterns
-  )
-
-  group_labels <- assign_empirical_groups(
-    colnames(
-      count_mat
-    ),
-    empirical_group_patterns
-  )
-
-  log_message(
-    "Empirical matrix: ",
-    nrow(
-      count_mat
-    ),
-    " features x ",
-    ncol(
-      count_mat
-    ),
-    " samples."
-  )
-
-  pc1_rankings <- list()
-
-  for (
-    g in levels(
-      group_labels
-    )
-  ) {
-    idx <- which(
-      group_labels ==
-        g
-    )
-
-    pc1_rankings[[
-      g
-    ]] <- compute_empirical_pc1_rank(
-      count_mat[
-        ,
-        idx,
-        drop = FALSE
-      ],
-      g
-    )
-  }
-
-  max_cutoff <- max(
-    empirical_cutoffs
-  )
-
-  if (
-    max_cutoff >
-    nrow(
-      count_mat
-    )
-  ) {
-    stop(
-      "Requested empirical cutoff exceeds feature count.",
-      call. = FALSE
-    )
-  }
-
-  cutoff_runs <- list()
-
-  for (
-    cutoff_name in
-    names(
-      empirical_cutoffs
-    )
-  ) {
-    cutoff_k <- as.integer(
-      empirical_cutoffs[[
-        cutoff_name
-      ]]
-    )
-
-    log_message(
-      "Running empirical ",
-      cutoff_name,
-      " (k=",
-      cutoff_k,
-      ")."
-    )
-
-    cutoff_runs[[
-      cutoff_name
-    ]] <- run_one_empirical_cutoff(
-      cutoff_name =
-        cutoff_name,
-
-      cutoff_k =
-        cutoff_k,
-
-      count_mat =
-        count_mat,
-
-      group_labels =
-        group_labels,
-
-      pc1_rankings =
-        pc1_rankings
-    )
-  }
-
-  dir.create(
-    file.path(
-      comparison_root,
-      "tables"
-    ),
-    recursive = TRUE,
-    showWarnings = FALSE
-  )
-
-  comparison_tables <-
-    build_cutoff_comparison_table(
-      cutoff_runs
-    )
-
-  overlap_df <-
-    build_hbfss_set_overlap(
-      cutoff_runs
-    )
-
-  site_level_df <-
-    build_site_level_cutoff_comparison(
-      cutoff_runs
-    )
-
-  save_csv(
-    comparison_tables$long,
-    file.path(
-      comparison_root,
-      "tables",
-      "Cutoff_Comparison_Long.csv"
-    )
-  )
-
-  save_csv(
-    comparison_tables$wide,
-    file.path(
-      comparison_root,
-      "tables",
-      "Cutoff_Comparison_Wide.csv"
-    )
-  )
-
-  save_csv(
-    overlap_df,
-    file.path(
-      comparison_root,
-      "tables",
-      "HBFSS_Significant_Set_Overlap.csv"
-    )
-  )
-
-  save_csv(
-    site_level_df,
-    file.path(
-      comparison_root,
-      "tables",
-      "Site_Level_Cutoff_Comparison.csv"
-    )
-  )
-
-  save_empirical_figure(
-    plot_cutoff_discovery_comparison(
-      comparison_tables$long
-    ),
-    comparison_root,
-    "Figure_01_Cutoff_Discovery_Comparison",
-    width = 7.4,
-    height = 7.0
-  )
-
-  delta_plot <- plot_cutoff_delta(
-    comparison_tables$wide
-  )
-
-  if (!is.null(delta_plot)) {
-    save_empirical_figure(
-      delta_plot,
-      comparison_root,
-      "Figure_02_Cutoff_Delta_Significant_Sites",
-      width = 7.4,
-      height = 7.0
-    )
-  }
-
-  save_empirical_figure(
-    plot_hbfss_overlap(
-      overlap_df
-    ),
-    comparison_root,
-    "Figure_03_HBFSS_Significant_Overlap",
-    width = 7.0,
-    height = 4.5
-  )
-
-  comparison_methods <- c(
-    "Two cutoff-specific empirical analyses were run from the same raw count matrix and the same independent PC1 rankings.",
-    "For each cutoff, top-k sites were selected independently in control and treatment and then combined as Joint + Disjoint control + Disjoint treatment.",
-    "The complete downstream DESeq2/apeglm/empirical-null/higher-criticism/HBFSS analysis was rerun independently within each cutoff-specific union.",
-    "The comparison tables report significant-site counts and the overlap of HBFSS significant-site sets between the top-5,000 and top-4,077 analyses."
-  )
-
-  writeLines(
-    comparison_methods,
-    file.path(
-      comparison_root,
-      "Methods_Cutoff_Comparison.txt"
-    )
-  )
-
-  # Full empirical manifest.
-  files <- list.files(
-    empirical_root,
-    recursive = TRUE,
-    full.names = TRUE
-  )
-
-  files <- files[
-    file.exists(
-      files
-    )
-  ]
-
-  manifest <- data.frame(
-    file =
-      vapply(
-        files,
-        repo_relative,
-        character(1)
-      ),
-
-    size_bytes =
-      file.info(
-        files
-      )$size,
-
-    stringsAsFactors =
-      FALSE
-  )
-
-  save_csv(
-    manifest,
-    file.path(
-      empirical_root,
-      "Manifest_DualCutoff.csv"
-    )
-  )
-
-  log_message(
-    "Dual-cutoff empirical analysis complete."
-  )
-
-  list(
-    cutoff_runs =
-      cutoff_runs,
-
-    comparison_long =
-      comparison_tables$long,
-
-    comparison_wide =
-      comparison_tables$wide,
-
-    hbfss_overlap =
-      overlap_df,
-
-    site_level =
-      site_level_df
-  )
-}
-
-
 
 # =============================================================================
-# TEXT OUTPUTS / GIT
+# =============================================================================
+# METHODS, MANIFEST, AND GIT
 # =============================================================================
 
-fmt_num <- function(x, digits = 3) {
-  x <- suppressWarnings(as.numeric(x[1]))
-  if (!is.finite(x) || is.na(x)) return("NA")
-  formatC(x, format = "f", digits = digits)
-}
-
-fmt_delta <- function(x, digits = 3) {
-  x <- suppressWarnings(as.numeric(x[1]))
-  if (!is.finite(x) || is.na(x)) return("NA")
-  paste0(ifelse(x >= 0, "+", ""), formatC(x, format = "f", digits = digits))
-}
-
-write_methods_and_interpretation <- function(result) {
+write_sequence_methods <- function() {
   methods_lines <- c(
-    "# Simulation methods",
+    "# SEQUENCE methods summary",
     "",
-    paste0("Negative-binomial count matrices were simulated with ", simulation_n_features, " features and ", simulation_n_samples_per_group, " samples per condition."),
-    paste0("DE fractions: ", paste(simulation_de_fractions, collapse = ", "), ". Fixed |LFC| values: ", paste(simulation_lfc_magnitudes, collapse = ", "), ". Weak mixture |LFC| range: ", simulation_weak_lfc_min, "-", simulation_weak_lfc_max, "."),
-    paste0("Each condition used ", simulation_n_reps, " replicate simulations. DESeq2 fitType was '", simulation_fit_type, "'. Replicates exceeding ", simulation_rep_timeout_seconds, " seconds were recorded as failures instead of stalling the run."),
-    "The simulation truth target for the lessAbs/cusp arm is true_cusp = 0 < |true LFC| < LFC boundary. This excludes exact null features and treats the weak arm as a boundary-adjacent composite-null classification problem, not conventional differential-expression recovery.",
+    "## Run parameters",
+    paste0("- alpha_standard: ", alpha_standard),
+    paste0("- alpha_strong: ", alpha_strong),
+    paste0("- alpha_weak: ", alpha_weak),
+    paste0("- LFC boundary: ", lfc_boundary),
+    paste0("- EVS cutoff: fixed top-N union; N = ", evs_top_n),
+    paste0("- HC invalid threshold: ", hc_invalid_at_or_above),
+    paste0("- Strict empirical null: ", strict_empirical_null),
+    paste0("- Comparisons: ", paste(comparison_table$comparison_name, collapse = ", ")),
+    paste0("- EVS modes: ", paste(evs_modes, collapse = ", ")),
     "",
-    "DESeq2_BH uses DESeq2 Wald-test p-values with DESeq2's BH-adjusted padj only; it intentionally does not impose an LFC filter because the strong and cusp arms are handled by DESeq2's composite-null tests.",
-    "DESeq2_Strong uses the DESeq2 greaterAbs composite-null test plus apeglm-shrunken |LFC| >= boundary.",
-    "DESeq2_Weak uses the DESeq2 lessAbs composite-null test and apeglm-shrunken |LFC| < boundary. It is not a standard Wald/BH differential-expression call.",
-    "Empirical p-values were estimated from the DESeq2 Wald statistic by fdrtool. Higher criticism selected one empirical-p threshold per simulated dataset.",
-    "HBFSS = abs(apeglm-shrunken log2FC) * -log10(empirical p). HBFSS cutoff = -log10(HC p-threshold) * LFC boundary. No HBFSS floor was added.",
-    "HBFSS_All uses the HC-derived HBFSS boundary. HBFSS_Strong is the HBFSS all call restricted to greaterAbs-supported strong effects. HBFSS_Weak is the HC-supported, lessAbs-supported cusp/sub-boundary call."
+    "## Input and preprocessing",
+    "Raw read-count matrices are imported for each comparison. Raw integer counts are retained for DESeq2. NormEVS uses DESeq2 VST expression; RawEVS uses log2(raw counts + 1).",
+    "",
+    "## Eigenvector splitting",
+    paste0("PC1 is calculated separately in treatment and control samples. Features are ranked by absolute PC1 loading. The leading edge is the union of the top-", evs_top_n, " treatment-ranked and top-", evs_top_n, " control-ranked features. The remainder contains all other features."),
+    "",
+    "## Differential expression and HBFSS",
+    paste0("DESeq2 design is ~ condition with untrt as the reference. Standard effects use BH padj < ", alpha_standard, " and |apeglm-shrunken LFC| >= ", lfc_boundary, ". Strong effects use greaterAbs. Weak effects use lessAbs, |shrunken LFC| < boundary, and HBFSS raw significance. HBFSS = |shrunken LFC| x -log10(empirical p). The HBFSS cutoff is -log10(HC p threshold) x LFC boundary."),
+    "",
+    "## Figure export",
+    "Figures are exported as PNG and PDF. Panel grobs are rendered through explicit grid devices so arranged multi-panel figures are saved reliably."
   )
-  writeLines(methods_lines, file.path(simulation_dir, "Methods_Simulation.txt"))
-
-  interp <- c(
-    "# Simulation interpretation",
-    "",
-    "The figures are organized around direct comparisons. Figure 01 compares HBFSS_All against DESeq2_BH. Figure 02 compares HBFSS_Strong against the DESeq2 greaterAbs composite-null strong-effect method. Figure 03 compares HBFSS_Weak against the DESeq2 lessAbs composite-null cusp method. Figures 04 and 05 document HC threshold behavior.",
-    "",
-    paste0("Mean all-DE ΔF1: ", fmt_delta(mean_finite(result$delta_all$delta_f1))),
-    paste0("Mean all-DE ΔRecall: ", fmt_delta(mean_finite(result$delta_all$delta_recall))),
-    paste0("Mean all-DE ΔFDR: ", fmt_delta(mean_finite(result$delta_all$delta_fdr))),
-    paste0("Mean strong-effect ΔF1: ", fmt_delta(mean_finite(result$delta_strong$delta_f1))),
-    paste0("Mean composite-cusp ΔF1: ", fmt_delta(mean_finite(result$delta_weak$delta_f1))),
-    paste0("Mean HC valid-threshold fraction: ", fmt_num(mean_finite(result$qc_summary$hc_valid_fraction))),
-    "",
-    "Positive ΔF1, ΔRecall, or ΔPrecision favors HBFSS. Positive ΔFDR indicates that the gain carries a false-discovery cost. The results should be described as sensitivity and discovery tradeoffs rather than as automatic universal FDR improvement."
-  )
-  writeLines(interp, file.path(simulation_dir, "Interpretation_Simulation.md"))
-  writeLines(interp, file.path(simulation_dir, "Interpretation_Simulation.txt"))
+  writeLines(methods_lines, file.path(output_dir, "METHODS_SEQUENCE_PIPELINE.md"))
 }
 
 write_manifest <- function() {
-  files <- list.files(simulation_dir, recursive = TRUE, full.names = TRUE)
-  files <- files[file.exists(files)]
-  manifest <- data.frame(file = vapply(files, repo_relative, character(1)), size_bytes = file.info(files)$size, stringsAsFactors = FALSE)
-  save_csv(manifest, file.path(simulation_dir, "Manifest_Simulation.csv"))
+  exported_files <- list.files(output_dir, recursive = TRUE, full.names = TRUE)
+  exported_files <- exported_files[file.info(exported_files)$isdir %in% FALSE]
+  root <- normalizePath(output_dir, winslash = "/", mustWork = FALSE)
+  manifest <- data.frame(
+    file = sub(paste0("^", root, "/?"), "", normalizePath(exported_files, winslash = "/", mustWork = FALSE)),
+    size_bytes = file.info(exported_files)$size,
+    stringsAsFactors = FALSE
+  )
+  save_csv(manifest, file.path(output_dir, "Manifest.csv"))
   manifest
 }
 
-git_run <- function(args, allow_failure = FALSE) {
+path_relative_to_repo <- function(path) {
+  root <- normalizePath(repo_root, winslash = "/", mustWork = TRUE)
+  abs_path <- normalizePath(path, winslash = "/", mustWork = FALSE)
+  prefix <- paste0(root, "/")
+  if (startsWith(abs_path, prefix)) return(substr(abs_path, nchar(prefix) + 1L, nchar(abs_path)))
+  abs_path
+}
+
+git_command <- function(args, allow_failure = FALSE, echo_output = TRUE) {
   if (Sys.which("git") == "") stop("Git executable was not found on PATH.", call. = FALSE)
-  out <- suppressWarnings(system2("git", args = c("-C", repo_root, args), stdout = TRUE, stderr = TRUE, timeout = 180))
+  cmd_display <- paste("git", "-C", repo_root, paste(args, collapse = " "))
+  log_message("$ ", cmd_display)
+  out <- suppressWarnings(system2("git", args = c("-C", repo_root, args), stdout = TRUE, stderr = TRUE))
   status <- attr(out, "status")
   if (is.null(status)) status <- 0L
-  if (length(out) > 0L) log_message(paste(out, collapse = "\n"))
-  if (status != 0L && !allow_failure) stop("Git command failed: git ", paste(args, collapse = " "), "\n", paste(out, collapse = "\n"), call. = FALSE)
+  status <- as.integer(status)
+  if (isTRUE(echo_output) && length(out) > 0L) log_message(paste(out, collapse = "\n"))
+  if (!isTRUE(allow_failure) && status != 0L) {
+    stop("Git command failed with status ", status, ": ", cmd_display, "\n", paste(out, collapse = "\n"), call. = FALSE)
+  }
   list(status = status, output = out)
 }
 
-push_outputs <- function() {
+git_output_first_line <- function(args, allow_failure = FALSE) {
+  res <- git_command(args, allow_failure = allow_failure, echo_output = FALSE)
+  if (res$status != 0L || length(res$output) == 0L) return(NA_character_)
+  trimws(res$output[1])
+}
+
+git_has_staged_changes <- function() {
+  res <- git_command(c("diff", "--cached", "--quiet"), allow_failure = TRUE, echo_output = FALSE)
+  if (res$status == 0L) return(FALSE)
+  if (res$status == 1L) return(TRUE)
+  stop("Unable to inspect staged Git changes.", call. = FALSE)
+}
+
+git_preflight <- function() {
   if (!isTRUE(git_push_after_success)) {
-    log_message("Git push skipped. Set SEQUENCE_GIT_PUSH=true to enable.")
+    log_message("Git push disabled: git_push_after_success is FALSE.")
     return(invisible(FALSE))
   }
-  if (!dir.exists(file.path(repo_root, ".git"))) stop("No .git directory found for push.", call. = FALSE)
-  current_branch <- trimws(system2("git", args = c("-C", repo_root, "rev-parse", "--abbrev-ref", "HEAD"), stdout = TRUE))
-  target_branch <- if (!is.na(git_branch_name) && nzchar(git_branch_name)) git_branch_name else current_branch
-  paths_to_stage <- c(repo_relative(output_dir))
-  sp <- script_path()
-  if (!is.na(sp) && file.exists(sp)) {
-    paths_to_stage <- c(paths_to_stage, repo_relative(sp))
+
+  git_root <- git_output_first_line(c("rev-parse", "--show-toplevel"), allow_failure = TRUE)
+  if (is.na(git_root) || !nzchar(git_root)) stop("Git push requested, but this run is not inside a Git repository.", call. = FALSE)
+  git_root <- normalizePath(git_root, winslash = "/", mustWork = TRUE)
+  expected_root <- normalizePath(repo_root, winslash = "/", mustWork = TRUE)
+  if (!identical(git_root, expected_root)) stop("Git root mismatch. repo_root is ", expected_root, " but git root is ", git_root, call. = FALSE)
+
+  remote_url <- git_output_first_line(c("remote", "get-url", git_remote_name), allow_failure = TRUE)
+  if (is.na(remote_url) || !nzchar(remote_url)) stop("Git remote '", git_remote_name, "' is not configured.", call. = FALSE)
+
+  current_branch <- git_output_first_line(c("rev-parse", "--abbrev-ref", "HEAD"), allow_failure = FALSE)
+  if (identical(current_branch, "HEAD") || is.na(current_branch) || !nzchar(current_branch)) stop("Git is in detached HEAD state.", call. = FALSE)
+
+  if (git_has_staged_changes()) {
+    stop("Git index already contains staged changes before the SEQUENCE run. Commit or unstage them before running this manuscript pipeline.", call. = FALSE)
   }
-  git_run(c("add", "--", unique(paths_to_stage)))
-  changed <- git_run(c("diff", "--cached", "--quiet"), allow_failure = TRUE)
-  if (changed$status == 0L) {
-    log_message("No Git changes to commit.")
-    return(invisible(FALSE))
-  }
-  git_run(c("commit", "-m", git_commit_message))
-  git_run(c("push", "-u", git_remote_name, paste0("HEAD:", target_branch)))
-  log_message("Git push complete.")
+
   invisible(TRUE)
 }
 
+git_commit_and_push <- function() {
+  if (!isTRUE(git_push_after_success)) return(invisible(FALSE))
 
-write_full_manifest <- function() {
-  files <- list.files(
-    output_dir,
-    recursive = TRUE,
-    full.names = TRUE
-  )
+  current_branch <- git_output_first_line(c("rev-parse", "--abbrev-ref", "HEAD"), allow_failure = FALSE)
+  if (identical(current_branch, "HEAD") || is.na(current_branch) || !nzchar(current_branch)) stop("Git is in detached HEAD state.", call. = FALSE)
 
-  files <- files[
-    file.exists(
-      files
-    )
-  ]
+  git_command(c("fetch", git_remote_name), allow_failure = FALSE)
+  upstream <- git_output_first_line(c("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"), allow_failure = TRUE)
+  if (isTRUE(git_pull_rebase_before_push) && !is.na(upstream) && nzchar(upstream)) {
+    git_command(c("pull", "--rebase", "--autostash"), allow_failure = FALSE)
+  }
 
-  manifest <- data.frame(
-    file =
-      vapply(
-        files,
-        repo_relative,
-        character(1)
-      ),
+  stage_paths <- c(output_dir)
+  sp <- script_path()
+  if (!is.na(sp) && file.exists(sp)) stage_paths <- c(sp, stage_paths)
+  stage_paths <- unique(vapply(stage_paths, path_relative_to_repo, character(1)))
 
-    size_bytes =
-      file.info(
-        files
-      )$size,
+  git_command(c("add", "-f", "--", stage_paths), allow_failure = FALSE)
 
-    stringsAsFactors =
-      FALSE
-  )
+  if (!git_has_staged_changes()) {
+    log_message("No changed SEQUENCE files to commit.")
+    return(invisible(FALSE))
+  }
 
-  save_csv(
-    manifest,
-    file.path(
-      output_dir,
-      "Manifest_All_Outputs.csv"
-    )
-  )
+  git_command(c("status", "--short"), allow_failure = FALSE)
+  git_command(c("commit", "-m", git_commit_message), allow_failure = FALSE)
 
-  manifest
+  if (!is.na(upstream) && nzchar(upstream)) {
+    git_command(c("push"), allow_failure = FALSE)
+  } else {
+    git_command(c("push", "-u", git_remote_name, current_branch), allow_failure = FALSE)
+  }
+
+  log_message("GitHub push complete.")
+  invisible(TRUE)
 }
 
+# =============================================================================
+# PIPELINE EXECUTION
+# =============================================================================
 
-main <- function() {
-  write_status(
-    "starting",
-    "initializing"
-  )
+cleanup_rplots_pdf()
+cat("", file = log_file)
+git_preflight()
 
-  log_message(
-    "SEQUENCE manuscript analysis started."
-  )
+analysis_store <- list()
+evs_store <- list()
+comparison_store <- list()
+summary_rows <- list()
+failure_rows <- list()
+figure_status_rows <- list()
 
-  log_message(
-    "Repository root: ",
-    repo_root
-  )
-
-  log_message(
-    "Output directory: ",
-    output_dir
-  )
-
-  simulation_result <- NULL
-  empirical_result <- NULL
-
-  if (
-    isTRUE(
-      run_simulation_validation_block
-    )
-  ) {
-    log_message(
-      "Starting simulation-validation block."
-    )
-
-    simulation_result <-
-      run_simulation_validation()
-
-    write_methods_and_interpretation(
-      simulation_result
-    )
-
-    writeLines(
-      capture.output(
-        sessionInfo()
-      ),
-      file.path(
-        simulation_dir,
-        "SessionInfo_Simulation.txt"
-      )
-    )
-  }
-
-  if (
-    isTRUE(
-      run_empirical_dual_cutoff_block
-    )
-  ) {
-    log_message(
-      "Starting empirical dual-cutoff block."
-    )
-
-    empirical_result <-
-      run_dual_cutoff_empirical()
-  }
-
-  writeLines(
-    capture.output(
-      sessionInfo()
-    ),
-    file.path(
-      output_dir,
-      "SessionInfo_All_Analyses.txt"
-    )
-  )
-
-  if (
-    isTRUE(
-      run_simulation_validation_block
-    )
-  ) {
-    write_manifest()
-  }
-
-  manifest_all <-
-    write_full_manifest()
-
-  cleanup_rplots_pdf()
-
-  write_status(
-    "outputs_complete",
-    paste0(
-      "files=",
-      nrow(
-        manifest_all
-      )
-    )
-  )
-
-  push_outputs()
-
-  write_status(
-    "complete",
-    "analysis finished"
-  )
-
-  cat(
-    "
-SEQUENCE analysis complete
-"
-  )
-
-  cat(
-    "Output directory: ",
-    output_dir,
-    "
-",
-    sep = ""
-  )
-
-  if (
-    isTRUE(
-      run_empirical_dual_cutoff_block
-    )
-  ) {
-    cat(
-      "Cutoff 5,000 folder: ",
-      file.path(
-        empirical_root,
-        "Cutoff_5000"
-      ),
-      "
-",
-      sep = ""
-    )
-
-    cat(
-      "Cutoff 4,077 folder: ",
-      file.path(
-        empirical_root,
-        "Cutoff_4077"
-      ),
-      "
-",
-      sep = ""
-    )
-
-    cat(
-      "Cutoff comparison folder: ",
-      comparison_root,
-      "
-",
-      sep = ""
-    )
-  }
-
-  invisible(
-    list(
-      simulation =
-        simulation_result,
-      empirical =
-        empirical_result
-    )
-  )
+run_store_save <- function(count_matrix, coldata, comparison_name, analysis_label, dataset_key) {
+  fit <- run_deseq2_hbfss(count_matrix, coldata, comparison_name, analysis_label, dataset_key)
+  save_csv(fit$results, analysis_table_path(comparison_name, analysis_label, "Results"))
+  save_csv(concise_analysis_summary(fit$summary), analysis_table_path(comparison_name, analysis_label, "Summary"))
+  key <- paste(comparison_name, analysis_label, sep = "__")
+  analysis_store[[key]] <<- fit
+  summary_rows[[key]] <<- fit$summary
+  invisible(fit)
 }
 
-tryCatch(
-  main(),
-  error = function(e) {
-    write_status("failed", conditionMessage(e))
-    log_message("SIMULATION FAILED - DO NOT PUSH: ", conditionMessage(e))
-    try(writeLines(capture.output(sessionInfo()), file.path(simulation_dir, "SessionInfo_Simulation_Failed.txt")), silent = TRUE)
-    try(cleanup_rplots_pdf(), silent = TRUE)
-    if (!interactive()) quit(save = "no", status = 1L, runLast = FALSE)
-    stop(e)
+for (i in seq_len(nrow(comparison_table))) {
+  comparison <- prepare_comparison(i)
+  comparison_name <- comparison$comparison_name
+  comparison_store[[comparison_name]] <- comparison
+
+  log_message("=====================================================")
+  log_message("Running comparison: ", comparison_name)
+  log_message("=====================================================")
+
+  tryCatch({
+    run_store_save(comparison$count_matrix, comparison$coldata, comparison_name, "Raw", "Raw")
+
+    for (mode in evs_modes) {
+      evs <- build_evs_split(comparison$count_matrix, comparison$coldata, comparison_name, mode)
+      evs_key <- paste(comparison_name, mode, sep = "__")
+      evs_store[[evs_key]] <- evs
+
+      save_csv(evs$joint_rank, analysis_table_path(comparison_name, mode, "EVS_Rank_Table"))
+      save_csv(concise_evs_summary(evs$summary), analysis_table_path(comparison_name, mode, "EVS_Summary"))
+
+      run_store_save(evs$leading_matrix, comparison$coldata, comparison_name, paste0("Lead_", mode), "Lead")
+      run_store_save(evs$remainder_matrix, comparison$coldata, comparison_name, paste0("Rem_", mode), "Rem")
+    }
+  }, error = function(e) {
+    failure_rows[[comparison_name]] <<- data.frame(comparison_name = comparison_name, error_message = conditionMessage(e), stringsAsFactors = FALSE)
+    log_message("FAILED: ", comparison_name, ": ", conditionMessage(e))
+  })
+}
+
+summary_df <- if (length(summary_rows) > 0L) bind_rows(summary_rows) else data.frame()
+if (nrow(summary_df) > 0L) save_csv(concise_analysis_summary(summary_df), file.path(output_dir, "Summary_Overall.csv"))
+
+if (length(failure_rows) > 0L) {
+  save_csv(bind_rows(failure_rows), file.path(output_dir, "Failures.csv"))
+  fail_pipeline("One or more comparisons failed. See Failures.csv. Figure export was not attempted because the analysis run is incomplete.")
+}
+if (nrow(summary_df) == 0L) fail_pipeline("No successful analyses were completed.")
+
+# =============================================================================
+# FIGURE EXPORT
+# =============================================================================
+
+comparison_order <- comparison_table$comparison_name
+
+if (isTRUE(save_individual_figures)) {
+  for (comparison_name in comparison_order) {
+    for (analysis_label in c("Raw", "Lead_NormEVS", "Lead_RawEVS", "Rem_NormEVS", "Rem_RawEVS")) {
+      key <- paste(comparison_name, analysis_label, sep = "__")
+      if (!is.null(analysis_store[[key]])) {
+        plot_title <- paste0(comparison_name, "\n", analysis_label_pretty(analysis_label))
+        out_name <- paste0("Volcano_", comparison_name, "_", analysis_label, ".png")
+        figure_status_rows[[length(figure_status_rows) + 1L]] <- safe_save_figure(plot_volcano(analysis_store[[key]]$results, plot_title), file.path(figure_dir, out_name), 6.4, 5.3)
+      }
+    }
   }
-)
+}
+
+raw_plots <- list()
+for (comparison_name in comparison_order) {
+  key <- paste(comparison_name, "Raw", sep = "__")
+  if (!is.null(analysis_store[[key]])) raw_plots[[comparison_name]] <- plot_volcano(analysis_store[[key]]$results, comparison_name)
+}
+raw_panel <- arrange_with_one_legend(raw_plots, "Volcano: Original", ncol = length(comparison_order))
+figure_status_rows[[length(figure_status_rows) + 1L]] <- safe_save_figure(raw_panel, file.path(figure_dir, "Volcano_Original.png"), 18.0, 5.8)
+
+for (dataset_prefix in c("Lead", "Rem")) {
+  plots <- list()
+  for (mode in evs_modes) {
+    for (comparison_name in comparison_order) {
+      analysis_label <- paste0(dataset_prefix, "_", mode)
+      key <- paste(comparison_name, analysis_label, sep = "__")
+      if (!is.null(analysis_store[[key]])) plots[[paste(comparison_name, mode, sep = "_")]] <- plot_volcano(analysis_store[[key]]$results, paste0(comparison_name, "\n", mode))
+    }
+  }
+  panel_title <- if (dataset_prefix == "Lead") "Volcano: Leading Edge" else "Volcano: Remainder"
+  panel_file <- if (dataset_prefix == "Lead") "Volcano_Lead.png" else "Volcano_Remainder.png"
+  panel <- arrange_with_one_legend(plots, panel_title, ncol = length(comparison_order))
+  figure_status_rows[[length(figure_status_rows) + 1L]] <- safe_save_figure(panel, file.path(figure_dir, panel_file), 18.0, 9.6)
+}
+
+figure_status_rows[[length(figure_status_rows) + 1L]] <- safe_save_figure(plot_discovery_counts(summary_df), file.path(figure_dir, "Counts.png"), 18.0, 6.2)
+
+if (isTRUE(save_individual_figures)) {
+  for (comparison_name in comparison_order) {
+    for (analysis_label in c("Raw", "Lead_NormEVS", "Lead_RawEVS", "Rem_NormEVS", "Rem_RawEVS")) {
+      key <- paste(comparison_name, analysis_label, sep = "__")
+      if (!is.null(analysis_store[[key]])) {
+        p <- plot_pca_support(analysis_store[[key]], paste0(comparison_name, "\n", analysis_label_pretty(analysis_label)))
+        out_name <- paste0("PCA_", comparison_name, "_", analysis_label, ".png")
+        figure_status_rows[[length(figure_status_rows) + 1L]] <- safe_save_figure(p, file.path(figure_dir, out_name), 5.9, 4.8)
+      }
+    }
+  }
+}
+
+pca_raw_plots <- list()
+for (comparison_name in comparison_order) {
+  key <- paste(comparison_name, "Raw", sep = "__")
+  if (!is.null(analysis_store[[key]])) pca_raw_plots[[comparison_name]] <- plot_pca_support(analysis_store[[key]], comparison_name)
+}
+pca_raw_panel <- arrange_with_one_legend(pca_raw_plots, "PCA: Original", ncol = length(comparison_order))
+figure_status_rows[[length(figure_status_rows) + 1L]] <- safe_save_figure(pca_raw_panel, file.path(figure_dir, "PCA_Original.png"), 18.0, 5.8)
+
+for (dataset_prefix in c("Lead", "Rem")) {
+  pca_plots <- list()
+  for (mode in evs_modes) {
+    for (comparison_name in comparison_order) {
+      analysis_label <- paste0(dataset_prefix, "_", mode)
+      key <- paste(comparison_name, analysis_label, sep = "__")
+      if (!is.null(analysis_store[[key]])) pca_plots[[paste(comparison_name, mode, sep = "_")]] <- plot_pca_support(analysis_store[[key]], paste0(comparison_name, "\n", mode))
+    }
+  }
+  panel_title <- if (dataset_prefix == "Lead") "PCA: Leading Edge" else "PCA: Remainder"
+  panel_file <- if (dataset_prefix == "Lead") "PCA_Lead.png" else "PCA_Remainder.png"
+  figure_status_rows[[length(figure_status_rows) + 1L]] <- safe_save_figure(arrange_with_one_legend(pca_plots, panel_title, ncol = length(comparison_order)), file.path(figure_dir, panel_file), 18.0, 9.4)
+}
+
+pca_var_rows <- list()
+for (comparison_name in comparison_order) {
+  for (analysis_label in c("Raw", "Lead_NormEVS", "Lead_RawEVS", "Rem_NormEVS", "Rem_RawEVS")) {
+    key <- paste(comparison_name, analysis_label, sep = "__")
+    if (!is.null(analysis_store[[key]])) pca_var_rows[[key]] <- extract_pca_variance_rows(analysis_store[[key]], comparison_name, analysis_label)
+  }
+}
+
+pca_var_df <- if (length(pca_var_rows) > 0L) bind_rows(pca_var_rows) else data.frame()
+if (nrow(pca_var_df) > 0L) {
+  save_csv(rename_columns_existing(pca_var_df, c(comparison_name = "comparison", analysis_label = "analysis", analysis_pretty = "panel", dataset_group = "dataset", evs_mode = "evs_mode", component = "component", variance_explained_pct = "variance_explained_pct", score_variance = "score_variance")), file.path(output_dir, "Summary_PCA.csv"))
+  pca_pc1_compare_df <- pca_pc1_evs_plot_df(pca_var_df)
+  if (nrow(pca_pc1_compare_df) > 0L) save_csv(rename_columns_existing(pca_pc1_compare_df, c(comparison_name = "comparison", analysis_label = "analysis", analysis_pretty = "panel", dataset_group = "dataset", evs_mode = "evs_mode", pc1_score_variance = "pc1_score_variance", original_pc1_score_variance = "original_pc1_score_variance", pc1_score_variance_ratio_to_original = "pc1_score_variance_ratio_to_original", pc1_score_variance_percent_of_original = "pc1_score_variance_percent_of_original")), file.path(output_dir, "Summary_PCA_PC1_ScoreVariance_EVS.csv"))
+  figure_status_rows[[length(figure_status_rows) + 1L]] <- safe_save_figure(plot_pc1_evs_variance_absolute(pca_var_df), file.path(figure_dir, "PC1_Variance_EVS.png"), 15.8, 8.8)
+}
+
+load_rows <- list()
+cutoff_rows <- list()
+for (mode in evs_modes) {
+  for (comparison_name in comparison_order) {
+    key <- paste(comparison_name, mode, sep = "__")
+    comp_obj <- comparison_store[[comparison_name]]
+    if (!is.null(evs_store[[key]]) && !is.null(comp_obj)) {
+      tmp <- evs_loading_distribution_rows(comp_obj$count_matrix, evs_store[[key]], comp_obj$coldata, comparison_name, mode)
+      load_rows[[key]] <- tmp
+      cut <- attr(tmp, "cutoffs")
+      if (!is.null(cut) && nrow(cut) > 0L) cutoff_rows[[key]] <- cut
+    }
+  }
+}
+
+load_df <- if (length(load_rows) > 0L) bind_rows(load_rows) else data.frame()
+cutoff_df <- if (length(cutoff_rows) > 0L) bind_rows(cutoff_rows) else data.frame()
+if (nrow(load_df) > 0L) {
+  attr(load_df, "cutoffs") <- cutoff_df
+  save_csv(rename_columns_existing(load_df, c(comparison_name = "comparison", evs_mode = "evs_mode", dataset_group = "dataset", scope = "scope", pc1_loading_abs = "abs_pc1_loading", pc1_score_variance = "pc1_score_variance", pc1_variance_contribution = "pc1_variance_contribution")), file.path(output_dir, "Summary_PC1VarianceDistributions.csv"))
+  if (nrow(cutoff_df) > 0L) save_csv(rename_columns_existing(cutoff_df, c(comparison_name = "comparison", evs_mode = "evs_mode", dataset_group = "dataset", scope = "scope", pc1_loading_cutoff = "pc1_loading_cutoff", pc1_score_variance = "pc1_score_variance", pc1_variance_contribution_cutoff = "pc1_variance_contribution_cutoff")), file.path(output_dir, "Summary_PC1VarianceCutoffs.csv"))
+  figure_status_rows[[length(figure_status_rows) + 1L]] <- safe_save_figure(plot_loading_histograms(load_df, "PC1 variance-contribution frequency after EVS"), file.path(figure_dir, "PC1_Variance_Distributions.png"), 15.8, 12.0)
+}
+
+figure_status_df <- if (length(figure_status_rows) > 0L) bind_rows(figure_status_rows) else data.frame()
+save_csv(figure_status_df, file.path(output_dir, "Figure_Export_Status.csv"))
+if (nrow(figure_status_df) > 0L && any(figure_status_df$status == "failed")) {
+  save_csv(figure_status_df[figure_status_df$status == "failed", , drop = FALSE], file.path(output_dir, "Figure_Export_Failures.csv"))
+  fail_pipeline("One or more figure exports failed. See Figure_Export_Failures.csv.")
+}
+
+# =============================================================================
+# COMPLETION
+# =============================================================================
+
+write_sequence_methods()
+write_run_session_info()
+cleanup_rplots_pdf()
+manifest <- write_manifest()
+git_commit_and_push()
+
+cat("\n=====================================================\n")
+cat("SEQUENCE pipeline complete.\n")
+cat("Output directory: ", output_dir, "\n", sep = "")
+cat("Exported files: ", nrow(manifest), "\n", sep = "")
+cat("=====================================================\n\n")
+print(summary_df)
