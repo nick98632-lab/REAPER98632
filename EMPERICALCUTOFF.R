@@ -11,180 +11,221 @@ options(stringsAsFactors = FALSE)
 
 # =============================================================================
 # FINAL MANUSCRIPT ANALYSIS
-# PC1-NB LEADING-EDGE REGIME + CHANGEPOINT-OPTIMIZED EIGENVECTOR SPLITTING
+# PC1-NB REGIME GEOMETRY + c1-CONSTRAINED EIGENVECTOR SPLITTING
 # =============================================================================
 #
-# The historical top-5,000 value is NEVER used to fit c1, c2, Anchor,
-# Terminal, NB scaling, or the optimized cutoff.  It is displayed only as a
-# prespecified manuscript reference.
+# PURPOSE
+# -------
+# This script performs three primary analyses:
+#
+#   A. Raw-count variance geometry along independently ranked PC1 axes.
+#   B. Cumulative PC1-versus-NB excess-variance mass divergence to estimate
+#      shared transition knots c1 and c2.
+#   C. Data-driven top-k optimization for the control/treatment eigenvector
+#      split, using c2 as the own-arm selection boundary and c1 as the
+#      opposite-arm hard contamination boundary.
+#
+# The historical top-5,000 value is NEVER used to estimate c1, c2, Anchor,
+# Terminal, the cutoff change-point, or any other fitted quantity. It is shown
+# only as a prespecified reference.
+#
 #
 # RANKING
 # -------
 # Each experimental arm is ranked independently by ASCENDING absolute PC1
-# loading.  Therefore the right side of the rank axis contains the strongest
-# PC1-loading sites:
+# loading:
 #
 #     rank_order <- order(abs_loading, decreasing = FALSE)
 #
+# Therefore larger rank = stronger absolute PC1 loading.
+#
+#
 # RAW-COUNT VARIANCE GEOMETRY
 # ---------------------------
-# For arm g, raw empirical feature variance is evaluated along the PC1 rank:
+# For arm g:
 #
 #     s_raw,g^2(r) = Var(raw counts at rank r within arm g)
 #     y_g(r)       = log(1 + s_raw,g^2(r))
 #
-# A smoothing spline (spar=0.60) is fitted to y_g(r), and ONE second
-# derivative y_g''(r) is calculated.  After the independently fitted c2:
+# A smoothing spline (spar=0.60) is fit to y_g(r). ONE second derivative
+# y_g''(r) is calculated.
 #
-#     Anchor   = first sign-change zero crossing of y_g''(r) after c2
+# After c2:
+#
+#     Anchor   = first sign-change zero crossing of y_g''(r)
 #     Terminal = second successive sign-change zero crossing of y_g''(r)
+#
 #
 # CUMULATIVE PC1-NB VARIANCE-MASS DIVERGENCE
 # ------------------------------------------
-# PC1 variance contribution:
+# Feature-level PC1 variance contribution:
 #
 #     P_i = lambda_1 * v_i1^2
 #
 # Pooled within-group empirical variance of DESeq2-normalized counts:
 #
-#                  sum_g sum_{j in g} (y_ij - ybar_ig)^2
-#     V_pool,i =   -------------------------------------
-#                           sum_g (n_g - 1)
+#                  sum_g sum_{j in g}(y_ij - ybar_ig)^2
+#     V_pool,i =   ------------------------------------
+#                           sum_g(n_g - 1)
 #
-# Arm-specific normalized mean and excess-over-Poisson variance:
+# Arm-specific mean and excess-over-Poisson variance:
 #
 #     mu_ig = mean normalized count in arm g
 #     E_ig  = max(V_pool,i - mu_ig, 0)
 #
-# Convert P and E into rank-wise probability masses:
+# Rank-wise masses:
 #
 #     p_g(r) = P_g(r) / sum P_g
 #     q_g(r) = E_g(r) / sum E_g
 #
-# and cumulative masses:
+# Cumulative divergence:
 #
 #     F_P,g(r) = cumsum[p_g(r)]
 #     F_E,g(r) = cumsum[q_g(r)]
 #     D_g(r)   = F_E,g(r) - F_P,g(r)
 #
-# A shared two-knot continuous linear-spline fit across all eight arms gives
-# c1 and c2.  The broad leading-edge regime is:
+# A shared two-knot continuous linear-spline model across all eight arms
+# estimates c1 and c2:
 #
-#     LE_g = { i : rank_g(i) > c2 }
+#     r < c1          : Remainder
+#     c1 <= r <= c2   : Divergence interval
+#     r > c2          : Leading-edge regime
 #
-# Thus ranks < c1 are the remainder, c1 <= rank <= c2 is the divergence
-# interval, and ranks > c2 are the leading-edge regime.
 #
-# DATA-DRIVEN TOP-k OPTIMIZATION
-# ------------------------------
+# TOP-k EIGENVECTOR SPLITTING
+# ---------------------------
 # For each control/treatment pair and candidate top-k depth:
 #
-#     S_C(k) = control top-k sites
-#     S_T(k) = treatment top-k sites
-#     U(k)   = S_C(k) union S_T(k)
-#
-# Joint/disjoint status remains exactly the eigenvector-splitting definition:
+#     S_C(k) = control top-k
+#     S_T(k) = treatment top-k
 #
 #     Joint              = S_C(k) intersection S_T(k)
 #     Disjoint control   = S_C(k) \ S_T(k)
 #     Disjoint treatment = S_T(k) \ S_C(k)
 #
-# Candidate k is restricted to k <= N-c2 so every site is selected from the
-# c2-defined leading-edge regime of the arm that selected it.
+# Candidate k is restricted to:
 #
-# A disjoint site is called ELIGIBLE when its rank in the opposite arm also
-# remains >c2.  Therefore a site may be outside the opposite arm's top-k set
-# and still be a legitimate disjoint site, provided it remains inside the
-# broader leading-edge regime there.
+#     k <= N - c2
 #
-# For every k we count:
+# so every selected site originates from the c2-defined leading-edge regime
+# of the arm that selected it.
 #
-#     G(k) = Joint + eligible disjoint control + eligible disjoint treatment
-#     X(k) = disjoint sites whose opposite-arm rank is <=c2
+# For a DISJOINT site, the opposite-arm rank is then classified as:
 #
-# X(k) is additionally split into crossings into the divergence interval
-# (c1 <= rank <= c2) and crossings into the remainder (rank < c1).
+#     r_opposite > c2
+#         opposite-arm Leading Edge        -> retained
 #
-# The cutoff problem is treated as a two-objective Pareto problem:
+#     c1 <= r_opposite <= c2
+#         opposite-arm Divergence interval -> retained / permissible
+#
+#     r_opposite < c1
+#         opposite-arm Remainder           -> hard cross-regime contamination
+#
+# Thus crossing c2 in the opposite arm is NOT automatically penalized.
+# Only crossing c1 into the opposite-arm remainder is treated as contamination.
+#
+# For each candidate k:
+#
+#     G(k) =
+#         Joint
+#         + Disjoint with opposite-arm Leading Edge
+#         + Disjoint with opposite-arm Divergence
+#
+#     R(k) =
+#         Disjoint sites with opposite-arm rank < c1
+#
+# The cutoff problem is:
 #
 #     maximize G(k)
-#     minimize X(k)
+#     minimize R(k)
 #
-# We first retain only non-dominated Pareto-frontier points.  We then estimate
-# the transition in the EMPIRICAL gain-versus-crossing relationship rather
-# than assigning a user-chosen contamination penalty.
+# subject to k <= N-c2.
 #
-# On the Pareto frontier, fit the continuous two-segment model:
+# The number of disjoint sites landing in the opposite-arm Divergence interval
+# is exported as a separate diagnostic and is NOT treated as contamination.
 #
-#     G(X) = beta0 + beta1*X + gamma*(X - tau)+
 #
-# where (u)+ = max(u,0).  Therefore:
+# DATA-DRIVEN CUTOFF CHANGE-POINT
+# -------------------------------
+# Non-dominated points in [R(k), G(k)] define the Pareto frontier.
 #
-#     slope before tau = beta1
-#     slope after  tau = beta1 + gamma
+# On that frontier the script fits:
 #
-# Candidate tau values are observed interior Pareto-frontier crossing counts.
-# At least three frontier observations are required on each side so each local
-# trend is empirically supported rather than being determined by an endpoint.
-# The selected tau minimizes BIC among shape-valid fits with nonnegative slopes
-# and a lower post-breakpoint slope:
+#     G(R) = beta0 + beta1*R + gamma*(R - tau)+
+#
+# with:
+#
+#     slope_before = beta1
+#     slope_after  = beta1 + gamma
+#
+# The preferred breakpoint has:
 #
 #     slope_after < slope_before
 #
-# This identifies the point where expanding k begins to return fewer additional
-# legitimate Joint/eligible-Disjoint sites per additional site crossing the
-# opposite-arm c2 boundary.  No contamination percentage, normalized weight,
-# or arbitrary gain-minus-cost penalty enters the cutoff selection.
+# and is selected by minimum BIC among shape-valid segmented models.
 #
-# For diagnosis, the segmented model is also compared with a single linear
-# G-versus-X model.  Delta_BIC = BIC_linear - BIC_segmented; positive values
-# favor the change-point model.  The best segmented approximation is still
-# returned if the linear model has lower BIC, but a warning/flag is emitted.
+# A single linear G-versus-R model is also fit. Positive:
 #
-# Pair-specific change-points are reported for diagnosis.  A SINGLE common
-# manuscript cutoff is obtained by pooling counts across all four comparisons:
+#     Delta_BIC = BIC_linear - BIC_segmented
+#
+# supports the segmented change-point description.
+#
+# If the segmented breakpoint is not supportable, the code uses a conservative
+# fallback rather than inventing a gain/contamination weight:
+#
+#     largest k with zero opposite-arm remainder crossings, if available.
+#
+# The four pair-specific scans are also pooled:
 #
 #     G_total(k) = sum_m G_m(k)
-#     X_total(k) = sum_m X_m(k)
+#     R_total(k) = sum_m R_m(k)
 #
-# and fitting the same Pareto-frontier change-point model to the pooled curve.
-# The observed frontier point at tau supplies the selected common k*.
+# to obtain one common manuscript cutoff.
 #
-# FINAL SITE SET
-# --------------
-# At the selected common k*, the downstream Leading Edge contains ONLY:
 #
-#     Joint + eligible disjoint control + eligible disjoint treatment
+# POST-BOUNDARY NB MEAN-VARIANCE SCALING
+# --------------------------------------
+# This is NOT part of boundary or cutoff selection.
 #
-# Any union member whose opposite-arm rank is <=c2 is written separately to
-# Excluded_Crossing_Sites.csv and is NOT included in the downstream selected
-# leading-edge file.
-#
-# POST-BOUNDARY NB SCALING
-# ------------------------
-# After boundaries/cutoff are fixed, fit:
+# After all boundaries are fixed, the script optionally estimates:
 #
 #     E = alpha * mu^p
 #
-# by lm(log(E) ~ log(mu)) on positive mu,E.  This is corroboration only:
-# p~1 is more NB1-like and p~2 more NB2-like.
+# using lm(log(E) ~ log(mu)) for positive mu,E.
 #
-# OUTPUTS
-# -------
-# Figures:
+# Its only purpose is orthogonal corroboration: it asks whether the empirical
+# count mean-variance relationship changes across the Remainder, Divergence,
+# and Leading-edge regimes. Because it does not determine c1, c2, or k*, it is
+# removed from the main figure family and written only as a supplemental
+# diagnostic figure/table by default.
+#
+#
+# PRIMARY FIGURES
+# ---------------
 #   Figure_Overall.png
 #   Figure_RT0_ZT6.png
 #   Figure_RT2_ZT8.png
 #   Figure_RT4_ZT10.png
 #   Figure_RT8_ZT14.png
-#   Figures_All.zip
 #
-# Tables/data:
+# Each primary figure contains ONLY:
+#   A. Raw-count variance geometry
+#   B. Cumulative PC1-NB variance-mass divergence
+#   C. c1-based top-k cutoff optimization
+#
+# OPTIONAL SUPPLEMENT
+# -------------------
+#   Figure_Supplement_NB_Scaling.png
+#   Table_NB_Scaling.csv
+#
+# TABLES / SITE SETS
+# ------------------
 #   Table_Key_Results.csv
 #   Table_Timepoints.csv
 #   Table_Cutoff_Optimization.csv
 #   Selected_LeadingEdge_Sites.csv
-#   Excluded_Crossing_Sites.csv
+#   Excluded_Remainder_Crossing_Sites.csv
+#   Figures_All.zip
 #
 # =============================================================================
 
@@ -194,7 +235,7 @@ options(stringsAsFactors = FALSE)
 
 COUNT_FILE <- "/root/REAPER98632/data/WTTS-Seq_2022.2_DE_raw_read_numbers.csv"
 
-OUT_ROOT <- "/root/REAPER98632/exports/pc1_nb_cutoff_final"
+OUT_ROOT <- "/root/REAPER98632/exports/pc1_nb_cutoff_c1_final"
 FIG_DIR  <- file.path(OUT_ROOT, "Figures")
 
 dir.create(OUT_ROOT, recursive = TRUE, showWarnings = FALSE)
@@ -230,6 +271,9 @@ DISPLAY_D_SPAR   <- 0.72
 PNG_WIDTH_IN <- 15
 PNG_DPI      <- 360
 
+# Keep NB scaling as supplemental corroboration, not a primary panel.
+INCLUDE_NB_SCALING_SUPPLEMENT <- TRUE
+
 
 # =============================================================================
 # COLORS
@@ -250,6 +294,12 @@ COL <- list(
   c2 = "#1B7837",
   selected = "#7B3294",
   paper = "#E69F00",
+
+  candidate = "#A6A6A6",
+  pareto = "#6A3D9A",
+  segmented = "#222222",
+  divergence_disjoint = "#D9A441",
+  remainder_cross = "#B2182B",
 
   anchor_control = "#386CB0",
   terminal_control = "#386CB0",
@@ -1079,7 +1129,7 @@ get_region_p <- function(df, keep) {
 
 
 # =============================================================================
-# TOP-k PARETO OPTIMIZATION AND JOINT / DISJOINT CLASSIFICATION
+# TOP-k OPTIMIZATION AND JOINT / DISJOINT CLASSIFICATION
 # =============================================================================
 
 make_rank_map <- function(df) {
@@ -1101,30 +1151,14 @@ rank_to_region <- function(rank, c1, c2) {
   )
 }
 
-add_interval_events <- function(diff_vec, starts, ends, K) {
-  # Adds +1 on [start, end-1].  ends may equal K+1.
-  if (length(starts) == 0L) {
-    return(diff_vec)
-  }
-
-  for (s in starts) {
-    if (is.finite(s) && s >= 1L && s <= K) {
-      diff_vec[s] <- diff_vec[s] + 1L
-    }
-  }
-
-  for (e in ends) {
-    if (is.finite(e) && e >= 1L && e <= K) {
-      diff_vec[e] <- diff_vec[e] - 1L
-    }
-  }
-
-  diff_vec
-}
-
 cumulative_activation <- function(depth, K) {
   depth <- as.integer(depth)
-  keep <- is.finite(depth) & depth >= 1L & depth <= K
+
+  keep <- (
+    is.finite(depth) &
+    depth >= 1L &
+    depth <= K
+  )
 
   if (!any(keep)) {
     return(rep(0L, K))
@@ -1140,7 +1174,28 @@ cumulative_activation <- function(depth, K) {
 
 active_interval_count <- function(starts, ends, K) {
   # Count intervals active for start <= k < end.
-  # Here every interval is inside 1..K and end may be K+1.
+  # end may equal K+1.
+  if (length(starts) == 0L) {
+    return(rep(0L, K))
+  }
+
+  starts <- as.integer(starts)
+  ends <- as.integer(ends)
+
+  valid <- (
+    is.finite(starts) &
+    is.finite(ends) &
+    starts >= 1L &
+    starts <= K &
+    ends > starts
+  )
+
+  starts <- starts[valid]
+  ends <- pmin(
+    ends[valid],
+    K + 1L
+  )
+
   if (length(starts) == 0L) {
     return(rep(0L, K))
   }
@@ -1148,19 +1203,24 @@ active_interval_count <- function(starts, ends, K) {
   diff_vec <- integer(K + 1L)
 
   start_tab <- tabulate(
-    as.integer(starts),
+    starts,
     nbins = K + 1L
   )
 
   end_tab <- tabulate(
-    pmin(as.integer(ends), K + 1L),
+    ends,
     nbins = K + 1L
   )
 
-  diff_vec <- diff_vec + start_tab - end_tab
+  diff_vec <- (
+    diff_vec +
+    start_tab -
+    end_tab
+  )
 
   cumsum(diff_vec)[seq_len(K)]
 }
+
 
 scan_pair_cutoffs <- function(
     control_df,
@@ -1172,189 +1232,303 @@ scan_pair_cutoffs <- function(
     treatment_group) {
 
   if (nrow(control_df) != nrow(treatment_df)) {
-    stop("Control and treatment rankings have different feature counts.")
+    stop(
+      "Control and treatment rankings have different feature counts."
+    )
   }
 
-  if (!setequal(control_df$feature_id, treatment_df$feature_id)) {
-    stop("Control and treatment rankings do not contain the same feature IDs.")
+  if (!setequal(
+    control_df$feature_id,
+    treatment_df$feature_id
+  )) {
+    stop(
+      "Control and treatment rankings do not contain the same feature IDs."
+    )
   }
 
   N <- nrow(control_df)
+
+  # Own-arm selection must originate strictly beyond c2.
   K <- as.integer(N - c2)
 
   if (K < 1L) {
-    stop("No candidate top-k depth exists beyond c2.")
+    stop(
+      "No candidate top-k depth exists beyond c2."
+    )
   }
 
-  rank_control <- make_rank_map(control_df)
-  rank_treatment <- make_rank_map(treatment_df)
+  rank_control <- make_rank_map(
+    control_df
+  )
+
+  rank_treatment <- make_rank_map(
+    treatment_df
+  )
 
   ids <- control_df$feature_id
 
-  rC <- as.integer(unname(rank_control[ids]))
-  rT <- as.integer(unname(rank_treatment[ids]))
+  rC <- as.integer(
+    unname(
+      rank_control[ids]
+    )
+  )
 
-  if (any(!is.finite(rC)) || any(!is.finite(rT))) {
-    stop("Non-finite rank encountered in ", comparison_name)
+  rT <- as.integer(
+    unname(
+      rank_treatment[ids]
+    )
+  )
+
+  if (
+    any(!is.finite(rC)) ||
+    any(!is.finite(rT))
+  ) {
+    stop(
+      "Non-finite rank encountered in ",
+      comparison_name
+    )
   }
 
-  # Entry depth: smallest top-k value at which a feature enters that arm's
-  # terminal selection.  Rank N enters at k=1; rank 1 enters at k=N.
+  # Entry depth:
+  # rank N enters at k=1
+  # rank 1 enters at k=N
   dC <- N - rC + 1L
   dT <- N - rT + 1L
 
   k <- seq_len(K)
 
-  # Joint sites activate when both arm-specific entry depths have been reached.
-  joint_depth <- pmax(dC, dT)
+  # -----------------------------------------------------------------------
+  # JOINT
+  # -----------------------------------------------------------------------
+  # Joint membership activates once BOTH top-k selections contain the site.
+  joint_depth <- pmax(
+    dC,
+    dT
+  )
+
   joint_n <- cumulative_activation(
     joint_depth,
     K
   )
 
-  # Good control-disjoint sites:
-  # dC <= k < dT, with dT <= K so the opposite arm is still >c2.
-  idx_good_C <- which(
+  # -----------------------------------------------------------------------
+  # DISJOINT, OPPOSITE ARM ALSO IN LEADING EDGE
+  # -----------------------------------------------------------------------
+  # Control-only while treatment has not yet admitted the site.
+  idx_le_C <- which(
     dC < dT &
     dC <= K &
     dT <= K
   )
 
-  good_disjoint_control_n <- active_interval_count(
-    starts = dC[idx_good_C],
-    ends = dT[idx_good_C],
+  disjoint_control_opposite_le_n <- active_interval_count(
+    starts = dC[idx_le_C],
+    ends = dT[idx_le_C],
     K = K
   )
 
-  # Good treatment-disjoint sites.
-  idx_good_T <- which(
+  # Treatment-only while control has not yet admitted the site.
+  idx_le_T <- which(
     dT < dC &
     dT <= K &
     dC <= K
   )
 
-  good_disjoint_treatment_n <- active_interval_count(
-    starts = dT[idx_good_T],
-    ends = dC[idx_good_T],
+  disjoint_treatment_opposite_le_n <- active_interval_count(
+    starts = dT[idx_le_T],
+    ends = dC[idx_le_T],
     K = K
   )
 
-  # Crossings selected by control whose opposite treatment rank is outside
-  # the c2 leading edge.  These stay disjoint for all k <= K.
-  idx_cross_C <- which(
+  # -----------------------------------------------------------------------
+  # DISJOINT, OPPOSITE ARM IN DIVERGENCE INTERVAL
+  # -----------------------------------------------------------------------
+  # These sites are intentionally PERMISSIBLE.
+  #
+  # The selecting arm is in its own top-k subset and therefore >c2.
+  # The opposite arm lies between c1 and c2 and never enters a top-k list
+  # because candidate k is capped at N-c2.
+  idx_div_C <- which(
     dC <= K &
-    dT > K
+    rT >= c1 &
+    rT <= c2
   )
 
-  idx_cross_C_div <- idx_cross_C[
-    rT[idx_cross_C] >= c1 &
-    rT[idx_cross_C] <= c2
-  ]
+  disjoint_control_opposite_divergence_n <-
+    cumulative_activation(
+      dC[idx_div_C],
+      K
+    )
 
-  idx_cross_C_rem <- idx_cross_C[
-    rT[idx_cross_C] < c1
-  ]
-
-  cross_control_divergence_n <- cumulative_activation(
-    dC[idx_cross_C_div],
-    K
-  )
-
-  cross_control_remainder_n <- cumulative_activation(
-    dC[idx_cross_C_rem],
-    K
-  )
-
-  # Crossings selected by treatment whose opposite control rank is outside
-  # the c2 leading edge.
-  idx_cross_T <- which(
+  idx_div_T <- which(
     dT <= K &
-    dC > K
+    rC >= c1 &
+    rC <= c2
   )
 
-  idx_cross_T_div <- idx_cross_T[
-    rC[idx_cross_T] >= c1 &
-    rC[idx_cross_T] <= c2
-  ]
+  disjoint_treatment_opposite_divergence_n <-
+    cumulative_activation(
+      dT[idx_div_T],
+      K
+    )
 
-  idx_cross_T_rem <- idx_cross_T[
-    rC[idx_cross_T] < c1
-  ]
+  # -----------------------------------------------------------------------
+  # HARD CROSS-REGIME CONTAMINATION: OPPOSITE ARM IN REMAINDER
+  # -----------------------------------------------------------------------
+  # Only r_opposite < c1 is penalized.
+  idx_rem_C <- which(
+    dC <= K &
+    rT < c1
+  )
 
-  cross_treatment_divergence_n <- cumulative_activation(
-    dT[idx_cross_T_div],
+  remainder_cross_control_n <- cumulative_activation(
+    dC[idx_rem_C],
     K
   )
 
-  cross_treatment_remainder_n <- cumulative_activation(
-    dT[idx_cross_T_rem],
+  idx_rem_T <- which(
+    dT <= K &
+    rC < c1
+  )
+
+  remainder_cross_treatment_n <- cumulative_activation(
+    dT[idx_rem_T],
     K
   )
 
-  good_disjoint_n <- (
-    good_disjoint_control_n +
-    good_disjoint_treatment_n
+  # -----------------------------------------------------------------------
+  # AGGREGATES
+  # -----------------------------------------------------------------------
+
+  disjoint_opposite_le_n <- (
+    disjoint_control_opposite_le_n +
+    disjoint_treatment_opposite_le_n
   )
 
-  good_n <- joint_n + good_disjoint_n
-
-  cross_divergence_n <- (
-    cross_control_divergence_n +
-    cross_treatment_divergence_n
+  disjoint_opposite_divergence_n <- (
+    disjoint_control_opposite_divergence_n +
+    disjoint_treatment_opposite_divergence_n
   )
 
-  cross_remainder_n <- (
-    cross_control_remainder_n +
-    cross_treatment_remainder_n
+  permissible_disjoint_control_n <- (
+    disjoint_control_opposite_le_n +
+    disjoint_control_opposite_divergence_n
   )
 
-  cross_n <- cross_divergence_n + cross_remainder_n
-  union_n <- good_n + cross_n
+  permissible_disjoint_treatment_n <- (
+    disjoint_treatment_opposite_le_n +
+    disjoint_treatment_opposite_divergence_n
+  )
 
-  # Independent sanity check of union size from activation depth.
-  union_depth <- pmin(dC, dT)
+  permissible_disjoint_n <- (
+    permissible_disjoint_control_n +
+    permissible_disjoint_treatment_n
+  )
+
+  # Benefit:
+  # Joint + all permissible disjoint sites.
+  good_n <- (
+    joint_n +
+    permissible_disjoint_n
+  )
+
+  # Cost:
+  # only true crossing into opposite-arm remainder.
+  remainder_cross_n <- (
+    remainder_cross_control_n +
+    remainder_cross_treatment_n
+  )
+
+  union_n <- (
+    good_n +
+    remainder_cross_n
+  )
+
+  # Independent union-size check.
+  union_depth <- pmin(
+    dC,
+    dT
+  )
+
   union_check <- cumulative_activation(
     union_depth,
     K
   )
 
-  if (!all(union_n == union_check)) {
-    stop("Internal union-count mismatch in ", comparison_name)
+  if (!all(
+    union_n == union_check
+  )) {
+    stop(
+      "Internal union-count mismatch in ",
+      comparison_name
+    )
   }
 
   data.frame(
     comparison = comparison_name,
     control_group = control_group,
     treatment_group = treatment_group,
+
     k = k,
     cutoff_rank = N - k + 1L,
 
     joint_n = joint_n,
-    eligible_disjoint_control_n = good_disjoint_control_n,
-    eligible_disjoint_treatment_n = good_disjoint_treatment_n,
-    eligible_disjoint_n = good_disjoint_n,
+
+    disjoint_control_opposite_le_n =
+      disjoint_control_opposite_le_n,
+
+    disjoint_treatment_opposite_le_n =
+      disjoint_treatment_opposite_le_n,
+
+    disjoint_opposite_le_n =
+      disjoint_opposite_le_n,
+
+    disjoint_control_opposite_divergence_n =
+      disjoint_control_opposite_divergence_n,
+
+    disjoint_treatment_opposite_divergence_n =
+      disjoint_treatment_opposite_divergence_n,
+
+    disjoint_opposite_divergence_n =
+      disjoint_opposite_divergence_n,
+
+    permissible_disjoint_control_n =
+      permissible_disjoint_control_n,
+
+    permissible_disjoint_treatment_n =
+      permissible_disjoint_treatment_n,
+
+    permissible_disjoint_n =
+      permissible_disjoint_n,
+
     good_n = good_n,
 
-    cross_control_divergence_n = cross_control_divergence_n,
-    cross_treatment_divergence_n = cross_treatment_divergence_n,
-    cross_divergence_n = cross_divergence_n,
+    remainder_cross_control_n =
+      remainder_cross_control_n,
 
-    cross_control_remainder_n = cross_control_remainder_n,
-    cross_treatment_remainder_n = cross_treatment_remainder_n,
-    cross_remainder_n = cross_remainder_n,
+    remainder_cross_treatment_n =
+      remainder_cross_treatment_n,
 
-    cross_n = cross_n,
+    remainder_cross_n =
+      remainder_cross_n,
+
     union_n = union_n,
 
-    good_fraction = ifelse(
+    retained_fraction = ifelse(
       union_n > 0,
       good_n / union_n,
       NA_real_
     ),
 
-    crossing_fraction = ifelse(
+    remainder_cross_fraction = ifelse(
       union_n > 0,
-      cross_n / union_n,
+      remainder_cross_n / union_n,
+      NA_real_
+    ),
+
+    divergence_disjoint_fraction = ifelse(
+      union_n > 0,
+      disjoint_opposite_divergence_n / union_n,
       NA_real_
     ),
 
@@ -1368,13 +1542,16 @@ scan_pair_cutoffs <- function(
   )
 }
 
+
 mark_pareto_frontier <- function(
     scan_df,
     good_col = "good_n",
-    cost_col = "cross_n") {
+    cost_col = "remainder_cross_n") {
 
   if (nrow(scan_df) < 1L) {
-    stop("Empty cutoff scan.")
+    stop(
+      "Empty cutoff scan."
+    )
   }
 
   tmp <- scan_df %>%
@@ -1392,20 +1569,33 @@ mark_pareto_frontier <- function(
     group_by(cost) %>%
     slice(1L) %>%
     ungroup() %>%
-    arrange(cost, desc(good))
+    arrange(
+      cost,
+      desc(good)
+    )
 
   running_best_before <- c(
     -Inf,
-    head(cummax(tmp$good), -1L)
+    head(
+      cummax(tmp$good),
+      -1L
+    )
   )
 
   tmp$is_frontier_coord <- (
-    tmp$good > running_best_before
+    tmp$good >
+    running_best_before
   )
 
   frontier <- tmp %>%
-    filter(is_frontier_coord) %>%
-    arrange(cost, good, k)
+    filter(
+      is_frontier_coord
+    ) %>%
+    arrange(
+      cost,
+      good,
+      k
+    )
 
   key_all <- paste(
     scan_df[[cost_col]],
@@ -1420,7 +1610,10 @@ mark_pareto_frontier <- function(
   )
 
   out <- scan_df
-  out$is_pareto <- key_all %in% key_frontier
+  out$is_pareto <- (
+    key_all %in%
+    key_frontier
+  )
 
   list(
     scan = out,
@@ -1428,10 +1621,11 @@ mark_pareto_frontier <- function(
   )
 }
 
+
 select_pareto_changepoint <- function(
     scan_df,
     good_col = "good_n",
-    cost_col = "cross_n",
+    cost_col = "remainder_cross_n",
     min_segment_points = 3L) {
 
   marked <- mark_pareto_frontier(
@@ -1441,260 +1635,505 @@ select_pareto_changepoint <- function(
   )
 
   frontier <- marked$frontier %>%
-    arrange(cost, good, k)
+    arrange(
+      cost,
+      good,
+      k
+    )
+
+  out <- marked$scan
+
+  zero_idx <- which(
+    out[[cost_col]] == 0
+  )
+
+  zero_max_k <- if (
+    length(zero_idx) > 0L
+  ) {
+    max(
+      out$k[zero_idx]
+    )
+  } else {
+    NA_integer_
+  }
 
   n <- nrow(frontier)
 
-  if (n < (2L * min_segment_points + 1L)) {
-    stop(
-      "Too few unique Pareto-frontier coordinates for a two-segment ",
-      "change-point fit. Need at least ",
-      2L * min_segment_points + 1L,
-      "; found ",
-      n,
-      "."
-    )
-  }
+  candidates <- data.frame()
+  valid <- data.frame()
 
-  x <- as.numeric(frontier$cost)
-  y <- as.numeric(frontier$good)
+  # Defaults used by any fallback.
+  selected_k <- NA_integer_
+  selected_good <- NA_real_
+  selected_cost <- NA_real_
+  breakpoint_cost <- NA_real_
+  slope_before <- NA_real_
+  slope_after <- NA_real_
+  slope_ratio <- NA_real_
+  bic_linear <- NA_real_
+  bic_segmented <- NA_real_
+  delta_bic <- NA_real_
+  shape_supported <- FALSE
+  bic_supports_segmented <- FALSE
+  selection_method <- NA_character_
 
-  if (any(!is.finite(x)) || any(!is.finite(y))) {
-    stop("Non-finite Pareto-frontier values encountered.")
-  }
-
-  if (any(diff(x) <= 0)) {
-    stop(
-      "Pareto-frontier crossing counts must be strictly increasing after ",
-      "duplicate-cost reduction."
-    )
-  }
+  frontier$segmented_fit_good <- NA_real_
+  frontier$marginal_good_per_cost <- NA_real_
+  frontier$is_changepoint <- FALSE
 
   # -----------------------------------------------------------------------
-  # Single-line reference model G = b0 + b1*X.
-  # BIC is used only to assess whether a two-segment description is supported.
+  # Need enough distinct Pareto coordinates to estimate a two-segment model.
   # -----------------------------------------------------------------------
-
-  X_linear <- cbind(
-    intercept = 1,
-    x = x
+  enough_frontier <- (
+    n >=
+    (2L * min_segment_points + 1L)
   )
 
-  linear_fit <- stats::lm.fit(
-    x = X_linear,
-    y = y
-  )
-
-  rss_linear <- sum(linear_fit$residuals^2)
-  rss_linear <- max(rss_linear, .Machine$double.eps)
-
-  bic_linear <- (
-    n * log(rss_linear / n) +
-    2 * log(n)
-  )
-
-  # -----------------------------------------------------------------------
-  # Exhaustive continuous broken-stick fit.
-  #
-  # For each observed interior breakpoint tau, the model matrix is:
-  #
-  #   [1, X, (X-tau)+]
-  #
-  # Cross-products are calculated from cumulative sums, so scanning every
-  # admissible breakpoint is O(n), not O(n^2).
-  # -----------------------------------------------------------------------
-
-  total_x <- sum(x)
-  total_x2 <- sum(x^2)
-  total_y <- sum(y)
-  total_xy <- sum(x * y)
-  total_y2 <- sum(y^2)
-
-  tail_x <- rev(cumsum(rev(x)))
-  tail_x2 <- rev(cumsum(rev(x^2)))
-  tail_y <- rev(cumsum(rev(y)))
-  tail_xy <- rev(cumsum(rev(x * y)))
-
-  candidate_idx <- seq.int(
-    min_segment_points,
-    n - min_segment_points
-  )
-
-  candidate_rows <- vector(
-    "list",
-    length(candidate_idx)
-  )
-
-  for (jj in seq_along(candidate_idx)) {
-    i <- candidate_idx[jj]
-    tau <- x[i]
-
-    # h=(X-tau)+ is nonzero only for observations strictly right of tau.
-    n_right <- n - i
-
-    sx_right <- tail_x[i + 1L]
-    sx2_right <- tail_x2[i + 1L]
-    sy_right <- tail_y[i + 1L]
-    sxy_right <- tail_xy[i + 1L]
-
-    sum_h <- sx_right - n_right * tau
-    sum_xh <- sx2_right - tau * sx_right
-    sum_h2 <- (
-      sx2_right -
-      2 * tau * sx_right +
-      n_right * tau^2
-    )
-    sum_hy <- sxy_right - tau * sy_right
-
-    XtX <- matrix(
-      c(
-        n, total_x, sum_h,
-        total_x, total_x2, sum_xh,
-        sum_h, sum_xh, sum_h2
-      ),
-      nrow = 3L,
-      byrow = TRUE
+  if (enough_frontier) {
+    x <- as.numeric(
+      frontier$cost
     )
 
-    Xty <- c(
-      total_y,
-      total_xy,
-      sum_hy
+    y <- as.numeric(
+      frontier$good
     )
 
-    beta <- tryCatch(
-      solve(XtX, Xty),
-      error = function(e) rep(NA_real_, 3L)
+    if (
+      any(!is.finite(x)) ||
+      any(!is.finite(y))
+    ) {
+      stop(
+        "Non-finite Pareto-frontier values encountered."
+      )
+    }
+
+    if (
+      any(diff(x) <= 0)
+    ) {
+      stop(
+        "Pareto cost must be strictly increasing after duplicate-cost ",
+        "reduction."
+      )
+    }
+
+    # Single-line reference model.
+    X_linear <- cbind(
+      intercept = 1,
+      x = x
     )
 
-    if (any(!is.finite(beta))) {
+    linear_fit <- stats::lm.fit(
+      x = X_linear,
+      y = y
+    )
+
+    rss_linear <- sum(
+      linear_fit$residuals^2
+    )
+
+    rss_linear <- max(
+      rss_linear,
+      .Machine$double.eps
+    )
+
+    # Two fitted regression coefficients.
+    bic_linear <- (
+      n * log(
+        rss_linear / n
+      ) +
+      2 * log(n)
+    )
+
+    # Efficient exhaustive broken-stick scan.
+    total_x <- sum(x)
+    total_x2 <- sum(x^2)
+    total_y <- sum(y)
+    total_xy <- sum(x * y)
+    total_y2 <- sum(y^2)
+
+    tail_x <- rev(
+      cumsum(
+        rev(x)
+      )
+    )
+
+    tail_x2 <- rev(
+      cumsum(
+        rev(x^2)
+      )
+    )
+
+    tail_y <- rev(
+      cumsum(
+        rev(y)
+      )
+    )
+
+    tail_xy <- rev(
+      cumsum(
+        rev(x * y)
+      )
+    )
+
+    candidate_idx <- seq.int(
+      min_segment_points,
+      n - min_segment_points
+    )
+
+    candidate_rows <- vector(
+      "list",
+      length(candidate_idx)
+    )
+
+    for (jj in seq_along(
+      candidate_idx
+    )) {
+      i <- candidate_idx[jj]
+      tau <- x[i]
+
+      n_right <- n - i
+
+      sx_right <- tail_x[i + 1L]
+      sx2_right <- tail_x2[i + 1L]
+      sy_right <- tail_y[i + 1L]
+      sxy_right <- tail_xy[i + 1L]
+
+      sum_h <- (
+        sx_right -
+        n_right * tau
+      )
+
+      sum_xh <- (
+        sx2_right -
+        tau * sx_right
+      )
+
+      sum_h2 <- (
+        sx2_right -
+        2 * tau * sx_right +
+        n_right * tau^2
+      )
+
+      sum_hy <- (
+        sxy_right -
+        tau * sy_right
+      )
+
+      XtX <- matrix(
+        c(
+          n, total_x, sum_h,
+          total_x, total_x2, sum_xh,
+          sum_h, sum_xh, sum_h2
+        ),
+        nrow = 3L,
+        byrow = TRUE
+      )
+
+      Xty <- c(
+        total_y,
+        total_xy,
+        sum_hy
+      )
+
+      beta <- tryCatch(
+        solve(
+          XtX,
+          Xty
+        ),
+        error = function(e) {
+          rep(
+            NA_real_,
+            3L
+          )
+        }
+      )
+
+      if (
+        any(!is.finite(beta))
+      ) {
+        candidate_rows[[jj]] <- data.frame(
+          frontier_index = i,
+          tau = tau,
+          k = frontier$k[i],
+          rss = Inf,
+          bic = Inf,
+          slope_before = NA_real_,
+          slope_after = NA_real_,
+          slope_change = NA_real_,
+          shape_valid = FALSE,
+          beta0 = NA_real_,
+          beta1 = NA_real_,
+          gamma = NA_real_,
+          stringsAsFactors = FALSE
+        )
+
+        next
+      }
+
+      rss <- (
+        total_y2 -
+        sum(
+          beta * Xty
+        )
+      )
+
+      rss <- max(
+        rss,
+        .Machine$double.eps
+      )
+
+      # Four effective parameters:
+      # intercept, pre-slope, slope change, breakpoint.
+      bic <- (
+        n * log(
+          rss / n
+        ) +
+        4 * log(n)
+      )
+
+      slope_pre <- beta[2L]
+      slope_post <- (
+        beta[2L] +
+        beta[3L]
+      )
+
+      shape_valid <- (
+        is.finite(slope_pre) &&
+        is.finite(slope_post) &&
+        slope_pre >= 0 &&
+        slope_post >= 0 &&
+        slope_post <
+        slope_pre
+      )
+
       candidate_rows[[jj]] <- data.frame(
         frontier_index = i,
         tau = tau,
         k = frontier$k[i],
-        rss = Inf,
-        bic = Inf,
-        slope_before = NA_real_,
-        slope_after = NA_real_,
-        slope_change = NA_real_,
-        shape_valid = FALSE,
+        rss = rss,
+        bic = bic,
+        slope_before = slope_pre,
+        slope_after = slope_post,
+        slope_change = (
+          slope_post -
+          slope_pre
+        ),
+        shape_valid = shape_valid,
+        beta0 = beta[1L],
+        beta1 = beta[2L],
+        gamma = beta[3L],
         stringsAsFactors = FALSE
       )
-
-      next
     }
 
-    rss <- total_y2 - sum(beta * Xty)
-    rss <- max(rss, .Machine$double.eps)
-
-    # Breakpoint tau is also estimated, so the segmented BIC counts four
-    # parameters: intercept, pre-slope, slope change, and breakpoint.
-    bic <- (
-      n * log(rss / n) +
-      4 * log(n)
+    candidates <- bind_rows(
+      candidate_rows
     )
 
-    slope_before <- beta[2L]
-    slope_after <- beta[2L] + beta[3L]
+    valid <- candidates %>%
+      filter(
+        shape_valid,
+        is.finite(bic)
+      )
 
-    shape_valid <- (
-      is.finite(slope_before) &&
-      is.finite(slope_after) &&
-      slope_before >= 0 &&
-      slope_after >= 0 &&
-      slope_after < slope_before
+    shape_supported <- (
+      nrow(valid) > 0L
     )
 
-    candidate_rows[[jj]] <- data.frame(
-      frontier_index = i,
-      tau = tau,
-      k = frontier$k[i],
-      rss = rss,
-      bic = bic,
-      slope_before = slope_before,
-      slope_after = slope_after,
-      slope_change = slope_after - slope_before,
-      shape_valid = shape_valid,
-      beta0 = beta[1L],
-      beta1 = beta[2L],
-      gamma = beta[3L],
-      stringsAsFactors = FALSE
-    )
+    if (shape_supported) {
+      chosen <- valid %>%
+        arrange(
+          bic,
+          desc(k)
+        ) %>%
+        slice(1L)
+
+      bic_segmented <- chosen$bic[1L]
+      delta_bic <- (
+        bic_linear -
+        bic_segmented
+      )
+
+      bic_supports_segmented <- (
+        is.finite(delta_bic) &&
+        delta_bic > 0
+      )
+
+      if (bic_supports_segmented) {
+        i_star <- as.integer(
+          chosen$frontier_index[1L]
+        )
+
+        selected_k <- as.integer(
+          chosen$k[1L]
+        )
+
+        selected_good <- frontier$good[i_star]
+        selected_cost <- frontier$cost[i_star]
+        breakpoint_cost <- chosen$tau[1L]
+
+        slope_before <- chosen$slope_before[1L]
+        slope_after <- chosen$slope_after[1L]
+
+        slope_ratio <- ifelse(
+          slope_before > 0,
+          slope_after / slope_before,
+          NA_real_
+        )
+
+        beta0 <- chosen$beta0[1L]
+        beta1 <- chosen$beta1[1L]
+        gamma <- chosen$gamma[1L]
+
+        frontier$segmented_fit_good <- (
+          beta0 +
+          beta1 * x +
+          gamma *
+          pmax(
+            x - breakpoint_cost,
+            0
+          )
+        )
+
+        frontier$marginal_good_per_cost <- c(
+          NA_real_,
+          diff(y) / diff(x)
+        )
+
+        frontier$is_changepoint[
+          i_star
+        ] <- TRUE
+
+        selection_method <-
+          "segmented_pareto_changepoint"
+      }
+    }
   }
 
-  candidates <- bind_rows(candidate_rows)
+  # -----------------------------------------------------------------------
+  # Conservative fallback if there is no supported segmented change-point.
+  # -----------------------------------------------------------------------
+  if (!is.finite(selected_k)) {
+    if (is.finite(zero_max_k)) {
+      selected_k <- as.integer(
+        zero_max_k
+      )
 
-  valid <- candidates %>%
-    filter(
-      shape_valid,
-      is.finite(bic)
-    )
+      selected_row <- out %>%
+        filter(
+          k == selected_k
+        ) %>%
+        slice(1L)
 
-  shape_supported <- nrow(valid) > 0L
+      selected_good <- selected_row[[good_col]][1L]
+      selected_cost <- selected_row[[cost_col]][1L]
 
-  if (shape_supported) {
-    chosen <- valid %>%
-      arrange(
-        bic,
-        desc(k)
-      ) %>%
-      slice(1L)
-  } else {
-    warning(
-      "No Pareto-frontier breakpoint produced the expected decreasing ",
-      "gain-per-crossing slope. Using the minimum-BIC segmented ",
-      "approximation and flagging shape_supported=FALSE."
-    )
+      selection_method <-
+        "largest_zero_remainder_crossing_k"
+    } else {
+      # No zero-cost solution.  Use the best shape-valid segmented
+      # approximation if available, but explicitly flag it as descriptive.
+      if (
+        nrow(valid) > 0L
+      ) {
+        chosen <- valid %>%
+          arrange(
+            bic,
+            desc(k)
+          ) %>%
+          slice(1L)
 
-    chosen <- candidates %>%
-      filter(is.finite(bic)) %>%
-      arrange(
-        bic,
-        desc(k)
-      ) %>%
-      slice(1L)
+        i_star <- as.integer(
+          chosen$frontier_index[1L]
+        )
+
+        selected_k <- as.integer(
+          chosen$k[1L]
+        )
+
+        selected_good <- frontier$good[i_star]
+        selected_cost <- frontier$cost[i_star]
+        breakpoint_cost <- chosen$tau[1L]
+
+        slope_before <- chosen$slope_before[1L]
+        slope_after <- chosen$slope_after[1L]
+
+        slope_ratio <- ifelse(
+          slope_before > 0,
+          slope_after / slope_before,
+          NA_real_
+        )
+
+        bic_segmented <- chosen$bic[1L]
+        delta_bic <- (
+          bic_linear -
+          bic_segmented
+        )
+
+        bic_supports_segmented <- (
+          is.finite(delta_bic) &&
+          delta_bic > 0
+        )
+
+        beta0 <- chosen$beta0[1L]
+        beta1 <- chosen$beta1[1L]
+        gamma <- chosen$gamma[1L]
+
+        x <- as.numeric(
+          frontier$cost
+        )
+
+        y <- as.numeric(
+          frontier$good
+        )
+
+        frontier$segmented_fit_good <- (
+          beta0 +
+          beta1 * x +
+          gamma *
+          pmax(
+            x - breakpoint_cost,
+            0
+          )
+        )
+
+        frontier$marginal_good_per_cost <- c(
+          NA_real_,
+          diff(y) / diff(x)
+        )
+
+        frontier$is_changepoint[
+          i_star
+        ] <- TRUE
+
+        selection_method <-
+          "segmented_descriptive_no_BIC_support"
+      } else {
+        # Last-resort deterministic Pareto point:
+        # smallest remainder crossing count; among ties greatest benefit,
+        # among ties largest k.
+        fallback <- out %>%
+          arrange(
+            .data[[cost_col]],
+            desc(.data[[good_col]]),
+            desc(k)
+          ) %>%
+          slice(1L)
+
+        selected_k <- as.integer(
+          fallback$k[1L]
+        )
+
+        selected_good <- fallback[[good_col]][1L]
+        selected_cost <- fallback[[cost_col]][1L]
+
+        selection_method <-
+          "minimum_remainder_crossing_fallback"
+      }
+    }
   }
 
-  if (nrow(chosen) != 1L) {
-    stop("No finite Pareto change-point model could be fit.")
-  }
-
-  i_star <- as.integer(chosen$frontier_index[1L])
-  tau_star <- chosen$tau[1L]
-  k_star <- as.integer(chosen$k[1L])
-
-  beta0 <- chosen$beta0[1L]
-  beta1 <- chosen$beta1[1L]
-  gamma <- chosen$gamma[1L]
-
-  fitted_good <- (
-    beta0 +
-    beta1 * x +
-    gamma * pmax(x - tau_star, 0)
-  )
-
-  frontier$segmented_fit_good <- fitted_good
-  frontier$marginal_good_per_cross <- c(
-    NA_real_,
-    diff(y) / diff(x)
-  )
-  frontier$is_changepoint <- seq_len(n) == i_star
-
-  delta_bic <- bic_linear - chosen$bic[1L]
-  bic_supports_segmented <- is.finite(delta_bic) && delta_bic > 0
-
-  if (!bic_supports_segmented) {
-    warning(
-      "The selected segmented Pareto model does not improve BIC over a ",
-      "single linear gain-versus-crossing model (Delta_BIC=",
-      signif(delta_bic, 5),
-      "). Treat the breakpoint as descriptive unless additional support is ",
-      "established."
-    )
-  }
-
-  out <- marked$scan
-
+  # Map frontier quantities back onto the full scan.
   frontier_key <- paste(
     frontier$cost,
     frontier$good,
@@ -1712,78 +2151,147 @@ select_pareto_changepoint <- function(
     frontier_key
   )
 
-  out$segmented_fit_good <- frontier$segmented_fit_good[m]
-  out$marginal_good_per_cross <- frontier$marginal_good_per_cross[m]
-  out$is_selected_changepoint <- out$k == k_star
+  out$segmented_fit_good <-
+    frontier$segmented_fit_good[m]
 
-  # Scalar diagnostics repeated in the scan make the exported optimization
-  # table self-contained and easy to audit.
-  out$breakpoint_cross_n <- tau_star
-  out$slope_before_breakpoint <- chosen$slope_before[1L]
-  out$slope_after_breakpoint <- chosen$slope_after[1L]
-  out$slope_ratio_after_before <- ifelse(
-    chosen$slope_before[1L] > 0,
-    chosen$slope_after[1L] / chosen$slope_before[1L],
-    NA_real_
+  out$marginal_good_per_cost <-
+    frontier$marginal_good_per_cost[m]
+
+  out$is_selected_cutoff <- (
+    out$k ==
+    selected_k
   )
+
+  out$selected_method <-
+    selection_method
+
+  out$breakpoint_remainder_cross_n <-
+    breakpoint_cost
+
+  out$slope_before_breakpoint <-
+    slope_before
+
+  out$slope_after_breakpoint <-
+    slope_after
+
+  out$slope_ratio_after_before <-
+    slope_ratio
+
   out$bic_linear <- bic_linear
-  out$bic_segmented <- chosen$bic[1L]
-  out$delta_BIC_linear_minus_segmented <- delta_bic
-  out$shape_supported <- shape_supported
-  out$bic_supports_segmented <- bic_supports_segmented
+  out$bic_segmented <- bic_segmented
 
-  zero_idx <- which(out[[cost_col]] == 0)
+  out$delta_BIC_linear_minus_segmented <-
+    delta_bic
 
-  zero_max_k <- if (length(zero_idx) > 0L) {
-    max(out$k[zero_idx])
-  } else {
-    NA_integer_
-  }
+  out$shape_supported <-
+    shape_supported
+
+  out$bic_supports_segmented <-
+    bic_supports_segmented
 
   list(
     scan = out,
     frontier = frontier,
     candidates = candidates,
-    selected_k = k_star,
-    selected_good = frontier$good[i_star],
-    selected_cost = frontier$cost[i_star],
-    breakpoint_cross_n = tau_star,
-    slope_before = chosen$slope_before[1L],
-    slope_after = chosen$slope_after[1L],
-    slope_ratio_after_before = ifelse(
-      chosen$slope_before[1L] > 0,
-      chosen$slope_after[1L] / chosen$slope_before[1L],
-      NA_real_
+
+    selected_k = as.integer(
+      selected_k
     ),
+
+    selected_good = selected_good,
+    selected_cost = selected_cost,
+
+    selection_method = selection_method,
+
+    breakpoint_remainder_cross_n =
+      breakpoint_cost,
+
+    slope_before = slope_before,
+    slope_after = slope_after,
+
+    slope_ratio_after_before =
+      slope_ratio,
+
     bic_linear = bic_linear,
-    bic_segmented = chosen$bic[1L],
+    bic_segmented = bic_segmented,
     delta_BIC = delta_bic,
+
     shape_supported = shape_supported,
-    bic_supports_segmented = bic_supports_segmented,
-    max_zero_crossing_k = zero_max_k
+
+    bic_supports_segmented =
+      bic_supports_segmented,
+
+    max_zero_remainder_crossing_k =
+      zero_max_k
   )
 }
 
-aggregate_global_cutoff_scan <- function(pair_scans) {
-  all_pair_scan <- bind_rows(pair_scans)
+
+aggregate_global_cutoff_scan <- function(
+    pair_scans) {
+
+  all_pair_scan <- bind_rows(
+    pair_scans
+  )
 
   global <- all_pair_scan %>%
     group_by(k) %>%
     summarise(
-      cutoff_rank = first(cutoff_rank),
+      cutoff_rank = first(
+        cutoff_rank
+      ),
 
-      joint_n = sum(joint_n),
-      eligible_disjoint_control_n =
-        sum(eligible_disjoint_control_n),
-      eligible_disjoint_treatment_n =
-        sum(eligible_disjoint_treatment_n),
-      eligible_disjoint_n = sum(eligible_disjoint_n),
-      good_n = sum(good_n),
+      joint_n = sum(
+        joint_n
+      ),
 
-      cross_divergence_n = sum(cross_divergence_n),
-      cross_remainder_n = sum(cross_remainder_n),
-      cross_n = sum(cross_n),
-      union_n = sum(union_n),
+      disjoint_control_opposite_le_n = sum(
+        disjoint_control_opposite_le_n
+      ),
+
+      disjoint_treatment_opposite_le_n = sum(
+        disjoint_treatment_opposite_le_n
+      ),
+
+      disjoint_opposite_le_n = sum(
+        disjoint_opposite_le_n
+      ),
+
+      disjoint_control_opposite_divergence_n = sum(
+        disjoint_control_opposite_divergence_n
+      ),
+
+      disjoint_treatment_opposite_divergence_n = sum(
+        disjoint_treatment_opposite_divergence_n
+      ),
+
+      disjoint_opposite_divergence_n = sum(
+        disjoint_opposite_divergence_n
+      ),
+
+      permissible_disjoint_control_n = sum(
+        permissible_disjoint_control_n
+      ),
+
+      permissible_disjoint_treatment_n = sum(
+        permissible_disjoint_treatment_n
+      ),
+
+      permissible_disjoint_n = sum(
+        permissible_disjoint_n
+      ),
+
+      good_n = sum(
+        good_n
+      ),
+
+      remainder_cross_n = sum(
+        remainder_cross_n
+      ),
+
+      union_n = sum(
+        union_n
+      ),
 
       .groups = "drop"
     ) %>%
@@ -1791,16 +2299,25 @@ aggregate_global_cutoff_scan <- function(pair_scans) {
       comparison = "GLOBAL",
       control_group = NA_character_,
       treatment_group = NA_character_,
-      good_fraction = ifelse(
+
+      retained_fraction = ifelse(
         union_n > 0,
         good_n / union_n,
         NA_real_
       ),
-      crossing_fraction = ifelse(
+
+      remainder_cross_fraction = ifelse(
         union_n > 0,
-        cross_n / union_n,
+        remainder_cross_n / union_n,
         NA_real_
       ),
+
+      divergence_disjoint_fraction = ifelse(
+        union_n > 0,
+        disjoint_opposite_divergence_n / union_n,
+        NA_real_
+      ),
+
       jaccard_top_k = ifelse(
         union_n > 0,
         joint_n / union_n,
@@ -1808,14 +2325,16 @@ aggregate_global_cutoff_scan <- function(pair_scans) {
       )
     )
 
-  # Columns retained for consistency with pairwise scan table.
-  global$cross_control_divergence_n <- NA_integer_
-  global$cross_treatment_divergence_n <- NA_integer_
-  global$cross_control_remainder_n <- NA_integer_
-  global$cross_treatment_remainder_n <- NA_integer_
+  # Pair-direction fields do not have a unique global direction.
+  global$remainder_cross_control_n <-
+    NA_integer_
+
+  global$remainder_cross_treatment_n <-
+    NA_integer_
 
   global
 }
+
 
 classify_pair_at_k <- function(
     control_df,
@@ -1827,18 +2346,31 @@ classify_pair_at_k <- function(
     control_group,
     treatment_group) {
 
-  if (nrow(control_df) != nrow(treatment_df)) {
-    stop("Control and treatment rankings have different feature counts.")
+  if (
+    nrow(control_df) !=
+    nrow(treatment_df)
+  ) {
+    stop(
+      "Control and treatment rankings have different feature counts."
+    )
   }
 
-  if (!setequal(control_df$feature_id, treatment_df$feature_id)) {
-    stop("Control and treatment rankings do not contain the same feature IDs.")
+  if (!setequal(
+    control_df$feature_id,
+    treatment_df$feature_id
+  )) {
+    stop(
+      "Control and treatment rankings do not contain the same feature IDs."
+    )
   }
 
   N <- nrow(control_df)
   Kmax <- N - c2
 
-  if (k < 1L || k > Kmax) {
+  if (
+    k < 1L ||
+    k > Kmax
+  ) {
     stop(
       "k must satisfy 1 <= k <= N-c2. Received k=",
       k,
@@ -1863,28 +2395,49 @@ classify_pair_at_k <- function(
     treatment_top
   )
 
-  rank_control <- make_rank_map(control_df)
-  rank_treatment <- make_rank_map(treatment_df)
+  rank_control <- make_rank_map(
+    control_df
+  )
+
+  rank_treatment <- make_rank_map(
+    treatment_df
+  )
 
   rC <- as.integer(
-    unname(rank_control[union_ids])
+    unname(
+      rank_control[union_ids]
+    )
   )
 
   rT <- as.integer(
-    unname(rank_treatment[union_ids])
+    unname(
+      rank_treatment[union_ids]
+    )
   )
 
-  in_control <- union_ids %in% control_top
-  in_treatment <- union_ids %in% treatment_top
+  in_control <- (
+    union_ids %in%
+    control_top
+  )
 
-  base_class <- ifelse(
-    in_control & in_treatment,
-    "Joint",
-    ifelse(
-      in_control,
-      paste0("Disjoint_", control_group),
-      paste0("Disjoint_", treatment_group)
-    )
+  in_treatment <- (
+    union_ids %in%
+    treatment_top
+  )
+
+  joint <- (
+    in_control &
+    in_treatment
+  )
+
+  control_only <- (
+    in_control &
+    !in_treatment
+  )
+
+  treatment_only <- (
+    in_treatment &
+    !in_control
   )
 
   control_region <- rank_to_region(
@@ -1899,24 +2452,72 @@ classify_pair_at_k <- function(
     c2
   )
 
-  joint <- in_control & in_treatment
-  control_only <- in_control & !in_treatment
-  treatment_only <- in_treatment & !in_control
+  base_class <- ifelse(
+    joint,
+    "Joint",
+    ifelse(
+      control_only,
+      paste0(
+        "Disjoint_",
+        control_group
+      ),
+      paste0(
+        "Disjoint_",
+        treatment_group
+      )
+    )
+  )
 
-  eligible <- (
-    joint |
+  opposite_region <- rep(
+    NA_character_,
+    length(union_ids)
+  )
+
+  opposite_region[
+    control_only
+  ] <- treatment_region[
+    control_only
+  ]
+
+  opposite_region[
+    treatment_only
+  ] <- control_region[
+    treatment_only
+  ]
+
+  disjoint_opposite_leading_edge <- (
     (control_only & rT > c2) |
     (treatment_only & rC > c2)
   )
 
-  cross_divergence <- (
-    (control_only & rT >= c1 & rT <= c2) |
-    (treatment_only & rC >= c1 & rC <= c2)
+  disjoint_opposite_divergence <- (
+    (
+      control_only &
+      rT >= c1 &
+      rT <= c2
+    ) |
+    (
+      treatment_only &
+      rC >= c1 &
+      rC <= c2
+    )
   )
 
-  cross_remainder <- (
-    (control_only & rT < c1) |
-    (treatment_only & rC < c1)
+  cross_into_remainder <- (
+    (
+      control_only &
+      rT < c1
+    ) |
+    (
+      treatment_only &
+      rC < c1
+    )
+  )
+
+  retained_for_analysis <- (
+    joint |
+    disjoint_opposite_leading_edge |
+    disjoint_opposite_divergence
   )
 
   analysis_class <- rep(
@@ -1924,67 +2525,76 @@ classify_pair_at_k <- function(
     length(union_ids)
   )
 
-  analysis_class[joint] <- "Joint"
+  analysis_class[
+    joint
+  ] <- "Joint"
 
   analysis_class[
-    control_only & rT > c2
+    control_only &
+    rT > c2
   ] <- paste0(
-    "Eligible_Disjoint_",
-    control_group
-  )
-
-  analysis_class[
-    treatment_only & rC > c2
-  ] <- paste0(
-    "Eligible_Disjoint_",
-    treatment_group
-  )
-
-  analysis_class[
-    control_only & rT >= c1 & rT <= c2
-  ] <- paste0(
-    "Cross_",
+    "Disjoint_",
     control_group,
-    "_to_",
-    treatment_group,
-    "_Divergence"
+    "_OppositeLeadingEdge"
   )
 
   analysis_class[
-    treatment_only & rC >= c1 & rC <= c2
+    treatment_only &
+    rC > c2
   ] <- paste0(
-    "Cross_",
+    "Disjoint_",
     treatment_group,
-    "_to_",
-    control_group,
-    "_Divergence"
+    "_OppositeLeadingEdge"
   )
 
   analysis_class[
-    control_only & rT < c1
+    control_only &
+    rT >= c1 &
+    rT <= c2
   ] <- paste0(
-    "Cross_",
+    "Disjoint_",
     control_group,
-    "_to_",
-    treatment_group,
-    "_Remainder"
+    "_OppositeDivergence"
   )
 
   analysis_class[
-    treatment_only & rC < c1
+    treatment_only &
+    rC >= c1 &
+    rC <= c2
   ] <- paste0(
-    "Cross_",
+    "Disjoint_",
     treatment_group,
-    "_to_",
+    "_OppositeDivergence"
+  )
+
+  analysis_class[
+    control_only &
+    rT < c1
+  ] <- paste0(
+    "Excluded_",
     control_group,
-    "_Remainder"
+    "_OppositeRemainder"
+  )
+
+  analysis_class[
+    treatment_only &
+    rC < c1
+  ] <- paste0(
+    "Excluded_",
+    treatment_group,
+    "_OppositeRemainder"
   )
 
   out <- data.frame(
     comparison = comparison_name,
     feature_id = union_ids,
+
     selected_k = as.integer(k),
-    cutoff_rank = rank_cutoff_from_k(N, k),
+
+    cutoff_rank = rank_cutoff_from_k(
+      N,
+      k
+    ),
 
     control_group = control_group,
     treatment_group = treatment_group,
@@ -1994,23 +2604,51 @@ classify_pair_at_k <- function(
 
     control_rank = rC,
     treatment_rank = rT,
+
     control_region = control_region,
     treatment_region = treatment_region,
+
+    opposite_region = opposite_region,
 
     control_top_k = in_control,
     treatment_top_k = in_treatment,
 
-    eligible_leading_edge = eligible,
-    cross_into_divergence = cross_divergence,
-    cross_into_remainder = cross_remainder,
-    outside_leading_edge = !eligible,
+    disjoint_opposite_leading_edge =
+      disjoint_opposite_leading_edge,
+
+    disjoint_opposite_divergence =
+      disjoint_opposite_divergence,
+
+    cross_into_remainder =
+      cross_into_remainder,
+
+    retained_for_analysis =
+      retained_for_analysis,
 
     stringsAsFactors = FALSE
   )
 
-  if (any(is.na(out$analysis_class))) {
+  if (
+    any(
+      is.na(
+        out$analysis_class
+      )
+    )
+  ) {
     stop(
       "Unclassified union site encountered in ",
+      comparison_name
+    )
+  }
+
+  if (
+    any(
+      out$retained_for_analysis &
+      out$cross_into_remainder
+    )
+  ) {
+    stop(
+      "A retained site was also classified as a remainder crossing in ",
       comparison_name
     )
   }
@@ -2018,13 +2656,21 @@ classify_pair_at_k <- function(
   out
 }
 
-summarize_classification <- function(class_df) {
-  if (nrow(class_df) < 1L) {
-    stop("Cannot summarize empty classification.")
+
+summarize_classification <- function(
+    class_df) {
+
+  if (
+    nrow(class_df) < 1L
+  ) {
+    stop(
+      "Cannot summarize empty classification."
+    )
   }
 
   joint_n <- sum(
-    class_df$base_class == "Joint"
+    class_df$base_class ==
+    "Joint"
   )
 
   control_only <- (
@@ -2037,56 +2683,129 @@ summarize_classification <- function(class_df) {
     !class_df$control_top_k
   )
 
-  eligible_disjoint_control_n <- sum(
+  disjoint_control_opposite_le_n <- sum(
     control_only &
-    class_df$eligible_leading_edge
+    class_df$disjoint_opposite_leading_edge
   )
 
-  eligible_disjoint_treatment_n <- sum(
+  disjoint_treatment_opposite_le_n <- sum(
     treatment_only &
-    class_df$eligible_leading_edge
+    class_df$disjoint_opposite_leading_edge
   )
 
-  eligible_disjoint_n <- (
-    eligible_disjoint_control_n +
-    eligible_disjoint_treatment_n
+  disjoint_control_opposite_divergence_n <- sum(
+    control_only &
+    class_df$disjoint_opposite_divergence
   )
 
-  good_n <- joint_n + eligible_disjoint_n
-
-  cross_divergence_n <- sum(
-    class_df$cross_into_divergence
+  disjoint_treatment_opposite_divergence_n <- sum(
+    treatment_only &
+    class_df$disjoint_opposite_divergence
   )
 
-  cross_remainder_n <- sum(
+  disjoint_opposite_le_n <- (
+    disjoint_control_opposite_le_n +
+    disjoint_treatment_opposite_le_n
+  )
+
+  disjoint_opposite_divergence_n <- (
+    disjoint_control_opposite_divergence_n +
+    disjoint_treatment_opposite_divergence_n
+  )
+
+  permissible_disjoint_control_n <- (
+    disjoint_control_opposite_le_n +
+    disjoint_control_opposite_divergence_n
+  )
+
+  permissible_disjoint_treatment_n <- (
+    disjoint_treatment_opposite_le_n +
+    disjoint_treatment_opposite_divergence_n
+  )
+
+  permissible_disjoint_n <- (
+    permissible_disjoint_control_n +
+    permissible_disjoint_treatment_n
+  )
+
+  good_n <- (
+    joint_n +
+    permissible_disjoint_n
+  )
+
+  remainder_cross_n <- sum(
     class_df$cross_into_remainder
   )
 
-  cross_n <- (
-    cross_divergence_n +
-    cross_remainder_n
+  union_n <- nrow(
+    class_df
   )
 
-  union_n <- nrow(class_df)
-
-  if (good_n + cross_n != union_n) {
-    stop("Classification counts do not sum to union size.")
+  if (
+    good_n +
+    remainder_cross_n !=
+    union_n
+  ) {
+    stop(
+      "Classification counts do not sum to union size."
+    )
   }
 
   data.frame(
-    k = unique(class_df$selected_k)[1L],
-    cutoff_rank = unique(class_df$cutoff_rank)[1L],
+    k = unique(
+      class_df$selected_k
+    )[1L],
+
+    cutoff_rank = unique(
+      class_df$cutoff_rank
+    )[1L],
+
     joint_n = joint_n,
-    eligible_disjoint_control_n = eligible_disjoint_control_n,
-    eligible_disjoint_treatment_n = eligible_disjoint_treatment_n,
-    eligible_disjoint_n = eligible_disjoint_n,
+
+    disjoint_control_opposite_le_n =
+      disjoint_control_opposite_le_n,
+
+    disjoint_treatment_opposite_le_n =
+      disjoint_treatment_opposite_le_n,
+
+    disjoint_opposite_le_n =
+      disjoint_opposite_le_n,
+
+    disjoint_control_opposite_divergence_n =
+      disjoint_control_opposite_divergence_n,
+
+    disjoint_treatment_opposite_divergence_n =
+      disjoint_treatment_opposite_divergence_n,
+
+    disjoint_opposite_divergence_n =
+      disjoint_opposite_divergence_n,
+
+    permissible_disjoint_control_n =
+      permissible_disjoint_control_n,
+
+    permissible_disjoint_treatment_n =
+      permissible_disjoint_treatment_n,
+
+    permissible_disjoint_n =
+      permissible_disjoint_n,
+
     good_n = good_n,
-    cross_divergence_n = cross_divergence_n,
-    cross_remainder_n = cross_remainder_n,
-    cross_n = cross_n,
+
+    remainder_cross_n =
+      remainder_cross_n,
+
     union_n = union_n,
-    good_fraction = good_n / union_n,
-    crossing_fraction = cross_n / union_n,
+
+    retained_fraction = (
+      good_n /
+      union_n
+    ),
+
+    remainder_cross_fraction = (
+      remainder_cross_n /
+      union_n
+    ),
+
     stringsAsFactors = FALSE
   )
 }
@@ -2106,11 +2825,20 @@ build_arm_scaling_table <- function(
 
   rows <- list()
 
-  for (comparison_name in names(comparisons)) {
-    mapping <- comparisons[[comparison_name]]
+  for (comparison_name in names(
+    comparisons
+  )) {
+    mapping <- comparisons[[
+      comparison_name
+    ]]
 
-    for (arm in names(mapping)) {
-      g <- unname(mapping[[arm]])
+    for (arm in names(
+      mapping
+    )) {
+      g <- unname(
+        mapping[[arm]]
+      )
+
       df <- group_results[[g]]$data
       N <- nrow(df)
 
@@ -2124,38 +2852,51 @@ build_arm_scaling_table <- function(
         paper_k
       )
 
-      rows[[length(rows) + 1L]] <- data.frame(
+      rows[[
+        length(rows) + 1L
+      ]] <- data.frame(
         comparison = comparison_name,
         arm = arm,
         group = g,
+
         p_remainder = get_region_p(
           df,
           df$rank < c1
         ),
+
         p_divergence = get_region_p(
           df,
           df$rank >= c1 &
           df$rank <= c2
         ),
+
         p_leading_edge = get_region_p(
           df,
           df$rank > c2
         ),
+
         p_selected_k = get_region_p(
           df,
-          df$rank >= selected_rank
+          df$rank >=
+          selected_rank
         ),
+
         p_paper_5000 = get_region_p(
           df,
-          df$rank >= paper_rank
+          df$rank >=
+          paper_rank
         ),
+
         stringsAsFactors = FALSE
       )
     }
   }
 
-  bind_rows(rows)
+  bind_rows(
+    rows
+  )
 }
+
 
 build_timepoint_table <- function(
     group_results,
@@ -2164,6 +2905,7 @@ build_timepoint_table <- function(
     selected_summaries,
     paper_summaries,
     global_k,
+    global_opt,
     c1,
     c2,
     paper_k,
@@ -2171,8 +2913,12 @@ build_timepoint_table <- function(
 
   rows <- list()
 
-  for (comparison_name in names(comparisons)) {
-    mapping <- comparisons[[comparison_name]]
+  for (comparison_name in names(
+    comparisons
+  )) {
+    mapping <- comparisons[[
+      comparison_name
+    ]]
 
     control_group <- unname(
       mapping[["control"]]
@@ -2182,177 +2928,298 @@ build_timepoint_table <- function(
       mapping[["treatment"]]
     )
 
-    pair_opt <- pair_optima[[comparison_name]]
-    selected_summary <- selected_summaries[[comparison_name]]
-    paper_summary <- paper_summaries[[comparison_name]]
+    pair_opt <- pair_optima[[
+      comparison_name
+    ]]
 
-    rows[[length(rows) + 1L]] <- data.frame(
+    selected_summary <- selected_summaries[[
+      comparison_name
+    ]]
+
+    paper_summary <- paper_summaries[[
+      comparison_name
+    ]]
+
+    rows[[
+      length(rows) + 1L
+    ]] <- data.frame(
       comparison = comparison_name,
       control_group = control_group,
       treatment_group = treatment_group,
 
       c1 = c1,
       c2 = c2,
-      c2_leading_edge_n = N - c2,
+      max_candidate_k = N - c2,
 
       control_anchor =
         group_results[[control_group]]$anchor,
+
       control_terminal =
         group_results[[control_group]]$terminal,
+
       treatment_anchor =
         group_results[[treatment_group]]$anchor,
+
       treatment_terminal =
         group_results[[treatment_group]]$terminal,
 
-      pairwise_changepoint_k =
+      pairwise_selected_k =
         pair_opt$selected_k,
-      pairwise_breakpoint_cross_n =
-        pair_opt$breakpoint_cross_n,
+
+      pairwise_selection_method =
+        pair_opt$selection_method,
+
+      pairwise_breakpoint_remainder_cross_n =
+        pair_opt$breakpoint_remainder_cross_n,
+
       pairwise_slope_before =
         pair_opt$slope_before,
+
       pairwise_slope_after =
         pair_opt$slope_after,
+
       pairwise_slope_ratio_after_before =
         pair_opt$slope_ratio_after_before,
+
       pairwise_delta_BIC =
         pair_opt$delta_BIC,
+
       pairwise_shape_supported =
         pair_opt$shape_supported,
+
       pairwise_BIC_supports_segmented =
         pair_opt$bic_supports_segmented,
-      pairwise_max_zero_crossing_k =
-        pair_opt$max_zero_crossing_k,
 
-      global_selected_k = global_k,
+      pairwise_max_zero_remainder_crossing_k =
+        pair_opt$max_zero_remainder_crossing_k,
+
+      global_selected_k =
+        global_k,
+
       global_selected_cutoff_rank =
-        rank_cutoff_from_k(N, global_k),
+        rank_cutoff_from_k(
+          N,
+          global_k
+        ),
+
+      global_selection_method =
+        global_opt$selection_method,
 
       selected_joint_n =
         selected_summary$joint_n,
-      selected_eligible_disjoint_control_n =
-        selected_summary$eligible_disjoint_control_n,
-      selected_eligible_disjoint_treatment_n =
-        selected_summary$eligible_disjoint_treatment_n,
+
+      selected_disjoint_opposite_le_n =
+        selected_summary$disjoint_opposite_le_n,
+
+      selected_disjoint_opposite_divergence_n =
+        selected_summary$disjoint_opposite_divergence_n,
+
+      selected_permissible_disjoint_n =
+        selected_summary$permissible_disjoint_n,
+
       selected_good_n =
         selected_summary$good_n,
-      selected_cross_divergence_n =
-        selected_summary$cross_divergence_n,
-      selected_cross_remainder_n =
-        selected_summary$cross_remainder_n,
-      selected_cross_n =
-        selected_summary$cross_n,
+
+      selected_remainder_cross_n =
+        selected_summary$remainder_cross_n,
+
       selected_union_n =
         selected_summary$union_n,
-      selected_good_fraction =
-        selected_summary$good_fraction,
-      selected_crossing_fraction =
-        selected_summary$crossing_fraction,
 
-      paper_reference_k = paper_k,
+      selected_retained_fraction =
+        selected_summary$retained_fraction,
+
+      selected_remainder_cross_fraction =
+        selected_summary$remainder_cross_fraction,
+
+      paper_reference_k =
+        paper_k,
+
       paper_reference_cutoff_rank =
-        rank_cutoff_from_k(N, paper_k),
+        rank_cutoff_from_k(
+          N,
+          paper_k
+        ),
+
       paper_joint_n =
         paper_summary$joint_n,
-      paper_eligible_disjoint_control_n =
-        paper_summary$eligible_disjoint_control_n,
-      paper_eligible_disjoint_treatment_n =
-        paper_summary$eligible_disjoint_treatment_n,
+
+      paper_disjoint_opposite_le_n =
+        paper_summary$disjoint_opposite_le_n,
+
+      paper_disjoint_opposite_divergence_n =
+        paper_summary$disjoint_opposite_divergence_n,
+
+      paper_permissible_disjoint_n =
+        paper_summary$permissible_disjoint_n,
+
       paper_good_n =
         paper_summary$good_n,
-      paper_cross_divergence_n =
-        paper_summary$cross_divergence_n,
-      paper_cross_remainder_n =
-        paper_summary$cross_remainder_n,
-      paper_cross_n =
-        paper_summary$cross_n,
+
+      paper_remainder_cross_n =
+        paper_summary$remainder_cross_n,
+
       paper_union_n =
         paper_summary$union_n,
-      paper_good_fraction =
-        paper_summary$good_fraction,
-      paper_crossing_fraction =
-        paper_summary$crossing_fraction,
+
+      paper_retained_fraction =
+        paper_summary$retained_fraction,
+
+      paper_remainder_cross_fraction =
+        paper_summary$remainder_cross_fraction,
 
       stringsAsFactors = FALSE
     )
   }
 
-  bind_rows(rows)
+  bind_rows(
+    rows
+  )
 }
+
 
 build_key_table <- function(
     timepoint_table,
     arm_scaling,
     global_opt,
+    global_scan,
     N,
     c1,
     c2,
     paper_k,
     shared_sse) {
 
-  global_row <- global_opt$scan %>%
-    filter(k == global_opt$selected_k) %>%
+  global_selected <- global_scan %>%
+    filter(
+      k ==
+      global_opt$selected_k
+    ) %>%
     slice(1L)
 
-  paper_row <- global_opt$scan %>%
-    filter(k == paper_k) %>%
+  paper_row <- global_scan %>%
+    filter(
+      k ==
+      paper_k
+    ) %>%
     slice(1L)
 
   data.frame(
     n_features = N,
+
     shared_c1 = c1,
     shared_c2 = c2,
-    c2_leading_edge_n = N - c2,
 
-    global_selected_k = global_opt$selected_k,
+    remainder_size =
+      c1 - 1L,
+
+    divergence_interval_size =
+      c2 - c1 + 1L,
+
+    leading_edge_size =
+      N - c2,
+
+    max_candidate_k =
+      N - c2,
+
+    global_selected_k =
+      global_opt$selected_k,
+
     global_selected_cutoff_rank =
-      rank_cutoff_from_k(N, global_opt$selected_k),
-    global_breakpoint_cross_n =
-      global_opt$breakpoint_cross_n,
+      rank_cutoff_from_k(
+        N,
+        global_opt$selected_k
+      ),
+
+    global_selection_method =
+      global_opt$selection_method,
+
+    global_breakpoint_remainder_cross_n =
+      global_opt$breakpoint_remainder_cross_n,
+
     global_slope_before =
       global_opt$slope_before,
+
     global_slope_after =
       global_opt$slope_after,
+
     global_slope_ratio_after_before =
       global_opt$slope_ratio_after_before,
+
     global_delta_BIC =
       global_opt$delta_BIC,
+
     global_shape_supported =
       global_opt$shape_supported,
+
     global_BIC_supports_segmented =
       global_opt$bic_supports_segmented,
-    global_max_zero_crossing_k =
-      global_opt$max_zero_crossing_k,
 
-    global_selected_good_n =
-      global_row$good_n,
-    global_selected_cross_divergence_n =
-      global_row$cross_divergence_n,
-    global_selected_cross_remainder_n =
-      global_row$cross_remainder_n,
-    global_selected_cross_n =
-      global_row$cross_n,
-    global_selected_union_n =
-      global_row$union_n,
-    global_selected_good_fraction =
-      global_row$good_fraction,
+    global_max_zero_remainder_crossing_k =
+      global_opt$max_zero_remainder_crossing_k,
 
-    pairwise_k_min =
-      min(timepoint_table$pairwise_changepoint_k),
-    pairwise_k_median =
-      median(timepoint_table$pairwise_changepoint_k),
-    pairwise_k_max =
-      max(timepoint_table$pairwise_changepoint_k),
+    selected_joint_n =
+      global_selected$joint_n[1L],
 
-    paper_reference_k = paper_k,
+    selected_disjoint_opposite_le_n =
+      global_selected$disjoint_opposite_le_n[1L],
+
+    selected_disjoint_opposite_divergence_n =
+      global_selected$disjoint_opposite_divergence_n[1L],
+
+    selected_permissible_disjoint_n =
+      global_selected$permissible_disjoint_n[1L],
+
+    selected_good_n =
+      global_selected$good_n[1L],
+
+    selected_remainder_cross_n =
+      global_selected$remainder_cross_n[1L],
+
+    selected_union_n =
+      global_selected$union_n[1L],
+
+    selected_retained_fraction =
+      global_selected$retained_fraction[1L],
+
+    paper_reference_k =
+      paper_k,
+
     paper_reference_cutoff_rank =
-      rank_cutoff_from_k(N, paper_k),
-    paper_reference_used_in_fitting = FALSE,
-    paper_global_good_n =
-      if (nrow(paper_row) == 1L) paper_row$good_n else NA_integer_,
-    paper_global_cross_n =
-      if (nrow(paper_row) == 1L) paper_row$cross_n else NA_integer_,
-    paper_global_good_fraction =
-      if (nrow(paper_row) == 1L) paper_row$good_fraction else NA_real_,
+      rank_cutoff_from_k(
+        N,
+        paper_k
+      ),
+
+    paper_reference_used_in_analysis =
+      FALSE,
+
+    paper_good_n = if (
+      nrow(paper_row) == 1L
+    ) {
+      paper_row$good_n[1L]
+    } else {
+      NA_real_
+    },
+
+    paper_remainder_cross_n = if (
+      nrow(paper_row) == 1L
+    ) {
+      paper_row$remainder_cross_n[1L]
+    } else {
+      NA_real_
+    },
+
+    pairwise_k_min = min(
+      timepoint_table$pairwise_selected_k
+    ),
+
+    pairwise_k_median = median(
+      timepoint_table$pairwise_selected_k
+    ),
+
+    pairwise_k_max = max(
+      timepoint_table$pairwise_selected_k
+    ),
 
     anchor_median = median(
       c(
@@ -2369,17 +3236,32 @@ build_key_table <- function(
     ),
 
     p_remainder_median =
-      safe_summary(arm_scaling$p_remainder),
-    p_divergence_median =
-      safe_summary(arm_scaling$p_divergence),
-    p_leading_edge_median =
-      safe_summary(arm_scaling$p_leading_edge),
-    p_selected_k_median =
-      safe_summary(arm_scaling$p_selected_k),
-    p_paper_5000_median =
-      safe_summary(arm_scaling$p_paper_5000),
+      safe_summary(
+        arm_scaling$p_remainder
+      ),
 
-    shared_model_SSE = shared_sse,
+    p_divergence_median =
+      safe_summary(
+        arm_scaling$p_divergence
+      ),
+
+    p_leading_edge_median =
+      safe_summary(
+        arm_scaling$p_leading_edge
+      ),
+
+    p_selected_k_median =
+      safe_summary(
+        arm_scaling$p_selected_k
+      ),
+
+    p_paper_5000_median =
+      safe_summary(
+        arm_scaling$p_paper_5000
+      ),
+
+    shared_model_SSE =
+      shared_sse,
 
     stringsAsFactors = FALSE
   )
@@ -2390,12 +3272,17 @@ build_key_table <- function(
 # FIGURE DATA
 # =============================================================================
 
-rankwise_median <- function(group_results, column) {
+rankwise_median <- function(
+    group_results,
+    column) {
+
   mat <- do.call(
     cbind,
     lapply(
       group_results,
-      function(z) z$data[[column]]
+      function(z) {
+        z$data[[column]]
+      }
     )
   )
 
@@ -2407,6 +3294,7 @@ rankwise_median <- function(group_results, column) {
   )
 }
 
+
 build_overall_figure_data <- function(
     group_results,
     knot_fit) {
@@ -2417,23 +3305,28 @@ build_overall_figure_data <- function(
 
   data.frame(
     rank = seq_len(N),
+
     raw_variance = rankwise_median(
       group_results,
       "display_log1p_raw_empirical_variance"
     ),
+
     D = rankwise_median(
       group_results,
       "display_D"
     ),
+
     D_fit = apply(
       knot_fit$fitted,
       1L,
       median,
       na.rm = TRUE
     ),
+
     stringsAsFactors = FALSE
   )
 }
+
 
 add_rank_regions <- function(
     p,
@@ -2449,7 +3342,7 @@ add_rank_regions <- function(
       ymin = -Inf,
       ymax = Inf,
       fill = COL$remainder,
-      alpha = 0.48
+      alpha = 0.50
     ) +
     annotate(
       "rect",
@@ -2458,7 +3351,7 @@ add_rank_regions <- function(
       ymin = -Inf,
       ymax = Inf,
       fill = COL$interval,
-      alpha = 0.42
+      alpha = 0.46
     ) +
     annotate(
       "rect",
@@ -2467,7 +3360,7 @@ add_rank_regions <- function(
       ymin = -Inf,
       ymax = Inf,
       fill = COL$leading,
-      alpha = 0.50
+      alpha = 0.52
     ) +
     annotate(
       "text",
@@ -2498,122 +3391,237 @@ add_rank_regions <- function(
     )
 }
 
+
 make_cutoff_panel <- function(
     scan_df,
     selected_k,
     paper_k,
-    title_text) {
+    title_text,
+    extra_k = NULL,
+    extra_label = "Global k*") {
 
   selected <- scan_df %>%
-    filter(k == selected_k) %>%
+    filter(
+      k == selected_k
+    ) %>%
     slice(1L)
 
+  if (
+    nrow(selected) != 1L
+  ) {
+    stop(
+      "Selected k not present in cutoff scan."
+    )
+  }
+
   paper <- scan_df %>%
-    filter(k == paper_k) %>%
+    filter(
+      k == paper_k
+    ) %>%
     slice(1L)
 
   frontier <- scan_df %>%
-    filter(is_pareto) %>%
-    arrange(cross_n, good_n, k) %>%
+    filter(
+      is_pareto
+    ) %>%
+    arrange(
+      remainder_cross_n,
+      good_n,
+      k
+    ) %>%
     distinct(
-      cross_n,
+      remainder_cross_n,
       good_n,
       .keep_all = TRUE
     )
 
-  p <- ggplot(
-    scan_df,
-    aes(
-      x = cross_n,
-      y = good_n
-    )
-  ) +
+  p <- ggplot() +
     geom_path(
-      aes(group = 1),
+      data = scan_df,
+      aes(
+        x = remainder_cross_n,
+        y = good_n,
+        group = 1
+      ),
+      color = COL$candidate,
       linewidth = 0.48,
-      alpha = 0.28
+      alpha = 0.45
     ) +
     geom_path(
       data = frontier,
-      aes(group = 1),
-      linewidth = 1.05
-    ) +
-    geom_line(
-      data = frontier %>%
-        filter(is.finite(segmented_fit_good)),
       aes(
-        y = segmented_fit_good,
+        x = remainder_cross_n,
+        y = good_n,
+        color = "Pareto frontier",
         group = 1
       ),
-      linewidth = 0.95,
-      linetype = "dashed"
-    ) +
-    geom_point(
-      data = selected,
-      size = 3.8,
-      shape = 18
-    ) +
-    labs(
-      title = title_text,
-      subtitle = paste0(
-        "Change-point k*=",
-        selected_k,
-        "; 5k reference"
-      ),
-      x = "Sites outside opposite-arm leading-edge regime",
-      y = "Joint + eligible disjoint"
-    ) +
-    theme_manuscript() +
-    theme(
-      legend.position = "none"
+      linewidth = 1.15
     )
 
-  if (nrow(paper) == 1L) {
+  fit_df <- frontier %>%
+    filter(
+      is.finite(
+        segmented_fit_good
+      )
+    )
+
+  if (
+    nrow(fit_df) > 1L
+  ) {
+    p <- p +
+      geom_line(
+        data = fit_df,
+        aes(
+          x = remainder_cross_n,
+          y = segmented_fit_good,
+          color = "Segmented fit",
+          group = 1
+        ),
+        linewidth = 0.95,
+        linetype = "dashed"
+      )
+  }
+
+  p <- p +
+    geom_point(
+      data = selected,
+      aes(
+        x = remainder_cross_n,
+        y = good_n,
+        color = "Selected k*"
+      ),
+      shape = 18,
+      size = 4.1
+    ) +
+    annotate(
+      "text",
+      x = selected$remainder_cross_n,
+      y = selected$good_n,
+      label = paste0(
+        "k*=",
+        selected_k
+      ),
+      vjust = 1.8,
+      size = 2.9,
+      fontface = "bold"
+    )
+
+  if (
+    nrow(paper) == 1L
+  ) {
     p <- p +
       geom_point(
         data = paper,
-        size = 3.2,
+        aes(
+          x = remainder_cross_n,
+          y = good_n,
+          color = "5k reference"
+        ),
         shape = 1,
-        stroke = 1.0
+        size = 3.6,
+        stroke = 1.15
       ) +
       annotate(
         "text",
-        x = paper$cross_n,
+        x = paper$remainder_cross_n,
         y = paper$good_n,
         label = "5k",
-        vjust = -0.8,
+        vjust = -0.85,
         size = 2.8
       )
   }
 
-  p +
-    annotate(
-      "text",
-      x = selected$cross_n,
-      y = selected$good_n,
-      label = "k*",
-      vjust = 1.7,
-      size = 2.8
+  if (
+    !is.null(extra_k) &&
+    is.finite(extra_k) &&
+    extra_k != selected_k
+  ) {
+    extra <- scan_df %>%
+      filter(
+        k == extra_k
+      ) %>%
+      slice(1L)
+
+    if (
+      nrow(extra) == 1L
+    ) {
+      p <- p +
+        geom_point(
+          data = extra,
+          aes(
+            x = remainder_cross_n,
+            y = good_n,
+            color = extra_label
+          ),
+          shape = 4,
+          size = 3.5,
+          stroke = 1.1
+        )
+    }
+  }
+
+  selected_div <- selected$disjoint_opposite_divergence_n
+
+  selected_rem <- selected$remainder_cross_n
+
+  color_values <- c(
+    "Pareto frontier" = COL$pareto,
+    "Segmented fit" = COL$segmented,
+    "Selected k*" = COL$selected,
+    "5k reference" = COL$paper,
+    stats::setNames(
+      COL$treatment,
+      extra_label
     )
+  )
+
+  p +
+    scale_color_manual(
+      values = color_values,
+      breaks = intersect(
+        names(color_values),
+        c(
+          "Pareto frontier",
+          "Segmented fit",
+          "Selected k*",
+          "5k reference",
+          extra_label
+        )
+      )
+    ) +
+    labs(
+      title = title_text,
+      subtitle = paste0(
+        "Divergence-disjoint=",
+        selected_div,
+        " | remainder crossings=",
+        selected_rem
+      ),
+      x = "Sites crossing into opposite-arm remainder (rank < c1)",
+      y = "Joint + permissible disjoint sites"
+    ) +
+    theme_manuscript()
 }
 
 
 # =============================================================================
-# OVERALL FIGURE
+# OVERALL MAIN FIGURE
 # =============================================================================
 
 make_overall_figure <- function(
     overall_df,
-    key_table,
-    arm_scaling,
     global_scan,
+    global_opt,
+    key_table,
     c1,
     c2,
     selected_k,
     paper_k,
     out_file) {
 
-  N <- nrow(overall_df)
+  N <- nrow(
+    overall_df
+  )
 
   selected_rank <- rank_cutoff_from_k(
     N,
@@ -2626,44 +3634,61 @@ make_overall_figure <- function(
   )
 
   anchor_median <- key_table$anchor_median[1L]
+
   terminal_median <- key_table$terminal_median[1L]
 
+  # -----------------------------------------------------------------------
   # A. Raw-count variance geometry.
+  # -----------------------------------------------------------------------
+
   a_lines <- data.frame(
     rank = c(
+      c1,
       c2,
       selected_rank,
       paper_rank
     ),
     key = c(
+      "c1",
       "c2",
-      paste0("k*=", selected_k),
+      paste0(
+        "k*=",
+        selected_k
+      ),
       "5k ref"
     ),
     stringsAsFactors = FALSE
   )
 
+  selected_key <- paste0(
+    "k*=",
+    selected_k
+  )
+
   a_colors <- c(
     "Raw variance" = COL$raw,
+    "c1" = COL$c1,
     "c2" = COL$c2,
     stats::setNames(
       COL$selected,
-      paste0("k*=", selected_k)
+      selected_key
     ),
     "5k ref" = COL$paper
   )
 
   a_types <- c(
     "Raw variance" = "solid",
+    "c1" = "dashed",
     "c2" = "longdash",
     stats::setNames(
       "dotdash",
-      paste0("k*=", selected_k)
+      selected_key
     ),
     "5k ref" = "dotted"
   )
 
   pA <- ggplot()
+
   pA <- add_rank_regions(
     pA,
     c1,
@@ -2684,7 +3709,7 @@ make_overall_figure <- function(
     geom_vline(
       xintercept = anchor_median,
       color = COL$divergence,
-      linewidth = 0.70,
+      linewidth = 0.68,
       show.legend = FALSE
     ) +
     geom_vline(
@@ -2702,8 +3727,7 @@ make_overall_figure <- function(
         color = "Raw variance",
         linetype = "Raw variance"
       ),
-      linewidth = 1.20,
-      lineend = "round"
+      linewidth = 1.20
     ) +
     annotate(
       "text",
@@ -2711,7 +3735,7 @@ make_overall_figure <- function(
       y = -Inf,
       label = "A",
       angle = 90,
-      vjust = -0.35,
+      vjust = -0.30,
       size = 2.8
     ) +
     annotate(
@@ -2720,26 +3744,33 @@ make_overall_figure <- function(
       y = -Inf,
       label = "T",
       angle = 90,
-      vjust = -0.35,
+      vjust = -0.30,
       size = 2.8
     ) +
     scale_color_manual(
       values = a_colors,
-      breaks = names(a_colors)
+      breaks = names(
+        a_colors
+      )
     ) +
     scale_linetype_manual(
       values = a_types,
-      breaks = names(a_types)
+      breaks = names(
+        a_types
+      )
     ) +
     labs(
       title = "A. Raw-count variance geometry",
-      subtitle = "A/T = first two y''=0 crossings after c2",
+      subtitle = "A/T = first two variance-curvature crossings after c2",
       x = "PC1 rank: low |loading| -> high |loading|",
       y = "Smoothed log(1 + raw-count variance)"
     ) +
     theme_manuscript()
 
+  # -----------------------------------------------------------------------
   # B. Cumulative divergence.
+  # -----------------------------------------------------------------------
+
   b_lines <- data.frame(
     rank = c(
       c1,
@@ -2750,7 +3781,7 @@ make_overall_figure <- function(
     key = c(
       "c1",
       "c2",
-      paste0("k*=", selected_k),
+      selected_key,
       "5k ref"
     ),
     stringsAsFactors = FALSE
@@ -2763,7 +3794,7 @@ make_overall_figure <- function(
     "c2" = COL$c2,
     stats::setNames(
       COL$selected,
-      paste0("k*=", selected_k)
+      selected_key
     ),
     "5k ref" = COL$paper
   )
@@ -2775,12 +3806,13 @@ make_overall_figure <- function(
     "c2" = "longdash",
     stats::setNames(
       "dotdash",
-      paste0("k*=", selected_k)
+      selected_key
     ),
     "5k ref" = "dotted"
   )
 
   pB <- ggplot()
+
   pB <- add_rank_regions(
     pB,
     c1,
@@ -2813,7 +3845,7 @@ make_overall_figure <- function(
         linetype = "D(r)"
       ),
       linewidth = 0.95,
-      alpha = 0.70
+      alpha = 0.72
     ) +
     geom_line(
       data = overall_df,
@@ -2823,139 +3855,65 @@ make_overall_figure <- function(
         color = "Shared fit",
         linetype = "Shared fit"
       ),
-      linewidth = 1.35
+      linewidth = 1.30
     ) +
     scale_color_manual(
       values = b_colors,
-      breaks = names(b_colors)
+      breaks = names(
+        b_colors
+      )
     ) +
     scale_linetype_manual(
       values = b_types,
-      breaks = names(b_types)
+      breaks = names(
+        b_types
+      )
     ) +
     labs(
       title = "B. Cumulative PC1-NB variance-mass divergence",
-      subtitle = "D(r)=F_E(r)-F_P(r); shared c1/c2 across 8 arms",
+      subtitle = "Shared c1/c2 fitted across all 8 arms",
       x = "PC1 rank",
-      y = "Cumulative divergence D(r)"
+      y = "D(r) = F_E(r) - F_P(r)"
     ) +
     theme_manuscript()
 
-  # C. Data-derived cutoff change-point.
+  # -----------------------------------------------------------------------
+  # C. c1-based cutoff optimization.
+  # -----------------------------------------------------------------------
+
   pC <- make_cutoff_panel(
     scan_df = global_scan,
     selected_k = selected_k,
     paper_k = paper_k,
-    title_text = "C. Global cutoff change-point"
-  )
-
-  # D. Post-boundary NB scaling.
-  scaling_plot <- arm_scaling %>%
-    select(
-      group,
-      p_remainder,
-      p_divergence,
-      p_leading_edge,
-      p_selected_k,
-      p_paper_5000
-    ) %>%
-    pivot_longer(
-      cols = c(
-        p_remainder,
-        p_divergence,
-        p_leading_edge,
-        p_selected_k,
-        p_paper_5000
-      ),
-      names_to = "region",
-      values_to = "p"
-    ) %>%
-    mutate(
-      region = factor(
-        region,
-        levels = c(
-          "p_remainder",
-          "p_divergence",
-          "p_leading_edge",
-          "p_selected_k",
-          "p_paper_5000"
-        ),
-        labels = c(
-          "Remainder",
-          "Divergence",
-          "Leading edge",
-          paste0("Selected k*=", selected_k),
-          "5k reference"
-        )
-      )
-    )
-
-  pD <- ggplot(
-    scaling_plot,
-    aes(
-      x = p,
-      y = region
-    )
+    title_text = "C. Global top-k optimization"
   ) +
-    geom_vline(
-      xintercept = 1,
-      linetype = "dashed",
-      color = "#777777",
-      linewidth = 0.55
-    ) +
-    geom_vline(
-      xintercept = 2,
-      linetype = "dotted",
-      color = "#777777",
-      linewidth = 0.65
-    ) +
-    geom_point(
-      alpha = 0.72,
-      size = 2.4,
-      position = position_jitter(
-        height = 0.08,
-        width = 0
-      )
-    ) +
-    stat_summary(
-      fun = median,
-      geom = "point",
-      size = 4.0,
-      shape = 18
-    ) +
     labs(
-      title = "D. Post-boundary NB mean-variance scaling",
-      subtitle = "Corroboration only: p~1 NB1-like; p~2 NB2-like",
-      x = "Exponent p in E = alpha * mu^p",
-      y = NULL
-    ) +
-    theme_manuscript() +
-    theme(
-      legend.position = "none"
+      subtitle = paste0(
+        "c1 is the hard opposite-arm boundary | method: ",
+        global_opt$selection_method
+      )
     )
 
   save_panels(
     list(
       pA,
       pB,
-      pC,
-      pD
+      pC
     ),
     out_file,
-    height_in = 15.0
+    height_in = 11.8
   )
 }
 
 
 # =============================================================================
-# TIME-POINT FIGURES
+# TIME-POINT MAIN FIGURES
 # =============================================================================
 
 make_timepoint_figure <- function(
     comparison_name,
     mapping,
     group_results,
-    arm_scaling,
     pair_scan,
     pair_optimum,
     global_k,
@@ -2972,10 +3930,17 @@ make_timepoint_figure <- function(
     mapping[["treatment"]]
   )
 
-  control <- group_results[[control_group]]$data
-  treatment <- group_results[[treatment_group]]$data
+  control <- group_results[[
+    control_group
+  ]]$data
 
-  N <- nrow(control)
+  treatment <- group_results[[
+    treatment_group
+  ]]$data
+
+  N <- nrow(
+    control
+  )
 
   selected_rank <- rank_cutoff_from_k(
     N,
@@ -2987,22 +3952,42 @@ make_timepoint_figure <- function(
     paper_k
   )
 
-  c_anchor <- group_results[[control_group]]$anchor
-  c_terminal <- group_results[[control_group]]$terminal
+  c_anchor <- group_results[[
+    control_group
+  ]]$anchor
 
-  t_anchor <- group_results[[treatment_group]]$anchor
-  t_terminal <- group_results[[treatment_group]]$terminal
+  c_terminal <- group_results[[
+    control_group
+  ]]$terminal
 
+  t_anchor <- group_results[[
+    treatment_group
+  ]]$anchor
+
+  t_terminal <- group_results[[
+    treatment_group
+  ]]$terminal
+
+  selected_key <- paste0(
+    "k*=",
+    global_k
+  )
+
+  # -----------------------------------------------------------------------
   # A. Raw-count variance geometry.
+  # -----------------------------------------------------------------------
+
   a_lines <- data.frame(
     rank = c(
+      c1,
       c2,
       selected_rank,
       paper_rank
     ),
     key = c(
+      "c1",
       "c2",
-      paste0("k*=", global_k),
+      selected_key,
       "5k ref"
     ),
     stringsAsFactors = FALSE
@@ -3011,10 +3996,11 @@ make_timepoint_figure <- function(
   a_colors <- c(
     "Control" = COL$control,
     "Treatment" = COL$treatment,
+    "c1" = COL$c1,
     "c2" = COL$c2,
     stats::setNames(
       COL$selected,
-      paste0("k*=", global_k)
+      selected_key
     ),
     "5k ref" = COL$paper
   )
@@ -3022,15 +4008,17 @@ make_timepoint_figure <- function(
   a_types <- c(
     "Control" = "solid",
     "Treatment" = "solid",
+    "c1" = "dashed",
     "c2" = "longdash",
     stats::setNames(
       "dotdash",
-      paste0("k*=", global_k)
+      selected_key
     ),
     "5k ref" = "dotted"
   )
 
   pA <- ggplot()
+
   pA <- add_rank_regions(
     pA,
     c1,
@@ -3082,7 +4070,7 @@ make_timepoint_figure <- function(
         color = "Control",
         linetype = "Control"
       ),
-      linewidth = 1.12
+      linewidth = 1.10
     ) +
     geom_line(
       data = treatment,
@@ -3092,7 +4080,7 @@ make_timepoint_figure <- function(
         color = "Treatment",
         linetype = "Treatment"
       ),
-      linewidth = 1.12
+      linewidth = 1.10
     ) +
     annotate(
       "text",
@@ -3136,11 +4124,15 @@ make_timepoint_figure <- function(
     ) +
     scale_color_manual(
       values = a_colors,
-      breaks = names(a_colors)
+      breaks = names(
+        a_colors
+      )
     ) +
     scale_linetype_manual(
       values = a_types,
-      breaks = names(a_types)
+      breaks = names(
+        a_types
+      )
     ) +
     labs(
       title = paste0(
@@ -3148,13 +4140,16 @@ make_timepoint_figure <- function(
         comparison_name,
         " raw-count variance geometry"
       ),
-      subtitle = "A/T = first two y''=0 crossings after c2",
+      subtitle = "A/T = first two variance-curvature crossings after c2",
       x = "PC1 rank: low |loading| -> high |loading|",
       y = "Smoothed log(1 + raw-count variance)"
     ) +
     theme_manuscript()
 
+  # -----------------------------------------------------------------------
   # B. Cumulative divergence.
+  # -----------------------------------------------------------------------
+
   b_lines <- data.frame(
     rank = c(
       c1,
@@ -3165,7 +4160,7 @@ make_timepoint_figure <- function(
     key = c(
       "c1",
       "c2",
-      paste0("k*=", global_k),
+      selected_key,
       "5k ref"
     ),
     stringsAsFactors = FALSE
@@ -3178,7 +4173,7 @@ make_timepoint_figure <- function(
     "c2" = COL$c2,
     stats::setNames(
       COL$selected,
-      paste0("k*=", global_k)
+      selected_key
     ),
     "5k ref" = COL$paper
   )
@@ -3190,12 +4185,13 @@ make_timepoint_figure <- function(
     "c2" = "longdash",
     stats::setNames(
       "dotdash",
-      paste0("k*=", global_k)
+      selected_key
     ),
     "5k ref" = "dotted"
   )
 
   pB <- ggplot()
+
   pB <- add_rank_regions(
     pB,
     c1,
@@ -3241,11 +4237,15 @@ make_timepoint_figure <- function(
     ) +
     scale_color_manual(
       values = b_colors,
-      breaks = names(b_colors)
+      breaks = names(
+        b_colors
+      )
     ) +
     scale_linetype_manual(
       values = b_types,
-      breaks = names(b_types)
+      breaks = names(
+        b_types
+      )
     ) +
     labs(
       title = paste0(
@@ -3253,45 +4253,60 @@ make_timepoint_figure <- function(
         comparison_name,
         " cumulative PC1-NB divergence"
       ),
-      subtitle = "D(r)=F_E(r)-F_P(r); shared c1/c2",
+      subtitle = "Shared c1/c2",
       x = "PC1 rank",
-      y = "Cumulative divergence D(r)"
+      y = "D(r) = F_E(r) - F_P(r)"
     ) +
     theme_manuscript()
 
-  # C. Pair-specific cutoff change-point.
+  # -----------------------------------------------------------------------
+  # C. Pair-specific c1-based cutoff optimization.
+  # -----------------------------------------------------------------------
+
   pC <- make_cutoff_panel(
     scan_df = pair_scan,
-    selected_k = pair_optimum$selected_k,
+    selected_k =
+      pair_optimum$selected_k,
     paper_k = paper_k,
     title_text = paste0(
       "C. ",
       comparison_name,
-      " cutoff change-point"
-    )
+      " top-k optimization"
+    ),
+    extra_k = global_k,
+    extra_label = "Global k*"
   ) +
     labs(
       subtitle = paste0(
-        "Pair change-point=",
+        "Pair k*=",
         pair_optimum$selected_k,
-        "; global k*=",
-        global_k,
-        "; 5k reference"
+        " | global k*=",
+        global_k
       )
-    ) +
-    geom_point(
-      data = pair_scan %>%
-        filter(k == global_k),
-      size = 3.2,
-      shape = 4,
-      stroke = 1.1
     )
 
-  # D. Post-boundary NB scaling.
+  save_panels(
+    list(
+      pA,
+      pB,
+      pC
+    ),
+    out_file,
+    height_in = 11.8
+  )
+}
+
+
+# =============================================================================
+# OPTIONAL SUPPLEMENT: NB MEAN-VARIANCE SCALING
+# =============================================================================
+
+make_nb_scaling_supplement <- function(
+    arm_scaling,
+    selected_k,
+    out_file) {
+
   scaling <- arm_scaling %>%
-    filter(
-      comparison == comparison_name
-    ) %>%
     mutate(
       arm_label = ifelse(
         arm == "control",
@@ -3300,20 +4315,19 @@ make_timepoint_figure <- function(
       )
     ) %>%
     select(
+      comparison,
       arm_label,
       p_remainder,
       p_divergence,
       p_leading_edge,
-      p_selected_k,
-      p_paper_5000
+      p_selected_k
     ) %>%
     pivot_longer(
       cols = c(
         p_remainder,
         p_divergence,
         p_leading_edge,
-        p_selected_k,
-        p_paper_5000
+        p_selected_k
       ),
       names_to = "region",
       values_to = "p"
@@ -3325,20 +4339,21 @@ make_timepoint_figure <- function(
           "p_remainder",
           "p_divergence",
           "p_leading_edge",
-          "p_selected_k",
-          "p_paper_5000"
+          "p_selected_k"
         ),
         labels = c(
           "Remainder",
           "Divergence",
           "Leading edge",
-          paste0("Selected k*=", global_k),
-          "5k reference"
+          paste0(
+            "Selected k*=",
+            selected_k
+          )
         )
       )
     )
 
-  pD <- ggplot(
+  p <- ggplot(
     scaling,
     aes(
       x = p,
@@ -3358,7 +4373,17 @@ make_timepoint_figure <- function(
       linetype = "dotted",
       linewidth = 0.65
     ) +
-    geom_point(size = 3.5) +
+    geom_point(
+      size = 3.1,
+      alpha = 0.88,
+      position = position_dodge(
+        width = 0.20
+      )
+    ) +
+    facet_wrap(
+      ~ comparison,
+      ncol = 2
+    ) +
     scale_color_manual(
       values = c(
         "Control" = COL$control,
@@ -3366,27 +4391,32 @@ make_timepoint_figure <- function(
       )
     ) +
     labs(
-      title = paste0(
-        "D. ",
-        comparison_name,
-        " post-boundary NB scaling"
-      ),
-      subtitle = "Corroboration only: p~1 NB1-like; p~2 NB2-like",
+      title = "Supplement. NB mean-variance scaling",
+      subtitle = "Post-boundary corroboration only",
       x = "Exponent p in E = alpha * mu^p",
       y = NULL
     ) +
-    theme_manuscript()
+    theme_manuscript(
+      base_size = 11
+    ) +
+    theme(
+      strip.text = element_text(
+        face = "bold"
+      )
+    )
 
-  save_panels(
-    list(
-      pA,
-      pB,
-      pC,
-      pD
-    ),
-    out_file,
-    height_in = 15.2
+  grDevices::png(
+    filename = out_file,
+    width = 12,
+    height = 8.5,
+    units = "in",
+    res = PNG_DPI,
+    bg = "white"
   )
+
+  print(p)
+
+  dev.off()
 }
 
 
@@ -3420,16 +4450,26 @@ message(
   )
 )
 
-N <- nrow(count_mat)
+N <- nrow(
+  count_mat
+)
 
-if (PAPER_REFERENCE_K >= N) {
-  stop("PAPER_REFERENCE_K must be smaller than N.")
+if (
+  PAPER_REFERENCE_K >= N
+) {
+  stop(
+    "PAPER_REFERENCE_K must be smaller than N."
+  )
 }
 
 PAPER_REFERENCE_RANK <- rank_cutoff_from_k(
   N,
   PAPER_REFERENCE_K
 )
+
+# -------------------------------------------------------------------------
+# Global DESeq2 normalization and pooled within-group empirical variance.
+# -------------------------------------------------------------------------
 
 deseq <- normalize_deseq2_global(
   count_mat = count_mat,
@@ -3439,8 +4479,10 @@ deseq <- normalize_deseq2_global(
 normalized_counts <- deseq$normalized_counts
 
 pooled <- compute_pooled_within_group_variance(
-  normalized_counts = normalized_counts,
-  group_labels = group_labels
+  normalized_counts =
+    normalized_counts,
+  group_labels =
+    group_labels
 )
 
 message(
@@ -3448,31 +4490,78 @@ message(
   pooled$residual_df
 )
 
+# -------------------------------------------------------------------------
+# Arm-specific PC1 ranking, raw variance geometry, and cumulative divergence.
+# -------------------------------------------------------------------------
+
 group_results <- vector(
   "list",
-  length(levels(group_labels))
+  length(
+    levels(
+      group_labels
+    )
+  )
 )
 
-names(group_results) <- levels(group_labels)
+names(
+  group_results
+) <- levels(
+  group_labels
+)
 
-for (g in levels(group_labels)) {
-  idx <- which(group_labels == g)
+for (g in levels(
+  group_labels
+)) {
+  idx <- which(
+    group_labels ==
+    g
+  )
 
-  if (length(idx) < 2L) {
-    stop("Not enough samples in group ", g)
+  if (
+    length(idx) < 2L
+  ) {
+    stop(
+      "Not enough samples in group ",
+      g
+    )
   }
 
-  message("Analyzing ", g, "...")
-
-  group_results[[g]] <- compute_group_analysis(
-    group_name = g,
-    raw_counts_arm = count_mat[, idx, drop = FALSE],
-    normalized_counts_arm = normalized_counts[, idx, drop = FALSE],
-    pooled_variance = pooled$variance
+  message(
+    "Analyzing ",
+    g,
+    "..."
   )
+
+  group_results[[g]] <-
+    compute_group_analysis(
+      group_name = g,
+
+      raw_counts_arm =
+        count_mat[
+          ,
+          idx,
+          drop = FALSE
+        ],
+
+      normalized_counts_arm =
+        normalized_counts[
+          ,
+          idx,
+          drop = FALSE
+        ],
+
+      pooled_variance =
+        pooled$variance
+    )
 }
 
-message("Fitting shared two-knot cumulative-divergence model...")
+# -------------------------------------------------------------------------
+# Shared c1/c2 cumulative-divergence model.
+# -------------------------------------------------------------------------
+
+message(
+  "Fitting shared two-knot cumulative-divergence model..."
+)
 
 knot_fit <- fit_shared_knots(
   group_results
@@ -3480,51 +4569,88 @@ knot_fit <- fit_shared_knots(
 
 C1 <- knot_fit$c1
 C2 <- knot_fit$c2
-MAX_CANDIDATE_K <- as.integer(N - C2)
 
-message("Shared c1 = ", C1)
-message("Shared c2 = ", C2)
+MAX_CANDIDATE_K <- as.integer(
+  N - C2
+)
+
 message(
-  "Maximum candidate k constrained by own-arm leading edge = ",
+  "Shared c1 = ",
+  C1
+)
+
+message(
+  "Shared c2 = ",
+  C2
+)
+
+message(
+  "Own-arm leading-edge candidate limit: k <= ",
   MAX_CANDIDATE_K
 )
 
-if (PAPER_REFERENCE_K > MAX_CANDIDATE_K) {
+if (
+  PAPER_REFERENCE_K >
+  MAX_CANDIDATE_K
+) {
   warning(
-    "Historical top-5,000 reference extends left of c2 and is outside the ",
-    "candidate optimization domain. It will remain reference-only."
+    "The historical top-5,000 reference extends left of c2 and therefore ",
+    "falls outside the own-arm leading-edge candidate domain. It remains ",
+    "reference-only."
   )
 }
+
+# -------------------------------------------------------------------------
+# Anchor / Terminal: first two raw-count variance-curvature crossings after c2.
+# -------------------------------------------------------------------------
 
 message(
   "Selecting Anchor/Terminal from first two raw-variance y''=0 crossings after c2..."
 )
 
-for (g in names(group_results)) {
+for (g in names(
+  group_results
+)) {
   at <- select_anchor_terminal_after_c2(
     crossings =
-      group_results[[g]]$raw_variance_crossings,
+      group_results[[
+        g
+      ]]$raw_variance_crossings,
+
     c2 = C2,
+
     total_n = N
   )
 
-  group_results[[g]]$anchor <- at$anchor
-  group_results[[g]]$terminal <- at$terminal
+  group_results[[g]]$anchor <-
+    at$anchor
+
+  group_results[[g]]$terminal <-
+    at$terminal
 }
 
 # -------------------------------------------------------------------------
-# Exhaustive pairwise cutoff scans and Pareto change-point fits.
+# Pairwise top-k scans.
+#
+# IMPORTANT:
+# - selection originates only from r > c2;
+# - opposite-arm divergence c1..c2 is permissible;
+# - only opposite-arm remainder r < c1 is penalized.
 # -------------------------------------------------------------------------
 
 message(
-  "Scanning all candidate k values for joint/disjoint benefit and c2 crossings..."
+  "Scanning candidate k values using c1 as the opposite-arm contamination boundary..."
 )
 
 pair_scans <- list()
 pair_optima <- list()
 
-for (comparison_name in names(COMPARISONS)) {
-  mapping <- COMPARISONS[[comparison_name]]
+for (comparison_name in names(
+  COMPARISONS
+)) {
+  mapping <- COMPARISONS[[
+    comparison_name
+  ]]
 
   control_group <- unname(
     mapping[["control"]]
@@ -3534,52 +4660,79 @@ for (comparison_name in names(COMPARISONS)) {
     mapping[["treatment"]]
   )
 
-  scan <- scan_pair_cutoffs(
+  raw_scan <- scan_pair_cutoffs(
     control_df =
-      group_results[[control_group]]$data,
+      group_results[[
+        control_group
+      ]]$data,
+
     treatment_df =
-      group_results[[treatment_group]]$data,
+      group_results[[
+        treatment_group
+      ]]$data,
+
     c1 = C1,
     c2 = C2,
-    comparison_name = comparison_name,
-    control_group = control_group,
-    treatment_group = treatment_group
+
+    comparison_name =
+      comparison_name,
+
+    control_group =
+      control_group,
+
+    treatment_group =
+      treatment_group
   )
 
   opt <- select_pareto_changepoint(
-    scan,
+    raw_scan,
     good_col = "good_n",
-    cost_col = "cross_n"
+    cost_col = "remainder_cross_n"
   )
 
-  pair_scans[[comparison_name]] <- opt$scan
-  pair_optima[[comparison_name]] <- opt
+  pair_scans[[
+    comparison_name
+  ]] <- opt$scan
+
+  pair_optima[[
+    comparison_name
+  ]] <- opt
+
+  selected_row <- opt$scan %>%
+    filter(
+      k ==
+      opt$selected_k
+    ) %>%
+    slice(1L)
 
   message(
     comparison_name,
-    ": pair change-point k*=",
+    ": k*=",
     opt$selected_k,
-    "; good=",
-    opt$selected_good,
-    "; crossings=",
-    opt$selected_cost,
-    "; slope before=",
-    signif(opt$slope_before, 4),
-    "; slope after=",
-    signif(opt$slope_after, 4),
+    "; method=",
+    opt$selection_method,
+    "; retained=",
+    selected_row$good_n[1L],
+    "; divergence-disjoint=",
+    selected_row$disjoint_opposite_divergence_n[1L],
+    "; remainder crossings=",
+    selected_row$remainder_cross_n[1L],
     "; Delta_BIC=",
-    signif(opt$delta_BIC, 5),
-    "; max zero-crossing k=",
     ifelse(
-      is.na(opt$max_zero_crossing_k),
-      "none",
-      opt$max_zero_crossing_k
+      is.finite(
+        opt$delta_BIC
+      ),
+      signif(
+        opt$delta_BIC,
+        5
+      ),
+      "NA"
     )
   )
 }
 
 # -------------------------------------------------------------------------
-# Global common cutoff: pooled Pareto change-point across all four comparisons.
+# Global common cutoff from pooled pairwise counts.
 # -------------------------------------------------------------------------
 
 global_scan_raw <- aggregate_global_cutoff_scan(
@@ -3589,34 +4742,42 @@ global_scan_raw <- aggregate_global_cutoff_scan(
 global_opt <- select_pareto_changepoint(
   global_scan_raw,
   good_col = "good_n",
-  cost_col = "cross_n"
+  cost_col = "remainder_cross_n"
 )
 
+global_scan <- global_opt$scan
+
 GLOBAL_K <- global_opt$selected_k
+
 GLOBAL_CUTOFF_RANK <- rank_cutoff_from_k(
   N,
   GLOBAL_K
 )
 
+global_selected_row <- global_scan %>%
+  filter(
+    k ==
+    GLOBAL_K
+  ) %>%
+  slice(1L)
+
 message(
-  "GLOBAL change-point k*=",
+  "GLOBAL k*=",
   GLOBAL_K,
   " (cutoff rank ",
   GLOBAL_CUTOFF_RANK,
-  "; crossing breakpoint ",
-  global_opt$breakpoint_cross_n,
   ")"
 )
 
 message(
-  "Global gain-per-crossing slope: ",
-  signif(global_opt$slope_before, 5),
-  " before -> ",
-  signif(global_opt$slope_after, 5),
-  " after; Delta_BIC=",
-  signif(global_opt$delta_BIC, 6),
-  "; segmented BIC supported=",
-  global_opt$bic_supports_segmented
+  "Global method=",
+  global_opt$selection_method,
+  "; retained=",
+  global_selected_row$good_n[1L],
+  "; divergence-disjoint=",
+  global_selected_row$disjoint_opposite_divergence_n[1L],
+  "; remainder crossings=",
+  global_selected_row$remainder_cross_n[1L]
 )
 
 message(
@@ -3624,21 +4785,87 @@ message(
   PAPER_REFERENCE_K,
   " (cutoff rank ",
   PAPER_REFERENCE_RANK,
-  ")"
+  "; reference only)"
 )
 
 # -------------------------------------------------------------------------
-# Classify actual sites at the global selected k and historical 5k reference.
-# Only Joint + eligible disjoint sites are retained downstream.
+# Classify actual sites at GLOBAL_K.
+#
+# Retained:
+#   Joint
+#   + Disjoint / opposite Leading Edge
+#   + Disjoint / opposite Divergence
+#
+# Excluded:
+#   Disjoint / opposite Remainder
 # -------------------------------------------------------------------------
 
 selected_rows <- list()
 excluded_rows <- list()
+
 selected_summaries <- list()
 paper_summaries <- list()
 
-for (comparison_name in names(COMPARISONS)) {
-  mapping <- COMPARISONS[[comparison_name]]
+make_na_summary <- function(
+    k,
+    cutoff_rank) {
+
+  data.frame(
+    k = k,
+    cutoff_rank = cutoff_rank,
+
+    joint_n = NA_integer_,
+
+    disjoint_control_opposite_le_n =
+      NA_integer_,
+
+    disjoint_treatment_opposite_le_n =
+      NA_integer_,
+
+    disjoint_opposite_le_n =
+      NA_integer_,
+
+    disjoint_control_opposite_divergence_n =
+      NA_integer_,
+
+    disjoint_treatment_opposite_divergence_n =
+      NA_integer_,
+
+    disjoint_opposite_divergence_n =
+      NA_integer_,
+
+    permissible_disjoint_control_n =
+      NA_integer_,
+
+    permissible_disjoint_treatment_n =
+      NA_integer_,
+
+    permissible_disjoint_n =
+      NA_integer_,
+
+    good_n = NA_integer_,
+
+    remainder_cross_n =
+      NA_integer_,
+
+    union_n = NA_integer_,
+
+    retained_fraction =
+      NA_real_,
+
+    remainder_cross_fraction =
+      NA_real_,
+
+    stringsAsFactors = FALSE
+  )
+}
+
+for (comparison_name in names(
+  COMPARISONS
+)) {
+  mapping <- COMPARISONS[[
+    comparison_name
+  ]]
 
   control_group <- unname(
     mapping[["control"]]
@@ -3650,64 +4877,91 @@ for (comparison_name in names(COMPARISONS)) {
 
   selected_all <- classify_pair_at_k(
     control_df =
-      group_results[[control_group]]$data,
+      group_results[[
+        control_group
+      ]]$data,
+
     treatment_df =
-      group_results[[treatment_group]]$data,
+      group_results[[
+        treatment_group
+      ]]$data,
+
     k = GLOBAL_K,
+
     c1 = C1,
     c2 = C2,
-    comparison_name = comparison_name,
-    control_group = control_group,
-    treatment_group = treatment_group
+
+    comparison_name =
+      comparison_name,
+
+    control_group =
+      control_group,
+
+    treatment_group =
+      treatment_group
   )
 
-  selected_summaries[[comparison_name]] <-
-    summarize_classification(
-      selected_all
+  selected_summaries[[
+    comparison_name
+  ]] <- summarize_classification(
+    selected_all
+  )
+
+  selected_rows[[
+    comparison_name
+  ]] <- selected_all %>%
+    filter(
+      retained_for_analysis
     )
 
-  selected_rows[[comparison_name]] <-
-    selected_all %>%
-    filter(eligible_leading_edge)
+  excluded_rows[[
+    comparison_name
+  ]] <- selected_all %>%
+    filter(
+      cross_into_remainder
+    )
 
-  excluded_rows[[comparison_name]] <-
-    selected_all %>%
-    filter(!eligible_leading_edge)
-
-  if (PAPER_REFERENCE_K <= MAX_CANDIDATE_K) {
+  if (
+    PAPER_REFERENCE_K <=
+    MAX_CANDIDATE_K
+  ) {
     paper_all <- classify_pair_at_k(
       control_df =
-        group_results[[control_group]]$data,
+        group_results[[
+          control_group
+        ]]$data,
+
       treatment_df =
-        group_results[[treatment_group]]$data,
+        group_results[[
+          treatment_group
+        ]]$data,
+
       k = PAPER_REFERENCE_K,
+
       c1 = C1,
       c2 = C2,
-      comparison_name = comparison_name,
-      control_group = control_group,
-      treatment_group = treatment_group
+
+      comparison_name =
+        comparison_name,
+
+      control_group =
+        control_group,
+
+      treatment_group =
+        treatment_group
     )
 
-    paper_summaries[[comparison_name]] <-
-      summarize_classification(
-        paper_all
-      )
+    paper_summaries[[
+      comparison_name
+    ]] <- summarize_classification(
+      paper_all
+    )
   } else {
-    paper_summaries[[comparison_name]] <- data.frame(
-      k = PAPER_REFERENCE_K,
-      cutoff_rank = PAPER_REFERENCE_RANK,
-      joint_n = NA_integer_,
-      eligible_disjoint_control_n = NA_integer_,
-      eligible_disjoint_treatment_n = NA_integer_,
-      eligible_disjoint_n = NA_integer_,
-      good_n = NA_integer_,
-      cross_divergence_n = NA_integer_,
-      cross_remainder_n = NA_integer_,
-      cross_n = NA_integer_,
-      union_n = NA_integer_,
-      good_fraction = NA_real_,
-      crossing_fraction = NA_real_,
-      stringsAsFactors = FALSE
+    paper_summaries[[
+      comparison_name
+    ]] <- make_na_summary(
+      PAPER_REFERENCE_K,
+      PAPER_REFERENCE_RANK
     )
   }
 }
@@ -3733,50 +4987,100 @@ write.csv(
   excluded_sites,
   file.path(
     OUT_ROOT,
-    "Excluded_Crossing_Sites.csv"
+    "Excluded_Remainder_Crossing_Sites.csv"
   ),
   row.names = FALSE
 )
 
 # -------------------------------------------------------------------------
-# Post-boundary NB scaling.
+# Supplemental NB scaling.
+# This remains entirely post-boundary and cannot alter c1, c2, or k*.
 # -------------------------------------------------------------------------
 
 arm_scaling <- build_arm_scaling_table(
-  group_results = group_results,
-  comparisons = COMPARISONS,
+  group_results =
+    group_results,
+
+  comparisons =
+    COMPARISONS,
+
   c1 = C1,
   c2 = C2,
-  selected_k = GLOBAL_K,
-  paper_k = PAPER_REFERENCE_K
+
+  selected_k =
+    GLOBAL_K,
+
+  paper_k =
+    PAPER_REFERENCE_K
+)
+
+write.csv(
+  arm_scaling,
+  file.path(
+    OUT_ROOT,
+    "Table_NB_Scaling.csv"
+  ),
+  row.names = FALSE
 )
 
 # -------------------------------------------------------------------------
-# Result tables.
+# Tables.
 # -------------------------------------------------------------------------
 
 timepoint_table <- build_timepoint_table(
-  group_results = group_results,
-  comparisons = COMPARISONS,
-  pair_optima = pair_optima,
-  selected_summaries = selected_summaries,
-  paper_summaries = paper_summaries,
-  global_k = GLOBAL_K,
+  group_results =
+    group_results,
+
+  comparisons =
+    COMPARISONS,
+
+  pair_optima =
+    pair_optima,
+
+  selected_summaries =
+    selected_summaries,
+
+  paper_summaries =
+    paper_summaries,
+
+  global_k =
+    GLOBAL_K,
+
+  global_opt =
+    global_opt,
+
   c1 = C1,
   c2 = C2,
-  paper_k = PAPER_REFERENCE_K,
+
+  paper_k =
+    PAPER_REFERENCE_K,
+
   N = N
 )
 
 key_table <- build_key_table(
-  timepoint_table = timepoint_table,
-  arm_scaling = arm_scaling,
-  global_opt = global_opt,
+  timepoint_table =
+    timepoint_table,
+
+  arm_scaling =
+    arm_scaling,
+
+  global_opt =
+    global_opt,
+
+  global_scan =
+    global_scan,
+
   N = N,
+
   c1 = C1,
   c2 = C2,
-  paper_k = PAPER_REFERENCE_K,
-  shared_sse = knot_fit$SSE
+
+  paper_k =
+    PAPER_REFERENCE_K,
+
+  shared_sse =
+    knot_fit$SSE
 )
 
 write.csv(
@@ -3797,10 +5101,11 @@ write.csv(
   row.names = FALSE
 )
 
-# Full pairwise + global cutoff optimization scan.
 cutoff_table <- bind_rows(
-  bind_rows(pair_scans),
-  global_opt$scan
+  bind_rows(
+    pair_scans
+  ),
+  global_scan
 ) %>%
   arrange(
     comparison,
@@ -3821,8 +5126,11 @@ write.csv(
 # -------------------------------------------------------------------------
 
 overall_df <- build_overall_figure_data(
-  group_results = group_results,
-  knot_fit = knot_fit
+  group_results =
+    group_results,
+
+  knot_fit =
+    knot_fit
 )
 
 figure_paths <- character(0)
@@ -3833,15 +5141,29 @@ overall_path <- file.path(
 )
 
 make_overall_figure(
-  overall_df = overall_df,
-  key_table = key_table,
-  arm_scaling = arm_scaling,
-  global_scan = global_opt$scan,
+  overall_df =
+    overall_df,
+
+  global_scan =
+    global_scan,
+
+  global_opt =
+    global_opt,
+
+  key_table =
+    key_table,
+
   c1 = C1,
   c2 = C2,
-  selected_k = GLOBAL_K,
-  paper_k = PAPER_REFERENCE_K,
-  out_file = overall_path
+
+  selected_k =
+    GLOBAL_K,
+
+  paper_k =
+    PAPER_REFERENCE_K,
+
+  out_file =
+    overall_path
 )
 
 figure_paths <- c(
@@ -3849,7 +5171,9 @@ figure_paths <- c(
   overall_path
 )
 
-for (comparison_name in names(COMPARISONS)) {
+for (comparison_name in names(
+  COMPARISONS
+)) {
   fig_path <- file.path(
     FIG_DIR,
     paste0(
@@ -3860,17 +5184,38 @@ for (comparison_name in names(COMPARISONS)) {
   )
 
   make_timepoint_figure(
-    comparison_name = comparison_name,
-    mapping = COMPARISONS[[comparison_name]],
-    group_results = group_results,
-    arm_scaling = arm_scaling,
-    pair_scan = pair_scans[[comparison_name]],
-    pair_optimum = pair_optima[[comparison_name]],
-    global_k = GLOBAL_K,
+    comparison_name =
+      comparison_name,
+
+    mapping =
+      COMPARISONS[[
+        comparison_name
+      ]],
+
+    group_results =
+      group_results,
+
+    pair_scan =
+      pair_scans[[
+        comparison_name
+      ]],
+
+    pair_optimum =
+      pair_optima[[
+        comparison_name
+      ]],
+
+    global_k =
+      GLOBAL_K,
+
     c1 = C1,
     c2 = C2,
-    paper_k = PAPER_REFERENCE_K,
-    out_file = fig_path
+
+    paper_k =
+      PAPER_REFERENCE_K,
+
+    out_file =
+      fig_path
   )
 
   figure_paths <- c(
@@ -3879,8 +5224,35 @@ for (comparison_name in names(COMPARISONS)) {
   )
 }
 
+if (
+  isTRUE(
+    INCLUDE_NB_SCALING_SUPPLEMENT
+  )
+) {
+  nb_supp_path <- file.path(
+    FIG_DIR,
+    "Figure_Supplement_NB_Scaling.png"
+  )
+
+  make_nb_scaling_supplement(
+    arm_scaling =
+      arm_scaling,
+
+    selected_k =
+      GLOBAL_K,
+
+    out_file =
+      nb_supp_path
+  )
+
+  figure_paths <- c(
+    figure_paths,
+    nb_supp_path
+  )
+}
+
 # -------------------------------------------------------------------------
-# Zip figures while keeping all PNG files individually.
+# Zip figures while retaining individual PNGs.
 # -------------------------------------------------------------------------
 
 ZIP_PATH <- file.path(
@@ -3888,8 +5260,14 @@ ZIP_PATH <- file.path(
   "Figures_All.zip"
 )
 
-if (file.exists(ZIP_PATH)) {
-  unlink(ZIP_PATH)
+if (
+  file.exists(
+    ZIP_PATH
+  )
+) {
+  unlink(
+    ZIP_PATH
+  )
 }
 
 old_wd <- getwd()
@@ -3897,44 +5275,101 @@ zip_ok <- FALSE
 
 tryCatch(
   {
-    setwd(FIG_DIR)
-
-    utils::zip(
-      zipfile = ZIP_PATH,
-      files = basename(figure_paths)
+    setwd(
+      FIG_DIR
     )
 
-    zip_ok <- file.exists(ZIP_PATH)
+    utils::zip(
+      zipfile =
+        ZIP_PATH,
+
+      files =
+        basename(
+          figure_paths
+        )
+    )
+
+    zip_ok <- file.exists(
+      ZIP_PATH
+    )
   },
   finally = {
-    setwd(old_wd)
+    setwd(
+      old_wd
+    )
   }
 )
 
-if (!zip_ok) {
+if (
+  !zip_ok
+) {
   warning(
     "Figure PNGs were created, but Figures_All.zip was not created."
   )
 }
 
-
 # =============================================================================
 # CONSOLE SUMMARY
 # =============================================================================
 
-message("============================================================")
-message("FINAL PC1-NB / CHANGEPOINT CUTOFF ANALYSIS COMPLETE")
-message("Shared c1 = ", C1)
-message("Shared c2 = ", C2)
-message("c2-defined leading-edge size per arm = ", N - C2)
+message(
+  "============================================================"
+)
 
 message(
-  "Pairwise change-points: ",
+  "FINAL c1-CONSTRAINED PC1-NB CUTOFF ANALYSIS COMPLETE"
+)
+
+message(
+  "Shared c1 = ",
+  C1,
+  " | shared c2 = ",
+  C2
+)
+
+message(
+  "Remainder: rank < ",
+  C1,
+  " | Divergence: ",
+  C1,
+  "-",
+  C2,
+  " | Leading edge: rank > ",
+  C2
+)
+
+message(
+  "Candidate k domain: 1-",
+  MAX_CANDIDATE_K
+)
+
+message(
+  "Global k* = ",
+  GLOBAL_K,
+  " | method = ",
+  global_opt$selection_method
+)
+
+message(
+  "At global k*: retained=",
+  global_selected_row$good_n[1L],
+  " | divergence-disjoint=",
+  global_selected_row$disjoint_opposite_divergence_n[1L],
+  " | remainder crossings=",
+  global_selected_row$remainder_cross_n[1L]
+)
+
+message(
+  "Pair-specific k*: ",
   paste(
-    names(pair_optima),
+    names(
+      pair_optima
+    ),
     vapply(
       pair_optima,
-      function(z) z$selected_k,
+      function(z) {
+        z$selected_k
+      },
       integer(1)
     ),
     sep = "=",
@@ -3943,83 +5378,27 @@ message(
 )
 
 message(
-  "GLOBAL change-point k* = ",
-  GLOBAL_K,
-  " (rank >= ",
-  GLOBAL_CUTOFF_RANK,
-  ")"
+  "Historical 5k reference used in fitting: FALSE"
 )
 
 message(
-  "Change-point slopes (good sites per outside site): ",
-  signif(global_opt$slope_before, 5),
-  " before -> ",
-  signif(global_opt$slope_after, 5),
-  " after; Delta_BIC=",
-  signif(global_opt$delta_BIC, 6)
+  "Primary figures: ",
+  FIG_DIR
 )
-
-global_selected_row <- global_opt$scan %>%
-  filter(k == GLOBAL_K) %>%
-  slice(1L)
 
 message(
-  "At global k*: good joint/disjoint = ",
-  global_selected_row$good_n,
-  "; outside leading edge = ",
-  global_selected_row$cross_n,
-  " (divergence=",
-  global_selected_row$cross_divergence_n,
-  ", remainder=",
-  global_selected_row$cross_remainder_n,
-  ")"
+  "Selected sites: Selected_LeadingEdge_Sites.csv"
 )
-
-if (PAPER_REFERENCE_K <= MAX_CANDIDATE_K) {
-  paper_global_row <- global_opt$scan %>%
-    filter(k == PAPER_REFERENCE_K) %>%
-    slice(1L)
-
-  message(
-    "Historical 5,000 reference: good = ",
-    paper_global_row$good_n,
-    "; outside leading edge = ",
-    paper_global_row$cross_n,
-    "; good fraction = ",
-    signif(
-      paper_global_row$good_fraction,
-      4
-    )
-  )
-} else {
-  message(
-    "Historical 5,000 reference lies outside c2-constrained optimization domain."
-  )
-}
 
 message(
-  "Anchor-Terminal ranges: ",
-  paste(
-    names(group_results),
-    vapply(
-      group_results,
-      function(z) {
-        paste0(
-          z$anchor,
-          "-",
-          z$terminal
-        )
-      },
-      character(1)
-    ),
-    sep = "=",
-    collapse = "; "
-  )
+  "Excluded sites: Excluded_Remainder_Crossing_Sites.csv"
 )
 
-message("Figures: ", FIG_DIR)
-message("Figure zip: ", ZIP_PATH)
-message("Selected sites: Selected_LeadingEdge_Sites.csv")
-message("Excluded crossings: Excluded_Crossing_Sites.csv")
-message("Tables: Table_Key_Results.csv; Table_Timepoints.csv; Table_Cutoff_Optimization.csv")
-message("============================================================")
+message(
+  "Tables: Table_Key_Results.csv; Table_Timepoints.csv; ",
+  "Table_Cutoff_Optimization.csv; Table_NB_Scaling.csv"
+)
+
+message(
+  "============================================================"
+)
