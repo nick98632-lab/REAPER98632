@@ -3,7 +3,6 @@
 suppressPackageStartupMessages({
   library(ggplot2)
   library(dplyr)
-  library(tidyr)
   library(grid)
 })
 
@@ -11,50 +10,35 @@ options(stringsAsFactors = FALSE)
 
 # =============================================================================
 # FINAL MANUSCRIPT ANALYSIS
-# PC1-NB REGIME GEOMETRY + c1-CONSTRAINED EIGENVECTOR SPLITTING
+# PC1-NB REGIME GEOMETRY + WEIGHTED PARETO EIGENVECTOR SPLITTING
 # =============================================================================
 #
-# PURPOSE
-# -------
-# This script performs three primary analyses:
-#
-#   A. Raw-count variance geometry along independently ranked PC1 axes.
-#   B. Cumulative PC1-versus-NB excess-variance mass divergence to estimate
-#      shared transition knots c1 and c2.
-#   C. Data-driven top-k optimization for the control/treatment eigenvector
-#      split, using c2 as the own-arm selection boundary and c1 as the
-#      opposite-arm hard contamination boundary.
-#
-# The historical top-5,000 value is NEVER used to estimate c1, c2, Anchor,
-# Terminal, the cutoff change-point, or any other fitted quantity. It is shown
-# only as a prespecified reference.
-#
+# PRIMARY ANALYSES
+# ----------------
+# 1. Raw-count variance geometry along the independently ranked PC1 axis.
+# 2. Cumulative PC1-NB variance-mass divergence with shared c1/c2.
+# 3. Weighted Pareto optimization of the top-k eigenvector split.
 #
 # RANKING
 # -------
-# Each experimental arm is ranked independently by ASCENDING absolute PC1
-# loading:
+# Each arm is ranked independently by ASCENDING absolute PC1 loading:
 #
-#     rank_order <- order(abs_loading, decreasing = FALSE)
+#     rank_order = order(|v_i1|, decreasing = FALSE)
 #
-# Therefore larger rank = stronger absolute PC1 loading.
-#
+# Thus larger rank = stronger absolute PC1 loading.
 #
 # RAW-COUNT VARIANCE GEOMETRY
 # ---------------------------
 # For arm g:
 #
-#     s_raw,g^2(r) = Var(raw counts at rank r within arm g)
-#     y_g(r)       = log(1 + s_raw,g^2(r))
+#     s_raw,g^2(r) = empirical sample variance of raw counts at rank r
+#     y_g(r)       = log[1 + s_raw,g^2(r)]
 #
-# A smoothing spline (spar=0.60) is fit to y_g(r). ONE second derivative
-# y_g''(r) is calculated.
-#
-# After c2:
+# A smoothing spline with spar=0.60 is fit to y_g(r). ONE second derivative
+# y_g''(r) is calculated. After c2:
 #
 #     Anchor   = first sign-change zero crossing of y_g''(r)
 #     Terminal = second successive sign-change zero crossing of y_g''(r)
-#
 #
 # CUMULATIVE PC1-NB VARIANCE-MASS DIVERGENCE
 # ------------------------------------------
@@ -64,141 +48,104 @@ options(stringsAsFactors = FALSE)
 #
 # Pooled within-group empirical variance of DESeq2-normalized counts:
 #
-#                  sum_g sum_{j in g}(y_ij - ybar_ig)^2
-#     V_pool,i =   ------------------------------------
-#                           sum_g(n_g - 1)
+#                      sum_g sum_{j in g}(y_ij-ybar_ig)^2
+#     V_pool,i =       -----------------------------------
+#                               sum_g(n_g-1)
 #
-# Arm-specific mean and excess-over-Poisson variance:
+# For arm g:
 #
-#     mu_ig = mean normalized count in arm g
+#     mu_ig = mean normalized count
 #     E_ig  = max(V_pool,i - mu_ig, 0)
 #
-# Rank-wise masses:
+# Rank-wise masses and cumulative divergence:
 #
-#     p_g(r) = P_g(r) / sum P_g
-#     q_g(r) = E_g(r) / sum E_g
-#
-# Cumulative divergence:
+#     p_g(r) = P_g(r)/sum(P_g)
+#     q_g(r) = E_g(r)/sum(E_g)
 #
 #     F_P,g(r) = cumsum[p_g(r)]
 #     F_E,g(r) = cumsum[q_g(r)]
-#     D_g(r)   = F_E,g(r) - F_P,g(r)
 #
-# A shared two-knot continuous linear-spline model across all eight arms
-# estimates c1 and c2:
+#     D_g(r) = F_E,g(r) - F_P,g(r)
 #
-#     r < c1          : Remainder
-#     c1 <= r <= c2   : Divergence interval
-#     r > c2          : Leading-edge regime
+# A shared two-knot continuous linear spline across all eight arms defines:
 #
+#     rank < c1          Remainder
+#     c1 <= rank <= c2   Divergence interval
+#     rank > c2          Leading-edge regime
 #
 # TOP-k EIGENVECTOR SPLITTING
 # ---------------------------
 # For each control/treatment pair and candidate top-k depth:
 #
-#     S_C(k) = control top-k
-#     S_T(k) = treatment top-k
+#     S_C(k) = top-k control features
+#     S_T(k) = top-k treatment features
 #
-#     Joint              = S_C(k) intersection S_T(k)
-#     Disjoint control   = S_C(k) \ S_T(k)
-#     Disjoint treatment = S_T(k) \ S_C(k)
+#     Joint        = S_C(k) intersection S_T(k)
+#     Disjoint C   = S_C(k) \ S_T(k)
+#     Disjoint T   = S_T(k) \ S_C(k)
 #
 # Candidate k is restricted to:
 #
-#     k <= N - c2
+#     1 <= k <= N-c2
 #
-# so every selected site originates from the c2-defined leading-edge regime
-# of the arm that selected it.
+# so every selected feature originates inside the c2-defined leading-edge
+# regime of the arm that nominates it.
 #
-# For a DISJOINT site, the opposite-arm rank is then classified as:
+# For a DISJOINT feature, the opposite-arm rank is classified as:
 #
 #     r_opposite > c2
-#         opposite-arm Leading Edge        -> retained
+#         opposite-arm Leading Edge         -> permissible
 #
 #     c1 <= r_opposite <= c2
-#         opposite-arm Divergence interval -> retained / permissible
+#         opposite-arm Divergence interval  -> permissible
 #
 #     r_opposite < c1
-#         opposite-arm Remainder           -> hard cross-regime contamination
+#         opposite-arm Remainder            -> contamination
 #
-# Thus crossing c2 in the opposite arm is NOT automatically penalized.
-# Only crossing c1 into the opposite-arm remainder is treated as contamination.
+# Therefore crossing c2 in the opposite arm is allowed. Only crossing c1 into
+# the opposite-arm Remainder is penalized.
 #
-# For each candidate k:
+# For each k:
 #
-#     G(k) =
-#         Joint
-#         + Disjoint with opposite-arm Leading Edge
-#         + Disjoint with opposite-arm Divergence
+#     G(k) = Joint + permissible Disjoint
 #
-#     R(k) =
-#         Disjoint sites with opposite-arm rank < c1
+#     R(k) = Disjoint sites whose opposite-arm rank is < c1
 #
-# The cutoff problem is:
+# WEIGHTED PARETO OPTIMUM
+# -----------------------
+# Non-dominated [R(k), G(k)] points define the Pareto frontier. Benefit and
+# contamination are normalized to [0,1] ON THE PARETO FRONTIER:
 #
-#     maximize G(k)
-#     minimize R(k)
+#     G_norm(k) = [G(k)-G_min]/[G_max-G_min]
+#     R_norm(k) = [R(k)-R_min]/[R_max-R_min]
 #
-# subject to k <= N-c2.
+# The weighted utility is:
 #
-# The number of disjoint sites landing in the opposite-arm Divergence interval
-# is exported as a separate diagnostic and is NOT treated as contamination.
+#     U(k) = w_G * G_norm(k) - w_R * R_norm(k)
 #
+# with default manuscript weights:
 #
-# DATA-DRIVEN CUTOFF CHANGE-POINT
-# -------------------------------
-# Non-dominated points in [R(k), G(k)] define the Pareto frontier.
+#     w_G = 1
+#     w_R = 1
 #
-# On that frontier the script fits:
+# The selected cutoff is:
 #
-#     G(R) = beta0 + beta1*R + gamma*(R - tau)+
+#     k* = argmax U(k)
 #
-# with:
+# among Pareto-optimal cutoffs. Ties are resolved by greater retained-site
+# count, then lower contamination, then larger k.
 #
-#     slope_before = beta1
-#     slope_after  = beta1 + gamma
-#
-# The preferred breakpoint has:
-#
-#     slope_after < slope_before
-#
-# and is selected by minimum BIC among shape-valid segmented models.
-#
-# A single linear G-versus-R model is also fit. Positive:
-#
-#     Delta_BIC = BIC_linear - BIC_segmented
-#
-# supports the segmented change-point description.
-#
-# If the segmented breakpoint is not supportable, the code uses a conservative
-# fallback rather than inventing a gain/contamination weight:
-#
-#     largest k with zero opposite-arm remainder crossings, if available.
-#
-# The four pair-specific scans are also pooled:
+# The four comparison-specific scans are also pooled:
 #
 #     G_total(k) = sum_m G_m(k)
 #     R_total(k) = sum_m R_m(k)
 #
-# to obtain one common manuscript cutoff.
+# and the same weighted Pareto rule gives one GLOBAL manuscript k*.
 #
-#
-# POST-BOUNDARY NB MEAN-VARIANCE SCALING
-# --------------------------------------
-# This is NOT part of boundary or cutoff selection.
-#
-# After all boundaries are fixed, the script optionally estimates:
-#
-#     E = alpha * mu^p
-#
-# using lm(log(E) ~ log(mu)) for positive mu,E.
-#
-# Its only purpose is orthogonal corroboration: it asks whether the empirical
-# count mean-variance relationship changes across the Remainder, Divergence,
-# and Leading-edge regimes. Because it does not determine c1, c2, or k*, it is
-# removed from the main figure family and written only as a supplemental
-# diagnostic figure/table by default.
-#
+# HISTORICAL TOP-5,000 CUTOFF
+# ---------------------------
+# The historical 5,000 cutoff is reference-only. It does NOT influence c1,
+# c2, Anchor, Terminal, the Pareto frontier, normalization, utility, or k*.
 #
 # PRIMARY FIGURES
 # ---------------
@@ -208,18 +155,13 @@ options(stringsAsFactors = FALSE)
 #   Figure_RT4_ZT10.png
 #   Figure_RT8_ZT14.png
 #
-# Each primary figure contains ONLY:
+# Each figure contains ONLY:
 #   A. Raw-count variance geometry
 #   B. Cumulative PC1-NB variance-mass divergence
-#   C. c1-based top-k cutoff optimization
+#   C. Weighted Pareto top-k optimization
 #
-# OPTIONAL SUPPLEMENT
-# -------------------
-#   Figure_Supplement_NB_Scaling.png
-#   Table_NB_Scaling.csv
-#
-# TABLES / SITE SETS
-# ------------------
+# OUTPUT TABLES / SITE SETS
+# -------------------------
 #   Table_Key_Results.csv
 #   Table_Timepoints.csv
 #   Table_Cutoff_Optimization.csv
@@ -228,14 +170,12 @@ options(stringsAsFactors = FALSE)
 #   Figures_All.zip
 #
 # =============================================================================
-
-# =============================================================================
 # SETTINGS
 # =============================================================================
 
 COUNT_FILE <- "/root/REAPER98632/data/WTTS-Seq_2022.2_DE_raw_read_numbers.csv"
 
-OUT_ROOT <- "/root/REAPER98632/exports/pc1_nb_cutoff_c1_final"
+OUT_ROOT <- "/root/REAPER98632/exports/pc1_nb_weighted_pareto_final"
 FIG_DIR  <- file.path(OUT_ROOT, "Figures")
 
 dir.create(OUT_ROOT, recursive = TRUE, showWarnings = FALSE)
@@ -271,8 +211,10 @@ DISPLAY_D_SPAR   <- 0.72
 PNG_WIDTH_IN <- 15
 PNG_DPI      <- 360
 
-# Keep NB scaling as supplemental corroboration, not a primary panel.
-INCLUDE_NB_SCALING_SUPPLEMENT <- TRUE
+# Weighted Pareto utility.  Equal normalized weights reproduce the
+# original weighted optimum used in the exploratory analysis.
+BENEFIT_WEIGHT <- 1.0
+CONTAMINATION_WEIGHT <- 1.0
 
 
 # =============================================================================
@@ -280,31 +222,27 @@ INCLUDE_NB_SCALING_SUPPLEMENT <- TRUE
 # =============================================================================
 
 COL <- list(
-  control = "#386CB0",
-  treatment = "#159D91",
-  raw = "#117A65",
-  divergence = "#262626",
-  fit = "#000000",
+  control = "#0072B2",
+  treatment = "#009E73",
+  raw = "#00A6A6",
+  divergence = "#6A3D9A",
+  fit = "#252525",
 
-  remainder = "#DCEFF2",
-  interval = "#F5E8C8",
-  leading = "#DDF2EA",
+  remainder = "#DCE6F2",
+  interval = "#FFF0B3",
+  leading = "#D8F3E7",
 
-  c1 = "#2166AC",
-  c2 = "#1B7837",
-  selected = "#7B3294",
-  paper = "#E69F00",
+  c1 = "#D73027",
+  c2 = "#1A9850",
+  selected = "#B5179E",
+  paper = "#F39C12",
 
-  candidate = "#A6A6A6",
-  pareto = "#6A3D9A",
-  segmented = "#222222",
-  divergence_disjoint = "#D9A441",
-  remainder_cross = "#B2182B",
-
-  anchor_control = "#386CB0",
-  terminal_control = "#386CB0",
-  anchor_treatment = "#159D91",
-  terminal_treatment = "#159D91"
+  candidate_line = "#9AA0A6",
+  pareto = "#5E3C99",
+  anchor_control = "#0072B2",
+  terminal_control = "#0072B2",
+  anchor_treatment = "#009E73",
+  terminal_treatment = "#009E73"
 )
 
 
@@ -361,12 +299,6 @@ save_panels <- function(plots, path, height_in) {
   }
 
   dev.off()
-}
-
-safe_summary <- function(x, fun = median) {
-  x <- x[is.finite(x)]
-  if (length(x) == 0L) return(NA_real_)
-  fun(x)
 }
 
 rank_cutoff_from_k <- function(N, k) {
@@ -1096,39 +1028,6 @@ fit_shared_knots <- function(group_results) {
 
 
 # =============================================================================
-# NB MEAN-VARIANCE SCALING
-# =============================================================================
-
-estimate_nb_exponent <- function(mu, E) {
-  keep <- (
-    is.finite(mu) &
-    is.finite(E) &
-    mu > 0 &
-    E > 0
-  )
-
-  if (sum(keep) < 10L) {
-    return(NA_real_)
-  }
-
-  fit <- stats::lm(
-    log(E[keep]) ~ log(mu[keep])
-  )
-
-  unname(
-    stats::coef(fit)[2L]
-  )
-}
-
-get_region_p <- function(df, keep) {
-  estimate_nb_exponent(
-    mu = df$normalized_group_mean[keep],
-    E = df$nb_excess_variance[keep]
-  )
-}
-
-
-# =============================================================================
 # TOP-k OPTIMIZATION AND JOINT / DISJOINT CLASSIFICATION
 # =============================================================================
 
@@ -1622,11 +1521,22 @@ mark_pareto_frontier <- function(
 }
 
 
-select_pareto_changepoint <- function(
+select_weighted_pareto_optimum <- function(
     scan_df,
     good_col = "good_n",
     cost_col = "remainder_cross_n",
-    min_segment_points = 3L) {
+    benefit_weight = BENEFIT_WEIGHT,
+    contamination_weight = CONTAMINATION_WEIGHT) {
+
+  if (
+    !is.finite(benefit_weight) ||
+    !is.finite(contamination_weight) ||
+    benefit_weight < 0 ||
+    contamination_weight < 0 ||
+    (benefit_weight + contamination_weight) <= 0
+  ) {
+    stop("Pareto weights must be finite, non-negative, and not both zero.")
+  }
 
   marked <- mark_pareto_frontier(
     scan_df,
@@ -1641,7 +1551,92 @@ select_pareto_changepoint <- function(
       k
     )
 
+  if (nrow(frontier) < 1L) {
+    stop("No Pareto-optimal cutoff points were identified.")
+  }
+
+  good_range <- range(
+    frontier$good,
+    na.rm = TRUE
+  )
+
+  cost_range <- range(
+    frontier$cost,
+    na.rm = TRUE
+  )
+
+  normalize_good <- function(x) {
+    if (diff(good_range) == 0) {
+      rep(1, length(x))
+    } else {
+      (x - good_range[1L]) / diff(good_range)
+    }
+  }
+
+  normalize_cost <- function(x) {
+    if (diff(cost_range) == 0) {
+      rep(0, length(x))
+    } else {
+      (x - cost_range[1L]) / diff(cost_range)
+    }
+  }
+
+  frontier$good_norm <- normalize_good(
+    frontier$good
+  )
+
+  frontier$remainder_norm <- normalize_cost(
+    frontier$cost
+  )
+
+  frontier$weighted_utility <- (
+    benefit_weight * frontier$good_norm -
+    contamination_weight * frontier$remainder_norm
+  )
+
+  best_utility <- max(
+    frontier$weighted_utility,
+    na.rm = TRUE
+  )
+
+  chosen <- frontier %>%
+    filter(
+      abs(
+        weighted_utility - best_utility
+      ) < 1e-12
+    ) %>%
+    arrange(
+      desc(good),
+      cost,
+      desc(k)
+    ) %>%
+    slice(1L)
+
+  selected_k <- as.integer(
+    chosen$k[1L]
+  )
+
   out <- marked$scan
+
+  # Use the same frontier-derived normalization for every candidate row so the
+  # exported table can show the utility landscape. Selection itself is still
+  # restricted to the Pareto frontier.
+  out$good_norm <- normalize_good(
+    out[[good_col]]
+  )
+
+  out$remainder_norm <- normalize_cost(
+    out[[cost_col]]
+  )
+
+  out$weighted_utility <- (
+    benefit_weight * out$good_norm -
+    contamination_weight * out$remainder_norm
+  )
+
+  out$is_selected_weighted <- (
+    out$k == selected_k
+  )
 
   zero_idx <- which(
     out[[cost_col]] == 0
@@ -1657,575 +1652,21 @@ select_pareto_changepoint <- function(
     NA_integer_
   }
 
-  n <- nrow(frontier)
-
-  candidates <- data.frame()
-  valid <- data.frame()
-
-  # Defaults used by any fallback.
-  selected_k <- NA_integer_
-  selected_good <- NA_real_
-  selected_cost <- NA_real_
-  breakpoint_cost <- NA_real_
-  slope_before <- NA_real_
-  slope_after <- NA_real_
-  slope_ratio <- NA_real_
-  bic_linear <- NA_real_
-  bic_segmented <- NA_real_
-  delta_bic <- NA_real_
-  shape_supported <- FALSE
-  bic_supports_segmented <- FALSE
-  selection_method <- NA_character_
-
-  frontier$segmented_fit_good <- NA_real_
-  frontier$marginal_good_per_cost <- NA_real_
-  frontier$is_changepoint <- FALSE
-
-  # -----------------------------------------------------------------------
-  # Need enough distinct Pareto coordinates to estimate a two-segment model.
-  # -----------------------------------------------------------------------
-  enough_frontier <- (
-    n >=
-    (2L * min_segment_points + 1L)
-  )
-
-  if (enough_frontier) {
-    x <- as.numeric(
-      frontier$cost
-    )
-
-    y <- as.numeric(
-      frontier$good
-    )
-
-    if (
-      any(!is.finite(x)) ||
-      any(!is.finite(y))
-    ) {
-      stop(
-        "Non-finite Pareto-frontier values encountered."
-      )
-    }
-
-    if (
-      any(diff(x) <= 0)
-    ) {
-      stop(
-        "Pareto cost must be strictly increasing after duplicate-cost ",
-        "reduction."
-      )
-    }
-
-    # Single-line reference model.
-    X_linear <- cbind(
-      intercept = 1,
-      x = x
-    )
-
-    linear_fit <- stats::lm.fit(
-      x = X_linear,
-      y = y
-    )
-
-    rss_linear <- sum(
-      linear_fit$residuals^2
-    )
-
-    rss_linear <- max(
-      rss_linear,
-      .Machine$double.eps
-    )
-
-    # Two fitted regression coefficients.
-    bic_linear <- (
-      n * log(
-        rss_linear / n
-      ) +
-      2 * log(n)
-    )
-
-    # Efficient exhaustive broken-stick scan.
-    total_x <- sum(x)
-    total_x2 <- sum(x^2)
-    total_y <- sum(y)
-    total_xy <- sum(x * y)
-    total_y2 <- sum(y^2)
-
-    tail_x <- rev(
-      cumsum(
-        rev(x)
-      )
-    )
-
-    tail_x2 <- rev(
-      cumsum(
-        rev(x^2)
-      )
-    )
-
-    tail_y <- rev(
-      cumsum(
-        rev(y)
-      )
-    )
-
-    tail_xy <- rev(
-      cumsum(
-        rev(x * y)
-      )
-    )
-
-    candidate_idx <- seq.int(
-      min_segment_points,
-      n - min_segment_points
-    )
-
-    candidate_rows <- vector(
-      "list",
-      length(candidate_idx)
-    )
-
-    for (jj in seq_along(
-      candidate_idx
-    )) {
-      i <- candidate_idx[jj]
-      tau <- x[i]
-
-      n_right <- n - i
-
-      sx_right <- tail_x[i + 1L]
-      sx2_right <- tail_x2[i + 1L]
-      sy_right <- tail_y[i + 1L]
-      sxy_right <- tail_xy[i + 1L]
-
-      sum_h <- (
-        sx_right -
-        n_right * tau
-      )
-
-      sum_xh <- (
-        sx2_right -
-        tau * sx_right
-      )
-
-      sum_h2 <- (
-        sx2_right -
-        2 * tau * sx_right +
-        n_right * tau^2
-      )
-
-      sum_hy <- (
-        sxy_right -
-        tau * sy_right
-      )
-
-      XtX <- matrix(
-        c(
-          n, total_x, sum_h,
-          total_x, total_x2, sum_xh,
-          sum_h, sum_xh, sum_h2
-        ),
-        nrow = 3L,
-        byrow = TRUE
-      )
-
-      Xty <- c(
-        total_y,
-        total_xy,
-        sum_hy
-      )
-
-      beta <- tryCatch(
-        solve(
-          XtX,
-          Xty
-        ),
-        error = function(e) {
-          rep(
-            NA_real_,
-            3L
-          )
-        }
-      )
-
-      if (
-        any(!is.finite(beta))
-      ) {
-        candidate_rows[[jj]] <- data.frame(
-          frontier_index = i,
-          tau = tau,
-          k = frontier$k[i],
-          rss = Inf,
-          bic = Inf,
-          slope_before = NA_real_,
-          slope_after = NA_real_,
-          slope_change = NA_real_,
-          shape_valid = FALSE,
-          beta0 = NA_real_,
-          beta1 = NA_real_,
-          gamma = NA_real_,
-          stringsAsFactors = FALSE
-        )
-
-        next
-      }
-
-      rss <- (
-        total_y2 -
-        sum(
-          beta * Xty
-        )
-      )
-
-      rss <- max(
-        rss,
-        .Machine$double.eps
-      )
-
-      # Four effective parameters:
-      # intercept, pre-slope, slope change, breakpoint.
-      bic <- (
-        n * log(
-          rss / n
-        ) +
-        4 * log(n)
-      )
-
-      slope_pre <- beta[2L]
-      slope_post <- (
-        beta[2L] +
-        beta[3L]
-      )
-
-      shape_valid <- (
-        is.finite(slope_pre) &&
-        is.finite(slope_post) &&
-        slope_pre >= 0 &&
-        slope_post >= 0 &&
-        slope_post <
-        slope_pre
-      )
-
-      candidate_rows[[jj]] <- data.frame(
-        frontier_index = i,
-        tau = tau,
-        k = frontier$k[i],
-        rss = rss,
-        bic = bic,
-        slope_before = slope_pre,
-        slope_after = slope_post,
-        slope_change = (
-          slope_post -
-          slope_pre
-        ),
-        shape_valid = shape_valid,
-        beta0 = beta[1L],
-        beta1 = beta[2L],
-        gamma = beta[3L],
-        stringsAsFactors = FALSE
-      )
-    }
-
-    candidates <- bind_rows(
-      candidate_rows
-    )
-
-    valid <- candidates %>%
-      filter(
-        shape_valid,
-        is.finite(bic)
-      )
-
-    shape_supported <- (
-      nrow(valid) > 0L
-    )
-
-    if (shape_supported) {
-      chosen <- valid %>%
-        arrange(
-          bic,
-          desc(k)
-        ) %>%
-        slice(1L)
-
-      bic_segmented <- chosen$bic[1L]
-      delta_bic <- (
-        bic_linear -
-        bic_segmented
-      )
-
-      bic_supports_segmented <- (
-        is.finite(delta_bic) &&
-        delta_bic > 0
-      )
-
-      if (bic_supports_segmented) {
-        i_star <- as.integer(
-          chosen$frontier_index[1L]
-        )
-
-        selected_k <- as.integer(
-          chosen$k[1L]
-        )
-
-        selected_good <- frontier$good[i_star]
-        selected_cost <- frontier$cost[i_star]
-        breakpoint_cost <- chosen$tau[1L]
-
-        slope_before <- chosen$slope_before[1L]
-        slope_after <- chosen$slope_after[1L]
-
-        slope_ratio <- ifelse(
-          slope_before > 0,
-          slope_after / slope_before,
-          NA_real_
-        )
-
-        beta0 <- chosen$beta0[1L]
-        beta1 <- chosen$beta1[1L]
-        gamma <- chosen$gamma[1L]
-
-        frontier$segmented_fit_good <- (
-          beta0 +
-          beta1 * x +
-          gamma *
-          pmax(
-            x - breakpoint_cost,
-            0
-          )
-        )
-
-        frontier$marginal_good_per_cost <- c(
-          NA_real_,
-          diff(y) / diff(x)
-        )
-
-        frontier$is_changepoint[
-          i_star
-        ] <- TRUE
-
-        selection_method <-
-          "segmented_pareto_changepoint"
-      }
-    }
-  }
-
-  # -----------------------------------------------------------------------
-  # Conservative fallback if there is no supported segmented change-point.
-  # -----------------------------------------------------------------------
-  if (!is.finite(selected_k)) {
-    if (is.finite(zero_max_k)) {
-      selected_k <- as.integer(
-        zero_max_k
-      )
-
-      selected_row <- out %>%
-        filter(
-          k == selected_k
-        ) %>%
-        slice(1L)
-
-      selected_good <- selected_row[[good_col]][1L]
-      selected_cost <- selected_row[[cost_col]][1L]
-
-      selection_method <-
-        "largest_zero_remainder_crossing_k"
-    } else {
-      # No zero-cost solution.  Use the best shape-valid segmented
-      # approximation if available, but explicitly flag it as descriptive.
-      if (
-        nrow(valid) > 0L
-      ) {
-        chosen <- valid %>%
-          arrange(
-            bic,
-            desc(k)
-          ) %>%
-          slice(1L)
-
-        i_star <- as.integer(
-          chosen$frontier_index[1L]
-        )
-
-        selected_k <- as.integer(
-          chosen$k[1L]
-        )
-
-        selected_good <- frontier$good[i_star]
-        selected_cost <- frontier$cost[i_star]
-        breakpoint_cost <- chosen$tau[1L]
-
-        slope_before <- chosen$slope_before[1L]
-        slope_after <- chosen$slope_after[1L]
-
-        slope_ratio <- ifelse(
-          slope_before > 0,
-          slope_after / slope_before,
-          NA_real_
-        )
-
-        bic_segmented <- chosen$bic[1L]
-        delta_bic <- (
-          bic_linear -
-          bic_segmented
-        )
-
-        bic_supports_segmented <- (
-          is.finite(delta_bic) &&
-          delta_bic > 0
-        )
-
-        beta0 <- chosen$beta0[1L]
-        beta1 <- chosen$beta1[1L]
-        gamma <- chosen$gamma[1L]
-
-        x <- as.numeric(
-          frontier$cost
-        )
-
-        y <- as.numeric(
-          frontier$good
-        )
-
-        frontier$segmented_fit_good <- (
-          beta0 +
-          beta1 * x +
-          gamma *
-          pmax(
-            x - breakpoint_cost,
-            0
-          )
-        )
-
-        frontier$marginal_good_per_cost <- c(
-          NA_real_,
-          diff(y) / diff(x)
-        )
-
-        frontier$is_changepoint[
-          i_star
-        ] <- TRUE
-
-        selection_method <-
-          "segmented_descriptive_no_BIC_support"
-      } else {
-        # Last-resort deterministic Pareto point:
-        # smallest remainder crossing count; among ties greatest benefit,
-        # among ties largest k.
-        fallback <- out %>%
-          arrange(
-            .data[[cost_col]],
-            desc(.data[[good_col]]),
-            desc(k)
-          ) %>%
-          slice(1L)
-
-        selected_k <- as.integer(
-          fallback$k[1L]
-        )
-
-        selected_good <- fallback[[good_col]][1L]
-        selected_cost <- fallback[[cost_col]][1L]
-
-        selection_method <-
-          "minimum_remainder_crossing_fallback"
-      }
-    }
-  }
-
-  # Map frontier quantities back onto the full scan.
-  frontier_key <- paste(
-    frontier$cost,
-    frontier$good,
-    sep = "::"
-  )
-
-  out_key <- paste(
-    out[[cost_col]],
-    out[[good_col]],
-    sep = "::"
-  )
-
-  m <- match(
-    out_key,
-    frontier_key
-  )
-
-  out$segmented_fit_good <-
-    frontier$segmented_fit_good[m]
-
-  out$marginal_good_per_cost <-
-    frontier$marginal_good_per_cost[m]
-
-  out$is_selected_cutoff <- (
-    out$k ==
-    selected_k
-  )
-
-  out$selected_method <-
-    selection_method
-
-  out$breakpoint_remainder_cross_n <-
-    breakpoint_cost
-
-  out$slope_before_breakpoint <-
-    slope_before
-
-  out$slope_after_breakpoint <-
-    slope_after
-
-  out$slope_ratio_after_before <-
-    slope_ratio
-
-  out$bic_linear <- bic_linear
-  out$bic_segmented <- bic_segmented
-
-  out$delta_BIC_linear_minus_segmented <-
-    delta_bic
-
-  out$shape_supported <-
-    shape_supported
-
-  out$bic_supports_segmented <-
-    bic_supports_segmented
-
   list(
     scan = out,
     frontier = frontier,
-    candidates = candidates,
-
-    selected_k = as.integer(
-      selected_k
-    ),
-
-    selected_good = selected_good,
-    selected_cost = selected_cost,
-
-    selection_method = selection_method,
-
-    breakpoint_remainder_cross_n =
-      breakpoint_cost,
-
-    slope_before = slope_before,
-    slope_after = slope_after,
-
-    slope_ratio_after_before =
-      slope_ratio,
-
-    bic_linear = bic_linear,
-    bic_segmented = bic_segmented,
-    delta_BIC = delta_bic,
-
-    shape_supported = shape_supported,
-
-    bic_supports_segmented =
-      bic_supports_segmented,
-
-    max_zero_remainder_crossing_k =
-      zero_max_k
+    selected_k = selected_k,
+    selected_good = chosen$good[1L],
+    selected_cost = chosen$cost[1L],
+    selected_good_norm = chosen$good_norm[1L],
+    selected_remainder_norm = chosen$remainder_norm[1L],
+    selected_utility = chosen$weighted_utility[1L],
+    benefit_weight = benefit_weight,
+    contamination_weight = contamination_weight,
+    selection_method = "weighted_pareto_utility",
+    max_zero_remainder_crossing_k = zero_max_k
   )
 }
-
 
 aggregate_global_cutoff_scan <- function(
     pair_scans) {
@@ -2815,89 +2256,6 @@ summarize_classification <- function(
 # RESULTS TABLES
 # =============================================================================
 
-build_arm_scaling_table <- function(
-    group_results,
-    comparisons,
-    c1,
-    c2,
-    selected_k,
-    paper_k) {
-
-  rows <- list()
-
-  for (comparison_name in names(
-    comparisons
-  )) {
-    mapping <- comparisons[[
-      comparison_name
-    ]]
-
-    for (arm in names(
-      mapping
-    )) {
-      g <- unname(
-        mapping[[arm]]
-      )
-
-      df <- group_results[[g]]$data
-      N <- nrow(df)
-
-      selected_rank <- rank_cutoff_from_k(
-        N,
-        selected_k
-      )
-
-      paper_rank <- rank_cutoff_from_k(
-        N,
-        paper_k
-      )
-
-      rows[[
-        length(rows) + 1L
-      ]] <- data.frame(
-        comparison = comparison_name,
-        arm = arm,
-        group = g,
-
-        p_remainder = get_region_p(
-          df,
-          df$rank < c1
-        ),
-
-        p_divergence = get_region_p(
-          df,
-          df$rank >= c1 &
-          df$rank <= c2
-        ),
-
-        p_leading_edge = get_region_p(
-          df,
-          df$rank > c2
-        ),
-
-        p_selected_k = get_region_p(
-          df,
-          df$rank >=
-          selected_rank
-        ),
-
-        p_paper_5000 = get_region_p(
-          df,
-          df$rank >=
-          paper_rank
-        ),
-
-        stringsAsFactors = FALSE
-      )
-    }
-  }
-
-  bind_rows(
-    rows
-  )
-}
-
-
 build_timepoint_table <- function(
     group_results,
     comparisons,
@@ -2963,37 +2321,22 @@ build_timepoint_table <- function(
       treatment_terminal =
         group_results[[treatment_group]]$terminal,
 
-      pairwise_selected_k =
+      pairwise_weighted_k =
         pair_opt$selected_k,
 
-      pairwise_selection_method =
-        pair_opt$selection_method,
+      pairwise_weighted_utility =
+        pair_opt$selected_utility,
 
-      pairwise_breakpoint_remainder_cross_n =
-        pair_opt$breakpoint_remainder_cross_n,
+      pairwise_good_norm =
+        pair_opt$selected_good_norm,
 
-      pairwise_slope_before =
-        pair_opt$slope_before,
-
-      pairwise_slope_after =
-        pair_opt$slope_after,
-
-      pairwise_slope_ratio_after_before =
-        pair_opt$slope_ratio_after_before,
-
-      pairwise_delta_BIC =
-        pair_opt$delta_BIC,
-
-      pairwise_shape_supported =
-        pair_opt$shape_supported,
-
-      pairwise_BIC_supports_segmented =
-        pair_opt$bic_supports_segmented,
+      pairwise_remainder_norm =
+        pair_opt$selected_remainder_norm,
 
       pairwise_max_zero_remainder_crossing_k =
         pair_opt$max_zero_remainder_crossing_k,
 
-      global_selected_k =
+      global_weighted_k =
         global_k,
 
       global_selected_cutoff_rank =
@@ -3002,8 +2345,11 @@ build_timepoint_table <- function(
           global_k
         ),
 
-      global_selection_method =
-        global_opt$selection_method,
+      benefit_weight =
+        global_opt$benefit_weight,
+
+      contamination_weight =
+        global_opt$contamination_weight,
 
       selected_joint_n =
         selected_summary$joint_n,
@@ -3080,7 +2426,6 @@ build_timepoint_table <- function(
 
 build_key_table <- function(
     timepoint_table,
-    arm_scaling,
     global_opt,
     global_scan,
     N,
@@ -3121,7 +2466,7 @@ build_key_table <- function(
     max_candidate_k =
       N - c2,
 
-    global_selected_k =
+    global_weighted_k =
       global_opt$selected_k,
 
     global_selected_cutoff_rank =
@@ -3130,29 +2475,20 @@ build_key_table <- function(
         global_opt$selected_k
       ),
 
-    global_selection_method =
-      global_opt$selection_method,
+    global_weighted_utility =
+      global_opt$selected_utility,
 
-    global_breakpoint_remainder_cross_n =
-      global_opt$breakpoint_remainder_cross_n,
+    global_good_norm =
+      global_opt$selected_good_norm,
 
-    global_slope_before =
-      global_opt$slope_before,
+    global_remainder_norm =
+      global_opt$selected_remainder_norm,
 
-    global_slope_after =
-      global_opt$slope_after,
+    benefit_weight =
+      global_opt$benefit_weight,
 
-    global_slope_ratio_after_before =
-      global_opt$slope_ratio_after_before,
-
-    global_delta_BIC =
-      global_opt$delta_BIC,
-
-    global_shape_supported =
-      global_opt$shape_supported,
-
-    global_BIC_supports_segmented =
-      global_opt$bic_supports_segmented,
+    contamination_weight =
+      global_opt$contamination_weight,
 
     global_max_zero_remainder_crossing_k =
       global_opt$max_zero_remainder_crossing_k,
@@ -3210,15 +2546,15 @@ build_key_table <- function(
     },
 
     pairwise_k_min = min(
-      timepoint_table$pairwise_selected_k
+      timepoint_table$pairwise_weighted_k
     ),
 
     pairwise_k_median = median(
-      timepoint_table$pairwise_selected_k
+      timepoint_table$pairwise_weighted_k
     ),
 
     pairwise_k_max = max(
-      timepoint_table$pairwise_selected_k
+      timepoint_table$pairwise_weighted_k
     ),
 
     anchor_median = median(
@@ -3234,31 +2570,6 @@ build_key_table <- function(
         timepoint_table$treatment_terminal
       )
     ),
-
-    p_remainder_median =
-      safe_summary(
-        arm_scaling$p_remainder
-      ),
-
-    p_divergence_median =
-      safe_summary(
-        arm_scaling$p_divergence
-      ),
-
-    p_leading_edge_median =
-      safe_summary(
-        arm_scaling$p_leading_edge
-      ),
-
-    p_selected_k_median =
-      safe_summary(
-        arm_scaling$p_selected_k
-      ),
-
-    p_paper_5000_median =
-      safe_summary(
-        arm_scaling$p_paper_5000
-      ),
 
     shared_model_SSE =
       shared_sse,
@@ -3398,7 +2709,7 @@ make_cutoff_panel <- function(
     paper_k,
     title_text,
     extra_k = NULL,
-    extra_label = "Global k*") {
+    extra_label = "Global weighted k*") {
 
   selected <- scan_df %>%
     filter(
@@ -3406,12 +2717,8 @@ make_cutoff_panel <- function(
     ) %>%
     slice(1L)
 
-  if (
-    nrow(selected) != 1L
-  ) {
-    stop(
-      "Selected k not present in cutoff scan."
-    )
+  if (nrow(selected) != 1L) {
+    stop("Selected k not present in cutoff scan.")
   }
 
   paper <- scan_df %>%
@@ -3443,9 +2750,22 @@ make_cutoff_panel <- function(
         y = good_n,
         group = 1
       ),
-      color = COL$candidate,
-      linewidth = 0.48,
-      alpha = 0.45
+      color = COL$candidate_line,
+      linewidth = 0.45,
+      alpha = 0.40
+    ) +
+    geom_point(
+      data = scan_df,
+      aes(
+        x = remainder_cross_n,
+        y = good_n,
+        fill = k
+      ),
+      shape = 21,
+      color = "white",
+      stroke = 0.15,
+      size = 1.55,
+      alpha = 0.88
     ) +
     geom_path(
       data = frontier,
@@ -3455,43 +2775,19 @@ make_cutoff_panel <- function(
         color = "Pareto frontier",
         group = 1
       ),
-      linewidth = 1.15
-    )
-
-  fit_df <- frontier %>%
-    filter(
-      is.finite(
-        segmented_fit_good
-      )
-    )
-
-  if (
-    nrow(fit_df) > 1L
-  ) {
-    p <- p +
-      geom_line(
-        data = fit_df,
-        aes(
-          x = remainder_cross_n,
-          y = segmented_fit_good,
-          color = "Segmented fit",
-          group = 1
-        ),
-        linewidth = 0.95,
-        linetype = "dashed"
-      )
-  }
-
-  p <- p +
+      linewidth = 1.30
+    ) +
     geom_point(
       data = selected,
       aes(
         x = remainder_cross_n,
         y = good_n,
-        color = "Selected k*"
+        color = "Weighted optimum"
       ),
-      shape = 18,
-      size = 4.1
+      shape = 23,
+      fill = COL$selected,
+      size = 4.7,
+      stroke = 1.15
     ) +
     annotate(
       "text",
@@ -3501,33 +2797,34 @@ make_cutoff_panel <- function(
         "k*=",
         selected_k
       ),
-      vjust = 1.8,
-      size = 2.9,
-      fontface = "bold"
+      vjust = 1.85,
+      size = 3.0,
+      fontface = "bold",
+      color = COL$selected
     )
 
-  if (
-    nrow(paper) == 1L
-  ) {
+  if (nrow(paper) == 1L) {
     p <- p +
       geom_point(
         data = paper,
         aes(
           x = remainder_cross_n,
           y = good_n,
-          color = "5k reference"
+          color = "5,000 reference"
         ),
-        shape = 1,
-        size = 3.6,
-        stroke = 1.15
+        shape = 21,
+        fill = "white",
+        size = 4.0,
+        stroke = 1.25
       ) +
       annotate(
         "text",
         x = paper$remainder_cross_n,
         y = paper$good_n,
         label = "5k",
-        vjust = -0.85,
-        size = 2.8
+        vjust = -0.9,
+        size = 2.8,
+        color = COL$paper
       )
   }
 
@@ -3542,9 +2839,7 @@ make_cutoff_panel <- function(
       ) %>%
       slice(1L)
 
-    if (
-      nrow(extra) == 1L
-    ) {
+    if (nrow(extra) == 1L) {
       p <- p +
         geom_point(
           data = extra,
@@ -3553,22 +2848,20 @@ make_cutoff_panel <- function(
             y = good_n,
             color = extra_label
           ),
-          shape = 4,
-          size = 3.5,
-          stroke = 1.1
+          shape = 8,
+          size = 3.7,
+          stroke = 1.15
         )
     }
   }
 
   selected_div <- selected$disjoint_opposite_divergence_n
-
   selected_rem <- selected$remainder_cross_n
 
   color_values <- c(
     "Pareto frontier" = COL$pareto,
-    "Segmented fit" = COL$segmented,
-    "Selected k*" = COL$selected,
-    "5k reference" = COL$paper,
+    "Weighted optimum" = COL$selected,
+    "5,000 reference" = COL$paper,
     stats::setNames(
       COL$treatment,
       extra_label
@@ -3576,31 +2869,58 @@ make_cutoff_panel <- function(
   )
 
   p +
+    scale_fill_gradientn(
+      colors = c(
+        "#2C7BB6",
+        "#00A6CA",
+        "#00CCBC",
+        "#90EB9D",
+        "#F9D057",
+        "#F29E2E",
+        "#D7191C"
+      ),
+      name = "Candidate k"
+    ) +
     scale_color_manual(
       values = color_values,
       breaks = intersect(
         names(color_values),
         c(
           "Pareto frontier",
-          "Segmented fit",
-          "Selected k*",
-          "5k reference",
+          "Weighted optimum",
+          "5,000 reference",
           extra_label
+        )
+      )
+    ) +
+    guides(
+      fill = guide_colorbar(
+        order = 1,
+        barwidth = unit(26, "mm"),
+        barheight = unit(3.5, "mm")
+      ),
+      color = guide_legend(
+        order = 2,
+        override.aes = list(
+          linewidth = 1.1
         )
       )
     ) +
     labs(
       title = title_text,
       subtitle = paste0(
-        "Divergence-disjoint=",
+        "U = Gnorm - Rnorm  |  divergence-disjoint=",
         selected_div,
-        " | remainder crossings=",
+        "  |  remainder crossings=",
         selected_rem
       ),
-      x = "Sites crossing into opposite-arm remainder (rank < c1)",
+      x = "Opposite-arm remainder crossings (rank < c1)",
       y = "Joint + permissible disjoint sites"
     ) +
-    theme_manuscript()
+    theme_manuscript() +
+    theme(
+      legend.box = "horizontal"
+    )
 }
 
 
@@ -3878,19 +3198,21 @@ make_overall_figure <- function(
     theme_manuscript()
 
   # -----------------------------------------------------------------------
-  # C. c1-based cutoff optimization.
+  # C. Weighted Pareto cutoff optimization.
   # -----------------------------------------------------------------------
 
   pC <- make_cutoff_panel(
     scan_df = global_scan,
     selected_k = selected_k,
     paper_k = paper_k,
-    title_text = "C. Global top-k optimization"
+    title_text = "C. Global weighted Pareto optimization"
   ) +
     labs(
       subtitle = paste0(
-        "c1 is the hard opposite-arm boundary | method: ",
-        global_opt$selection_method
+        "c1 = hard contamination boundary | weights ",
+        global_opt$benefit_weight,
+        ":",
+        global_opt$contamination_weight
       )
     )
 
@@ -4260,7 +3582,7 @@ make_timepoint_figure <- function(
     theme_manuscript()
 
   # -----------------------------------------------------------------------
-  # C. Pair-specific c1-based cutoff optimization.
+  # C. Pair-specific weighted Pareto optimization.
   # -----------------------------------------------------------------------
 
   pC <- make_cutoff_panel(
@@ -4271,10 +3593,10 @@ make_timepoint_figure <- function(
     title_text = paste0(
       "C. ",
       comparison_name,
-      " top-k optimization"
+      " weighted Pareto optimization"
     ),
     extra_k = global_k,
-    extra_label = "Global k*"
+    extra_label = "Global weighted k*"
   ) +
     labs(
       subtitle = paste0(
@@ -4294,129 +3616,6 @@ make_timepoint_figure <- function(
     out_file,
     height_in = 11.8
   )
-}
-
-
-# =============================================================================
-# OPTIONAL SUPPLEMENT: NB MEAN-VARIANCE SCALING
-# =============================================================================
-
-make_nb_scaling_supplement <- function(
-    arm_scaling,
-    selected_k,
-    out_file) {
-
-  scaling <- arm_scaling %>%
-    mutate(
-      arm_label = ifelse(
-        arm == "control",
-        "Control",
-        "Treatment"
-      )
-    ) %>%
-    select(
-      comparison,
-      arm_label,
-      p_remainder,
-      p_divergence,
-      p_leading_edge,
-      p_selected_k
-    ) %>%
-    pivot_longer(
-      cols = c(
-        p_remainder,
-        p_divergence,
-        p_leading_edge,
-        p_selected_k
-      ),
-      names_to = "region",
-      values_to = "p"
-    ) %>%
-    mutate(
-      region = factor(
-        region,
-        levels = c(
-          "p_remainder",
-          "p_divergence",
-          "p_leading_edge",
-          "p_selected_k"
-        ),
-        labels = c(
-          "Remainder",
-          "Divergence",
-          "Leading edge",
-          paste0(
-            "Selected k*=",
-            selected_k
-          )
-        )
-      )
-    )
-
-  p <- ggplot(
-    scaling,
-    aes(
-      x = p,
-      y = region,
-      color = arm_label
-    )
-  ) +
-    geom_vline(
-      xintercept = 1,
-      color = "#777777",
-      linetype = "dashed",
-      linewidth = 0.55
-    ) +
-    geom_vline(
-      xintercept = 2,
-      color = "#777777",
-      linetype = "dotted",
-      linewidth = 0.65
-    ) +
-    geom_point(
-      size = 3.1,
-      alpha = 0.88,
-      position = position_dodge(
-        width = 0.20
-      )
-    ) +
-    facet_wrap(
-      ~ comparison,
-      ncol = 2
-    ) +
-    scale_color_manual(
-      values = c(
-        "Control" = COL$control,
-        "Treatment" = COL$treatment
-      )
-    ) +
-    labs(
-      title = "Supplement. NB mean-variance scaling",
-      subtitle = "Post-boundary corroboration only",
-      x = "Exponent p in E = alpha * mu^p",
-      y = NULL
-    ) +
-    theme_manuscript(
-      base_size = 11
-    ) +
-    theme(
-      strip.text = element_text(
-        face = "bold"
-      )
-    )
-
-  grDevices::png(
-    filename = out_file,
-    width = 12,
-    height = 8.5,
-    units = "in",
-    res = PNG_DPI,
-    bg = "white"
-  )
-
-  print(p)
-
-  dev.off()
 }
 
 
@@ -4684,7 +3883,7 @@ for (comparison_name in names(
       treatment_group
   )
 
-  opt <- select_pareto_changepoint(
+  opt <- select_weighted_pareto_optimum(
     raw_scan,
     good_col = "good_n",
     cost_col = "remainder_cross_n"
@@ -4707,27 +3906,16 @@ for (comparison_name in names(
 
   message(
     comparison_name,
-    ": k*=",
+    ": weighted k*=",
     opt$selected_k,
-    "; method=",
-    opt$selection_method,
     "; retained=",
     selected_row$good_n[1L],
     "; divergence-disjoint=",
     selected_row$disjoint_opposite_divergence_n[1L],
     "; remainder crossings=",
     selected_row$remainder_cross_n[1L],
-    "; Delta_BIC=",
-    ifelse(
-      is.finite(
-        opt$delta_BIC
-      ),
-      signif(
-        opt$delta_BIC,
-        5
-      ),
-      "NA"
-    )
+    "; utility=",
+    signif(opt$selected_utility, 5)
   )
 }
 
@@ -4739,7 +3927,7 @@ global_scan_raw <- aggregate_global_cutoff_scan(
   pair_scans
 )
 
-global_opt <- select_pareto_changepoint(
+global_opt <- select_weighted_pareto_optimum(
   global_scan_raw,
   good_col = "good_n",
   cost_col = "remainder_cross_n"
@@ -4770,8 +3958,8 @@ message(
 )
 
 message(
-  "Global method=",
-  global_opt$selection_method,
+  "Global weighted utility=",
+  signif(global_opt$selected_utility, 5),
   "; retained=",
   global_selected_row$good_n[1L],
   "; divergence-disjoint=",
@@ -4993,37 +4181,6 @@ write.csv(
 )
 
 # -------------------------------------------------------------------------
-# Supplemental NB scaling.
-# This remains entirely post-boundary and cannot alter c1, c2, or k*.
-# -------------------------------------------------------------------------
-
-arm_scaling <- build_arm_scaling_table(
-  group_results =
-    group_results,
-
-  comparisons =
-    COMPARISONS,
-
-  c1 = C1,
-  c2 = C2,
-
-  selected_k =
-    GLOBAL_K,
-
-  paper_k =
-    PAPER_REFERENCE_K
-)
-
-write.csv(
-  arm_scaling,
-  file.path(
-    OUT_ROOT,
-    "Table_NB_Scaling.csv"
-  ),
-  row.names = FALSE
-)
-
-# -------------------------------------------------------------------------
 # Tables.
 # -------------------------------------------------------------------------
 
@@ -5061,9 +4218,6 @@ timepoint_table <- build_timepoint_table(
 key_table <- build_key_table(
   timepoint_table =
     timepoint_table,
-
-  arm_scaling =
-    arm_scaling,
 
   global_opt =
     global_opt,
@@ -5224,33 +4378,6 @@ for (comparison_name in names(
   )
 }
 
-if (
-  isTRUE(
-    INCLUDE_NB_SCALING_SUPPLEMENT
-  )
-) {
-  nb_supp_path <- file.path(
-    FIG_DIR,
-    "Figure_Supplement_NB_Scaling.png"
-  )
-
-  make_nb_scaling_supplement(
-    arm_scaling =
-      arm_scaling,
-
-    selected_k =
-      GLOBAL_K,
-
-    out_file =
-      nb_supp_path
-  )
-
-  figure_paths <- c(
-    figure_paths,
-    nb_supp_path
-  )
-}
-
 # -------------------------------------------------------------------------
 # Zip figures while retaining individual PNGs.
 # -------------------------------------------------------------------------
@@ -5317,7 +4444,7 @@ message(
 )
 
 message(
-  "FINAL c1-CONSTRAINED PC1-NB CUTOFF ANALYSIS COMPLETE"
+  "FINAL WEIGHTED-PARETO PC1-NB CUTOFF ANALYSIS COMPLETE"
 )
 
 message(
@@ -5344,10 +4471,14 @@ message(
 )
 
 message(
-  "Global k* = ",
+  "Global weighted k* = ",
   GLOBAL_K,
-  " | method = ",
-  global_opt$selection_method
+  " | utility = ",
+  signif(global_opt$selected_utility, 5),
+  " | weights = ",
+  global_opt$benefit_weight,
+  ":",
+  global_opt$contamination_weight
 )
 
 message(
@@ -5360,7 +4491,7 @@ message(
 )
 
 message(
-  "Pair-specific k*: ",
+  "Pair-specific weighted k*: ",
   paste(
     names(
       pair_optima
@@ -5396,7 +4527,7 @@ message(
 
 message(
   "Tables: Table_Key_Results.csv; Table_Timepoints.csv; ",
-  "Table_Cutoff_Optimization.csv; Table_NB_Scaling.csv"
+  "Table_Cutoff_Optimization.csv"
 )
 
 message(
