@@ -9,165 +9,262 @@ suppressPackageStartupMessages({
 options(stringsAsFactors = FALSE)
 
 # =============================================================================
-# FINAL MANUSCRIPT ANALYSIS
 # PC1-NB REGIME GEOMETRY + WEIGHTED PARETO EIGENVECTOR SPLITTING
 # =============================================================================
 #
-# MANUSCRIPT-ONLY FINAL VERSION
-# -----------------------------
-# This file intentionally excludes:
-#   - zero-arm sensitivity analysis,
-#   - segmented/change-point cutoff models,
-#   - post-boundary NB-scaling panels,
-#   - Anchor/Terminal curvature markers.
-#
-# PRIMARY ANALYSES
-# ----------------
-# 1. Raw-count variance geometry along the independently ranked PC1 axis.
-# 2. Cumulative PC1-NB variance-mass divergence with shared c1/c2.
-# 3. Weighted Pareto optimization of the top-k eigenvector split.
-#
-# RANKING
+# PURPOSE
 # -------
-# Each arm is ranked independently by ASCENDING absolute PC1 loading:
+# Identify variance regimes along independently ranked PC1 axes and determine
+# a common top-k eigenvector-splitting cutoff that maximizes retention of Joint
+# and permissible Disjoint sites while minimizing recruitment of sites whose
+# opposite-arm rank falls into the Remainder.
+#
+#
+# 1. ARM-SPECIFIC PC1 RANKING
+# ---------------------------
+# For each experimental arm g, counts are converted to CPM and transformed:
+#
+#     X_ig = log(1 + CPM_ig)
+#
+# PCA/SVD is performed independently within each arm.  Let v_i1 denote the
+# loading of feature i on PC1. Features are ranked by ASCENDING absolute PC1
+# loading:
 #
 #     rank_order = order(|v_i1|, decreasing = FALSE)
 #
-# Thus larger rank = stronger absolute PC1 loading.
+# Thus:
 #
-# RAW-COUNT VARIANCE GEOMETRY
-# ---------------------------
-# For arm g:
+#     low rank  = small |PC1 loading|
+#     high rank = large |PC1 loading|
 #
-#     s_raw,g^2(r) = empirical sample variance of raw counts at rank r
-#     y_g(r)       = log[1 + s_raw,g^2(r)]
-#
-# A display smoothing spline is used only to show the empirical raw-count
-# variance geometry along the PC1-ranked axis. It does NOT determine c1, c2,
-# the Pareto frontier, or k*.
-#
-# CUMULATIVE PC1-NB VARIANCE-MASS DIVERGENCE
-# ------------------------------------------
-# Feature-level PC1 variance contribution:
+# Feature-level contribution to PC1 variance is:
 #
 #     P_i = lambda_1 * v_i1^2
 #
-# Pooled within-group empirical variance of DESeq2-normalized counts:
+# where lambda_1 is the PC1 eigenvalue.
 #
-#                      sum_g sum_{j in g}(y_ij-ybar_ig)^2
-#     V_pool,i =       -----------------------------------
-#                               sum_g(n_g-1)
 #
-# For arm g:
+# 2. RAW-COUNT VARIANCE GEOMETRY
+# ------------------------------
+# Within each arm, the empirical sample variance of the raw counts is:
 #
-#     mu_ig = mean normalized count
-#     E_ig  = max(V_pool,i - mu_ig, 0)
+#     s_raw,g^2(i) = Var_j(Y_ij | g)
 #
-# Rank-wise masses and cumulative divergence:
+# After ordering features by PC1 rank:
 #
-#     p_g(r) = P_g(r)/sum(P_g)
-#     q_g(r) = E_g(r)/sum(E_g)
+#     y_g(r) = log[1 + s_raw,g^2(r)]
 #
-#     F_P,g(r) = cumsum[p_g(r)]
-#     F_E,g(r) = cumsum[q_g(r)]
+# A smoothing spline is used to display the empirical variance geometry along
+# the ranked axis.
+#
+#
+# 3. POOLED WITHIN-GROUP NORMALIZED VARIANCE
+# ------------------------------------------
+# Counts are normalized globally with DESeq2 size factors.  The pooled
+# within-group empirical variance for feature i is:
+#
+#                    sum_g sum_{j in g}(y_ij - ybar_ig)^2
+#     V_pool,i =     -------------------------------------
+#                              sum_g(n_g - 1)
+#
+# where y_ij is the DESeq2-normalized count.
+#
+# For each arm g:
+#
+#     mu_ig = mean_j(y_ij | g)
+#
+# and the excess-over-Poisson variance is:
+#
+#     E_ig = max(V_pool,i - mu_ig, 0)
+#
+#
+# 4. CUMULATIVE PC1-NB VARIANCE-MASS DIVERGENCE
+# ----------------------------------------------
+# PC1 variance contribution and NB excess variance are converted to rank-wise
+# probability masses:
+#
+#     p_g(r) = P_g(r) / sum_r P_g(r)
+#
+#     q_g(r) = E_g(r) / sum_r E_g(r)
+#
+# Their cumulative distributions are:
+#
+#     F_P,g(r) = sum_{j <= r} p_g(j)
+#
+#     F_E,g(r) = sum_{j <= r} q_g(j)
+#
+# and cumulative divergence is:
 #
 #     D_g(r) = F_E,g(r) - F_P,g(r)
 #
-# A shared two-knot continuous linear spline across all eight arms defines:
+# A shared two-knot continuous linear spline is fit jointly to D_g(r) for all
+# eight arms:
 #
-#     rank < c1          Remainder
-#     c1 <= rank <= c2   Divergence interval
-#     rank > c2          Leading-edge regime
+#     D_g(x) =
+#       beta_0g
+#       + beta_1g*x
+#       + gamma_1g*(x-c1)_+
+#       + gamma_2g*(x-c2)_+
 #
-# TOP-k EIGENVECTOR SPLITTING
-# ---------------------------
-# For each control/treatment pair and candidate top-k depth:
+# with:
 #
-#     S_C(k) = top-k control features
-#     S_T(k) = top-k treatment features
+#     x = (rank - 1)/(N - 1)
 #
-#     Joint        = S_C(k) intersection S_T(k)
-#     Disjoint C   = S_C(k) \ S_T(k)
-#     Disjoint T   = S_T(k) \ S_C(k)
+# and shared c1 and c2 across arms.
 #
-# Candidate k is restricted to:
+# Rank regimes are defined as:
 #
-#     1 <= k <= N-c2
+#     rank < c1          = Remainder
 #
-# so every selected feature originates inside the c2-defined leading-edge
-# regime of the arm that nominates it.
+#     c1 <= rank <= c2   = Divergence interval
 #
-# For a DISJOINT feature, the opposite-arm rank is classified as:
+#     rank > c2          = Leading-edge regime
+#
+#
+# 5. TOP-k EIGENVECTOR SPLITTING
+# ------------------------------
+# For each control/treatment pair and candidate depth k:
+#
+#     S_C(k) = top-k features in the control PC1 ranking
+#
+#     S_T(k) = top-k features in the treatment PC1 ranking
+#
+# Joint and Disjoint classes are:
+#
+#     Joint      = S_C(k) intersection S_T(k)
+#
+#     Disjoint C = S_C(k) \ S_T(k)
+#
+#     Disjoint T = S_T(k) \ S_C(k)
+#
+# Candidate k is constrained by the selecting arm's Leading-edge regime:
+#
+#     1 <= k <= N - c2
+#
+# Therefore every site entering S_C(k) or S_T(k) originates from rank > c2
+# in the arm that selects it.
+#
+#
+# 6. OPPOSITE-ARM CLASSIFICATION OF DISJOINT SITES
+# ------------------------------------------------
+# For a Disjoint site, its rank in the opposite arm determines whether it is
+# retained:
 #
 #     r_opposite > c2
-#         opposite-arm Leading Edge         -> permissible
+#         = opposite-arm Leading edge
+#         = retained
 #
 #     c1 <= r_opposite <= c2
-#         opposite-arm Divergence interval  -> permissible
+#         = opposite-arm Divergence interval
+#         = retained
 #
 #     r_opposite < c1
-#         opposite-arm Remainder            -> contamination
+#         = opposite-arm Remainder
+#         = contamination
 #
-# Therefore crossing c2 in the opposite arm is allowed. Only crossing c1 into
-# the opposite-arm Remainder is penalized.
+# Thus the Divergence interval is permissible.  The Remainder boundary c1 is
+# the contamination boundary.
 #
-# For each k:
+# For candidate k:
 #
-#     G(k) = Joint + permissible Disjoint
+#     G(k) =
+#       N_Joint(k)
+#       + N_Disjoint,opposite-LE(k)
+#       + N_Disjoint,opposite-Divergence(k)
 #
-#     R(k) = Disjoint sites whose opposite-arm rank is < c1
+#     R(k) =
+#       N_Disjoint,opposite-Remainder(k)
 #
-# WEIGHTED PARETO OPTIMUM
-# -----------------------
-# Non-dominated [R(k), G(k)] points define the Pareto frontier. Benefit and
-# contamination are normalized to [0,1] ON THE PARETO FRONTIER:
 #
-#     G_norm(k) = [G(k)-G_min]/[G_max-G_min]
-#     R_norm(k) = [R(k)-R_min]/[R_max-R_min]
+# 7. WEIGHTED PARETO OPTIMIZATION
+# -------------------------------
+# Each candidate k is represented by the pair:
 #
-# The weighted utility is:
+#     [R(k), G(k)]
 #
-#     U(k) = w_G * G_norm(k) - w_R * R_norm(k)
+# A candidate is Pareto-optimal if no other candidate has both:
 #
-# with default manuscript weights:
+#     G(k') >= G(k)
+#
+# and
+#
+#     R(k') <= R(k)
+#
+# with at least one strict inequality.
+#
+# On the Pareto frontier, benefit and contamination are normalized:
+#
+#     G_norm(k) =
+#       [G(k) - G_min] / [G_max - G_min]
+#
+#     R_norm(k) =
+#       [R(k) - R_min] / [R_max - R_min]
+#
+# Weighted utility is:
+#
+#     U(k) =
+#       w_G * G_norm(k)
+#       - w_R * R_norm(k)
+#
+# with:
 #
 #     w_G = 1
 #     w_R = 1
 #
 # The selected cutoff is:
 #
-#     k* = argmax U(k)
+#     k* = argmax_k U(k)
 #
-# among Pareto-optimal cutoffs. Ties are resolved by greater retained-site
-# count, then lower contamination, then larger k.
+# over Pareto-optimal candidates.
 #
-# The four comparison-specific scans are also pooled:
+# Ties are resolved by:
+#
+#     1. greater G(k)
+#     2. lower R(k)
+#     3. larger k
+#
+#
+# 8. GLOBAL COMMON CUTOFF
+# -----------------------
+# The four comparison-specific scans are aggregated at each common k:
 #
 #     G_total(k) = sum_m G_m(k)
+#
 #     R_total(k) = sum_m R_m(k)
 #
-# and the same weighted Pareto rule gives one GLOBAL manuscript k*.
+# The same weighted Pareto rule is then applied to:
 #
-# HISTORICAL TOP-5,000 CUTOFF
-# ---------------------------
-# The historical 5,000 cutoff is reference-only. It does NOT influence c1,
-# c2, the Pareto frontier, normalization, utility, or k*.
+#     [R_total(k), G_total(k)]
 #
-# PRIMARY FIGURES
-# ---------------
+# to obtain the global common cutoff:
+#
+#     k_global*
+#
+#
+# 9. PRESPECIFIED 5,000-SITE REFERENCE
+# ------------------------------------
+# The 5,000-site cutoff is plotted and tabulated as a prespecified reference.
+# It is not used to estimate c1, c2, the Pareto frontier, the normalized
+# utility, or k*.
+#
+#
+# FIGURES
+# -------
 #   Figure_Overall.png
 #   Figure_RT0_ZT6.png
 #   Figure_RT2_ZT8.png
 #   Figure_RT4_ZT10.png
 #   Figure_RT8_ZT14.png
 #
-# Each figure contains ONLY:
+# Each figure contains:
+#
 #   A. Raw-count variance geometry
 #   B. Cumulative PC1-NB variance-mass divergence
 #   C. Weighted Pareto top-k optimization
 #
-# OUTPUT TABLES / SITE SETS
-# -------------------------
+#
+# OUTPUTS
+# -------
 #   Table_Key_Results.csv
 #   Table_Timepoints.csv
 #   Table_Cutoff_Optimization.csv
@@ -175,6 +272,7 @@ options(stringsAsFactors = FALSE)
 #   Excluded_Remainder_Crossing_Sites.csv
 #   Figures_All.zip
 #
+# =============================================================================
 # =============================================================================
 # SETTINGS
 # =============================================================================
@@ -214,8 +312,8 @@ DISPLAY_D_SPAR   <- 0.72
 PNG_WIDTH_IN <- 15
 PNG_DPI      <- 360
 
-# Weighted Pareto utility.  Equal normalized weights reproduce the
-# original weighted optimum used in the exploratory analysis.
+# Equal normalized weights for retained-site benefit and remainder
+# contamination.
 BENEFIT_WEIGHT <- 1.0
 CONTAMINATION_WEIGHT <- 1.0
 
@@ -3533,9 +3631,9 @@ if (
   MAX_CANDIDATE_K
 ) {
   warning(
-    "The historical top-5,000 reference extends left of c2 and therefore ",
-    "falls outside the own-arm leading-edge candidate domain. It remains ",
-    "reference-only."
+    "The prespecified top-5,000 reference extends left of c2 and therefore ",
+    "falls outside the own-arm leading-edge candidate domain. It is retained ",
+    "for descriptive comparison only."
   )
 }
 
@@ -3680,11 +3778,11 @@ message(
 )
 
 message(
-  "Historical paper k=",
+  "Prespecified reference k=",
   PAPER_REFERENCE_K,
   " (cutoff rank ",
   PAPER_REFERENCE_RANK,
-  "; reference only)"
+  "; descriptive reference)"
 )
 
 # -------------------------------------------------------------------------
@@ -4217,11 +4315,11 @@ message(
 )
 
 message(
-  "Historical 5k reference used in fitting: FALSE"
+  "Prespecified 5,000 reference used in optimization: FALSE"
 )
 
 message(
-  "Primary figures: ",
+  "Figures: ",
   FIG_DIR
 )
 
