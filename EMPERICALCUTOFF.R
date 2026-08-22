@@ -11,140 +11,142 @@ options(stringsAsFactors = FALSE)
 
 # =============================================================================
 # FINAL MANUSCRIPT ANALYSIS
-# PC1-NB LEADING-EDGE REGIME + DATA-DRIVEN TOP-k EIGENVECTOR SPLITTING
+# PC1-NB LEADING-EDGE REGIME + PARETO-OPTIMIZED EIGENVECTOR SPLITTING
 # =============================================================================
 #
-# CORE LOGIC
-# ----------
+# The historical top-5,000 value is NEVER used to fit c1, c2, Anchor,
+# Terminal, NB scaling, or the optimized cutoff.  It is displayed only as a
+# prespecified manuscript reference.
 #
-# 1. Rank features independently within each experimental arm by ascending
-#    absolute PC1 loading:
+# RANKING
+# -------
+# Each experimental arm is ranked independently by ASCENDING absolute PC1
+# loading.  Therefore the right side of the rank axis contains the strongest
+# PC1-loading sites:
 #
-#       rank_i = rank(|v_i1|), ascending
+#     rank_order <- order(abs_loading, decreasing = FALSE)
 #
-#    Thus larger rank = stronger PC1 contribution.
+# RAW-COUNT VARIANCE GEOMETRY
+# ---------------------------
+# For arm g, raw empirical feature variance is evaluated along the PC1 rank:
 #
+#     s_raw,g^2(r) = Var(raw counts at rank r within arm g)
+#     y_g(r)       = log(1 + s_raw,g^2(r))
 #
-# 2. Define two empirical variance quantities explicitly.
+# A smoothing spline (spar=0.60) is fitted to y_g(r), and ONE second
+# derivative y_g''(r) is calculated.  After the independently fitted c2:
 #
-#    RAW-count empirical variance, within one arm:
+#     Anchor   = first sign-change zero crossing of y_g''(r) after c2
+#     Terminal = second successive sign-change zero crossing of y_g''(r)
 #
-#       s_raw,ig^2 = Var_j(Y_ij | arm g)
+# CUMULATIVE PC1-NB VARIANCE-MASS DIVERGENCE
+# ------------------------------------------
+# PC1 variance contribution:
 #
-#    This quantity is used ONLY for the familiar raw-variance geometry and
-#    Anchor/Terminal curvature markers.
+#     P_i = lambda_1 * v_i1^2
 #
+# Pooled within-group empirical variance of DESeq2-normalized counts:
 #
-#    Pooled within-group empirical variance of DESeq2-normalized counts:
+#                  sum_g sum_{j in g} (y_ij - ybar_ig)^2
+#     V_pool,i =   -------------------------------------
+#                           sum_g (n_g - 1)
 #
-#                           sum_g sum_{j in g} (y_ij - ybar_ig)^2
-#       V_pool,i =          -------------------------------------
-#                                    sum_g (n_g - 1)
+# Arm-specific normalized mean and excess-over-Poisson variance:
 #
-#    This is an empirical pooled within-group variance; it is NOT a DESeq2
-#    fitted dispersion parameter.
+#     mu_ig = mean normalized count in arm g
+#     E_ig  = max(V_pool,i - mu_ig, 0)
 #
-#    For arm g:
+# Convert P and E into rank-wise probability masses:
 #
-#       mu_ig = mean_j(y_ij | arm g)
-#       E_ig  = max(V_pool,i - mu_ig, 0)
+#     p_g(r) = P_g(r) / sum P_g
+#     q_g(r) = E_g(r) / sum E_g
 #
-#    E_ig is the excess-over-Poisson variance signal used for PC1-NB
-#    cumulative divergence.
+# and cumulative masses:
 #
+#     F_P,g(r) = cumsum[p_g(r)]
+#     F_E,g(r) = cumsum[q_g(r)]
+#     D_g(r)   = F_E,g(r) - F_P,g(r)
 #
-# 3. PC1 variance contribution and cumulative variance-mass divergence:
+# A shared two-knot continuous linear-spline fit across all eight arms gives
+# c1 and c2.  The broad leading-edge regime is:
 #
-#       P_i = lambda_1 * v_i1^2
+#     LE_g = { i : rank_g(i) > c2 }
 #
-#       p_g(r) = P_g(r) / sum P_g
-#       q_g(r) = E_g(r) / sum E_g
+# Thus ranks < c1 are the remainder, c1 <= rank <= c2 is the divergence
+# interval, and ranks > c2 are the leading-edge regime.
 #
-#       F_P,g(r) = cumulative sum of p_g(r)
-#       F_E,g(r) = cumulative sum of q_g(r)
+# DATA-DRIVEN TOP-k OPTIMIZATION
+# ------------------------------
+# For each control/treatment pair and candidate top-k depth:
 #
-#       D_g(r) = F_E,g(r) - F_P,g(r)
+#     S_C(k) = control top-k sites
+#     S_T(k) = treatment top-k sites
+#     U(k)   = S_C(k) union S_T(k)
 #
-#    A shared two-knot continuous linear-spline model is fit jointly to all
-#    eight arm-specific D_g(r) curves.  The second shared knot c2 marks the
-#    onset of the broad data-derived leading-edge regime:
+# Joint/disjoint status remains exactly the eigenvector-splitting definition:
 #
-#       LE_g = { feature i : rank_g(i) > c2 }
+#     Joint              = S_C(k) intersection S_T(k)
+#     Disjoint control   = S_C(k) \ S_T(k)
+#     Disjoint treatment = S_T(k) \ S_C(k)
 #
+# Candidate k is restricted to k <= N-c2 so every site is selected from the
+# c2-defined leading-edge regime of the arm that selected it.
 #
-# 4. Raw-count Anchor / Terminal geometry:
+# A disjoint site is called ELIGIBLE when its rank in the opposite arm also
+# remains >c2.  Therefore a site may be outside the opposite arm's top-k set
+# and still be a legitimate disjoint site, provided it remains inside the
+# broader leading-edge regime there.
 #
-#       y_g(r) = smooth{ log[1 + s_raw,g^2(r)] }
+# For every k we count:
 #
-#    The second derivative y_g''(r) is calculated from this raw-count variance
-#    spline only.
+#     G(k) = Joint + eligible disjoint control + eligible disjoint treatment
+#     X(k) = disjoint sites whose opposite-arm rank is <=c2
 #
-#       Anchor_g   = first y_g''(r)=0 sign-change crossing after c2
-#       Terminal_g = second successive y_g''(r)=0 sign-change crossing
+# X(k) is additionally split into crossings into the divergence interval
+# (c1 <= rank <= c2) and crossings into the remainder (rank < c1).
 #
+# The cutoff problem is treated as a two-objective Pareto problem:
 #
-# 5. DATA-DRIVEN TOP-k CUTOFF FOR EIGENVECTOR SPLITTING
+#     maximize G(k)
+#     minimize X(k)
 #
-#    For each control/treatment pair and candidate k:
+# No arbitrary penalty weight is introduced.  We first retain the Pareto
+# frontier.  Within that frontier, the reproducible knee is the point with
+# maximum separation between normalized benefit and normalized cost:
 #
-#       S_C(k) = top-k features in the control PC1 ranking
-#       S_T(k) = top-k features in the treatment PC1 ranking
-#       U(k)   = S_C(k) union S_T(k)
+#     knee_score(k) = G_norm(k) - X_norm(k)
 #
-#    Joint and disjoint status is still defined by top-k membership:
+# This is equivalent, up to a constant factor, to maximum perpendicular
+# separation above the equal-gain/equal-cost diagonal after both objectives
+# are normalized to [0,1].  Ties choose the larger k.
 #
-#       Joint              = S_C(k) intersection S_T(k)
-#       Disjoint control   = S_C(k) \ S_T(k)
-#       Disjoint treatment = S_T(k) \ S_C(k)
+# Pair-specific knees are reported for diagnosis.  A SINGLE common manuscript
+# cutoff is obtained by pooling counts across all four comparisons at each k:
 #
-#    A candidate k is ELIGIBLE only when EVERY feature admitted by either
-#    top-k list remains inside the broader c2-defined leading-edge regime in
-#    BOTH condition-specific rankings:
+#     G_total(k) = sum_m G_m(k)
+#     X_total(k) = sum_m X_m(k)
 #
-#       U(k) subset of LE_C intersection LE_T
+# and selecting the knee of the pooled Pareto frontier.  This makes one common
+# cutoff data-derived while allowing the four time points to contribute.
 #
-#    Equivalently, for every i in U(k):
+# FINAL SITE SET
+# --------------
+# At the selected common k*, the downstream Leading Edge contains ONLY:
 #
-#       rank_C(i) > c2  AND  rank_T(i) > c2
+#     Joint + eligible disjoint control + eligible disjoint treatment
 #
-#    This preserves biologically meaningful disjoint sites: a site can fail the
-#    stricter top-k threshold in the opposite arm while still remaining inside
-#    that arm's broader leading-edge regime.
+# Any union member whose opposite-arm rank is <=c2 is written separately to
+# Excluded_Crossing_Sites.csv and is NOT included in the downstream selected
+# leading-edge file.
 #
-#    Eligibility is monotone in k.  Once a newly admitted feature falls at or
-#    below c2 in either arm, that k and all larger k are ineligible.
+# POST-BOUNDARY NB SCALING
+# ------------------------
+# After boundaries/cutoff are fixed, fit:
 #
-#    For each comparison:
+#     E = alpha * mu^p
 #
-#       k_pair* = largest eligible k
-#
-#    To retain ONE common manuscript cutoff across all four comparisons:
-#
-#       k_common* = min(k_pair*)
-#
-#    k_common* is therefore the largest single top-k depth that satisfies the
-#    leading-edge eligibility rule in every control/treatment comparison.
-#
-#
-# 6. Historical top-5,000 cutoff:
-#
-#       paper_ref_rank = N - 5000 + 1
-#
-#    The 5,000 cutoff is retained only as a reference.  It does NOT determine
-#    c1, c2, Anchor, Terminal, k_pair*, or k_common*.
-#
-#
-# 7. Post-boundary NB scaling corroboration:
-#
-#       E = alpha * mu^p
-#
-#    p is fit after regions are defined:
-#
-#       p near 1 -> more NB1-like
-#       p near 2 -> more NB2-like
-#
-#    This is corroboration only and does not select any boundary or cutoff.
-#
+# by lm(log(E) ~ log(mu)) on positive mu,E.  This is corroboration only:
+# p~1 is more NB1-like and p~2 more NB2-like.
 #
 # OUTPUTS
 # -------
@@ -154,19 +156,16 @@ options(stringsAsFactors = FALSE)
 #   Figure_RT2_ZT8.png
 #   Figure_RT4_ZT10.png
 #   Figure_RT8_ZT14.png
-#
-# Tables:
-#   Table_Key_Results.csv
-#   Table_Timepoints.csv
-#
-# Downstream selected sites:
-#   Selected_LeadingEdge_Sites.csv
-#
-# Figure archive:
 #   Figures_All.zip
 #
+# Tables/data:
+#   Table_Key_Results.csv
+#   Table_Timepoints.csv
+#   Table_Cutoff_Optimization.csv
+#   Selected_LeadingEdge_Sites.csv
+#   Excluded_Crossing_Sites.csv
+#
 # =============================================================================
-
 
 # =============================================================================
 # SETTINGS
@@ -1059,7 +1058,7 @@ get_region_p <- function(df, keep) {
 
 
 # =============================================================================
-# TOP-k ELIGIBILITY AND JOINT / DISJOINT CLASSIFICATION
+# TOP-k PARETO OPTIMIZATION AND JOINT / DISJOINT CLASSIFICATION
 # =============================================================================
 
 make_rank_map <- function(df) {
@@ -1069,10 +1068,87 @@ make_rank_map <- function(df) {
   )
 }
 
-find_pairwise_max_eligible_k <- function(
+rank_to_region <- function(rank, c1, c2) {
+  ifelse(
+    rank < c1,
+    "Remainder",
+    ifelse(
+      rank <= c2,
+      "Divergence",
+      "LeadingEdge"
+    )
+  )
+}
+
+add_interval_events <- function(diff_vec, starts, ends, K) {
+  # Adds +1 on [start, end-1].  ends may equal K+1.
+  if (length(starts) == 0L) {
+    return(diff_vec)
+  }
+
+  for (s in starts) {
+    if (is.finite(s) && s >= 1L && s <= K) {
+      diff_vec[s] <- diff_vec[s] + 1L
+    }
+  }
+
+  for (e in ends) {
+    if (is.finite(e) && e >= 1L && e <= K) {
+      diff_vec[e] <- diff_vec[e] - 1L
+    }
+  }
+
+  diff_vec
+}
+
+cumulative_activation <- function(depth, K) {
+  depth <- as.integer(depth)
+  keep <- is.finite(depth) & depth >= 1L & depth <= K
+
+  if (!any(keep)) {
+    return(rep(0L, K))
+  }
+
+  cumsum(
+    tabulate(
+      depth[keep],
+      nbins = K
+    )
+  )
+}
+
+active_interval_count <- function(starts, ends, K) {
+  # Count intervals active for start <= k < end.
+  # Here every interval is inside 1..K and end may be K+1.
+  if (length(starts) == 0L) {
+    return(rep(0L, K))
+  }
+
+  diff_vec <- integer(K + 1L)
+
+  start_tab <- tabulate(
+    as.integer(starts),
+    nbins = K + 1L
+  )
+
+  end_tab <- tabulate(
+    pmin(as.integer(ends), K + 1L),
+    nbins = K + 1L
+  )
+
+  diff_vec <- diff_vec + start_tab - end_tab
+
+  cumsum(diff_vec)[seq_len(K)]
+}
+
+scan_pair_cutoffs <- function(
     control_df,
     treatment_df,
-    c2) {
+    c1,
+    c2,
+    comparison_name,
+    control_group,
+    treatment_group) {
 
   if (nrow(control_df) != nrow(treatment_df)) {
     stop("Control and treatment rankings have different feature counts.")
@@ -1083,109 +1159,420 @@ find_pairwise_max_eligible_k <- function(
   }
 
   N <- nrow(control_df)
+  K <- as.integer(N - c2)
 
-  max_leading_edge_k <- N - c2
-
-  if (max_leading_edge_k < 1L) {
-    stop("No features exist beyond c2.")
+  if (K < 1L) {
+    stop("No candidate top-k depth exists beyond c2.")
   }
-
-  control_desc <- rev(control_df$feature_id)
-  treatment_desc <- rev(treatment_df$feature_id)
 
   rank_control <- make_rank_map(control_df)
   rank_treatment <- make_rank_map(treatment_df)
 
-  first_invalid_k <- NA_integer_
-  failure_records <- list()
+  ids <- control_df$feature_id
 
-  for (k in seq_len(max_leading_edge_k)) {
-    new_ids <- unique(
-      c(
-        control_desc[k],
-        treatment_desc[k]
-      )
-    )
+  rC <- as.integer(unname(rank_control[ids]))
+  rT <- as.integer(unname(rank_treatment[ids]))
 
-    rc <- unname(rank_control[new_ids])
-    rt <- unname(rank_treatment[new_ids])
+  if (any(!is.finite(rC)) || any(!is.finite(rT))) {
+    stop("Non-finite rank encountered in ", comparison_name)
+  }
 
-    bad <- (
-      !is.finite(rc) |
-      !is.finite(rt) |
-      rc <= c2 |
-      rt <= c2
-    )
+  # Entry depth: smallest top-k value at which a feature enters that arm's
+  # terminal selection.  Rank N enters at k=1; rank 1 enters at k=N.
+  dC <- N - rC + 1L
+  dT <- N - rT + 1L
 
-    if (any(bad)) {
-      first_invalid_k <- k
+  k <- seq_len(K)
 
-      bad_ids <- new_ids[bad]
+  # Joint sites activate when both arm-specific entry depths have been reached.
+  joint_depth <- pmax(dC, dT)
+  joint_n <- cumulative_activation(
+    joint_depth,
+    K
+  )
 
-      failure_records[[1L]] <- data.frame(
-        feature_id = bad_ids,
-        control_rank = unname(rank_control[bad_ids]),
-        treatment_rank = unname(rank_treatment[bad_ids]),
-        fails_control_leading_edge =
-          unname(rank_control[bad_ids]) <= c2,
-        fails_treatment_leading_edge =
-          unname(rank_treatment[bad_ids]) <= c2,
-        stringsAsFactors = FALSE
-      )
+  # Good control-disjoint sites:
+  # dC <= k < dT, with dT <= K so the opposite arm is still >c2.
+  idx_good_C <- which(
+    dC < dT &
+    dC <= K &
+    dT <= K
+  )
 
-      break
+  good_disjoint_control_n <- active_interval_count(
+    starts = dC[idx_good_C],
+    ends = dT[idx_good_C],
+    K = K
+  )
+
+  # Good treatment-disjoint sites.
+  idx_good_T <- which(
+    dT < dC &
+    dT <= K &
+    dC <= K
+  )
+
+  good_disjoint_treatment_n <- active_interval_count(
+    starts = dT[idx_good_T],
+    ends = dC[idx_good_T],
+    K = K
+  )
+
+  # Crossings selected by control whose opposite treatment rank is outside
+  # the c2 leading edge.  These stay disjoint for all k <= K.
+  idx_cross_C <- which(
+    dC <= K &
+    dT > K
+  )
+
+  idx_cross_C_div <- idx_cross_C[
+    rT[idx_cross_C] >= c1 &
+    rT[idx_cross_C] <= c2
+  ]
+
+  idx_cross_C_rem <- idx_cross_C[
+    rT[idx_cross_C] < c1
+  ]
+
+  cross_control_divergence_n <- cumulative_activation(
+    dC[idx_cross_C_div],
+    K
+  )
+
+  cross_control_remainder_n <- cumulative_activation(
+    dC[idx_cross_C_rem],
+    K
+  )
+
+  # Crossings selected by treatment whose opposite control rank is outside
+  # the c2 leading edge.
+  idx_cross_T <- which(
+    dT <= K &
+    dC > K
+  )
+
+  idx_cross_T_div <- idx_cross_T[
+    rC[idx_cross_T] >= c1 &
+    rC[idx_cross_T] <= c2
+  ]
+
+  idx_cross_T_rem <- idx_cross_T[
+    rC[idx_cross_T] < c1
+  ]
+
+  cross_treatment_divergence_n <- cumulative_activation(
+    dT[idx_cross_T_div],
+    K
+  )
+
+  cross_treatment_remainder_n <- cumulative_activation(
+    dT[idx_cross_T_rem],
+    K
+  )
+
+  good_disjoint_n <- (
+    good_disjoint_control_n +
+    good_disjoint_treatment_n
+  )
+
+  good_n <- joint_n + good_disjoint_n
+
+  cross_divergence_n <- (
+    cross_control_divergence_n +
+    cross_treatment_divergence_n
+  )
+
+  cross_remainder_n <- (
+    cross_control_remainder_n +
+    cross_treatment_remainder_n
+  )
+
+  cross_n <- cross_divergence_n + cross_remainder_n
+  union_n <- good_n + cross_n
+
+  # Independent sanity check of union size from activation depth.
+  union_depth <- pmin(dC, dT)
+  union_check <- cumulative_activation(
+    union_depth,
+    K
+  )
+
+  if (!all(union_n == union_check)) {
+    stop("Internal union-count mismatch in ", comparison_name)
+  }
+
+  data.frame(
+    comparison = comparison_name,
+    control_group = control_group,
+    treatment_group = treatment_group,
+    k = k,
+    cutoff_rank = N - k + 1L,
+
+    joint_n = joint_n,
+    eligible_disjoint_control_n = good_disjoint_control_n,
+    eligible_disjoint_treatment_n = good_disjoint_treatment_n,
+    eligible_disjoint_n = good_disjoint_n,
+    good_n = good_n,
+
+    cross_control_divergence_n = cross_control_divergence_n,
+    cross_treatment_divergence_n = cross_treatment_divergence_n,
+    cross_divergence_n = cross_divergence_n,
+
+    cross_control_remainder_n = cross_control_remainder_n,
+    cross_treatment_remainder_n = cross_treatment_remainder_n,
+    cross_remainder_n = cross_remainder_n,
+
+    cross_n = cross_n,
+    union_n = union_n,
+
+    good_fraction = ifelse(
+      union_n > 0,
+      good_n / union_n,
+      NA_real_
+    ),
+
+    crossing_fraction = ifelse(
+      union_n > 0,
+      cross_n / union_n,
+      NA_real_
+    ),
+
+    jaccard_top_k = ifelse(
+      union_n > 0,
+      joint_n / union_n,
+      NA_real_
+    ),
+
+    stringsAsFactors = FALSE
+  )
+}
+
+mark_pareto_frontier <- function(
+    scan_df,
+    good_col = "good_n",
+    cost_col = "cross_n") {
+
+  if (nrow(scan_df) < 1L) {
+    stop("Empty cutoff scan.")
+  }
+
+  tmp <- scan_df %>%
+    transmute(
+      row_id = row_number(),
+      k = k,
+      good = .data[[good_col]],
+      cost = .data[[cost_col]]
+    ) %>%
+    arrange(
+      cost,
+      desc(good),
+      desc(k)
+    ) %>%
+    group_by(cost) %>%
+    slice(1L) %>%
+    ungroup() %>%
+    arrange(cost, desc(good))
+
+  running_best_before <- c(
+    -Inf,
+    head(cummax(tmp$good), -1L)
+  )
+
+  tmp$is_frontier_coord <- (
+    tmp$good > running_best_before
+  )
+
+  frontier <- tmp %>%
+    filter(is_frontier_coord) %>%
+    arrange(cost, good, k)
+
+  key_all <- paste(
+    scan_df[[cost_col]],
+    scan_df[[good_col]],
+    sep = "::"
+  )
+
+  key_frontier <- paste(
+    frontier$cost,
+    frontier$good,
+    sep = "::"
+  )
+
+  out <- scan_df
+  out$is_pareto <- key_all %in% key_frontier
+
+  list(
+    scan = out,
+    frontier = frontier
+  )
+}
+
+select_pareto_knee <- function(
+    scan_df,
+    good_col = "good_n",
+    cost_col = "cross_n") {
+
+  marked <- mark_pareto_frontier(
+    scan_df,
+    good_col = good_col,
+    cost_col = cost_col
+  )
+
+  frontier <- marked$frontier
+
+  if (nrow(frontier) == 1L) {
+    chosen <- frontier[1L, , drop = FALSE]
+    chosen$good_norm <- 1
+    chosen$cost_norm <- 0
+    chosen$knee_score <- 1
+  } else {
+    good_range <- range(frontier$good, na.rm = TRUE)
+    cost_range <- range(frontier$cost, na.rm = TRUE)
+
+    if (diff(good_range) == 0) {
+      frontier$good_norm <- 1
+    } else {
+      frontier$good_norm <- (
+        frontier$good - good_range[1L]
+      ) / diff(good_range)
     }
-  }
 
-  if (is.na(first_invalid_k)) {
-    k_star <- max_leading_edge_k
-    first_invalid_k <- max_leading_edge_k + 1L
-  } else {
-    k_star <- first_invalid_k - 1L
-  }
+    if (diff(cost_range) == 0) {
+      frontier$cost_norm <- 0
+    } else {
+      frontier$cost_norm <- (
+        frontier$cost - cost_range[1L]
+      ) / diff(cost_range)
+    }
 
-  if (k_star < 1L) {
-    stop(
-      "No positive top-k cutoff satisfies the cross-condition leading-edge ",
-      "eligibility rule."
+    frontier$knee_score <- (
+      frontier$good_norm - frontier$cost_norm
     )
+
+    best_score <- max(
+      frontier$knee_score,
+      na.rm = TRUE
+    )
+
+    candidate <- frontier %>%
+      filter(
+        abs(knee_score - best_score) < 1e-12
+      ) %>%
+      arrange(
+        desc(good),
+        cost,
+        desc(k)
+      )
+
+    chosen <- candidate[1L, , drop = FALSE]
   }
 
-  failures <- if (length(failure_records) == 0L) {
-    data.frame(
-      feature_id = character(0),
-      control_rank = integer(0),
-      treatment_rank = integer(0),
-      fails_control_leading_edge = logical(0),
-      fails_treatment_leading_edge = logical(0),
-      stringsAsFactors = FALSE
-    )
+  k_star <- as.integer(chosen$k[1L])
+
+  out <- marked$scan
+  out$is_selected_knee <- out$k == k_star
+
+  zero_idx <- which(out[[cost_col]] == 0)
+
+  zero_max_k <- if (length(zero_idx) > 0L) {
+    max(out$k[zero_idx])
   } else {
-    bind_rows(failure_records)
+    NA_integer_
   }
 
   list(
-    k_star = as.integer(k_star),
-    cutoff_rank = rank_cutoff_from_k(N, k_star),
-    first_invalid_k = as.integer(first_invalid_k),
-    max_leading_edge_k = as.integer(max_leading_edge_k),
-    failures = failures
+    scan = out,
+    frontier = frontier,
+    selected_k = k_star,
+    selected_good = chosen$good[1L],
+    selected_cost = chosen$cost[1L],
+    selected_knee_score = chosen$knee_score[1L],
+    max_zero_crossing_k = zero_max_k
   )
+}
+
+aggregate_global_cutoff_scan <- function(pair_scans) {
+  all_pair_scan <- bind_rows(pair_scans)
+
+  global <- all_pair_scan %>%
+    group_by(k) %>%
+    summarise(
+      cutoff_rank = first(cutoff_rank),
+
+      joint_n = sum(joint_n),
+      eligible_disjoint_control_n =
+        sum(eligible_disjoint_control_n),
+      eligible_disjoint_treatment_n =
+        sum(eligible_disjoint_treatment_n),
+      eligible_disjoint_n = sum(eligible_disjoint_n),
+      good_n = sum(good_n),
+
+      cross_divergence_n = sum(cross_divergence_n),
+      cross_remainder_n = sum(cross_remainder_n),
+      cross_n = sum(cross_n),
+      union_n = sum(union_n),
+
+      .groups = "drop"
+    ) %>%
+    mutate(
+      comparison = "GLOBAL",
+      control_group = NA_character_,
+      treatment_group = NA_character_,
+      good_fraction = ifelse(
+        union_n > 0,
+        good_n / union_n,
+        NA_real_
+      ),
+      crossing_fraction = ifelse(
+        union_n > 0,
+        cross_n / union_n,
+        NA_real_
+      ),
+      jaccard_top_k = ifelse(
+        union_n > 0,
+        joint_n / union_n,
+        NA_real_
+      )
+    )
+
+  # Columns retained for consistency with pairwise scan table.
+  global$cross_control_divergence_n <- NA_integer_
+  global$cross_treatment_divergence_n <- NA_integer_
+  global$cross_control_remainder_n <- NA_integer_
+  global$cross_treatment_remainder_n <- NA_integer_
+
+  global
 }
 
 classify_pair_at_k <- function(
     control_df,
     treatment_df,
     k,
+    c1,
     c2,
     comparison_name,
     control_group,
     treatment_group) {
 
-  N <- nrow(control_df)
+  if (nrow(control_df) != nrow(treatment_df)) {
+    stop("Control and treatment rankings have different feature counts.")
+  }
 
-  if (k < 1L || k > N) {
-    stop("Invalid k for ", comparison_name, ": ", k)
+  if (!setequal(control_df$feature_id, treatment_df$feature_id)) {
+    stop("Control and treatment rankings do not contain the same feature IDs.")
+  }
+
+  N <- nrow(control_df)
+  Kmax <- N - c2
+
+  if (k < 1L || k > Kmax) {
+    stop(
+      "k must satisfy 1 <= k <= N-c2. Received k=",
+      k,
+      "; N-c2=",
+      Kmax,
+      "."
+    )
   }
 
   control_top <- tail(
@@ -1206,10 +1593,18 @@ classify_pair_at_k <- function(
   rank_control <- make_rank_map(control_df)
   rank_treatment <- make_rank_map(treatment_df)
 
+  rC <- as.integer(
+    unname(rank_control[union_ids])
+  )
+
+  rT <- as.integer(
+    unname(rank_treatment[union_ids])
+  )
+
   in_control <- union_ids %in% control_top
   in_treatment <- union_ids %in% treatment_top
 
-  class <- ifelse(
+  base_class <- ifelse(
     in_control & in_treatment,
     "Joint",
     ifelse(
@@ -1219,75 +1614,206 @@ classify_pair_at_k <- function(
     )
   )
 
+  control_region <- rank_to_region(
+    rC,
+    c1,
+    c2
+  )
+
+  treatment_region <- rank_to_region(
+    rT,
+    c1,
+    c2
+  )
+
+  joint <- in_control & in_treatment
+  control_only <- in_control & !in_treatment
+  treatment_only <- in_treatment & !in_control
+
+  eligible <- (
+    joint |
+    (control_only & rT > c2) |
+    (treatment_only & rC > c2)
+  )
+
+  cross_divergence <- (
+    (control_only & rT >= c1 & rT <= c2) |
+    (treatment_only & rC >= c1 & rC <= c2)
+  )
+
+  cross_remainder <- (
+    (control_only & rT < c1) |
+    (treatment_only & rC < c1)
+  )
+
+  analysis_class <- rep(
+    NA_character_,
+    length(union_ids)
+  )
+
+  analysis_class[joint] <- "Joint"
+
+  analysis_class[
+    control_only & rT > c2
+  ] <- paste0(
+    "Eligible_Disjoint_",
+    control_group
+  )
+
+  analysis_class[
+    treatment_only & rC > c2
+  ] <- paste0(
+    "Eligible_Disjoint_",
+    treatment_group
+  )
+
+  analysis_class[
+    control_only & rT >= c1 & rT <= c2
+  ] <- paste0(
+    "Cross_",
+    control_group,
+    "_to_",
+    treatment_group,
+    "_Divergence"
+  )
+
+  analysis_class[
+    treatment_only & rC >= c1 & rC <= c2
+  ] <- paste0(
+    "Cross_",
+    treatment_group,
+    "_to_",
+    control_group,
+    "_Divergence"
+  )
+
+  analysis_class[
+    control_only & rT < c1
+  ] <- paste0(
+    "Cross_",
+    control_group,
+    "_to_",
+    treatment_group,
+    "_Remainder"
+  )
+
+  analysis_class[
+    treatment_only & rC < c1
+  ] <- paste0(
+    "Cross_",
+    treatment_group,
+    "_to_",
+    control_group,
+    "_Remainder"
+  )
+
   out <- data.frame(
     comparison = comparison_name,
     feature_id = union_ids,
-    class = class,
+    selected_k = as.integer(k),
+    cutoff_rank = rank_cutoff_from_k(N, k),
+
     control_group = control_group,
     treatment_group = treatment_group,
-    selected_k = k,
-    control_rank = unname(rank_control[union_ids]),
-    treatment_rank = unname(rank_treatment[union_ids]),
+
+    base_class = base_class,
+    analysis_class = analysis_class,
+
+    control_rank = rC,
+    treatment_rank = rT,
+    control_region = control_region,
+    treatment_region = treatment_region,
+
     control_top_k = in_control,
     treatment_top_k = in_treatment,
-    control_in_c2_leading_edge =
-      unname(rank_control[union_ids]) > c2,
-    treatment_in_c2_leading_edge =
-      unname(rank_treatment[union_ids]) > c2,
+
+    eligible_leading_edge = eligible,
+    cross_into_divergence = cross_divergence,
+    cross_into_remainder = cross_remainder,
+    outside_leading_edge = !eligible,
+
     stringsAsFactors = FALSE
   )
 
-  out$eligible_both_c2 <- (
-    out$control_in_c2_leading_edge &
-    out$treatment_in_c2_leading_edge
-  )
+  if (any(is.na(out$analysis_class))) {
+    stop(
+      "Unclassified union site encountered in ",
+      comparison_name
+    )
+  }
 
   out
 }
 
 summarize_classification <- function(class_df) {
-  class_counts <- table(class_df$class)
-
-  joint_n <- if ("Joint" %in% names(class_counts)) {
-    unname(class_counts[["Joint"]])
-  } else {
-    0L
+  if (nrow(class_df) < 1L) {
+    stop("Cannot summarize empty classification.")
   }
 
-  disjoint_n <- nrow(class_df) - joint_n
+  joint_n <- sum(
+    class_df$base_class == "Joint"
+  )
 
-  control_only_n <- sum(
+  control_only <- (
     class_df$control_top_k &
     !class_df$treatment_top_k
   )
 
-  treatment_only_n <- sum(
-    !class_df$control_top_k &
-    class_df$treatment_top_k
+  treatment_only <- (
+    class_df$treatment_top_k &
+    !class_df$control_top_k
+  )
+
+  eligible_disjoint_control_n <- sum(
+    control_only &
+    class_df$eligible_leading_edge
+  )
+
+  eligible_disjoint_treatment_n <- sum(
+    treatment_only &
+    class_df$eligible_leading_edge
+  )
+
+  eligible_disjoint_n <- (
+    eligible_disjoint_control_n +
+    eligible_disjoint_treatment_n
+  )
+
+  good_n <- joint_n + eligible_disjoint_n
+
+  cross_divergence_n <- sum(
+    class_df$cross_into_divergence
+  )
+
+  cross_remainder_n <- sum(
+    class_df$cross_into_remainder
+  )
+
+  cross_n <- (
+    cross_divergence_n +
+    cross_remainder_n
   )
 
   union_n <- nrow(class_df)
 
-  k <- unique(class_df$selected_k)
-
-  jaccard <- if (union_n > 0L) {
-    joint_n / union_n
-  } else {
-    NA_real_
+  if (good_n + cross_n != union_n) {
+    stop("Classification counts do not sum to union size.")
   }
 
   data.frame(
-    k = k,
+    k = unique(class_df$selected_k)[1L],
+    cutoff_rank = unique(class_df$cutoff_rank)[1L],
     joint_n = joint_n,
-    disjoint_control_n = control_only_n,
-    disjoint_treatment_n = treatment_only_n,
-    disjoint_total_n = disjoint_n,
+    eligible_disjoint_control_n = eligible_disjoint_control_n,
+    eligible_disjoint_treatment_n = eligible_disjoint_treatment_n,
+    eligible_disjoint_n = eligible_disjoint_n,
+    good_n = good_n,
+    cross_divergence_n = cross_divergence_n,
+    cross_remainder_n = cross_remainder_n,
+    cross_n = cross_n,
     union_n = union_n,
-    jaccard = jaccard,
-    all_union_sites_inside_both_c2_regimes =
-      all(class_df$eligible_both_c2),
-    offending_n =
-      sum(!class_df$eligible_both_c2),
+    good_fraction = good_n / union_n,
+    crossing_fraction = cross_n / union_n,
     stringsAsFactors = FALSE
   )
 }
@@ -1302,7 +1828,7 @@ build_arm_scaling_table <- function(
     comparisons,
     c1,
     c2,
-    common_k,
+    selected_k,
     paper_k) {
 
   rows <- list()
@@ -1317,7 +1843,7 @@ build_arm_scaling_table <- function(
 
       selected_rank <- rank_cutoff_from_k(
         N,
-        common_k
+        selected_k
       )
 
       paper_rank <- rank_cutoff_from_k(
@@ -1332,6 +1858,11 @@ build_arm_scaling_table <- function(
         p_remainder = get_region_p(
           df,
           df$rank < c1
+        ),
+        p_divergence = get_region_p(
+          df,
+          df$rank >= c1 &
+          df$rank <= c2
         ),
         p_leading_edge = get_region_p(
           df,
@@ -1356,10 +1887,10 @@ build_arm_scaling_table <- function(
 build_timepoint_table <- function(
     group_results,
     comparisons,
-    pair_cutoffs,
-    selected_sites,
+    pair_optima,
+    selected_summaries,
     paper_summaries,
-    common_k,
+    global_k,
     c1,
     c2,
     paper_k,
@@ -1370,18 +1901,16 @@ build_timepoint_table <- function(
   for (comparison_name in names(comparisons)) {
     mapping <- comparisons[[comparison_name]]
 
-    control_group <- unname(mapping[["control"]])
-    treatment_group <- unname(mapping[["treatment"]])
-
-    pair_info <- pair_cutoffs[[comparison_name]]
-
-    selected_df <- selected_sites %>%
-      filter(comparison == comparison_name)
-
-    selected_summary <- summarize_classification(
-      selected_df
+    control_group <- unname(
+      mapping[["control"]]
     )
 
+    treatment_group <- unname(
+      mapping[["treatment"]]
+    )
+
+    pair_opt <- pair_optima[[comparison_name]]
+    selected_summary <- selected_summaries[[comparison_name]]
     paper_summary <- paper_summaries[[comparison_name]]
 
     rows[[length(rows) + 1L]] <- data.frame(
@@ -1391,6 +1920,7 @@ build_timepoint_table <- function(
 
       c1 = c1,
       c2 = c2,
+      c2_leading_edge_n = N - c2,
 
       control_anchor =
         group_results[[control_group]]$anchor,
@@ -1401,44 +1931,61 @@ build_timepoint_table <- function(
       treatment_terminal =
         group_results[[treatment_group]]$terminal,
 
-      pairwise_max_eligible_k =
-        pair_info$k_star,
-      pairwise_cutoff_rank =
-        pair_info$cutoff_rank,
-      first_invalid_k =
-        pair_info$first_invalid_k,
+      pairwise_pareto_k =
+        pair_opt$selected_k,
+      pairwise_knee_score =
+        pair_opt$selected_knee_score,
+      pairwise_max_zero_crossing_k =
+        pair_opt$max_zero_crossing_k,
 
-      common_selected_k = common_k,
-      common_selected_cutoff_rank =
-        rank_cutoff_from_k(N, common_k),
+      global_selected_k = global_k,
+      global_selected_cutoff_rank =
+        rank_cutoff_from_k(N, global_k),
+
+      selected_joint_n =
+        selected_summary$joint_n,
+      selected_eligible_disjoint_control_n =
+        selected_summary$eligible_disjoint_control_n,
+      selected_eligible_disjoint_treatment_n =
+        selected_summary$eligible_disjoint_treatment_n,
+      selected_good_n =
+        selected_summary$good_n,
+      selected_cross_divergence_n =
+        selected_summary$cross_divergence_n,
+      selected_cross_remainder_n =
+        selected_summary$cross_remainder_n,
+      selected_cross_n =
+        selected_summary$cross_n,
+      selected_union_n =
+        selected_summary$union_n,
+      selected_good_fraction =
+        selected_summary$good_fraction,
+      selected_crossing_fraction =
+        selected_summary$crossing_fraction,
 
       paper_reference_k = paper_k,
       paper_reference_cutoff_rank =
         rank_cutoff_from_k(N, paper_k),
-      paper_5000_eligible =
-        paper_k <= pair_info$k_star,
-
-      selected_joint_n =
-        selected_summary$joint_n,
-      selected_disjoint_control_n =
-        selected_summary$disjoint_control_n,
-      selected_disjoint_treatment_n =
-        selected_summary$disjoint_treatment_n,
-      selected_union_n =
-        selected_summary$union_n,
-      selected_jaccard =
-        selected_summary$jaccard,
-
       paper_joint_n =
         paper_summary$joint_n,
-      paper_disjoint_control_n =
-        paper_summary$disjoint_control_n,
-      paper_disjoint_treatment_n =
-        paper_summary$disjoint_treatment_n,
+      paper_eligible_disjoint_control_n =
+        paper_summary$eligible_disjoint_control_n,
+      paper_eligible_disjoint_treatment_n =
+        paper_summary$eligible_disjoint_treatment_n,
+      paper_good_n =
+        paper_summary$good_n,
+      paper_cross_divergence_n =
+        paper_summary$cross_divergence_n,
+      paper_cross_remainder_n =
+        paper_summary$cross_remainder_n,
+      paper_cross_n =
+        paper_summary$cross_n,
       paper_union_n =
         paper_summary$union_n,
-      paper_offending_n =
-        paper_summary$offending_n,
+      paper_good_fraction =
+        paper_summary$good_fraction,
+      paper_crossing_fraction =
+        paper_summary$crossing_fraction,
 
       stringsAsFactors = FALSE
     )
@@ -1450,63 +1997,88 @@ build_timepoint_table <- function(
 build_key_table <- function(
     timepoint_table,
     arm_scaling,
+    global_opt,
     N,
     c1,
     c2,
-    common_k,
     paper_k,
     shared_sse) {
 
+  global_row <- global_opt$scan %>%
+    filter(k == global_opt$selected_k) %>%
+    slice(1L)
+
+  paper_row <- global_opt$scan %>%
+    filter(k == paper_k) %>%
+    slice(1L)
+
   data.frame(
     n_features = N,
-
     shared_c1 = c1,
     shared_c2 = c2,
     c2_leading_edge_n = N - c2,
 
-    common_selected_k = common_k,
-    common_selected_cutoff_rank =
-      rank_cutoff_from_k(N, common_k),
+    global_selected_k = global_opt$selected_k,
+    global_selected_cutoff_rank =
+      rank_cutoff_from_k(N, global_opt$selected_k),
+    global_knee_score =
+      global_opt$selected_knee_score,
+    global_max_zero_crossing_k =
+      global_opt$max_zero_crossing_k,
+
+    global_selected_good_n =
+      global_row$good_n,
+    global_selected_cross_divergence_n =
+      global_row$cross_divergence_n,
+    global_selected_cross_remainder_n =
+      global_row$cross_remainder_n,
+    global_selected_cross_n =
+      global_row$cross_n,
+    global_selected_union_n =
+      global_row$union_n,
+    global_selected_good_fraction =
+      global_row$good_fraction,
 
     pairwise_k_min =
-      min(timepoint_table$pairwise_max_eligible_k),
+      min(timepoint_table$pairwise_pareto_k),
     pairwise_k_median =
-      median(timepoint_table$pairwise_max_eligible_k),
+      median(timepoint_table$pairwise_pareto_k),
     pairwise_k_max =
-      max(timepoint_table$pairwise_max_eligible_k),
+      max(timepoint_table$pairwise_pareto_k),
 
     paper_reference_k = paper_k,
     paper_reference_cutoff_rank =
       rank_cutoff_from_k(N, paper_k),
-    paper_reference_used_in_analysis = FALSE,
-    paper_reference_eligible_all_comparisons =
-      all(timepoint_table$paper_5000_eligible),
+    paper_reference_used_in_fitting = FALSE,
+    paper_global_good_n =
+      if (nrow(paper_row) == 1L) paper_row$good_n else NA_integer_,
+    paper_global_cross_n =
+      if (nrow(paper_row) == 1L) paper_row$cross_n else NA_integer_,
+    paper_global_good_fraction =
+      if (nrow(paper_row) == 1L) paper_row$good_fraction else NA_real_,
 
-    anchor_median =
-      median(
-        c(
-          timepoint_table$control_anchor,
-          timepoint_table$treatment_anchor
-        )
-      ),
+    anchor_median = median(
+      c(
+        timepoint_table$control_anchor,
+        timepoint_table$treatment_anchor
+      )
+    ),
 
-    terminal_median =
-      median(
-        c(
-          timepoint_table$control_terminal,
-          timepoint_table$treatment_terminal
-        )
-      ),
+    terminal_median = median(
+      c(
+        timepoint_table$control_terminal,
+        timepoint_table$treatment_terminal
+      )
+    ),
 
     p_remainder_median =
       safe_summary(arm_scaling$p_remainder),
-
+    p_divergence_median =
+      safe_summary(arm_scaling$p_divergence),
     p_leading_edge_median =
       safe_summary(arm_scaling$p_leading_edge),
-
     p_selected_k_median =
       safe_summary(arm_scaling$p_selected_k),
-
     p_paper_5000_median =
       safe_summary(arm_scaling$p_paper_5000),
 
@@ -1629,6 +2201,90 @@ add_rank_regions <- function(
     )
 }
 
+make_cutoff_panel <- function(
+    scan_df,
+    selected_k,
+    paper_k,
+    title_text) {
+
+  selected <- scan_df %>%
+    filter(k == selected_k) %>%
+    slice(1L)
+
+  paper <- scan_df %>%
+    filter(k == paper_k) %>%
+    slice(1L)
+
+  frontier <- scan_df %>%
+    filter(is_pareto) %>%
+    arrange(cross_n, good_n)
+
+  p <- ggplot(
+    scan_df,
+    aes(
+      x = cross_n,
+      y = good_n
+    )
+  ) +
+    geom_path(
+      aes(group = 1),
+      linewidth = 0.55,
+      alpha = 0.40
+    ) +
+    geom_path(
+      data = frontier,
+      aes(group = 1),
+      linewidth = 1.15
+    ) +
+    geom_point(
+      data = selected,
+      size = 3.6,
+      shape = 18
+    ) +
+    labs(
+      title = title_text,
+      subtitle = paste0(
+        "Pareto knee k*=",
+        selected_k,
+        "; 5k shown as reference"
+      ),
+      x = "Outside leading edge",
+      y = "Joint + eligible disjoint"
+    ) +
+    theme_manuscript() +
+    theme(
+      legend.position = "none"
+    )
+
+  if (nrow(paper) == 1L) {
+    p <- p +
+      geom_point(
+        data = paper,
+        size = 3.2,
+        shape = 1,
+        stroke = 1.0
+      ) +
+      annotate(
+        "text",
+        x = paper$cross_n,
+        y = paper$good_n,
+        label = "5k",
+        vjust = -0.8,
+        size = 2.8
+      )
+  }
+
+  p +
+    annotate(
+      "text",
+      x = selected$cross_n,
+      y = selected$good_n,
+      label = "k*",
+      vjust = 1.7,
+      size = 2.8
+    )
+}
+
 
 # =============================================================================
 # OVERALL FIGURE
@@ -1638,9 +2294,10 @@ make_overall_figure <- function(
     overall_df,
     key_table,
     arm_scaling,
+    global_scan,
     c1,
     c2,
-    common_k,
+    selected_k,
     paper_k,
     out_file) {
 
@@ -1648,7 +2305,7 @@ make_overall_figure <- function(
 
   selected_rank <- rank_cutoff_from_k(
     N,
-    common_k
+    selected_k
   )
 
   paper_rank <- rank_cutoff_from_k(
@@ -1659,18 +2316,7 @@ make_overall_figure <- function(
   anchor_median <- key_table$anchor_median[1L]
   terminal_median <- key_table$terminal_median[1L]
 
-  paper_status <- if (
-    key_table$paper_reference_eligible_all_comparisons[1L]
-  ) {
-    "eligible"
-  } else {
-    "ineligible"
-  }
-
-  # -----------------------------------------------------------------------
-  # A. RAW-COUNT VARIANCE GEOMETRY
-  # -----------------------------------------------------------------------
-
+  # A. Raw-count variance geometry.
   a_lines <- data.frame(
     rank = c(
       c2,
@@ -1679,7 +2325,7 @@ make_overall_figure <- function(
     ),
     key = c(
       "c2",
-      paste0("k*=", common_k),
+      paste0("k*=", selected_k),
       "5k ref"
     ),
     stringsAsFactors = FALSE
@@ -1690,7 +2336,7 @@ make_overall_figure <- function(
     "c2" = COL$c2,
     stats::setNames(
       COL$selected,
-      paste0("k*=", common_k)
+      paste0("k*=", selected_k)
     ),
     "5k ref" = COL$paper
   )
@@ -1700,7 +2346,7 @@ make_overall_figure <- function(
     "c2" = "longdash",
     stats::setNames(
       "dotdash",
-      paste0("k*=", common_k)
+      paste0("k*=", selected_k)
     ),
     "5k ref" = "dotted"
   )
@@ -1775,19 +2421,13 @@ make_overall_figure <- function(
     ) +
     labs(
       title = "A. Raw-count variance geometry",
-      subtitle = paste0(
-        "A/T = first two y''=0 crossings after c2; 5k reference = ",
-        paper_status
-      ),
+      subtitle = "A/T = first two y''=0 crossings after c2",
       x = "PC1 rank: low |loading| -> high |loading|",
       y = "Smoothed log(1 + raw-count variance)"
     ) +
     theme_manuscript()
 
-  # -----------------------------------------------------------------------
-  # B. CUMULATIVE DIVERGENCE
-  # -----------------------------------------------------------------------
-
+  # B. Cumulative divergence.
   b_lines <- data.frame(
     rank = c(
       c1,
@@ -1798,7 +2438,7 @@ make_overall_figure <- function(
     key = c(
       "c1",
       "c2",
-      paste0("k*=", common_k),
+      paste0("k*=", selected_k),
       "5k ref"
     ),
     stringsAsFactors = FALSE
@@ -1811,7 +2451,7 @@ make_overall_figure <- function(
     "c2" = COL$c2,
     stats::setNames(
       COL$selected,
-      paste0("k*=", common_k)
+      paste0("k*=", selected_k)
     ),
     "5k ref" = COL$paper
   )
@@ -1823,7 +2463,7 @@ make_overall_figure <- function(
     "c2" = "longdash",
     stats::setNames(
       "dotdash",
-      paste0("k*=", common_k)
+      paste0("k*=", selected_k)
     ),
     "5k ref" = "dotted"
   )
@@ -1883,20 +2523,26 @@ make_overall_figure <- function(
     ) +
     labs(
       title = "B. Cumulative PC1-NB variance-mass divergence",
-      subtitle = "D(r)=F_E(r)-F_P(r); shared c1/c2 fitted across all 8 arms",
+      subtitle = "D(r)=F_E(r)-F_P(r); shared c1/c2 across 8 arms",
       x = "PC1 rank",
       y = "Cumulative divergence D(r)"
     ) +
     theme_manuscript()
 
-  # -----------------------------------------------------------------------
-  # C. POST-BOUNDARY NB SCALING
-  # -----------------------------------------------------------------------
+  # C. Pareto cutoff optimization.
+  pC <- make_cutoff_panel(
+    scan_df = global_scan,
+    selected_k = selected_k,
+    paper_k = paper_k,
+    title_text = "C. Global cutoff optimization"
+  )
 
+  # D. Post-boundary NB scaling.
   scaling_plot <- arm_scaling %>%
     select(
       group,
       p_remainder,
+      p_divergence,
       p_leading_edge,
       p_selected_k,
       p_paper_5000
@@ -1904,6 +2550,7 @@ make_overall_figure <- function(
     pivot_longer(
       cols = c(
         p_remainder,
+        p_divergence,
         p_leading_edge,
         p_selected_k,
         p_paper_5000
@@ -1916,20 +2563,22 @@ make_overall_figure <- function(
         region,
         levels = c(
           "p_remainder",
+          "p_divergence",
           "p_leading_edge",
           "p_selected_k",
           "p_paper_5000"
         ),
         labels = c(
           "Remainder",
+          "Divergence",
           "Leading edge",
-          paste0("Selected k*=", common_k),
+          paste0("Selected k*=", selected_k),
           "5k reference"
         )
       )
     )
 
-  pC <- ggplot(
+  pD <- ggplot(
     scaling_plot,
     aes(
       x = p,
@@ -1963,7 +2612,7 @@ make_overall_figure <- function(
       shape = 18
     ) +
     labs(
-      title = "C. Post-boundary NB mean-variance scaling",
+      title = "D. Post-boundary NB mean-variance scaling",
       subtitle = "Corroboration only: p~1 NB1-like; p~2 NB2-like",
       x = "Exponent p in E = alpha * mu^p",
       y = NULL
@@ -1977,10 +2626,11 @@ make_overall_figure <- function(
     list(
       pA,
       pB,
-      pC
+      pC,
+      pD
     ),
     out_file,
-    height_in = 11.7
+    height_in = 15.0
   )
 }
 
@@ -1994,10 +2644,11 @@ make_timepoint_figure <- function(
     mapping,
     group_results,
     arm_scaling,
-    timepoint_table,
+    pair_scan,
+    pair_optimum,
+    global_k,
     c1,
     c2,
-    common_k,
     paper_k,
     out_file) {
 
@@ -2016,7 +2667,7 @@ make_timepoint_figure <- function(
 
   selected_rank <- rank_cutoff_from_k(
     N,
-    common_k
+    global_k
   )
 
   paper_rank <- rank_cutoff_from_k(
@@ -2024,31 +2675,13 @@ make_timepoint_figure <- function(
     paper_k
   )
 
-  tp <- timepoint_table %>%
-    filter(
-      comparison == comparison_name
-    )
-
-  pair_k <- tp$pairwise_max_eligible_k[1L]
-
-  paper_status <- if (
-    tp$paper_5000_eligible[1L]
-  ) {
-    "eligible"
-  } else {
-    "ineligible"
-  }
-
   c_anchor <- group_results[[control_group]]$anchor
   c_terminal <- group_results[[control_group]]$terminal
 
   t_anchor <- group_results[[treatment_group]]$anchor
   t_terminal <- group_results[[treatment_group]]$terminal
 
-  # -----------------------------------------------------------------------
-  # A. RAW-COUNT VARIANCE GEOMETRY
-  # -----------------------------------------------------------------------
-
+  # A. Raw-count variance geometry.
   a_lines <- data.frame(
     rank = c(
       c2,
@@ -2057,7 +2690,7 @@ make_timepoint_figure <- function(
     ),
     key = c(
       "c2",
-      paste0("k*=", common_k),
+      paste0("k*=", global_k),
       "5k ref"
     ),
     stringsAsFactors = FALSE
@@ -2069,7 +2702,7 @@ make_timepoint_figure <- function(
     "c2" = COL$c2,
     stats::setNames(
       COL$selected,
-      paste0("k*=", common_k)
+      paste0("k*=", global_k)
     ),
     "5k ref" = COL$paper
   )
@@ -2080,7 +2713,7 @@ make_timepoint_figure <- function(
     "c2" = "longdash",
     stats::setNames(
       "dotdash",
-      paste0("k*=", common_k)
+      paste0("k*=", global_k)
     ),
     "5k ref" = "dotted"
   )
@@ -2203,21 +2836,13 @@ make_timepoint_figure <- function(
         comparison_name,
         " raw-count variance geometry"
       ),
-      subtitle = paste0(
-        "Pair k*=", pair_k,
-        "; common k*=", common_k,
-        "; 5k=", paper_status,
-        "; A/T = first two y''=0 crossings after c2"
-      ),
+      subtitle = "A/T = first two y''=0 crossings after c2",
       x = "PC1 rank: low |loading| -> high |loading|",
       y = "Smoothed log(1 + raw-count variance)"
     ) +
     theme_manuscript()
 
-  # -----------------------------------------------------------------------
-  # B. CUMULATIVE DIVERGENCE
-  # -----------------------------------------------------------------------
-
+  # B. Cumulative divergence.
   b_lines <- data.frame(
     rank = c(
       c1,
@@ -2228,7 +2853,7 @@ make_timepoint_figure <- function(
     key = c(
       "c1",
       "c2",
-      paste0("k*=", common_k),
+      paste0("k*=", global_k),
       "5k ref"
     ),
     stringsAsFactors = FALSE
@@ -2241,7 +2866,7 @@ make_timepoint_figure <- function(
     "c2" = COL$c2,
     stats::setNames(
       COL$selected,
-      paste0("k*=", common_k)
+      paste0("k*=", global_k)
     ),
     "5k ref" = COL$paper
   )
@@ -2253,7 +2878,7 @@ make_timepoint_figure <- function(
     "c2" = "longdash",
     stats::setNames(
       "dotdash",
-      paste0("k*=", common_k)
+      paste0("k*=", global_k)
     ),
     "5k ref" = "dotted"
   )
@@ -2316,16 +2941,41 @@ make_timepoint_figure <- function(
         comparison_name,
         " cumulative PC1-NB divergence"
       ),
-      subtitle = "D(r)=F_E(r)-F_P(r); shared c1/c2 from all 8 arms",
+      subtitle = "D(r)=F_E(r)-F_P(r); shared c1/c2",
       x = "PC1 rank",
       y = "Cumulative divergence D(r)"
     ) +
     theme_manuscript()
 
-  # -----------------------------------------------------------------------
-  # C. POST-BOUNDARY NB SCALING
-  # -----------------------------------------------------------------------
+  # C. Pair-specific Pareto optimization.
+  pC <- make_cutoff_panel(
+    scan_df = pair_scan,
+    selected_k = pair_optimum$selected_k,
+    paper_k = paper_k,
+    title_text = paste0(
+      "C. ",
+      comparison_name,
+      " cutoff optimization"
+    )
+  ) +
+    labs(
+      subtitle = paste0(
+        "Pair knee=",
+        pair_optimum$selected_k,
+        "; global k*=",
+        global_k,
+        "; 5k reference"
+      )
+    ) +
+    geom_point(
+      data = pair_scan %>%
+        filter(k == global_k),
+      size = 3.2,
+      shape = 4,
+      stroke = 1.1
+    )
 
+  # D. Post-boundary NB scaling.
   scaling <- arm_scaling %>%
     filter(
       comparison == comparison_name
@@ -2340,6 +2990,7 @@ make_timepoint_figure <- function(
     select(
       arm_label,
       p_remainder,
+      p_divergence,
       p_leading_edge,
       p_selected_k,
       p_paper_5000
@@ -2347,6 +2998,7 @@ make_timepoint_figure <- function(
     pivot_longer(
       cols = c(
         p_remainder,
+        p_divergence,
         p_leading_edge,
         p_selected_k,
         p_paper_5000
@@ -2359,20 +3011,22 @@ make_timepoint_figure <- function(
         region,
         levels = c(
           "p_remainder",
+          "p_divergence",
           "p_leading_edge",
           "p_selected_k",
           "p_paper_5000"
         ),
         labels = c(
           "Remainder",
+          "Divergence",
           "Leading edge",
-          paste0("Selected k*=", common_k),
+          paste0("Selected k*=", global_k),
           "5k reference"
         )
       )
     )
 
-  pC <- ggplot(
+  pD <- ggplot(
     scaling,
     aes(
       x = p,
@@ -2401,7 +3055,7 @@ make_timepoint_figure <- function(
     ) +
     labs(
       title = paste0(
-        "C. ",
+        "D. ",
         comparison_name,
         " post-boundary NB scaling"
       ),
@@ -2415,10 +3069,11 @@ make_timepoint_figure <- function(
     list(
       pA,
       pB,
-      pC
+      pC,
+      pD
     ),
     out_file,
-    height_in = 11.8
+    height_in = 15.2
   )
 }
 
@@ -2513,9 +3168,21 @@ knot_fit <- fit_shared_knots(
 
 C1 <- knot_fit$c1
 C2 <- knot_fit$c2
+MAX_CANDIDATE_K <- as.integer(N - C2)
 
 message("Shared c1 = ", C1)
 message("Shared c2 = ", C2)
+message(
+  "Maximum candidate k constrained by own-arm leading edge = ",
+  MAX_CANDIDATE_K
+)
+
+if (PAPER_REFERENCE_K > MAX_CANDIDATE_K) {
+  warning(
+    "Historical top-5,000 reference extends left of c2 and is outside the ",
+    "candidate optimization domain. It will remain reference-only."
+  )
+}
 
 message(
   "Selecting Anchor/Terminal from first two raw-variance y''=0 crossings after c2..."
@@ -2533,11 +3200,16 @@ for (g in names(group_results)) {
   group_results[[g]]$terminal <- at$terminal
 }
 
+# -------------------------------------------------------------------------
+# Exhaustive pairwise cutoff scans.
+# -------------------------------------------------------------------------
+
 message(
-  "Finding pairwise maximum eligible top-k values..."
+  "Scanning all candidate k values for joint/disjoint benefit and c2 crossings..."
 )
 
-pair_cutoffs <- list()
+pair_scans <- list()
+pair_optima <- list()
 
 for (comparison_name in names(COMPARISONS)) {
   mapping <- COMPARISONS[[comparison_name]]
@@ -2550,49 +3222,74 @@ for (comparison_name in names(COMPARISONS)) {
     mapping[["treatment"]]
   )
 
-  pair_cutoffs[[comparison_name]] <-
-    find_pairwise_max_eligible_k(
-      control_df =
-        group_results[[control_group]]$data,
-      treatment_df =
-        group_results[[treatment_group]]$data,
-      c2 = C2
-    )
+  scan <- scan_pair_cutoffs(
+    control_df =
+      group_results[[control_group]]$data,
+    treatment_df =
+      group_results[[treatment_group]]$data,
+    c1 = C1,
+    c2 = C2,
+    comparison_name = comparison_name,
+    control_group = control_group,
+    treatment_group = treatment_group
+  )
+
+  opt <- select_pareto_knee(
+    scan,
+    good_col = "good_n",
+    cost_col = "cross_n"
+  )
+
+  pair_scans[[comparison_name]] <- opt$scan
+  pair_optima[[comparison_name]] <- opt
 
   message(
     comparison_name,
-    ": pairwise k* = ",
-    pair_cutoffs[[comparison_name]]$k_star,
-    "; first invalid k = ",
-    pair_cutoffs[[comparison_name]]$first_invalid_k
+    ": pair Pareto knee k*=",
+    opt$selected_k,
+    "; good=",
+    opt$selected_good,
+    "; crossings=",
+    opt$selected_cost,
+    "; max zero-crossing k=",
+    ifelse(
+      is.na(opt$max_zero_crossing_k),
+      "none",
+      opt$max_zero_crossing_k
+    )
   )
 }
 
-PAIR_K_VALUES <- vapply(
-  pair_cutoffs,
-  function(z) z$k_star,
-  integer(1)
+# -------------------------------------------------------------------------
+# Global common cutoff: aggregate objectives across all four comparisons.
+# -------------------------------------------------------------------------
+
+global_scan_raw <- aggregate_global_cutoff_scan(
+  pair_scans
 )
 
-COMMON_K <- min(
-  PAIR_K_VALUES
+global_opt <- select_pareto_knee(
+  global_scan_raw,
+  good_col = "good_n",
+  cost_col = "cross_n"
 )
 
-COMMON_CUTOFF_RANK <- rank_cutoff_from_k(
+GLOBAL_K <- global_opt$selected_k
+GLOBAL_CUTOFF_RANK <- rank_cutoff_from_k(
   N,
-  COMMON_K
+  GLOBAL_K
 )
 
 message(
-  "Largest common eligible k across all comparisons = ",
-  COMMON_K,
+  "GLOBAL Pareto knee k*=",
+  GLOBAL_K,
   " (cutoff rank ",
-  COMMON_CUTOFF_RANK,
+  GLOBAL_CUTOFF_RANK,
   ")"
 )
 
 message(
-  "Historical paper k = ",
+  "Historical paper k=",
   PAPER_REFERENCE_K,
   " (cutoff rank ",
   PAPER_REFERENCE_RANK,
@@ -2600,10 +3297,13 @@ message(
 )
 
 # -------------------------------------------------------------------------
-# Classify selected Joint / Disjoint sites at the common eligible k.
+# Classify actual sites at the global selected k and historical 5k reference.
+# Only Joint + eligible disjoint sites are retained downstream.
 # -------------------------------------------------------------------------
 
-selected_site_rows <- list()
+selected_rows <- list()
+excluded_rows <- list()
+selected_summaries <- list()
 paper_summaries <- list()
 
 for (comparison_name in names(COMPARISONS)) {
@@ -2617,48 +3317,76 @@ for (comparison_name in names(COMPARISONS)) {
     mapping[["treatment"]]
   )
 
-  selected_df <- classify_pair_at_k(
+  selected_all <- classify_pair_at_k(
     control_df =
       group_results[[control_group]]$data,
     treatment_df =
       group_results[[treatment_group]]$data,
-    k = COMMON_K,
+    k = GLOBAL_K,
+    c1 = C1,
     c2 = C2,
     comparison_name = comparison_name,
     control_group = control_group,
     treatment_group = treatment_group
   )
 
-  if (!all(selected_df$eligible_both_c2)) {
-    stop(
-      "Internal error: common selected k is not eligible for ",
-      comparison_name,
-      "."
+  selected_summaries[[comparison_name]] <-
+    summarize_classification(
+      selected_all
+    )
+
+  selected_rows[[comparison_name]] <-
+    selected_all %>%
+    filter(eligible_leading_edge)
+
+  excluded_rows[[comparison_name]] <-
+    selected_all %>%
+    filter(!eligible_leading_edge)
+
+  if (PAPER_REFERENCE_K <= MAX_CANDIDATE_K) {
+    paper_all <- classify_pair_at_k(
+      control_df =
+        group_results[[control_group]]$data,
+      treatment_df =
+        group_results[[treatment_group]]$data,
+      k = PAPER_REFERENCE_K,
+      c1 = C1,
+      c2 = C2,
+      comparison_name = comparison_name,
+      control_group = control_group,
+      treatment_group = treatment_group
+    )
+
+    paper_summaries[[comparison_name]] <-
+      summarize_classification(
+        paper_all
+      )
+  } else {
+    paper_summaries[[comparison_name]] <- data.frame(
+      k = PAPER_REFERENCE_K,
+      cutoff_rank = PAPER_REFERENCE_RANK,
+      joint_n = NA_integer_,
+      eligible_disjoint_control_n = NA_integer_,
+      eligible_disjoint_treatment_n = NA_integer_,
+      eligible_disjoint_n = NA_integer_,
+      good_n = NA_integer_,
+      cross_divergence_n = NA_integer_,
+      cross_remainder_n = NA_integer_,
+      cross_n = NA_integer_,
+      union_n = NA_integer_,
+      good_fraction = NA_real_,
+      crossing_fraction = NA_real_,
+      stringsAsFactors = FALSE
     )
   }
-
-  selected_site_rows[[comparison_name]] <- selected_df
-
-  paper_df <- classify_pair_at_k(
-    control_df =
-      group_results[[control_group]]$data,
-    treatment_df =
-      group_results[[treatment_group]]$data,
-    k = PAPER_REFERENCE_K,
-    c2 = C2,
-    comparison_name = comparison_name,
-    control_group = control_group,
-    treatment_group = treatment_group
-  )
-
-  paper_summaries[[comparison_name]] <-
-    summarize_classification(
-      paper_df
-    )
 }
 
 selected_sites <- bind_rows(
-  selected_site_rows
+  selected_rows
+)
+
+excluded_sites <- bind_rows(
+  excluded_rows
 )
 
 write.csv(
@@ -2666,6 +3394,15 @@ write.csv(
   file.path(
     OUT_ROOT,
     "Selected_LeadingEdge_Sites.csv"
+  ),
+  row.names = FALSE
+)
+
+write.csv(
+  excluded_sites,
+  file.path(
+    OUT_ROOT,
+    "Excluded_Crossing_Sites.csv"
   ),
   row.names = FALSE
 )
@@ -2679,21 +3416,21 @@ arm_scaling <- build_arm_scaling_table(
   comparisons = COMPARISONS,
   c1 = C1,
   c2 = C2,
-  common_k = COMMON_K,
+  selected_k = GLOBAL_K,
   paper_k = PAPER_REFERENCE_K
 )
 
 # -------------------------------------------------------------------------
-# Compact manuscript result tables.
+# Result tables.
 # -------------------------------------------------------------------------
 
 timepoint_table <- build_timepoint_table(
   group_results = group_results,
   comparisons = COMPARISONS,
-  pair_cutoffs = pair_cutoffs,
-  selected_sites = selected_sites,
+  pair_optima = pair_optima,
+  selected_summaries = selected_summaries,
   paper_summaries = paper_summaries,
-  common_k = COMMON_K,
+  global_k = GLOBAL_K,
   c1 = C1,
   c2 = C2,
   paper_k = PAPER_REFERENCE_K,
@@ -2703,10 +3440,10 @@ timepoint_table <- build_timepoint_table(
 key_table <- build_key_table(
   timepoint_table = timepoint_table,
   arm_scaling = arm_scaling,
+  global_opt = global_opt,
   N = N,
   c1 = C1,
   c2 = C2,
-  common_k = COMMON_K,
   paper_k = PAPER_REFERENCE_K,
   shared_sse = knot_fit$SSE
 )
@@ -2725,6 +3462,25 @@ write.csv(
   file.path(
     OUT_ROOT,
     "Table_Timepoints.csv"
+  ),
+  row.names = FALSE
+)
+
+# Full pairwise + global cutoff optimization scan.
+cutoff_table <- bind_rows(
+  bind_rows(pair_scans),
+  global_opt$scan
+) %>%
+  arrange(
+    comparison,
+    k
+  )
+
+write.csv(
+  cutoff_table,
+  file.path(
+    OUT_ROOT,
+    "Table_Cutoff_Optimization.csv"
   ),
   row.names = FALSE
 )
@@ -2749,9 +3505,10 @@ make_overall_figure(
   overall_df = overall_df,
   key_table = key_table,
   arm_scaling = arm_scaling,
+  global_scan = global_opt$scan,
   c1 = C1,
   c2 = C2,
-  common_k = COMMON_K,
+  selected_k = GLOBAL_K,
   paper_k = PAPER_REFERENCE_K,
   out_file = overall_path
 )
@@ -2776,10 +3533,11 @@ for (comparison_name in names(COMPARISONS)) {
     mapping = COMPARISONS[[comparison_name]],
     group_results = group_results,
     arm_scaling = arm_scaling,
-    timepoint_table = timepoint_table,
+    pair_scan = pair_scans[[comparison_name]],
+    pair_optimum = pair_optima[[comparison_name]],
+    global_k = GLOBAL_K,
     c1 = C1,
     c2 = C2,
-    common_k = COMMON_K,
     paper_k = PAPER_REFERENCE_K,
     out_file = fig_path
   )
@@ -2791,7 +3549,7 @@ for (comparison_name in names(COMPARISONS)) {
 }
 
 # -------------------------------------------------------------------------
-# Zip all figures while keeping each PNG individually available.
+# Zip figures while keeping all PNG files individually.
 # -------------------------------------------------------------------------
 
 ZIP_PATH <- file.path(
@@ -2834,35 +3592,70 @@ if (!zip_ok) {
 # =============================================================================
 
 message("============================================================")
-message("FINAL PC1-NB LEADING-EDGE ANALYSIS COMPLETE")
+message("FINAL PC1-NB / PARETO CUTOFF ANALYSIS COMPLETE")
 message("Shared c1 = ", C1)
 message("Shared c2 = ", C2)
 message("c2-defined leading-edge size per arm = ", N - C2)
 
 message(
-  "Pairwise maximum eligible k*: ",
+  "Pairwise Pareto knees: ",
   paste(
-    names(PAIR_K_VALUES),
-    PAIR_K_VALUES,
+    names(pair_optima),
+    vapply(
+      pair_optima,
+      function(z) z$selected_k,
+      integer(1)
+    ),
     sep = "=",
     collapse = "; "
   )
 )
 
 message(
-  "Largest common eligible k* = ",
-  COMMON_K,
+  "GLOBAL Pareto knee k* = ",
+  GLOBAL_K,
   " (rank >= ",
-  COMMON_CUTOFF_RANK,
+  GLOBAL_CUTOFF_RANK,
   ")"
 )
 
+global_selected_row <- global_opt$scan %>%
+  filter(k == GLOBAL_K) %>%
+  slice(1L)
+
 message(
-  "Historical 5,000 reference = rank >= ",
-  PAPER_REFERENCE_RANK,
-  "; eligible in all comparisons = ",
-  all(timepoint_table$paper_5000_eligible)
+  "At global k*: good joint/disjoint = ",
+  global_selected_row$good_n,
+  "; outside leading edge = ",
+  global_selected_row$cross_n,
+  " (divergence=",
+  global_selected_row$cross_divergence_n,
+  ", remainder=",
+  global_selected_row$cross_remainder_n,
+  ")"
 )
+
+if (PAPER_REFERENCE_K <= MAX_CANDIDATE_K) {
+  paper_global_row <- global_opt$scan %>%
+    filter(k == PAPER_REFERENCE_K) %>%
+    slice(1L)
+
+  message(
+    "Historical 5,000 reference: good = ",
+    paper_global_row$good_n,
+    "; outside leading edge = ",
+    paper_global_row$cross_n,
+    "; good fraction = ",
+    signif(
+      paper_global_row$good_fraction,
+      4
+    )
+  )
+} else {
+  message(
+    "Historical 5,000 reference lies outside c2-constrained optimization domain."
+  )
+}
 
 message(
   "Anchor-Terminal ranges: ",
@@ -2887,5 +3680,6 @@ message(
 message("Figures: ", FIG_DIR)
 message("Figure zip: ", ZIP_PATH)
 message("Selected sites: Selected_LeadingEdge_Sites.csv")
-message("Tables: Table_Key_Results.csv; Table_Timepoints.csv")
+message("Excluded crossings: Excluded_Crossing_Sites.csv")
+message("Tables: Table_Key_Results.csv; Table_Timepoints.csv; Table_Cutoff_Optimization.csv")
 message("============================================================")
