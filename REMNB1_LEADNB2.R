@@ -500,10 +500,28 @@ nb2_region_loglik <- function(alpha, counts_block, mu_vec) {
   sum(stats::dnbinom(counts_vec[keep], size = size, mu = mu_rep[keep], log = TRUE))
 }
 
-fit_region_alpha_mle <- function(counts_block, mu_vec) {
-  obj <- function(a) -nb2_region_loglik(a, counts_block, mu_vec)
-  opt <- stats::optimize(obj, lower = 1e-8, upper = 100, tol = 1e-8)
-  list(alpha_mle = opt$minimum, loglik = -opt$objective)
+fit_region_alpha_mle <- function(counts_block, mu_vec, log_alpha_lower = -15, log_alpha_upper = 15) {
+  # Searching on log(alpha) instead of alpha directly is far more robust when
+  # the true dispersion could plausibly span many orders of magnitude (as
+  # turned out to be the case for DESeq2-normalized, continuous-scale
+  # counts, which previously saturated a fixed alpha upper bound of 100 in
+  # every single case -- silently producing a meaningless MLE stuck at the
+  # boundary, -Inf log-likelihoods, and an NA LRT p-value). log_alpha_lower
+  # = -15 / log_alpha_upper = 15 correspond to alpha from ~3e-7 to ~3e6.
+  obj <- function(log_a) {
+    a <- exp(log_a)
+    -nb2_region_loglik(a, counts_block, mu_vec)
+  }
+  opt <- stats::optimize(obj, lower = log_alpha_lower, upper = log_alpha_upper, tol = 1e-8)
+  at_bound <- (opt$minimum <= log_alpha_lower + 1e-6) || (opt$minimum >= log_alpha_upper - 1e-6)
+  if (at_bound) {
+    warning(
+      "fit_region_alpha_mle: alpha MLE saturated at the search boundary ",
+      "(log_alpha = ", signif(opt$minimum, 4), "). This fit is unreliable; ",
+      "see the at_bound columns in the output table."
+    )
+  }
+  list(alpha_mle = exp(opt$minimum), loglik = -opt$objective, at_bound = at_bound)
 }
 
 compute_region_lrt <- function(metric_matrix, feature_df, left_idx, right_idx, deseq2_dispersion = NULL, deseq2_outlier_flag = NULL) {
@@ -536,15 +554,23 @@ compute_region_lrt <- function(metric_matrix, feature_df, left_idx, right_idx, d
     alpha_left_mle = fit_left$alpha_mle,
     alpha_right_mle = fit_right$alpha_mle,
     alpha_pooled_mle = fit_pooled$alpha_mle,
+    alpha_left_at_bound = fit_left$at_bound,
+    alpha_right_at_bound = fit_right$at_bound,
+    alpha_pooled_at_bound = fit_pooled$at_bound,
     loglik_left = fit_left$loglik,
     loglik_right = fit_right$loglik,
     loglik_pooled = fit_pooled$loglik,
     lrt_stat = lrt_stat,
     lrt_df = 1L,
     lrt_p = lrt_p,
+    # If any of the three fits saturated at the search boundary, the
+    # direction call is not meaningful -- report NA rather than a
+    # misleading "RIGHT_more_NB2" / "LEFT_more_NB2" label built on a
+    # broken estimate.
     lrt_direction = ifelse(
-      fit_right$alpha_mle > fit_left$alpha_mle,
-      "RIGHT_more_NB2", "LEFT_more_NB2"
+      fit_left$at_bound | fit_right$at_bound | fit_pooled$at_bound,
+      NA_character_,
+      ifelse(fit_right$alpha_mle > fit_left$alpha_mle, "RIGHT_more_NB2", "LEFT_more_NB2")
     ),
     stringsAsFactors = FALSE
   )
