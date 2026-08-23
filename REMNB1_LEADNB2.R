@@ -116,7 +116,7 @@ options(stringsAsFactors = FALSE)
 # =============================================================================
 
 COUNT_FILE <- "/root/REAPER98632/data/WTTS-Seq_2022.2_DE_raw_read_numbers.csv"
-OUT_ROOT   <- "/root/REAPER98632/exports/manuscript_final_clean"
+OUT_ROOT   <- "/root/REAPER98632/exports/remnb1_leadnb2_manuscript"
 
 FIXED_LEADING_EDGE_SIZE <- 5000L
 VAR_SPLINE_SPAR         <- 0.60
