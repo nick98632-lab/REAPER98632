@@ -20,46 +20,47 @@
 #   - that comparison's own empirical k* (pairwise_weighted_k), which
 #     differs by comparison (e.g. RT0_ZT6 and RT4_ZT10 do not share a value)
 #
-# DIAGNOSTIC A: Is Leading-Edge membership gene-intrinsic, or does it track
-# the true condition split?
-#   For each comparison, condition labels are randomly permuted many times.
-#   Under each permutation, PC1 is recomputed independently within each
-#   pseudo-arm and a permuted Leading-Edge set is derived exactly as in the
-#   real pipeline. If Leading-Edge membership reflects an intrinsic property
-#   of each gene (e.g. a stable dispersion regime), it should be largely
-#   insensitive to which samples get called "control" vs "treatment", and
-#   permuted Leading-Edge sets should still substantially overlap with the
-#   real Leading-Edge set. If Leading-Edge membership is actually tracking
-#   the true condition effect, scrambling the labels destroys that signal
-#   and permuted Leading-Edge sets should look close to a structureless
-#   random baseline. Remainder is reported symmetrically alongside Leading
-#   Edge, since both retain 100% of the data.
-#
-#   Two null references are reported alongside the real-vs-permuted
-#   overlap:
-#     - label-permutation null: PCA is still run, only labels are shuffled.
-#     - fully-random null: no PCA at all; two random k-subsets are drawn
-#       directly, as an absolute floor for how much overlap is expected
-#       from set size alone.
-#
-# DIAGNOSTIC B: Does Remainder behave like an NB1 (linear mean-variance)
+# DIAGNOSTIC 1: Does Remainder behave like an NB1 (linear mean-variance)
 # regime and Leading Edge like an NB2 (quadratic mean-variance) regime?
-#   Within each set, per-feature pooled within-group mean and variance are
-#   computed from DESeq2-normalized counts. Excess-over-Poisson variance
-#   (variance minus mean, floored at 0) is regressed against mean (NB1,
-#   linear) and against mean^2 (NB2, quadratic) separately for Remainder
-#   and for Leading Edge. Both R-squared and AIC are reported for each
-#   model in each set; AIC (delta_aic / preferred columns) is the primary
-#   comparison, since it is a more rigorous way to judge two non-nested
-#   models than raw R-squared on a through-origin fit. This directly tests
-#   whether Remainder fits NB1 better and Leading Edge fits NB2 better.
+#   Within each set, per-feature mean and variance come from DESeq2's own
+#   dispersion-shrinkage pipeline (estimateDispersions), not raw unshrunk
+#   per-feature sample variance: Var = mean + dispersion_final * mean^2,
+#   using DESeq2's final (empirical-Bayes MAP shrunk) dispersion estimate.
+#   This avoids letting a handful of noisy, low-replicate-count features
+#   dominate the curve fit, which raw sample variance is prone to with
+#   small n per group. Excess-over-Poisson variance (variance minus mean,
+#   floored at 0) is regressed against mean (NB1, linear) and against
+#   mean^2 (NB2, quadratic) separately for Remainder and for Leading Edge.
+#   Both R-squared and AIC are reported for each model in each set; AIC
+#   (delta_aic / preferred columns) is the primary comparison, since it is
+#   a more rigorous way to judge two non-nested models than raw R-squared
+#   on a through-origin fit. This directly tests whether Remainder fits
+#   NB1 better and Leading Edge fits NB2 better.
+#
+# DIAGNOSTIC 2: is the observed NB2-NB1 gap between Leading Edge and
+# Remainder bigger than a random partition of the same size would give?
+#   Diagnostic A tests whether gene-SET MEMBERSHIP survives relabeling --
+#   a question about whether Leading Edge is a gene-intrinsic property.
+#   Diagnostic C instead directly tests the specific quantity motivating
+#   the two-regime claim: gap = log1p(variance - mean) - log1p(mean), i.e.
+#   NB2 minus NB1, using the exact same formula as REMNB1_LEADNB2.R. Using
+#   the real (unpermuted) per-gene mean/variance throughout, the real
+#   median gap of Leading Edge minus the real median gap of Remainder is
+#   compared against a null built by repeatedly drawing a random gene
+#   subset of the same size as Leading Edge (independent of PC1 rank) and
+#   computing the same statistic. A one-sided permutation p-value reports
+#   how often a random partition matches or exceeds the real, PC1-defined
+#   partition's gap; a z-like effect size (real minus null mean, divided
+#   by null sd) gives a standardized magnitude.
 #
 # OUTPUTS (written to a directory separate from the existing pipeline):
-#   Table_Permutation_Stability.csv
 #   Table_NB_Regime_Fit.csv
-#   Figure_Permutation_Stability.png
+#   Table_Gap_Permutation.csv
 #   Figure_NB_Regime_Fit.png
 #   Figure_NB_Regime_AIC.png
+#   Figure_Gap_Permutation.png
+#   RegimeDiagnostic_Figures.zip
+#   RegimeDiagnostic_Tables.zip
 # =============================================================================
 
 suppressPackageStartupMessages({
@@ -221,25 +222,11 @@ leading_edge_set <- function(count_mat, sample_ids_arm1, sample_ids_arm2, k) {
   union(top1, top2)
 }
 
-jaccard <- function(a, b) {
-  inter <- length(intersect(a, b))
-  uni <- length(union(a, b))
-  if (uni == 0L) return(NA_real_)
-  inter / uni
-}
-
-chance_jaccard <- function(a_size, b_size, n_total) {
-  exp_inter <- (a_size * b_size) / n_total
-  exp_union <- a_size + b_size - exp_inter
-  if (exp_union <= 0) return(NA_real_)
-  exp_inter / exp_union
-}
-
 # -----------------------------------------------------------------------------
-# DIAGNOSTIC B helpers: NB1 (linear) vs NB2 (quadratic) mean-variance fit
+# DIAGNOSTIC 1 helpers: NB1 (linear) vs NB2 (quadratic) mean-variance fit
 # -----------------------------------------------------------------------------
 
-deseq2_normalize <- function(count_mat, group_labels) {
+deseq2_shrunk_mean_variance <- function(count_mat, group_labels) {
   if (!requireNamespace("DESeq2", quietly = TRUE)) {
     stop("DESeq2 is required for the NB regime diagnostic.")
   }
@@ -253,43 +240,60 @@ deseq2_normalize <- function(count_mat, group_labels) {
     DESeq2::estimateSizeFactors(dds),
     error = function(e) DESeq2::estimateSizeFactors(dds, type = "poscounts")
   )
-  DESeq2::counts(dds, normalized = TRUE)
-}
 
-pooled_mean_variance <- function(normalized_counts, group_labels) {
-  groups <- levels(factor(group_labels))
-  sse <- rep(0, nrow(normalized_counts))
-  sum_mu <- rep(0, nrow(normalized_counts))
-  residual_df <- 0L
-  n_groups_used <- 0L
+  # estimateDispersions fits gene-wise dispersion, the mean-dispersion trend,
+  # and the final MAP (empirical-Bayes shrunk) dispersion per gene -- this is
+  # the same shrinkage DESeq2 normally applies before testing. Using the
+  # final shrunk dispersion here (instead of raw unshrunk per-feature sample
+  # variance) avoids letting a handful of noisy, low-replicate-count
+  # features dominate the NB1-vs-NB2 curve fit.
+  dds <- DESeq2::estimateDispersions(dds, quiet = TRUE)
 
-  for (g in groups) {
-    idx <- which(group_labels == g)
-    if (length(idx) < 2L) next
-    xg <- normalized_counts[, idx, drop = FALSE]
-    mu_g <- rowMeans(xg)
-    resid_g <- sweep(xg, 1L, mu_g, "-")
-    sse <- sse + rowSums(resid_g^2)
-    sum_mu <- sum_mu + mu_g
-    residual_df <- residual_df + length(idx) - 1L
-    n_groups_used <- n_groups_used + 1L
-  }
+  base_mean <- rowMeans(DESeq2::counts(dds, normalized = TRUE))
+  disp_final <- DESeq2::dispersions(dds)
 
-  V <- sse / max(residual_df, 1L)
-  V[!is.finite(V)] <- 0
-  V <- pmax(V, 0)
-  mu <- sum_mu / max(n_groups_used, 1L)
+  # DESeq2 flags a gene as a dispersion outlier when its gene-wise estimate
+  # sits too far above the fitted trend (default ~2 residual SD); for those
+  # genes, dispersion_final above is NOT shrunk toward the trend -- it
+  # reverts to the raw gene-wise MLE. Because the trend is fit on the whole
+  # dataset (dominated by the much larger Remainder population), Leading
+  # Edge genes -- if they systematically sit higher on mean/variance -- are
+  # disproportionately likely to be flagged this way, which would make
+  # "dispersion_final" for Leading Edge closer to an unshrunk estimate than
+  # the label implies. This flag makes that checkable rather than assumed.
+  disp_outlier <- tryCatch(
+    S4Vectors::mcols(dds)$dispOutlier,
+    error = function(e) rep(NA, nrow(dds))
+  )
+  if (is.null(disp_outlier)) disp_outlier <- rep(NA, nrow(dds))
+
+  # NB2 parameterization: Var = mu + dispersion * mu^2. This is the variance
+  # implied by DESeq2's own final shrunk dispersion estimate, analogous to
+  # the "final dispersion estimates" used in the Figure 22 mean-variance fit.
+  shrunk_variance <- base_mean + disp_final * base_mean^2
+
+  keep <- is.finite(base_mean) & is.finite(shrunk_variance) & !is.na(disp_final)
 
   data.frame(
-    feature_id = rownames(normalized_counts),
-    mean = mu,
-    variance = V,
+    feature_id = rownames(count_mat)[keep],
+    mean = base_mean[keep],
+    variance = shrunk_variance[keep],
+    dispersion_final = disp_final[keep],
+    dispersion_is_outlier = disp_outlier[keep],
     stringsAsFactors = FALSE
   )
 }
 
 fit_nb_regimes <- function(mean_var_df, feature_subset) {
   sub <- mean_var_df[mean_var_df$feature_id %in% feature_subset, , drop = FALSE]
+
+  outlier_col <- sub$dispersion_is_outlier
+  frac_outlier <- if (length(outlier_col) > 0L && !all(is.na(outlier_col))) {
+    mean(outlier_col, na.rm = TRUE)
+  } else {
+    NA_real_
+  }
+
   sub <- sub[is.finite(sub$mean) & is.finite(sub$variance) & sub$mean > 0, , drop = FALSE]
   sub$excess <- pmax(sub$variance - sub$mean, 0)
 
@@ -300,7 +304,8 @@ fit_nb_regimes <- function(mean_var_df, feature_subset) {
       aic = NA_real_,
       delta_aic = NA_real_,
       preferred = NA,
-      n_features = nrow(sub)
+      n_features = nrow(sub),
+      frac_dispersion_outlier = frac_outlier
     ))
   }
 
@@ -325,7 +330,8 @@ fit_nb_regimes <- function(mean_var_df, feature_subset) {
     aic = c(aic1, aic2),
     delta_aic = c(aic1 - best_aic, aic2 - best_aic),
     preferred = c(aic1 < aic2, aic2 < aic1),
-    n_features = nrow(sub)
+    n_features = nrow(sub),
+    frac_dispersion_outlier = frac_outlier
   )
 }
 
@@ -335,13 +341,13 @@ fit_nb_regimes <- function(mean_var_df, feature_subset) {
 
 message("Reading count matrix...")
 count_mat <- read_count_matrix(COUNT_FILE, GROUP_PATTERNS)
-n_total_features <- nrow(count_mat)
 
 message("Reading per-comparison empirical cutoffs from ", CUTOFF_TIMEPOINTS_FILE, " ...")
 pairwise_k_star <- load_pairwise_k_star(CUTOFF_TIMEPOINTS_FILE)
 
-stability_rows <- list()
 nb_rows <- list()
+gap_permutation_rows <- list()
+gap_null_long_rows <- list()
 
 for (comparison_name in names(COMPARISONS)) {
   pair <- COMPARISONS[[comparison_name]]
@@ -373,6 +379,19 @@ for (comparison_name in names(COMPARISONS)) {
 
   comparison_mat <- count_mat[, all_ids, drop = FALSE]
 
+  # Computed once per comparison (does not depend on k) and shared by
+  # Diagnostic B and the new Diagnostic C below. Previously this was
+  # recomputed inside the k loop even though it doesn't depend on k.
+  message("  Fitting DESeq2 shrunk dispersion for this comparison...")
+  mean_var_df <- deseq2_shrunk_mean_variance(comparison_mat, group_labels)
+
+  # Same NB2 / NB1 / gap formulas as REMNB1_LEADNB2.R's compute_ranked_feature_metrics,
+  # computed here genome-wide (every gene in the comparison) rather than
+  # only within a local LEFT/RIGHT window at the boundary.
+  mean_var_df$nb2 <- log1p(pmax(mean_var_df$variance - mean_var_df$mean, 0))
+  mean_var_df$nb1 <- log1p(mean_var_df$mean)
+  mean_var_df$gap <- mean_var_df$nb2 - mean_var_df$nb1
+
   for (k in comparison_k_values) {
 
     k_type <- if (k == PAPER_REFERENCE_K) "paper_reference" else "empirical_k_star"
@@ -381,72 +400,11 @@ for (comparison_name in names(COMPARISONS)) {
     real_le <- leading_edge_set(comparison_mat, control_ids, treatment_ids, k)
     real_remainder <- setdiff(rownames(comparison_mat), real_le)
 
-    # --- DIAGNOSTIC A: permutation stability (both sets, symmetric) ------
-    # Both Leading Edge and Remainder retain 100% of the data (they are
-    # exact complements of each other); this diagnostic tests each side
-    # explicitly rather than reporting only Leading Edge and leaving
-    # Remainder's stability implied.
-    perm_jaccard_le <- numeric(N_PERMUTATIONS)
-    perm_jaccard_rem <- numeric(N_PERMUTATIONS)
-    random_jaccard_le <- numeric(N_PERMUTATIONS)
-    random_jaccard_rem <- numeric(N_PERMUTATIONS)
-
-    for (p in seq_len(N_PERMUTATIONS)) {
-      shuffled <- sample(all_ids)
-      pseudo_g1 <- shuffled[seq_len(n_control)]
-      pseudo_g2 <- shuffled[(n_control + 1L):length(shuffled)]
-
-      perm_le <- leading_edge_set(comparison_mat, pseudo_g1, pseudo_g2, k)
-      perm_remainder <- setdiff(rownames(comparison_mat), perm_le)
-
-      perm_jaccard_le[p] <- jaccard(real_le, perm_le)
-      perm_jaccard_rem[p] <- jaccard(real_remainder, perm_remainder)
-
-      random_le <- union(
-        sample(rownames(comparison_mat), min(k, n_total_features)),
-        sample(rownames(comparison_mat), min(k, n_total_features))
-      )
-      random_remainder <- setdiff(rownames(comparison_mat), random_le)
-
-      random_jaccard_le[p] <- jaccard(real_le, random_le)
-      random_jaccard_rem[p] <- jaccard(real_remainder, random_remainder)
-    }
-
-    chance_ref_le <- chance_jaccard(length(real_le), length(real_le), n_total_features)
-    chance_ref_rem <- chance_jaccard(length(real_remainder), length(real_remainder), n_total_features)
-
-    make_stability_row <- function(feature_set, real_size, perm_j, random_j, chance_ref) {
-      data.frame(
-        comparison = comparison_name,
-        k = k,
-        k_type = k_type,
-        feature_set = feature_set,
-        real_set_size = real_size,
-        label_permutation_jaccard_mean = mean(perm_j, na.rm = TRUE),
-        label_permutation_jaccard_sd = sd(perm_j, na.rm = TRUE),
-        fully_random_jaccard_mean = mean(random_j, na.rm = TRUE),
-        analytic_chance_jaccard = chance_ref,
-        n_permutations = N_PERMUTATIONS,
-        interpretation = ifelse(
-          mean(perm_j, na.rm = TRUE) > mean(random_j, na.rm = TRUE) * 2,
-          "Membership survives relabeling (supports gene-intrinsic regime)",
-          "Membership collapses toward chance under relabeling (tracks condition split)"
-        ),
-        stringsAsFactors = FALSE
-      )
-    }
-
-    stability_rows[[length(stability_rows) + 1L]] <- make_stability_row(
-      "Leading_Edge", length(real_le), perm_jaccard_le, random_jaccard_le, chance_ref_le
-    )
-    stability_rows[[length(stability_rows) + 1L]] <- make_stability_row(
-      "Remainder", length(real_remainder), perm_jaccard_rem, random_jaccard_rem, chance_ref_rem
-    )
-
-    # --- DIAGNOSTIC B: NB1 vs NB2 regime fit -----------------------------
-    norm_counts <- deseq2_normalize(comparison_mat, group_labels)
-    mean_var_df <- pooled_mean_variance(norm_counts, group_labels)
-
+    # --- DIAGNOSTIC 1: NB1 vs NB2 regime fit -----------------------------
+    # Uses DESeq2's final shrunk dispersion (empirical-Bayes MAP estimate),
+    # not raw unshrunk per-feature sample variance, so a handful of noisy
+    # low-replicate features cannot dominate the curve fit. mean_var_df was
+    # computed once per comparison above, since it does not depend on k.
     fit_le <- fit_nb_regimes(mean_var_df, real_le)
     fit_remainder <- fit_nb_regimes(mean_var_df, real_remainder)
 
@@ -461,69 +419,83 @@ for (comparison_name in names(COMPARISONS)) {
 
     nb_rows[[length(nb_rows) + 1L]] <- fit_le
     nb_rows[[length(nb_rows) + 1L]] <- fit_remainder
+
+    # --- DIAGNOSTIC 2: direct permutation test of the NB2-NB1 gap --------
+    # Diagnostic A tests whether gene-SET MEMBERSHIP survives relabeling.
+    # This is a different, more direct question: is the actual NB2-NB1 gap
+    # between Leading Edge and Remainder bigger than what an arbitrary
+    # random partition of the same sizes would produce by chance, using
+    # the exact same gap statistic already used throughout REMNB1_LEADNB2.R
+    # (gap = log1p(variance - mean) - log1p(mean), i.e. NB2 minus NB1).
+    #
+    # gene mu/variance come from the real (unpermuted) data throughout --
+    # only which genes get labeled "Leading Edge" vs "Remainder" is
+    # permuted, drawing a random gene subset of the same size as the real
+    # Leading Edge set, uniformly at random from every gene in the
+    # comparison, independent of PC1 rank.
+    real_gap_le <- mean_var_df$gap[mean_var_df$feature_id %in% real_le]
+    real_gap_rem <- mean_var_df$gap[mean_var_df$feature_id %in% real_remainder]
+    diff_gap_real <- stats::median(real_gap_le, na.rm = TRUE) - stats::median(real_gap_rem, na.rm = TRUE)
+
+    all_feature_ids <- mean_var_df$feature_id
+    n_le <- length(real_le)
+    null_diffs <- numeric(N_PERMUTATIONS)
+
+    for (p in seq_len(N_PERMUTATIONS)) {
+      random_le_ids <- sample(all_feature_ids, n_le)
+      random_rem_ids <- setdiff(all_feature_ids, random_le_ids)
+      gap_random_le <- mean_var_df$gap[mean_var_df$feature_id %in% random_le_ids]
+      gap_random_rem <- mean_var_df$gap[mean_var_df$feature_id %in% random_rem_ids]
+      null_diffs[p] <- stats::median(gap_random_le, na.rm = TRUE) - stats::median(gap_random_rem, na.rm = TRUE)
+    }
+
+    # One-sided: is the real gap bigger than a random partition would give?
+    # The +1 in numerator and denominator is the standard permutation-test
+    # correction (the observed statistic counts as one of its own draws),
+    # so the p-value is never reported as exactly 0.
+    perm_p_gap <- (1 + sum(null_diffs >= diff_gap_real)) / (N_PERMUTATIONS + 1)
+
+    gap_permutation_rows[[length(gap_permutation_rows) + 1L]] <- data.frame(
+      comparison = comparison_name,
+      k = k,
+      k_type = k_type,
+      diff_gap_real = diff_gap_real,
+      null_mean = mean(null_diffs, na.rm = TRUE),
+      null_sd = stats::sd(null_diffs, na.rm = TRUE),
+      effect_size_z = (diff_gap_real - mean(null_diffs, na.rm = TRUE)) / stats::sd(null_diffs, na.rm = TRUE),
+      perm_p_one_sided = perm_p_gap,
+      n_permutations = N_PERMUTATIONS,
+      stringsAsFactors = FALSE
+    )
+
+    gap_null_long_rows[[length(gap_null_long_rows) + 1L]] <- data.frame(
+      comparison = comparison_name,
+      k = k,
+      k_type = k_type,
+      null_diff = null_diffs,
+      stringsAsFactors = FALSE
+    )
   }
 }
 
-stability_table <- dplyr::bind_rows(stability_rows)
 nb_table <- dplyr::bind_rows(nb_rows)
+gap_permutation_table <- dplyr::bind_rows(gap_permutation_rows)
+gap_null_long_table <- dplyr::bind_rows(gap_null_long_rows)
 
-write.csv(
-  stability_table,
-  file.path(OUT_ROOT, "Table_Permutation_Stability.csv"),
-  row.names = FALSE
-)
 write.csv(
   nb_table,
   file.path(OUT_ROOT, "Table_NB_Regime_Fit.csv"),
+  row.names = FALSE
+)
+write.csv(
+  gap_permutation_table,
+  file.path(OUT_ROOT, "Table_Gap_Permutation.csv"),
   row.names = FALSE
 )
 
 # -----------------------------------------------------------------------------
 # Figures
 # -----------------------------------------------------------------------------
-
-stability_long <- stability_table %>%
-  dplyr::select(
-    comparison, k, k_type, feature_set,
-    label_permutation_jaccard_mean,
-    fully_random_jaccard_mean
-  ) %>%
-  tidyr::pivot_longer(
-    cols = c(label_permutation_jaccard_mean, fully_random_jaccard_mean),
-    names_to = "null_type",
-    values_to = "jaccard"
-  ) %>%
-  dplyr::mutate(
-    null_type = dplyr::recode(
-      null_type,
-      label_permutation_jaccard_mean = "Label-permutation null",
-      fully_random_jaccard_mean = "Fully-random null"
-    ),
-    k_type_label = dplyr::recode(
-      k_type,
-      paper_reference = "Paper reference (k=5000, same for all)",
-      empirical_k_star = "Empirical k* (comparison-specific)"
-    ),
-    comparison_k_label = paste0(comparison, "\n(k=", k, ")")
-  )
-
-p_stability <- ggplot(stability_long, aes(x = comparison_k_label, y = jaccard, fill = null_type)) +
-  geom_col(position = position_dodge(width = 0.7), width = 0.6) +
-  facet_grid(k_type_label ~ feature_set) +
-  labs(
-    title = "Diagnostic A: membership stability under label permutation",
-    subtitle = "Reported symmetrically for Leading Edge and Remainder, since both retain 100% of the data. Each comparison uses its own empirical k* (see x-axis), not a shared global value. Higher label-permutation overlap relative to the fully-random floor supports a gene-intrinsic regime for that set.",
-    x = NULL,
-    y = "Mean Jaccard overlap with the real (unpermuted) set",
-    fill = NULL
-  ) +
-  theme_bw(base_size = 11) +
-  theme(legend.position = "bottom", axis.text.x = element_text(size = 8))
-
-ggsave(
-  file.path(OUT_ROOT, "Figure_Permutation_Stability.png"),
-  p_stability, width = 12, height = 7.5, dpi = 300
-)
 
 nb_plot_df <- nb_table %>%
   dplyr::mutate(
@@ -575,9 +547,101 @@ ggsave(
   p_nb_aic, width = 13, height = 7, dpi = 300
 )
 
+# Diagnostic C figure: for each comparison/k, the null distribution of
+# diff_gap under random gene-set partitions, with the real observed
+# Leading-Edge-vs-Remainder gap marked as a vertical line. If the real line
+# sits far into the right tail of its null histogram, that is direct,
+# interpretable evidence that Leading Edge is more NB2-like than Remainder
+# by more than chance would produce for a random partition of that size.
+gap_null_plot_df <- gap_null_long_table %>%
+  dplyr::mutate(
+    k_type_label = dplyr::recode(
+      k_type,
+      paper_reference = "Paper reference (k=5000)",
+      empirical_k_star = "Empirical k*"
+    )
+  )
+
+gap_real_plot_df <- gap_permutation_table %>%
+  dplyr::mutate(
+    k_type_label = dplyr::recode(
+      k_type,
+      paper_reference = "Paper reference (k=5000)",
+      empirical_k_star = "Empirical k*"
+    )
+  )
+
+p_gap_perm <- ggplot(gap_null_plot_df, aes(x = null_diff)) +
+  geom_histogram(bins = 40, fill = "grey70", color = "white") +
+  geom_vline(
+    data = gap_real_plot_df,
+    aes(xintercept = diff_gap_real),
+    color = "#C0392B", linewidth = 1
+  ) +
+  geom_text(
+    data = gap_real_plot_df,
+    aes(x = diff_gap_real, y = Inf, label = paste0("p=", signif(perm_p_one_sided, 3))),
+    vjust = 1.3, hjust = -0.05, size = 3, color = "#C0392B"
+  ) +
+  facet_grid(k_type_label ~ comparison, scales = "free") +
+  labs(
+    title = "Diagnostic C: observed Leading-Edge-vs-Remainder NB2-NB1 gap vs a random-partition null",
+    subtitle = "Grey histogram = gap expected from a random gene subset of the same size, repeated many times. Red line = the real, PC1-defined Leading Edge partition's gap.",
+    x = "median(gap | subset) - median(gap | rest)",
+    y = "Count across permutations"
+  ) +
+  theme_bw(base_size = 10)
+
+ggsave(
+  file.path(OUT_ROOT, "Figure_Gap_Permutation.png"),
+  p_gap_perm, width = 13, height = 7, dpi = 300
+)
+
 message("Diagnostic complete. Outputs written to: ", OUT_ROOT)
-message("  Table_Permutation_Stability.csv")
 message("  Table_NB_Regime_Fit.csv")
-message("  Figure_Permutation_Stability.png")
+message("  Table_Gap_Permutation.csv")
 message("  Figure_NB_Regime_Fit.png")
 message("  Figure_NB_Regime_AIC.png")
+message("  Figure_Gap_Permutation.png")
+
+# -----------------------------------------------------------------------------
+# Zip archives: everything in one download for figures and for tables.
+# Wrapped in tryCatch so that if the zip utility is unavailable, the actual
+# diagnostic results above are still kept -- only the packaging step is lost.
+# -----------------------------------------------------------------------------
+
+message("Creating zip archives...")
+
+zip_result <- tryCatch(
+  {
+    figure_files <- list.files(OUT_ROOT, pattern = "\\.png$", full.names = TRUE)
+    table_files <- list.files(OUT_ROOT, pattern = "\\.csv$", full.names = TRUE)
+
+    if (length(figure_files) > 0L) {
+      figures_zip_path <- file.path(OUT_ROOT, "RegimeDiagnostic_Figures.zip")
+      if (file.exists(figures_zip_path)) file.remove(figures_zip_path)
+      utils::zip(figures_zip_path, files = figure_files, flags = "-j")
+      message("  RegimeDiagnostic_Figures.zip (", length(figure_files), " files)")
+    } else {
+      message("  No .png files found; skipping RegimeDiagnostic_Figures.zip")
+    }
+
+    if (length(table_files) > 0L) {
+      tables_zip_path <- file.path(OUT_ROOT, "RegimeDiagnostic_Tables.zip")
+      if (file.exists(tables_zip_path)) file.remove(tables_zip_path)
+      utils::zip(tables_zip_path, files = table_files, flags = "-j")
+      message("  RegimeDiagnostic_Tables.zip (", length(table_files), " files)")
+    } else {
+      message("  No .csv files found; skipping RegimeDiagnostic_Tables.zip")
+    }
+
+    TRUE
+  },
+  error = function(e) {
+    message(
+      "Zip archive creation failed (individual files above are still ",
+      "intact and usable): ", conditionMessage(e)
+    )
+    FALSE
+  }
+)
