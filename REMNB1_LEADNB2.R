@@ -87,7 +87,13 @@ options(stringsAsFactors = FALSE)
 # It is strictly appropriate for the Main track (raw integer counts); for
 # the DESeq2-normalized supplement track, counts are continuous and the
 # same test is still reported but is a looser applied approximation, marked
-# by the lrt_is_integer_count_track column in the output table.
+# by the lrt_is_integer_count_track column in the output table. For the
+# DESeq2 track specifically, compute_deseq2_matrices now also runs DESeq2's
+# own dispersion-shrinkage pipeline (estimateDispersions), and the region
+# medians of that final shrunk dispersion are reported alongside the
+# unshrunk MLE alpha as alpha_left_deseq2_shrunk / alpha_right_deseq2_shrunk
+# / diff_deseq2_shrunk, so the shrinkage-stabilized comparison can be read
+# directly instead of relying only on the unshrunk per-region MLE.
 #
 # METHODS-LEVEL VALIDATION
 #
@@ -221,6 +227,33 @@ compute_deseq2_matrices <- function(count_mat_arm, rank_method = "normalized_log
   )
 
   dds <- DESeq2::estimateSizeFactors(dds)
+
+  # estimateDispersions fits gene-wise dispersion, the mean-dispersion
+  # trend, and the final MAP (empirical-Bayes shrunk) dispersion per gene.
+  # Previously this function only ran estimateSizeFactors, so the "DESeq2"
+  # track never actually used DESeq2's dispersion shrinkage despite its
+  # name -- only size-factor normalization. dispersion_final below is the
+  # same shrunk per-gene dispersion DESeq2 normally uses before testing.
+  dds <- tryCatch(
+    DESeq2::estimateDispersions(dds, quiet = TRUE),
+    error = function(e) {
+      message("estimateDispersions failed, dispersion_final will be NA: ", conditionMessage(e))
+      dds
+    }
+  )
+  dispersion_final <- tryCatch(DESeq2::dispersions(dds), error = function(e) rep(NA_real_, nrow(dds)))
+
+  # See the matching comment in REGIME_DIAGNOSTIC.r: genes flagged as
+  # dispersion outliers by DESeq2 are NOT shrunk toward the trend, so their
+  # dispersion_final value is effectively an unshrunk gene-wise estimate.
+  # Exposed here so the LEFT/RIGHT outlier fraction can be reported directly
+  # rather than assumed.
+  dispersion_is_outlier <- tryCatch(
+    S4Vectors::mcols(dds)$dispOutlier,
+    error = function(e) rep(NA, nrow(dds))
+  )
+  if (is.null(dispersion_is_outlier)) dispersion_is_outlier <- rep(NA, nrow(dds))
+
   norm_counts <- DESeq2::counts(dds, normalized = TRUE)
 
   vst_mat <- NULL
@@ -241,7 +274,9 @@ compute_deseq2_matrices <- function(count_mat_arm, rank_method = "normalized_log
   list(
     normalized_counts = norm_counts,
     ranking_matrix = ranking_matrix,
-    size_factors = DESeq2::sizeFactors(dds)
+    size_factors = DESeq2::sizeFactors(dds),
+    dispersion_final = setNames(dispersion_final, rownames(count_mat_arm)),
+    dispersion_is_outlier = setNames(dispersion_is_outlier, rownames(count_mat_arm))
   )
 }
 
@@ -471,7 +506,7 @@ fit_region_alpha_mle <- function(counts_block, mu_vec) {
   list(alpha_mle = opt$minimum, loglik = -opt$objective)
 }
 
-compute_region_lrt <- function(metric_matrix, feature_df, left_idx, right_idx) {
+compute_region_lrt <- function(metric_matrix, feature_df, left_idx, right_idx, deseq2_dispersion = NULL, deseq2_outlier_flag = NULL) {
   left_ids <- feature_df$feature_id[left_idx]
   right_ids <- feature_df$feature_id[right_idx]
 
@@ -497,7 +532,7 @@ compute_region_lrt <- function(metric_matrix, feature_df, left_idx, right_idx) {
   lrt_stat <- max(lrt_stat, 0)
   lrt_p <- stats::pchisq(lrt_stat, df = 1, lower.tail = FALSE)
 
-  data.frame(
+  out <- data.frame(
     alpha_left_mle = fit_left$alpha_mle,
     alpha_right_mle = fit_right$alpha_mle,
     alpha_pooled_mle = fit_pooled$alpha_mle,
@@ -513,6 +548,39 @@ compute_region_lrt <- function(metric_matrix, feature_df, left_idx, right_idx) {
     ),
     stringsAsFactors = FALSE
   )
+
+  # When DESeq2's own final shrunk dispersion is available (DESeq2 track
+  # only), also report region medians of that shrunk estimate as a
+  # complementary, shrinkage-stabilized companion to the full-likelihood
+  # alpha_left_mle / alpha_right_mle above, which are unshrunk MLE fits.
+  if (!is.null(deseq2_dispersion)) {
+    disp_left <- deseq2_dispersion[left_ids]
+    disp_right <- deseq2_dispersion[right_ids]
+    out$alpha_left_deseq2_shrunk <- stats::median(disp_left, na.rm = TRUE)
+    out$alpha_right_deseq2_shrunk <- stats::median(disp_right, na.rm = TRUE)
+    out$diff_deseq2_shrunk <- out$alpha_right_deseq2_shrunk - out$alpha_left_deseq2_shrunk
+  } else {
+    out$alpha_left_deseq2_shrunk <- NA_real_
+    out$alpha_right_deseq2_shrunk <- NA_real_
+    out$diff_deseq2_shrunk <- NA_real_
+  }
+
+  # Fraction of LEFT/RIGHT genes DESeq2 flagged as dispersion outliers, i.e.
+  # NOT shrunk toward the trend, reverting instead to the unshrunk gene-wise
+  # estimate. If RIGHT (toward the leading edge) shows a much higher outlier
+  # fraction than LEFT, that directly confirms alpha_right_deseq2_shrunk is
+  # less "shrunk" in practice than its name implies for that region.
+  if (!is.null(deseq2_outlier_flag)) {
+    outlier_left <- deseq2_outlier_flag[left_ids]
+    outlier_right <- deseq2_outlier_flag[right_ids]
+    out$frac_dispersion_outlier_left <- mean(outlier_left, na.rm = TRUE)
+    out$frac_dispersion_outlier_right <- mean(outlier_right, na.rm = TRUE)
+  } else {
+    out$frac_dispersion_outlier_left <- NA_real_
+    out$frac_dispersion_outlier_right <- NA_real_
+  }
+
+  out
 }
 
 validate_method_level <- function(feature_df, interval_info, region_summary, total_n) {
@@ -850,7 +918,9 @@ run_one_track <- function(comparison_name,
                           fig_tag,
                           rank_tag,
                           metric_tag,
-                          metric_name) {
+                          metric_name,
+                          deseq2_dispersion = NULL,
+                          deseq2_outlier_flag = NULL) {
 
   abs_loadings <- compute_abs_pc1_loadings(rank_matrix)
   rank_order <- order(abs_loadings, decreasing = FALSE)
@@ -882,7 +952,9 @@ run_one_track <- function(comparison_name,
     metric_matrix = metric_matrix,
     feature_df = feature_df,
     left_idx = region_idx$left_idx,
-    right_idx = region_idx$right_idx
+    right_idx = region_idx$right_idx,
+    deseq2_dispersion = deseq2_dispersion,
+    deseq2_outlier_flag = deseq2_outlier_flag
   )
   lrt_result$lrt_is_integer_count_track <- identical(track, "Main")
 
@@ -1038,7 +1110,9 @@ for (comparison_name in names(COMPARISONS)) {
           fig_tag = "DESeq2 supplement",
           rank_tag = deseq2_rank_tag,
           metric_tag = "Metrics: DESeq2 normalized",
-          metric_name = "deseq2_normalized_counts"
+          metric_name = "deseq2_normalized_counts",
+          deseq2_dispersion = deseq2_obj$dispersion_final,
+          deseq2_outlier_flag = deseq2_obj$dispersion_is_outlier
         )
 
         write.csv(
