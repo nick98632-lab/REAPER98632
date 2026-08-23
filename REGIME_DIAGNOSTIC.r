@@ -118,6 +118,33 @@ read_count_matrix <- function(path, group_patterns) {
   storage.mode(count_mat) <- "numeric"
   rownames(count_mat) <- feature_ids
 
+  # The raw CSV can contain blank cells, non-numeric placeholders (e.g. "NA",
+  # "-"), or genuinely missing values, all of which become NA on coercion to
+  # numeric above. PCA/svd cannot run with any NA/Inf present anywhere in the
+  # matrix, so these are resolved explicitly here rather than failing deep
+  # inside prcomp with an opaque "infinite or missing values" error.
+  n_na <- sum(is.na(count_mat))
+  n_inf <- sum(is.infinite(count_mat))
+  if (n_na > 0L || n_inf > 0L) {
+    message(sprintf(
+      "Count matrix contained %d NA and %d non-finite cell(s) after loading; treating as 0.",
+      n_na, n_inf
+    ))
+    count_mat[is.na(count_mat) | is.infinite(count_mat)] <- 0
+  }
+
+  # A feature with zero counts across every sample carries no PC1 information
+  # and can still destabilize downstream variance calculations; drop it here
+  # rather than silently propagating zeros/NaNs through PCA and DESeq2.
+  all_zero <- rowSums(count_mat, na.rm = TRUE) == 0
+  if (any(all_zero)) {
+    message(sprintf(
+      "Dropping %d feature(s) with zero counts across every sample.",
+      sum(all_zero)
+    ))
+    count_mat <- count_mat[!all_zero, , drop = FALSE]
+  }
+
   count_mat
 }
 
@@ -125,11 +152,21 @@ normalize_cpm_log1p <- function(count_mat_arm) {
   lib_size <- colSums(count_mat_arm, na.rm = TRUE)
   lib_size[!is.finite(lib_size) | lib_size <= 0] <- 1
   cpm <- sweep(count_mat_arm, 2L, lib_size / 1e6, "/")
-  log1p(cpm)
+  result <- log1p(cpm)
+  # Defensive final guard: no NA/Inf should reach prcomp regardless of cause.
+  result[!is.finite(result)] <- 0
+  result
 }
 
 compute_pc1_rank <- function(rank_matrix_arm) {
-  pca <- stats::prcomp(t(rank_matrix_arm), center = TRUE, scale. = FALSE, rank. = 1)
+  input_mat <- t(rank_matrix_arm)
+  if (any(!is.finite(input_mat))) {
+    stop(
+      "Non-finite values reached compute_pc1_rank after normalization; ",
+      "this indicates malformed input data upstream of PCA."
+    )
+  }
+  pca <- stats::prcomp(input_mat, center = TRUE, scale. = FALSE, rank. = 1)
   loading <- pca$rotation[, 1L]
   loading[!is.finite(loading)] <- 0
   abs(loading)
