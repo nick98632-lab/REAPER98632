@@ -3105,7 +3105,7 @@ save_discovery_count_panel <- function(summary_df) {
       color = "black",
       show.legend = FALSE
     ) +
-    facet_wrap(~ Analysis, scales = "free_y", ncol = 3) +
+    facet_wrap(~ Analysis, scales = "free_y", nrow = 1) +
     scale_y_continuous(expand = expansion(mult = c(0.04, 0.16))) +
     scale_color_manual(
       values = significance_method_colors,
@@ -3135,8 +3135,8 @@ save_discovery_count_panel <- function(summary_df) {
       strip.text = element_text(face = "bold")
     )
 
-  save_grob(p, file.path(paper_fig_dir, "Figure_Manuscript_Discovery_Counts.png"), width = 14.5, height = 8.2)
-  save_grob(p, file.path(paper_fig_dir, "Figure_Manuscript_Discovery_Counts.pdf"), width = 14.5, height = 8.2)
+  save_grob(p, file.path(paper_fig_dir, "Figure_Manuscript_Discovery_Counts.png"), width = 21.0, height = 6.5)
+  save_grob(p, file.path(paper_fig_dir, "Figure_Manuscript_Discovery_Counts.pdf"), width = 21.0, height = 6.5)
   invisible(TRUE)
 }
 
