@@ -1173,3 +1173,46 @@ write.csv(
 )
 
 message("Done. Outputs written to: ", OUT_ROOT)
+
+# -----------------------------------------------------------------------------
+# Zip archives: everything in one download for figures and for tables.
+# Outputs live in per-comparison subfolders (OUT_ROOT/RT0_ZT6/, etc.), so
+# this searches recursively. Wrapped in tryCatch so that if the zip utility
+# is unavailable, the actual results above are still kept intact.
+# -----------------------------------------------------------------------------
+
+message("Creating zip archives...")
+
+zip_result <- tryCatch(
+  {
+    figure_files <- list.files(OUT_ROOT, pattern = "\\.png$", full.names = TRUE, recursive = TRUE)
+    table_files <- list.files(OUT_ROOT, pattern = "\\.csv$", full.names = TRUE, recursive = TRUE)
+
+    if (length(figure_files) > 0L) {
+      figures_zip_path <- file.path(OUT_ROOT, "REMNB1_LEADNB2_Figures.zip")
+      if (file.exists(figures_zip_path)) file.remove(figures_zip_path)
+      utils::zip(figures_zip_path, files = figure_files, flags = "-j")
+      message("  REMNB1_LEADNB2_Figures.zip (", length(figure_files), " files)")
+    } else {
+      message("  No .png files found; skipping REMNB1_LEADNB2_Figures.zip")
+    }
+
+    if (length(table_files) > 0L) {
+      tables_zip_path <- file.path(OUT_ROOT, "REMNB1_LEADNB2_Tables.zip")
+      if (file.exists(tables_zip_path)) file.remove(tables_zip_path)
+      utils::zip(tables_zip_path, files = table_files, flags = "-j")
+      message("  REMNB1_LEADNB2_Tables.zip (", length(table_files), " files)")
+    } else {
+      message("  No .csv files found; skipping REMNB1_LEADNB2_Tables.zip")
+    }
+
+    TRUE
+  },
+  error = function(e) {
+    message(
+      "Zip archive creation failed (individual files above are still ",
+      "intact and usable): ", conditionMessage(e)
+    )
+    FALSE
+  }
+)
