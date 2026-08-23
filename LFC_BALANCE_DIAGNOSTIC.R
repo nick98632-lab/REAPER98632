@@ -379,3 +379,45 @@ if (length(lfc_long_rows) > 0L) {
 message("Diagnostic complete. Outputs written to: ", OUT_ROOT)
 message("  Table_LFC_Balance.csv")
 message("  Figure_LFC_Balance_AllComparisons.png")
+
+# -----------------------------------------------------------------------------
+# Zip archives: everything in one download for figures and for tables.
+# Wrapped in tryCatch so that if the zip utility is unavailable, the actual
+# diagnostic results above are still kept -- only the packaging step is lost.
+# -----------------------------------------------------------------------------
+
+message("Creating zip archives...")
+
+zip_result <- tryCatch(
+  {
+    figure_files <- list.files(OUT_ROOT, pattern = "\\.png$", full.names = TRUE)
+    table_files <- list.files(OUT_ROOT, pattern = "\\.csv$", full.names = TRUE)
+
+    if (length(figure_files) > 0L) {
+      figures_zip_path <- file.path(OUT_ROOT, "LFC_Balance_Figures.zip")
+      if (file.exists(figures_zip_path)) file.remove(figures_zip_path)
+      utils::zip(figures_zip_path, files = figure_files, flags = "-j")
+      message("  LFC_Balance_Figures.zip (", length(figure_files), " files)")
+    } else {
+      message("  No .png files found; skipping LFC_Balance_Figures.zip")
+    }
+
+    if (length(table_files) > 0L) {
+      tables_zip_path <- file.path(OUT_ROOT, "LFC_Balance_Tables.zip")
+      if (file.exists(tables_zip_path)) file.remove(tables_zip_path)
+      utils::zip(tables_zip_path, files = table_files, flags = "-j")
+      message("  LFC_Balance_Tables.zip (", length(table_files), " files)")
+    } else {
+      message("  No .csv files found; skipping LFC_Balance_Tables.zip")
+    }
+
+    TRUE
+  },
+  error = function(e) {
+    message(
+      "Zip archive creation failed (individual files above are still ",
+      "intact and usable): ", conditionMessage(e)
+    )
+    FALSE
+  }
+)
