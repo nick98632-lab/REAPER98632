@@ -1,300 +1,139 @@
-Using count file: /root/REAPER98632/data/WTTS-Seq_2022.2_DE_raw_read_numbers.csv
-Output directory: /root/REAPER98632/exports/manuscript_final_clean
-
-=====================================================
-Running comparison: RT0_ZT6
-=====================================================
-estimating size factors
-estimating dispersions
-gene-wise dispersion estimates
-mean-dispersion relationship
-final dispersion estimates
-fitting model and testing
-using 'apeglm' for LFC shrinkage. If used in published research, please cite:
-    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
-    sequence count data: removing the noise and preserving large differences.
-    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
-estimating size factors
-estimating dispersions
-gene-wise dispersion estimates
-mean-dispersion relationship
-final dispersion estimates
-fitting model and testing
-using 'apeglm' for LFC shrinkage. If used in published research, please cite:
-    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
-    sequence count data: removing the noise and preserving large differences.
-    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
-estimating size factors
-estimating dispersions
-gene-wise dispersion estimates
-mean-dispersion relationship
--- note: fitType='parametric', but the dispersion trend was not well captured by the
-   function: y = a/x + b, and a local regression fit was automatically substituted.
-   specify fitType='local' or 'mean' to avoid this message next time.
-final dispersion estimates
-fitting model and testing
-using 'apeglm' for LFC shrinkage. If used in published research, please cite:
-    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
-    sequence count data: removing the noise and preserving large differences.
-    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
-estimating size factors
-estimating dispersions
-gene-wise dispersion estimates
-mean-dispersion relationship
-final dispersion estimates
-fitting model and testing
-using 'apeglm' for LFC shrinkage. If used in published research, please cite:
-    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
-    sequence count data: removing the noise and preserving large differences.
-    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
-estimating size factors
-estimating dispersions
-gene-wise dispersion estimates
-mean-dispersion relationship
--- note: fitType='parametric', but the dispersion trend was not well captured by the
-   function: y = a/x + b, and a local regression fit was automatically substituted.
-   specify fitType='local' or 'mean' to avoid this message next time.
-final dispersion estimates
-fitting model and testing
-using 'apeglm' for LFC shrinkage. If used in published research, please cite:
-    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
-    sequence count data: removing the noise and preserving large differences.
-    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
-
-=====================================================
-Running comparison: RT2_ZT8
-=====================================================
-estimating size factors
-estimating dispersions
-gene-wise dispersion estimates
-mean-dispersion relationship
-final dispersion estimates
-fitting model and testing
-using 'apeglm' for LFC shrinkage. If used in published research, please cite:
-    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
-    sequence count data: removing the noise and preserving large differences.
-    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
-estimating size factors
-estimating dispersions
-gene-wise dispersion estimates
-mean-dispersion relationship
-final dispersion estimates
-fitting model and testing
-using 'apeglm' for LFC shrinkage. If used in published research, please cite:
-    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
-    sequence count data: removing the noise and preserving large differences.
-    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
-estimating size factors
-estimating dispersions
-gene-wise dispersion estimates
-mean-dispersion relationship
--- note: fitType='parametric', but the dispersion trend was not well captured by the
-   function: y = a/x + b, and a local regression fit was automatically substituted.
-   specify fitType='local' or 'mean' to avoid this message next time.
-final dispersion estimates
-fitting model and testing
-using 'apeglm' for LFC shrinkage. If used in published research, please cite:
-    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
-    sequence count data: removing the noise and preserving large differences.
-    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
-estimating size factors
-estimating dispersions
-gene-wise dispersion estimates
-mean-dispersion relationship
-final dispersion estimates
-fitting model and testing
-using 'apeglm' for LFC shrinkage. If used in published research, please cite:
-    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
-    sequence count data: removing the noise and preserving large differences.
-    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
-estimating size factors
-estimating dispersions
-gene-wise dispersion estimates
-mean-dispersion relationship
--- note: fitType='parametric', but the dispersion trend was not well captured by the
-   function: y = a/x + b, and a local regression fit was automatically substituted.
-   specify fitType='local' or 'mean' to avoid this message next time.
-final dispersion estimates
-fitting model and testing
-using 'apeglm' for LFC shrinkage. If used in published research, please cite:
-    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
-    sequence count data: removing the noise and preserving large differences.
-    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
-
-=====================================================
-Running comparison: RT4_ZT10
-=====================================================
-estimating size factors
-estimating dispersions
-gene-wise dispersion estimates
-mean-dispersion relationship
-final dispersion estimates
-fitting model and testing
-using 'apeglm' for LFC shrinkage. If used in published research, please cite:
-    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
-    sequence count data: removing the noise and preserving large differences.
-    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
-estimating size factors
-estimating dispersions
-gene-wise dispersion estimates
-mean-dispersion relationship
-final dispersion estimates
-fitting model and testing
-using 'apeglm' for LFC shrinkage. If used in published research, please cite:
-    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
-    sequence count data: removing the noise and preserving large differences.
-    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
-estimating size factors
-estimating dispersions
-gene-wise dispersion estimates
-mean-dispersion relationship
--- note: fitType='parametric', but the dispersion trend was not well captured by the
-   function: y = a/x + b, and a local regression fit was automatically substituted.
-   specify fitType='local' or 'mean' to avoid this message next time.
-final dispersion estimates
-fitting model and testing
-using 'apeglm' for LFC shrinkage. If used in published research, please cite:
-    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
-    sequence count data: removing the noise and preserving large differences.
-    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
-estimating size factors
-estimating dispersions
-gene-wise dispersion estimates
-mean-dispersion relationship
-final dispersion estimates
-fitting model and testing
-using 'apeglm' for LFC shrinkage. If used in published research, please cite:
-    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
-    sequence count data: removing the noise and preserving large differences.
-    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
-estimating size factors
-estimating dispersions
-gene-wise dispersion estimates
-mean-dispersion relationship
--- note: fitType='parametric', but the dispersion trend was not well captured by the
-   function: y = a/x + b, and a local regression fit was automatically substituted.
-   specify fitType='local' or 'mean' to avoid this message next time.
-final dispersion estimates
-fitting model and testing
-using 'apeglm' for LFC shrinkage. If used in published research, please cite:
-    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
-    sequence count data: removing the noise and preserving large differences.
-    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
-
-=====================================================
-Running comparison: RT8_ZT14
-=====================================================
-estimating size factors
-estimating dispersions
-gene-wise dispersion estimates
-mean-dispersion relationship
-final dispersion estimates
-fitting model and testing
-using 'apeglm' for LFC shrinkage. If used in published research, please cite:
-    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
-    sequence count data: removing the noise and preserving large differences.
-    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
-estimating size factors
-estimating dispersions
-gene-wise dispersion estimates
-mean-dispersion relationship
-final dispersion estimates
-fitting model and testing
-using 'apeglm' for LFC shrinkage. If used in published research, please cite:
-    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
-    sequence count data: removing the noise and preserving large differences.
-    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
-estimating size factors
-estimating dispersions
-gene-wise dispersion estimates
-mean-dispersion relationship
--- note: fitType='parametric', but the dispersion trend was not well captured by the
-   function: y = a/x + b, and a local regression fit was automatically substituted.
-   specify fitType='local' or 'mean' to avoid this message next time.
-final dispersion estimates
-fitting model and testing
-using 'apeglm' for LFC shrinkage. If used in published research, please cite:
-    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
-    sequence count data: removing the noise and preserving large differences.
-    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
-estimating size factors
-estimating dispersions
-gene-wise dispersion estimates
-mean-dispersion relationship
-final dispersion estimates
-fitting model and testing
-using 'apeglm' for LFC shrinkage. If used in published research, please cite:
-    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
-    sequence count data: removing the noise and preserving large differences.
-    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
-estimating size factors
-estimating dispersions
-gene-wise dispersion estimates
-mean-dispersion relationship
--- note: fitType='parametric', but the dispersion trend was not well captured by the
-   function: y = a/x + b, and a local regression fit was automatically substituted.
-   specify fitType='local' or 'mean' to avoid this message next time.
-final dispersion estimates
-fitting model and testing
-using 'apeglm' for LFC shrinkage. If used in published research, please cite:
-    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
-    sequence count data: removing the noise and preserving large differences.
-    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
-There were 50 or more warnings (use warnings() to see the first 50)
-Running simulation validation: 360 runs
--- note: fitType='parametric', but the dispersion trend was not well captured by the
-   function: y = a/x + b, and a local regression fit was automatically substituted.
-   specify fitType='local' or 'mean' to avoid this message next time.
--- note: fitType='parametric', but the dispersion trend was not well captured by the
-   function: y = a/x + b, and a local regression fit was automatically substituted.
-   specify fitType='local' or 'mean' to avoid this message next time.
--- note: fitType='parametric', but the dispersion trend was not well captured by the
-   function: y = a/x + b, and a local regression fit was automatically substituted.
-   specify fitType='local' or 'mean' to avoid this message next time.
--- note: fitType='parametric', but the dispersion trend was not well captured by the
-   function: y = a/x + b, and a local regression fit was automatically substituted.
-   specify fitType='local' or 'mean' to avoid this message next time.
-Simulation progress: 10/360
--- note: fitType='parametric', but the dispersion trend was not well captured by the
-   function: y = a/x + b, and a local regression fit was automatically substituted.
-   specify fitType='local' or 'mean' to avoid this message next time.
--- note: fitType='parametric', but the dispersion trend was not well captured by the
-   function: y = a/x + b, and a local regression fit was automatically substituted.
-   specify fitType='local' or 'mean' to avoid this message next time.
-Simulation progress: 20/360
--- note: fitType='parametric', but the dispersion trend was not well captured by the
-   function: y = a/x + b, and a local regression fit was automatically substituted.
-   specify fitType='local' or 'mean' to avoid this message next time.
--- note: fitType='parametric', but the dispersion trend was not well captured by the
-   function: y = a/x + b, and a local regression fit was automatically substituted.
-   specify fitType='local' or 'mean' to avoid this message next time.
-Simulation progress: 30/360
--- note: fitType='parametric', but the dispersion trend was not well captured by the
-   function: y = a/x + b, and a local regression fit was automatically substituted.
-   specify fitType='local' or 'mean' to avoid this message next time.
--- note: fitType='parametric', but the dispersion trend was not well captured by the
-   function: y = a/x + b, and a local regression fit was automatically substituted.
-   specify fitType='local' or 'mean' to avoid this message next time.
--- note: fitType='parametric', but the dispersion trend was not well captured by the
-   function: y = a/x + b, and a local regression fit was automatically substituted.
-   specify fitType='local' or 'mean' to avoid this message next time.
-Simulation progress: 40/360
--- note: fitType='parametric', but the dispersion trend was not well captured by the
-   function: y = a/x + b, and a local regression fit was automatically substituted.
-   specify fitType='local' or 'mean' to avoid this message next time.
--- note: fitType='parametric', but the dispersion trend was not well captured by the
-   function: y = a/x + b, and a local regression fit was automatically substituted.
-   specify fitType='local' or 'mean' to avoid this message next time.
--- note: fitType='parametric', but the dispersion trend was not well captured by the
-   function: y = a/x + b, and a local regression fit was automatically substituted.
-   specify fitType='local' or 'mean' to avoid this message next time.
--- note: fitType='parametric', but the dispersion trend was not well captured by the
-   function: y = a/x + b, and a local regression fit was automatically substituted.
-   specify fitType='local' or 'mean' to avoid this message next time.
--- note: fitType='parametric', but the dispersion trend was not well captured by the
-   function: y = a/x + b, and a local regression fit was automatically substituted.
-   specify fitType='local' or 'mean' to avoid this message next time.
-Simulation progress: 50/360
--- note: fitType='parametric', but the dispersion trend was not well captured by the
-   function: y = a/x + b, and a local regression fit was automatically substituted.
-   specify fitType='local' or 'mean' to avoid this message next time.
+[2026-05-21 15:56:53] Method-aligned SEQUENCE simulation started.
+[2026-05-21 15:56:53] Repository root: /root/REAPER98632
+[2026-05-21 15:56:53] Output directory: /root/REAPER98632/exports/manuscript_final_clean/simulation_validation
+[2026-05-21 15:56:53] Simulation started: 320 planned runs
+[2026-05-21 15:56:53] Simulation progress: 1/320 | profile=fixed | LFC=0.5 | DE=0.05 | null_inflation=0 | rep=1 | timeout=240 sec | elapsed=4.21e-06 min | ETA=0.00134 min
+[2026-05-21 15:57:01] Simulation progress: 2/320 | profile=fixed | LFC=0.5 | DE=0.05 | null_inflation=0 | rep=2 | timeout=240 sec | elapsed=0.143 min | ETA=22.7 min
+[2026-05-21 15:57:10] Simulation progress: 3/320 | profile=fixed | LFC=0.5 | DE=0.05 | null_inflation=0 | rep=3 | timeout=240 sec | elapsed=0.283 min | ETA=29.9 min
+[2026-05-21 15:57:17] Simulation progress: 4/320 | profile=fixed | LFC=0.5 | DE=0.05 | null_inflation=0 | rep=4 | timeout=240 sec | elapsed=0.4 min | ETA=31.6 min
+[2026-05-21 15:57:24] Simulation progress: 5/320 | profile=fixed | LFC=0.5 | DE=0.05 | null_inflation=0 | rep=5 | timeout=240 sec | elapsed=0.523 min | ETA=32.9 min
+[2026-05-21 15:57:31] Simulation progress: 6/320 | profile=fixed | LFC=0.5 | DE=0.05 | null_inflation=0 | rep=6 | timeout=240 sec | elapsed=0.645 min | ETA=33.7 min
+[2026-05-21 15:57:39] Simulation progress: 7/320 | profile=fixed | LFC=0.5 | DE=0.05 | null_inflation=0 | rep=7 | timeout=240 sec | elapsed=0.765 min | ETA=34.2 min
+[2026-05-21 15:57:45] Simulation progress: 8/320 | profile=fixed | LFC=0.5 | DE=0.05 | null_inflation=0 | rep=8 | timeout=240 sec | elapsed=0.876 min | ETA=34.2 min
+[2026-05-21 15:57:52] Simulation progress: 9/320 | profile=fixed | LFC=0.5 | DE=0.05 | null_inflation=0 | rep=9 | timeout=240 sec | elapsed=0.995 min | ETA=34.4 min
+[2026-05-21 15:57:59] Simulation progress: 10/320 | profile=fixed | LFC=0.5 | DE=0.05 | null_inflation=0 | rep=10 | timeout=240 sec | elapsed=1.11 min | ETA=34.3 min
+[2026-05-21 15:58:07] Simulation progress: 11/320 | profile=fixed | LFC=0.5 | DE=0.05 | null_inflation=0 | rep=11 | timeout=240 sec | elapsed=1.24 min | ETA=34.8 min
+[2026-05-21 15:58:13] Simulation progress: 12/320 | profile=fixed | LFC=0.5 | DE=0.05 | null_inflation=0 | rep=12 | timeout=240 sec | elapsed=1.34 min | ETA=34.5 min
+[2026-05-21 15:58:20] Simulation progress: 13/320 | profile=fixed | LFC=0.5 | DE=0.05 | null_inflation=0 | rep=13 | timeout=240 sec | elapsed=1.45 min | ETA=34.2 min
+[2026-05-21 15:58:26] Simulation progress: 14/320 | profile=fixed | LFC=0.5 | DE=0.05 | null_inflation=0 | rep=14 | timeout=240 sec | elapsed=1.55 min | ETA=34 min
+[2026-05-21 15:58:34] Simulation progress: 15/320 | profile=fixed | LFC=0.5 | DE=0.05 | null_inflation=0 | rep=15 | timeout=240 sec | elapsed=1.68 min | ETA=34.2 min
+[2026-05-21 15:58:41] Simulation progress: 16/320 | profile=fixed | LFC=0.5 | DE=0.05 | null_inflation=0 | rep=16 | timeout=240 sec | elapsed=1.81 min | ETA=34.3 min
+[2026-05-21 15:58:48] Simulation progress: 17/320 | profile=fixed | LFC=0.5 | DE=0.05 | null_inflation=0 | rep=17 | timeout=240 sec | elapsed=1.92 min | ETA=34.2 min
+[2026-05-21 15:58:54] Simulation progress: 18/320 | profile=fixed | LFC=0.5 | DE=0.05 | null_inflation=0 | rep=18 | timeout=240 sec | elapsed=2.02 min | ETA=33.9 min
+[2026-05-21 15:59:02] Simulation progress: 19/320 | profile=fixed | LFC=0.5 | DE=0.05 | null_inflation=0 | rep=19 | timeout=240 sec | elapsed=2.15 min | ETA=34.1 min
+[2026-05-21 15:59:09] Simulation progress: 20/320 | profile=fixed | LFC=0.5 | DE=0.05 | null_inflation=0 | rep=20 | timeout=240 sec | elapsed=2.28 min | ETA=34.2 min
+[2026-05-21 15:59:17] Simulation progress: 21/320 | profile=fixed | LFC=0.5 | DE=0.1 | null_inflation=0 | rep=1 | timeout=240 sec | elapsed=2.41 min | ETA=34.2 min
+[2026-05-21 15:59:24] Simulation progress: 22/320 | profile=fixed | LFC=0.5 | DE=0.1 | null_inflation=0 | rep=2 | timeout=240 sec | elapsed=2.53 min | ETA=34.3 min
+[2026-05-21 15:59:31] Simulation progress: 23/320 | profile=fixed | LFC=0.5 | DE=0.1 | null_inflation=0 | rep=3 | timeout=240 sec | elapsed=2.64 min | ETA=34.1 min
+[2026-05-21 15:59:38] Simulation progress: 24/320 | profile=fixed | LFC=0.5 | DE=0.1 | null_inflation=0 | rep=4 | timeout=240 sec | elapsed=2.75 min | ETA=34 min
+[2026-05-21 15:59:46] Simulation progress: 25/320 | profile=fixed | LFC=0.5 | DE=0.1 | null_inflation=0 | rep=5 | timeout=240 sec | elapsed=2.88 min | ETA=34 min
+[2026-05-21 15:59:54] Simulation progress: 26/320 | profile=fixed | LFC=0.5 | DE=0.1 | null_inflation=0 | rep=6 | timeout=240 sec | elapsed=3.03 min | ETA=34.3 min
+[2026-05-21 16:00:05] Simulation progress: 27/320 | profile=fixed | LFC=0.5 | DE=0.1 | null_inflation=0 | rep=7 | timeout=240 sec | elapsed=3.21 min | ETA=34.9 min
+[2026-05-21 16:00:21] Simulation progress: 28/320 | profile=fixed | LFC=0.5 | DE=0.1 | null_inflation=0 | rep=8 | timeout=240 sec | elapsed=3.47 min | ETA=36.2 min
+[2026-05-21 16:00:34] Simulation progress: 29/320 | profile=fixed | LFC=0.5 | DE=0.1 | null_inflation=0 | rep=9 | timeout=240 sec | elapsed=3.69 min | ETA=37 min
+[2026-05-21 16:00:48] Simulation progress: 30/320 | profile=fixed | LFC=0.5 | DE=0.1 | null_inflation=0 | rep=10 | timeout=240 sec | elapsed=3.92 min | ETA=37.9 min
+[2026-05-21 16:01:00] Simulation progress: 31/320 | profile=fixed | LFC=0.5 | DE=0.1 | null_inflation=0 | rep=11 | timeout=240 sec | elapsed=4.12 min | ETA=38.4 min
+[2026-05-21 16:01:10] Simulation progress: 32/320 | profile=fixed | LFC=0.5 | DE=0.1 | null_inflation=0 | rep=12 | timeout=240 sec | elapsed=4.29 min | ETA=38.6 min
+[2026-05-21 16:01:20] Simulation progress: 33/320 | profile=fixed | LFC=0.5 | DE=0.1 | null_inflation=0 | rep=13 | timeout=240 sec | elapsed=4.45 min | ETA=38.7 min
+[2026-05-21 16:01:31] Simulation progress: 34/320 | profile=fixed | LFC=0.5 | DE=0.1 | null_inflation=0 | rep=14 | timeout=240 sec | elapsed=4.63 min | ETA=39 min
+[2026-05-21 16:01:41] Simulation progress: 35/320 | profile=fixed | LFC=0.5 | DE=0.1 | null_inflation=0 | rep=15 | timeout=240 sec | elapsed=4.81 min | ETA=39.1 min
+[2026-05-21 16:01:52] Simulation progress: 36/320 | profile=fixed | LFC=0.5 | DE=0.1 | null_inflation=0 | rep=16 | timeout=240 sec | elapsed=4.99 min | ETA=39.4 min
+[2026-05-21 16:02:03] Simulation progress: 37/320 | profile=fixed | LFC=0.5 | DE=0.1 | null_inflation=0 | rep=17 | timeout=240 sec | elapsed=5.18 min | ETA=39.6 min
+[2026-05-21 16:02:13] Simulation progress: 38/320 | profile=fixed | LFC=0.5 | DE=0.1 | null_inflation=0 | rep=18 | timeout=240 sec | elapsed=5.34 min | ETA=39.6 min
+[2026-05-21 16:02:23] Simulation progress: 39/320 | profile=fixed | LFC=0.5 | DE=0.1 | null_inflation=0 | rep=19 | timeout=240 sec | elapsed=5.51 min | ETA=39.7 min
+[2026-05-21 16:02:32] Simulation progress: 40/320 | profile=fixed | LFC=0.5 | DE=0.1 | null_inflation=0 | rep=20 | timeout=240 sec | elapsed=5.66 min | ETA=39.6 min
+[2026-05-21 16:02:42] Simulation progress: 41/320 | profile=fixed | LFC=1 | DE=0.05 | null_inflation=0 | rep=1 | timeout=240 sec | elapsed=5.83 min | ETA=39.6 min
+[2026-05-21 16:02:53] Simulation progress: 42/320 | profile=fixed | LFC=1 | DE=0.05 | null_inflation=0 | rep=2 | timeout=240 sec | elapsed=6 min | ETA=39.7 min
+[2026-05-21 16:03:03] Simulation progress: 43/320 | profile=fixed | LFC=1 | DE=0.05 | null_inflation=0 | rep=3 | timeout=240 sec | elapsed=6.17 min | ETA=39.7 min
+[2026-05-21 16:03:12] Simulation progress: 44/320 | profile=fixed | LFC=1 | DE=0.05 | null_inflation=0 | rep=4 | timeout=240 sec | elapsed=6.33 min | ETA=39.7 min
+[2026-05-21 16:03:20] Simulation progress: 45/320 | profile=fixed | LFC=1 | DE=0.05 | null_inflation=0 | rep=5 | timeout=240 sec | elapsed=6.46 min | ETA=39.5 min
+[2026-05-21 16:03:29] Simulation progress: 46/320 | profile=fixed | LFC=1 | DE=0.05 | null_inflation=0 | rep=6 | timeout=240 sec | elapsed=6.61 min | ETA=39.4 min
+[2026-05-21 16:03:39] Simulation progress: 47/320 | profile=fixed | LFC=1 | DE=0.05 | null_inflation=0 | rep=7 | timeout=240 sec | elapsed=6.78 min | ETA=39.4 min
+[2026-05-21 16:03:49] Simulation progress: 48/320 | profile=fixed | LFC=1 | DE=0.05 | null_inflation=0 | rep=8 | timeout=240 sec | elapsed=6.93 min | ETA=39.3 min
+[2026-05-21 16:03:58] Simulation progress: 49/320 | profile=fixed | LFC=1 | DE=0.05 | null_inflation=0 | rep=9 | timeout=240 sec | elapsed=7.09 min | ETA=39.2 min
+[2026-05-21 16:04:08] Simulation progress: 50/320 | profile=fixed | LFC=1 | DE=0.05 | null_inflation=0 | rep=10 | timeout=240 sec | elapsed=7.25 min | ETA=39.2 min
+[2026-05-21 16:04:16] Simulation progress: 51/320 | profile=fixed | LFC=1 | DE=0.05 | null_inflation=0 | rep=11 | timeout=240 sec | elapsed=7.39 min | ETA=39 min
+[2026-05-21 16:04:25] Simulation progress: 52/320 | profile=fixed | LFC=1 | DE=0.05 | null_inflation=0 | rep=12 | timeout=240 sec | elapsed=7.54 min | ETA=38.8 min
+[2026-05-21 16:04:35] Simulation progress: 53/320 | profile=fixed | LFC=1 | DE=0.05 | null_inflation=0 | rep=13 | timeout=240 sec | elapsed=7.71 min | ETA=38.8 min
+[2026-05-21 16:04:45] Simulation progress: 54/320 | profile=fixed | LFC=1 | DE=0.05 | null_inflation=0 | rep=14 | timeout=240 sec | elapsed=7.87 min | ETA=38.8 min
+[2026-05-21 16:04:54] Simulation progress: 55/320 | profile=fixed | LFC=1 | DE=0.05 | null_inflation=0 | rep=15 | timeout=240 sec | elapsed=8.02 min | ETA=38.7 min
+[2026-05-21 16:05:04] Simulation progress: 56/320 | profile=fixed | LFC=1 | DE=0.05 | null_inflation=0 | rep=16 | timeout=240 sec | elapsed=8.2 min | ETA=38.6 min
+[2026-05-21 16:05:16] Simulation progress: 57/320 | profile=fixed | LFC=1 | DE=0.05 | null_inflation=0 | rep=17 | timeout=240 sec | elapsed=8.38 min | ETA=38.7 min
+[2026-05-21 16:05:25] Simulation progress: 58/320 | profile=fixed | LFC=1 | DE=0.05 | null_inflation=0 | rep=18 | timeout=240 sec | elapsed=8.53 min | ETA=38.5 min
+[2026-05-21 16:05:34] Simulation progress: 59/320 | profile=fixed | LFC=1 | DE=0.05 | null_inflation=0 | rep=19 | timeout=240 sec | elapsed=8.7 min | ETA=38.5 min
+[2026-05-21 16:05:44] Simulation progress: 60/320 | profile=fixed | LFC=1 | DE=0.05 | null_inflation=0 | rep=20 | timeout=240 sec | elapsed=8.86 min | ETA=38.4 min
+[2026-05-21 16:05:54] Simulation progress: 61/320 | profile=fixed | LFC=1 | DE=0.1 | null_inflation=0 | rep=1 | timeout=240 sec | elapsed=9.03 min | ETA=38.3 min
+[2026-05-21 16:06:04] Simulation progress: 62/320 | profile=fixed | LFC=1 | DE=0.1 | null_inflation=0 | rep=2 | timeout=240 sec | elapsed=9.19 min | ETA=38.2 min
+[2026-05-21 16:06:13] Simulation progress: 63/320 | profile=fixed | LFC=1 | DE=0.1 | null_inflation=0 | rep=3 | timeout=240 sec | elapsed=9.33 min | ETA=38.1 min
+[2026-05-21 16:06:20] Simulation progress: 64/320 | profile=fixed | LFC=1 | DE=0.1 | null_inflation=0 | rep=4 | timeout=240 sec | elapsed=9.45 min | ETA=37.8 min
+[2026-05-21 16:06:28] Simulation progress: 65/320 | profile=fixed | LFC=1 | DE=0.1 | null_inflation=0 | rep=5 | timeout=240 sec | elapsed=9.58 min | ETA=37.6 min
+[2026-05-21 16:06:36] Simulation progress: 66/320 | profile=fixed | LFC=1 | DE=0.1 | null_inflation=0 | rep=6 | timeout=240 sec | elapsed=9.73 min | ETA=37.4 min
+[2026-05-21 16:06:43] Simulation progress: 67/320 | profile=fixed | LFC=1 | DE=0.1 | null_inflation=0 | rep=7 | timeout=240 sec | elapsed=9.84 min | ETA=37.2 min
+[2026-05-21 16:06:50] Simulation progress: 68/320 | profile=fixed | LFC=1 | DE=0.1 | null_inflation=0 | rep=8 | timeout=240 sec | elapsed=9.95 min | ETA=36.9 min
+[2026-05-21 16:06:57] Simulation progress: 69/320 | profile=fixed | LFC=1 | DE=0.1 | null_inflation=0 | rep=9 | timeout=240 sec | elapsed=10.1 min | ETA=36.7 min
+[2026-05-21 16:07:06] Simulation progress: 70/320 | profile=fixed | LFC=1 | DE=0.1 | null_inflation=0 | rep=10 | timeout=240 sec | elapsed=10.2 min | ETA=36.5 min
+[2026-05-21 16:07:13] Simulation progress: 71/320 | profile=fixed | LFC=1 | DE=0.1 | null_inflation=0 | rep=11 | timeout=240 sec | elapsed=10.3 min | ETA=36.2 min
+[2026-05-21 16:07:21] Simulation progress: 72/320 | profile=fixed | LFC=1 | DE=0.1 | null_inflation=0 | rep=12 | timeout=240 sec | elapsed=10.5 min | ETA=36 min
+[2026-05-21 16:07:27] Simulation progress: 73/320 | profile=fixed | LFC=1 | DE=0.1 | null_inflation=0 | rep=13 | timeout=240 sec | elapsed=10.6 min | ETA=35.8 min
+[2026-05-21 16:07:35] Simulation progress: 74/320 | profile=fixed | LFC=1 | DE=0.1 | null_inflation=0 | rep=14 | timeout=240 sec | elapsed=10.7 min | ETA=35.6 min
+[2026-05-21 16:07:41] Simulation progress: 75/320 | profile=fixed | LFC=1 | DE=0.1 | null_inflation=0 | rep=15 | timeout=240 sec | elapsed=10.8 min | ETA=35.3 min
+[2026-05-21 16:07:48] Simulation progress: 76/320 | profile=fixed | LFC=1 | DE=0.1 | null_inflation=0 | rep=16 | timeout=240 sec | elapsed=10.9 min | ETA=35.1 min
+[2026-05-21 16:07:55] Simulation progress: 77/320 | profile=fixed | LFC=1 | DE=0.1 | null_inflation=0 | rep=17 | timeout=240 sec | elapsed=11 min | ETA=34.8 min
+[2026-05-21 16:08:01] Simulation progress: 78/320 | profile=fixed | LFC=1 | DE=0.1 | null_inflation=0 | rep=18 | timeout=240 sec | elapsed=11.1 min | ETA=34.6 min
+[2026-05-21 16:08:08] Simulation progress: 79/320 | profile=fixed | LFC=1 | DE=0.1 | null_inflation=0 | rep=19 | timeout=240 sec | elapsed=11.3 min | ETA=34.3 min
+[2026-05-21 16:08:14] Simulation progress: 80/320 | profile=fixed | LFC=1 | DE=0.1 | null_inflation=0 | rep=20 | timeout=240 sec | elapsed=11.4 min | ETA=34.1 min
+[2026-05-21 16:08:20] Simulation progress: 81/320 | profile=fixed | LFC=2 | DE=0.05 | null_inflation=0 | rep=1 | timeout=240 sec | elapsed=11.5 min | ETA=33.8 min
+[2026-05-21 16:08:27] Simulation progress: 82/320 | profile=fixed | LFC=2 | DE=0.05 | null_inflation=0 | rep=2 | timeout=240 sec | elapsed=11.6 min | ETA=33.6 min
+[2026-05-21 16:08:33] Simulation progress: 83/320 | profile=fixed | LFC=2 | DE=0.05 | null_inflation=0 | rep=3 | timeout=240 sec | elapsed=11.7 min | ETA=33.4 min
+[2026-05-21 16:08:41] Simulation progress: 84/320 | profile=fixed | LFC=2 | DE=0.05 | null_inflation=0 | rep=4 | timeout=240 sec | elapsed=11.8 min | ETA=33.1 min
+[2026-05-21 16:08:47] Simulation progress: 85/320 | profile=fixed | LFC=2 | DE=0.05 | null_inflation=0 | rep=5 | timeout=240 sec | elapsed=11.9 min | ETA=32.9 min
+[2026-05-21 16:08:54] Simulation progress: 86/320 | profile=fixed | LFC=2 | DE=0.05 | null_inflation=0 | rep=6 | timeout=240 sec | elapsed=12 min | ETA=32.7 min
+[2026-05-21 16:09:02] Simulation progress: 87/320 | profile=fixed | LFC=2 | DE=0.05 | null_inflation=0 | rep=7 | timeout=240 sec | elapsed=12.2 min | ETA=32.5 min
+[2026-05-21 16:09:15] Simulation progress: 88/320 | profile=fixed | LFC=2 | DE=0.05 | null_inflation=0 | rep=8 | timeout=240 sec | elapsed=12.4 min | ETA=32.6 min
+[2026-05-21 16:09:25] Simulation progress: 89/320 | profile=fixed | LFC=2 | DE=0.05 | null_inflation=0 | rep=9 | timeout=240 sec | elapsed=12.5 min | ETA=32.6 min
+[2026-05-21 16:09:33] Simulation progress: 90/320 | profile=fixed | LFC=2 | DE=0.05 | null_inflation=0 | rep=10 | timeout=240 sec | elapsed=12.7 min | ETA=32.4 min
+[2026-05-21 16:09:40] Simulation progress: 91/320 | profile=fixed | LFC=2 | DE=0.05 | null_inflation=0 | rep=11 | timeout=240 sec | elapsed=12.8 min | ETA=32.2 min
+[2026-05-21 16:09:47] Simulation progress: 92/320 | profile=fixed | LFC=2 | DE=0.05 | null_inflation=0 | rep=12 | timeout=240 sec | elapsed=12.9 min | ETA=32 min
+[2026-05-21 16:09:54] Simulation progress: 93/320 | profile=fixed | LFC=2 | DE=0.05 | null_inflation=0 | rep=13 | timeout=240 sec | elapsed=13 min | ETA=31.8 min
+[2026-05-21 16:10:05] Simulation progress: 94/320 | profile=fixed | LFC=2 | DE=0.05 | null_inflation=0 | rep=14 | timeout=240 sec | elapsed=13.2 min | ETA=31.8 min
+[2026-05-21 16:10:18] Simulation progress: 95/320 | profile=fixed | LFC=2 | DE=0.05 | null_inflation=0 | rep=15 | timeout=240 sec | elapsed=13.4 min | ETA=31.8 min
+[2026-05-21 16:10:30] Simulation progress: 96/320 | profile=fixed | LFC=2 | DE=0.05 | null_inflation=0 | rep=16 | timeout=240 sec | elapsed=13.6 min | ETA=31.8 min
+[2026-05-21 16:10:41] Simulation progress: 97/320 | profile=fixed | LFC=2 | DE=0.05 | null_inflation=0 | rep=17 | timeout=240 sec | elapsed=13.8 min | ETA=31.8 min
+[2026-05-21 16:10:50] Simulation progress: 98/320 | profile=fixed | LFC=2 | DE=0.05 | null_inflation=0 | rep=18 | timeout=240 sec | elapsed=14 min | ETA=31.6 min
+[2026-05-21 16:10:58] Simulation progress: 99/320 | profile=fixed | LFC=2 | DE=0.05 | null_inflation=0 | rep=19 | timeout=240 sec | elapsed=14.1 min | ETA=31.5 min
+[2026-05-21 16:11:07] Simulation progress: 100/320 | profile=fixed | LFC=2 | DE=0.05 | null_inflation=0 | rep=20 | timeout=240 sec | elapsed=14.2 min | ETA=31.3 min
+[2026-05-21 16:11:15] Simulation progress: 101/320 | profile=fixed | LFC=2 | DE=0.1 | null_inflation=0 | rep=1 | timeout=240 sec | elapsed=14.4 min | ETA=31.2 min
+[2026-05-21 16:11:23] Simulation progress: 102/320 | profile=fixed | LFC=2 | DE=0.1 | null_inflation=0 | rep=2 | timeout=240 sec | elapsed=14.5 min | ETA=31 min
+[2026-05-21 16:11:32] Simulation progress: 103/320 | profile=fixed | LFC=2 | DE=0.1 | null_inflation=0 | rep=3 | timeout=240 sec | elapsed=14.7 min | ETA=30.9 min
+[2026-05-21 16:11:41] Simulation progress: 104/320 | profile=fixed | LFC=2 | DE=0.1 | null_inflation=0 | rep=4 | timeout=240 sec | elapsed=14.8 min | ETA=30.8 min
+[2026-05-21 16:11:49] Simulation progress: 105/320 | profile=fixed | LFC=2 | DE=0.1 | null_inflation=0 | rep=5 | timeout=240 sec | elapsed=14.9 min | ETA=30.6 min
+[2026-05-21 16:11:57] Simulation progress: 106/320 | profile=fixed | LFC=2 | DE=0.1 | null_inflation=0 | rep=6 | timeout=240 sec | elapsed=15.1 min | ETA=30.4 min
+[2026-05-21 16:12:06] Simulation progress: 107/320 | profile=fixed | LFC=2 | DE=0.1 | null_inflation=0 | rep=7 | timeout=240 sec | elapsed=15.2 min | ETA=30.3 min
+[2026-05-21 16:12:14] Simulation progress: 108/320 | profile=fixed | LFC=2 | DE=0.1 | null_inflation=0 | rep=8 | timeout=240 sec | elapsed=15.4 min | ETA=30.2 min
+[2026-05-21 16:12:22] Simulation progress: 109/320 | profile=fixed | LFC=2 | DE=0.1 | null_inflation=0 | rep=9 | timeout=240 sec | elapsed=15.5 min | ETA=30 min
+[2026-05-21 16:12:30] Simulation progress: 110/320 | profile=fixed | LFC=2 | DE=0.1 | null_inflation=0 | rep=10 | timeout=240 sec | elapsed=15.6 min | ETA=29.8 min
+[2026-05-21 16:12:38] Simulation progress: 111/320 | profile=fixed | LFC=2 | DE=0.1 | null_inflation=0 | rep=11 | timeout=240 sec | elapsed=15.8 min | ETA=29.7 min
+[2026-05-21 16:12:46] Simulation progress: 112/320 | profile=fixed | LFC=2 | DE=0.1 | null_inflation=0 | rep=12 | timeout=240 sec | elapsed=15.9 min | ETA=29.5 min
+[2026-05-21 16:12:55] Simulation progress: 113/320 | profile=fixed | LFC=2 | DE=0.1 | null_inflation=0 | rep=13 | timeout=240 sec | elapsed=16 min | ETA=29.4 min
+[2026-05-21 16:13:04] Simulation progress: 114/320 | profile=fixed | LFC=2 | DE=0.1 | null_inflation=0 | rep=14 | timeout=240 sec | elapsed=16.2 min | ETA=29.3 min
+[2026-05-21 16:13:12] Simulation progress: 115/320 | profile=fixed | LFC=2 | DE=0.1 | null_inflation=0 | rep=15 | timeout=240 sec | elapsed=16.3 min | ETA=29.1 min
+[2026-05-21 16:13:20] Simulation progress: 116/320 | profile=fixed | LFC=2 | DE=0.1 | null_inflation=0 | rep=16 | timeout=240 sec | elapsed=16.5 min | ETA=28.9 min
+[2026-05-21 16:13:27] Simulation progress: 117/320 | profile=fixed | LFC=2 | DE=0.1 | null_inflation=0 | rep=17 | timeout=240 sec | elapsed=16.6 min | ETA=28.8 min
+[2026-05-21 16:13:34] Simulation progress: 118/320 | profile=fixed | LFC=2 | DE=0.1 | null_inflation=0 | rep=18 | timeout=240 sec | elapsed=16.7 min | ETA=28.6 min
+[2026-05-21 16:13:42] Simulation progress: 119/320 | profile=fixed | LFC=2 | DE=0.1 | null_inflation=0 | rep=19 | timeout=240 sec | elapsed=16.8 min | ETA=28.4 min
+[2026-05-21 16:13:49] Simulation progress: 120/320 | profile=fixed | LFC=2 | DE=0.1 | null_inflation=0 | rep=20 | timeout=240 sec | elapsed=16.9 min | ETA=28.2 min
+[2026-05-21 16:13:57] Simulation progress: 121/320 | profile=fixed | LFC=0.5 | DE=0.05 | null_inflation=0.1 | rep=1 | timeout=240 sec | elapsed=17.1 min | ETA=28.1 min
+[2026-05-21 16:14:04] Simulation progress: 122/320 | profile=fixed | LFC=0.5 | DE=0.05 | null_inflation=0.1 | rep=2 | timeout=240 sec | elapsed=17.2 min | ETA=27.9 min
+[2026-05-21 16:14:10] Simulation progress: 123/320 | profile=fixed | LFC=0.5 | DE=0.05 | null_inflation=0.1 | rep=3 | timeout=240 sec | elapsed=17.3 min | ETA=27.7 min
+[2026-05-21 16:14:17] Simulation progress: 124/320 | profile=fixed | LFC=0.5 | DE=0.05 | null_inflation=0.1 | rep=4 | timeout=240 sec | elapsed=17.4 min | ETA=27.5 min
+[2026-05-21 16:14:24] Simulation progress: 125/320 | profile=fixed | LFC=0.5 | DE=0.05 | null_inflation=0.1 | rep=5 | timeout=240 sec | elapsed=17.5 min | ETA=27.3 min
+[2026-05-21 16:14:32] Simulation progress: 126/320 | profile=fixed | LFC=0.5 | DE=0.05 | null_inflation=0.1 | rep=6 | timeout=240 sec | elapsed=17.7 min | ETA=27.2 min
+[2026-05-21 16:14:40] Simulation progress: 127/320 | profile=fixed | LFC=0.5 | DE=0.05 | null_inflation=0.1 | rep=7 | timeout=240 sec | elapsed=17.8 min | ETA=27 min
+[2026-05-21 16:14:48] Simulation progress: 128/320 | profile=fixed | LFC=0.5 | DE=0.05 | null_inflation=0.1 | rep=8 | timeout=240 sec | elapsed=17.9 min | ETA=26.9 min
+[2026-05-21 16:14:56] Simulation progress: 129/320 | profile=fixed | LFC=0.5 | DE=0.05 | null_inflation=0.1 | rep=9 | timeout=240 sec | elapsed=18 min | ETA=26.7 min
+[2026-05-21 16:15:07] Simulation progress: 130/320 | profile=fixed | LFC=0.5 | DE=0.05 | null_inflation=0.1 | rep=10 | timeout=240 sec | elapsed=18.2 min | ETA=26.7 min
+[2026-05-21 16:15:18] Simulation progress: 131/320 | profile=fixed | LFC=0.5 | DE=0.05 | null_inflation=0.1 | rep=11 | timeout=240 sec | elapsed=18.4 min | ETA=26.6 min
+[2026-05-21 16:15:28] Simulation progress: 132/320 | profile=fixed | LFC=0.5 | DE=0.05 | null_inflation=0.1 | rep=12 | timeout=240 sec | elapsed=18.6 min | ETA=26.5 min
+[2026-05-21 16:15:37] Simulation progress: 133/320 | profile=fixed | LFC=0.5 | DE=0.05 | null_inflation=0.1 | rep=13 | timeout=240 sec | elapsed=18.7 min | ETA=26.4 min
+[2026-05-21 16:15:46] Simulation progress: 134/320 | profile=fixed | LFC=0.5 | DE=0.05 | null_inflation=0.1 | rep=14 | timeout=240 sec | elapsed=18.9 min | ETA=26.2 min
+[2026-05-21 16:15:56] Simulation progress: 135/320 | profile=fixed | LFC=0.5 | DE=0.05 | null_inflation=0.1 | rep=15 | timeout=240 sec | elapsed=19.1 min | ETA=26.1 min

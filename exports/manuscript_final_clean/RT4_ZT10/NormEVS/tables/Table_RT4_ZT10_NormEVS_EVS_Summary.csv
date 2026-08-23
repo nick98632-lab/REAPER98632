@@ -1,2 +1,0 @@
-"comparison","evs_mode","top_n_target","treatment_top_n","control_top_n","treatment_loading_cutoff","control_loading_cutoff","leading_edge_features","remainder_features","input_matrix"
-"RT4_ZT10","NormEVS",5000,5000,5000,0.000711314638491753,0.000447951367496344,7093,24664,"DESeq2 normalized counts; no log transform"

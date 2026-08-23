@@ -1,0 +1,271 @@
+Using count file: /root/REAPER98632/data/WTTS-Seq_2022.2_DE_raw_read_numbers.csv
+Repository root: /root/REAPER98632
+Output directory: /root/REAPER98632/exports/sequence_journal_ready
+
+=====================================================
+Running comparison: RT0_ZT6
+=====================================================
+Running RT0_ZT6 NormEVS
+EVS track NormEVS: fixed top-5,000 selected independently from each condition PC1 eigenvector; downstream Lead/Rem DESeq2 analyses use the corresponding raw-count subsets.
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+-- note: fitType='parametric', but the dispersion trend was not well captured by the
+   function: y = a/x + b, and a local regression fit was automatically substituted.
+   specify fitType='local' or 'mean' to avoid this message next time.
+final dispersion estimates
+fitting model and testing
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+Running RT0_ZT6 RawEVS
+EVS track RawEVS: fixed top-5,000 selected independently from each condition PC1 eigenvector; downstream Lead/Rem DESeq2 analyses use the corresponding raw-count subsets.
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+-- note: fitType='parametric', but the dispersion trend was not well captured by the
+   function: y = a/x + b, and a local regression fit was automatically substituted.
+   specify fitType='local' or 'mean' to avoid this message next time.
+final dispersion estimates
+fitting model and testing
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+
+=====================================================
+Running comparison: RT2_ZT8
+=====================================================
+Running RT2_ZT8 NormEVS
+EVS track NormEVS: fixed top-5,000 selected independently from each condition PC1 eigenvector; downstream Lead/Rem DESeq2 analyses use the corresponding raw-count subsets.
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+-- note: fitType='parametric', but the dispersion trend was not well captured by the
+   function: y = a/x + b, and a local regression fit was automatically substituted.
+   specify fitType='local' or 'mean' to avoid this message next time.
+final dispersion estimates
+fitting model and testing
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+Running RT2_ZT8 RawEVS
+EVS track RawEVS: fixed top-5,000 selected independently from each condition PC1 eigenvector; downstream Lead/Rem DESeq2 analyses use the corresponding raw-count subsets.
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+-- note: fitType='parametric', but the dispersion trend was not well captured by the
+   function: y = a/x + b, and a local regression fit was automatically substituted.
+   specify fitType='local' or 'mean' to avoid this message next time.
+final dispersion estimates
+fitting model and testing
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+
+=====================================================
+Running comparison: RT4_ZT10
+=====================================================
+Running RT4_ZT10 NormEVS
+EVS track NormEVS: fixed top-5,000 selected independently from each condition PC1 eigenvector; downstream Lead/Rem DESeq2 analyses use the corresponding raw-count subsets.
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+-- note: fitType='parametric', but the dispersion trend was not well captured by the
+   function: y = a/x + b, and a local regression fit was automatically substituted.
+   specify fitType='local' or 'mean' to avoid this message next time.
+final dispersion estimates
+fitting model and testing
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+Running RT4_ZT10 RawEVS
+EVS track RawEVS: fixed top-5,000 selected independently from each condition PC1 eigenvector; downstream Lead/Rem DESeq2 analyses use the corresponding raw-count subsets.
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+-- note: fitType='parametric', but the dispersion trend was not well captured by the
+   function: y = a/x + b, and a local regression fit was automatically substituted.
+   specify fitType='local' or 'mean' to avoid this message next time.
+final dispersion estimates
+fitting model and testing
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+
+=====================================================
+Running comparison: RT8_ZT14
+=====================================================
+Running RT8_ZT14 NormEVS
+EVS track NormEVS: fixed top-5,000 selected independently from each condition PC1 eigenvector; downstream Lead/Rem DESeq2 analyses use the corresponding raw-count subsets.
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+-- note: fitType='parametric', but the dispersion trend was not well captured by the
+   function: y = a/x + b, and a local regression fit was automatically substituted.
+   specify fitType='local' or 'mean' to avoid this message next time.
+final dispersion estimates
+fitting model and testing
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+Running RT8_ZT14 RawEVS
+EVS track RawEVS: fixed top-5,000 selected independently from each condition PC1 eigenvector; downstream Lead/Rem DESeq2 analyses use the corresponding raw-count subsets.
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+-- note: fitType='parametric', but the dispersion trend was not well captured by the
+   function: y = a/x + b, and a local regression fit was automatically substituted.
+   specify fitType='local' or 'mean' to avoid this message next time.
+final dispersion estimates
+fitting model and testing
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+There were 50 or more warnings (use warnings() to see the first 50)
+There were 50 or more warnings (use warnings() to see the first 50)
+There were 50 or more warnings (use warnings() to see the first 50)
+Running final 3'aTWAS ortholog overlap: /root/REAPER98632/data/3aTWAS_genes_of_11_brain_disorders.csv
+Published 2024 WTTS/TWAS benchmark reproduced: 11 PASs / 9 genes in RT4_ZT10 RawEVS Rem.
+Final export audit passed: all comparison/view tables, curated panels, method counts, TWAS rows, and published benchmark are internally consistent.
+Error in git_exec(c("push", GIT_REMOTE, paste0("HEAD:", branch))) : 
+  Git command failed: git push origin HEAD:index.html
+remote: Invalid username or token. Password authentication is not supported for Git operations.
+fatal: Authentication failed for 'https://github.com/nick98632-lab/REAPER98632.git/'
+Calls: publish_results_to_repository -> git_exec
+Execution halted
