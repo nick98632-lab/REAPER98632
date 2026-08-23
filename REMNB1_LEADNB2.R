@@ -10,104 +10,67 @@ suppressPackageStartupMessages({
 options(stringsAsFactors = FALSE)
 
 # =============================================================================
-# FINAL MANUSCRIPT SCRIPT
+# LEFT/RIGHT NB2 DISPERSION EVIDENCE
 # =============================================================================
 #
-# PURPOSE
+# For each comparison arm, this script tests whether features at the extreme
+# (RIGHT) end of the PC1-loading rank axis show stronger NB2-like
+# overdispersion than a matched block (LEFT) immediately below them.
 #
-# This script produces:
+# GEOMETRY
 #
-# 1. Main manuscript figures
-#    - Rank: log-transformed CPM-style library-size normalization
-#    - Metrics: raw counts
+# Features are ranked within each arm by absolute PC1 loading. Along that
+# rank axis, empirical variance is computed feature-wise and transformed as
+# log(1 + variance). A smoothing spline is fit to the ranked variance
+# trajectory, and its second derivative is used to locate zero-crossings.
 #
-# 2. DESeq2 supplementary figures
-#    - Rank: DESeq2-normalized counts, optionally VST
-#    - Metrics: DESeq2-normalized counts
+# A fixed leading-edge reference rank is defined as the rank leaving exactly
+# FIXED_LEADING_EDGE_SIZE features on the right side, including that rank.
+# The Anchor and Terminal are the nearest second-derivative zero-crossings
+# immediately left and right of that reference rank.
 #
-# SCIENTIFIC LOGIC
+#   RIGHT = all ranks from Anchor through the right edge of the ranking
+#   LEFT  = equal-sized matched block immediately left of Anchor
 #
-# A. Geometry
-#    Features are ranked within each arm by absolute PC1 loading.
-#    Along that rank axis, empirical variance is computed feature-wise and
-#    transformed as log(1 + variance). A smoothing spline is fit to the ranked
-#    variance trajectory. This smooth curve is used because a stable continuous
-#    second derivative is more defensible than differentiating a noisy jagged
-#    empirical series directly.
-#
-#    A fixed leading-edge reference is defined as the rank leaving exactly
-#    FIXED_LEADING_EDGE_SIZE features on the right side, including that rank.
-#
-#    The final custom interval is defined by the two nearest spline-based
-#    second-derivative zero-crossings flanking that fixed reference:
-#      - Anchor   = nearest d2 zero immediately LEFT of the fixed reference
-#      - Terminal = nearest d2 zero immediately RIGHT of the fixed reference
-#
-#    This is a custom geometric rule. It is not presented as a standard
-#    published cutoff procedure.
-#
-# B. Corroboration
-#    RIGHT = all ranks from Anchor through the right edge of the ranked series
-#    LEFT  = equal-sized matched block immediately left of Anchor
-#
-#    The hypothesis is that RIGHT shows stronger NB2-like,
-#    overdispersion-consistent behavior than LEFT.
-#
-# NB2-RELATED QUANTITIES
+# DESCRIPTIVE NB2 QUANTITIES
 #
 # Let mu denote empirical mean and variance denote empirical variance.
+#   NB2      = log(1 + variance - mu)                  extra-Poisson signal
+#   NB2-NB1  = NB2 - log(1 + mu)                        excess relative to mean
+#   alpha*mu = log(1 + alpha*mu), alpha = max((variance-mu)/mu^2, 0)
 #
-# 1. NB2 = log(1 + variance - mu)
-#    Extra-Poisson variance signal.
+# FORMAL LIKELIHOOD-RATIO TEST
 #
-# 2. NB2-NB1 = log(1 + variance - mu) - log(1 + mu)
-#    Higher-order excess-variance signal relative to lower-order mean signal.
-#
-# 3. alpha*mu = log(1 + alpha*mu), where
-#       alpha = max((variance - mu) / mu^2, 0)
-#    Under variance = mu + alpha*mu^2, this is a normalized NB2-linked signal.
-#
-# These three quantities are descriptive medians with no test attached to
-# them on their own; they motivate the comparison but do not establish it
-# statistically.
-#
-# FORMAL LIKELIHOOD-RATIO TEST (LRT)
-#
-# A formal test is computed alongside the descriptive quantities above:
-#   H0: LEFT and RIGHT share one NB2 dispersion parameter (alpha)
-#   H1: LEFT and RIGHT have their own separate alpha
-# Each feature's mean (mu) is held fixed at its own empirical mean; alpha is
+# H0: LEFT and RIGHT share one NB2 dispersion parameter (alpha)
+# H1: LEFT and RIGHT each have their own alpha
+# Each feature's mean is held fixed at its own empirical mean; alpha is
 # estimated by maximum likelihood under Var = mu + alpha*mu^2 (equivalently
-# dnbinom size = 1/alpha). H1 has exactly one more free parameter than H0
-# (two alphas vs one shared alpha), so:
+# dnbinom size = 1/alpha). Counts are rounded to the nearest non-negative
+# integer before this likelihood is computed, since dnbinom's likelihood is
+# defined for integer counts. H1 has exactly one more free parameter than
+# H0, so:
 #   LRT = 2 * (loglik_H1 - loglik_H0)  ~  chi-square(df = 1) under H0
-# This LRT, its p-value, and the preferred direction (RIGHT_more_NB2 vs
-# LEFT_more_NB2) are written to the cutoff summary table for every arm and
-# track, and the p-value is shown in each figure's summary-panel subtitle.
-# It is strictly appropriate for the Main track (raw integer counts); for
-# the DESeq2-normalized supplement track, counts are continuous and the
-# same test is still reported but is a looser applied approximation, marked
-# by the lrt_is_integer_count_track column in the output table. For the
-# DESeq2 track specifically, compute_deseq2_matrices now also runs DESeq2's
-# own dispersion-shrinkage pipeline (estimateDispersions), and the region
-# medians of that final shrunk dispersion are reported alongside the
-# unshrunk MLE alpha as alpha_left_deseq2_shrunk / alpha_right_deseq2_shrunk
-# / diff_deseq2_shrunk, so the shrinkage-stabilized comparison can be read
-# directly instead of relying only on the unshrunk per-region MLE.
+#
+# DESEQ2 DISPERSION SHRINKAGE
+#
+# For the DESeq2 track, DESeq2's own dispersion-shrinkage pipeline
+# (estimateDispersions) is run on each arm. Region medians of the final
+# shrunk dispersion are reported (alpha_left_deseq2_shrunk /
+# alpha_right_deseq2_shrunk / diff_deseq2_shrunk), alongside the fraction
+# of LEFT and RIGHT genes DESeq2 flags as dispersion outliers -- genes
+# whose dispersion is not shrunk toward the fitted trend.
 #
 # METHODS-LEVEL VALIDATION
 #
-# For every comparison arm and every analysis track, the script verifies that:
+# For every comparison arm and every analysis track, the script verifies:
 # - Anchor < Ref < Terminal
 # - LEFT and RIGHT have equal size
 # - reported summary medians exactly match the sliced plotted regions
 #
 # FIGURE RULES
 #
-# - 3 panels only
-# - no separate legend-strip panels
-# - no annotation boxes in the cutoff zone
-# - short labels only inside panels
+# - 3 panels per per-arm figure; no separate legend-strip panels
+# - no annotation boxes in the cutoff zone; short labels only inside panels
 # - file names start with Figure_ or Table_
 # =============================================================================
 
@@ -230,10 +193,8 @@ compute_deseq2_matrices <- function(count_mat_arm, rank_method = "normalized_log
 
   # estimateDispersions fits gene-wise dispersion, the mean-dispersion
   # trend, and the final MAP (empirical-Bayes shrunk) dispersion per gene.
-  # Previously this function only ran estimateSizeFactors, so the "DESeq2"
-  # track never actually used DESeq2's dispersion shrinkage despite its
-  # name -- only size-factor normalization. dispersion_final below is the
-  # same shrunk per-gene dispersion DESeq2 normally uses before testing.
+  # dispersion_final is the shrunk per-gene dispersion DESeq2 normally uses
+  # before testing.
   dds <- tryCatch(
     DESeq2::estimateDispersions(dds, quiet = TRUE),
     error = function(e) {
@@ -243,11 +204,10 @@ compute_deseq2_matrices <- function(count_mat_arm, rank_method = "normalized_log
   )
   dispersion_final <- tryCatch(DESeq2::dispersions(dds), error = function(e) rep(NA_real_, nrow(dds)))
 
-  # See the matching comment in REGIME_DIAGNOSTIC.r: genes flagged as
-  # dispersion outliers by DESeq2 are NOT shrunk toward the trend, so their
-  # dispersion_final value is effectively an unshrunk gene-wise estimate.
-  # Exposed here so the LEFT/RIGHT outlier fraction can be reported directly
-  # rather than assumed.
+  # Genes flagged as dispersion outliers by DESeq2 are not shrunk toward
+  # the trend, so their dispersion_final value is an unshrunk gene-wise
+  # estimate. Exposed here so the LEFT/RIGHT outlier fraction can be
+  # reported directly.
   dispersion_is_outlier <- tryCatch(
     S4Vectors::mcols(dds)$dispOutlier,
     error = function(e) rep(NA, nrow(dds))
@@ -494,20 +454,19 @@ nb2_region_loglik <- function(alpha, counts_block, mu_vec) {
   if (!is.finite(alpha) || alpha <= 0) return(-Inf)
   size <- 1 / alpha
   mu_rep <- rep(mu_vec, times = ncol(counts_block))
-  counts_vec <- as.vector(counts_block)
+  # dnbinom's likelihood is defined for integer counts. Counts are rounded
+  # to the nearest non-negative integer so every track uses a genuine
+  # discrete NB likelihood.
+  counts_vec <- round(pmax(as.vector(counts_block), 0))
   keep <- is.finite(counts_vec) & is.finite(mu_rep) & mu_rep > 0 & counts_vec >= 0
   if (!any(keep)) return(-Inf)
   sum(stats::dnbinom(counts_vec[keep], size = size, mu = mu_rep[keep], log = TRUE))
 }
 
 fit_region_alpha_mle <- function(counts_block, mu_vec, log_alpha_lower = -15, log_alpha_upper = 15) {
-  # Searching on log(alpha) instead of alpha directly is far more robust when
-  # the true dispersion could plausibly span many orders of magnitude (as
-  # turned out to be the case for DESeq2-normalized, continuous-scale
-  # counts, which previously saturated a fixed alpha upper bound of 100 in
-  # every single case -- silently producing a meaningless MLE stuck at the
-  # boundary, -Inf log-likelihoods, and an NA LRT p-value). log_alpha_lower
-  # = -15 / log_alpha_upper = 15 correspond to alpha from ~3e-7 to ~3e6.
+  # Searching on log(alpha) rather than alpha directly is robust across the
+  # wide range of scales the dispersion can plausibly take (roughly 3e-7 to
+  # 3e6 over this lower/upper bound).
   obj <- function(log_a) {
     a <- exp(log_a)
     -nb2_region_loglik(a, counts_block, mu_vec)
@@ -1014,13 +973,10 @@ run_one_track <- function(comparison_name,
       Call_Alpha = ifelse(diff_alpha > 0, "RIGHT", "NOT_RIGHT")
     )
 
-  zero_path  <- file.path(output_dir, paste0("Table_Zero_", comparison_name, "_", arm_name, "_", track, ".csv"))
   valid_path <- file.path(output_dir, paste0("Table_Valid_", comparison_name, "_", arm_name, "_", track, ".csv"))
   rank_path  <- file.path(output_dir, paste0("Table_Rank_", comparison_name, "_", arm_name, "_", track, ".csv"))
   cut_path   <- file.path(output_dir, paste0("Table_Cutoff_", comparison_name, "_", arm_name, "_", track, ".csv"))
   fig_path   <- file.path(output_dir, paste0("Figure_", track, "_", comparison_name, "_", arm_name, ".png"))
-
-  write.csv(zero_df, zero_path, row.names = FALSE)
 
   write.csv(
     data.frame(
@@ -1172,7 +1128,123 @@ write.csv(
   row.names = FALSE
 )
 
+# -----------------------------------------------------------------------------
+# Clean summary tables: each table only contains columns that are populated
+# for its track, so neither has structural NA columns.
+# -----------------------------------------------------------------------------
+
+lrt_summary <- overall_summary %>%
+  filter(track == "Main") %>%
+  transmute(
+    comparison = comp,
+    arm = arm,
+    left_n = left_n,
+    right_n = right_n,
+    alpha_left = alpha_left_mle,
+    alpha_right = alpha_right_mle,
+    diff_alpha = alpha_right_mle - alpha_left_mle,
+    lrt_stat = lrt_stat,
+    lrt_p = lrt_p,
+    direction = lrt_direction
+  )
+
+write.csv(
+  lrt_summary,
+  file.path(OUT_ROOT, "Table_LRT_Main.csv"),
+  row.names = FALSE
+)
+
+dispersion_outlier_summary <- overall_summary %>%
+  filter(track == "DESeq2") %>%
+  transmute(
+    comparison = comp,
+    arm = arm,
+    left_n = left_n,
+    right_n = right_n,
+    alpha_left_shrunk = alpha_left_deseq2_shrunk,
+    alpha_right_shrunk = alpha_right_deseq2_shrunk,
+    diff_shrunk = diff_deseq2_shrunk,
+    outlier_frac_left = frac_dispersion_outlier_left,
+    outlier_frac_right = frac_dispersion_outlier_right
+  )
+
+write.csv(
+  dispersion_outlier_summary,
+  file.path(OUT_ROOT, "Table_Dispersion_Outlier_DESeq2.csv"),
+  row.names = FALSE
+)
+
 message("Done. Outputs written to: ", OUT_ROOT)
+
+# -----------------------------------------------------------------------------
+# Figure: LRT evidence across every comparison (Main track). One row of
+# points per arm, LEFT vs RIGHT alpha, with the LRT p-value labeled.
+# -----------------------------------------------------------------------------
+
+lrt_plot_df <- lrt_summary %>%
+  mutate(
+    arm_label = paste0(comparison, " ", arm),
+    p_label = ifelse(
+      lrt_p < 1e-10,
+      paste0("p<1e-10"),
+      paste0("p=", formatC(lrt_p, format = "e", digits = 2))
+    )
+  )
+
+p_lrt <- ggplot(lrt_plot_df, aes(y = reorder(arm_label, diff_alpha))) +
+  geom_segment(aes(x = alpha_left, xend = alpha_right, yend = arm_label), color = "#7A7A7A", linewidth = 0.9) +
+  geom_point(aes(x = alpha_left, color = "LEFT"), size = 3.6) +
+  geom_point(aes(x = alpha_right, color = "RIGHT"), size = 3.6) +
+  geom_text(aes(x = pmax(alpha_left, alpha_right), label = p_label), hjust = -0.15, size = 3) +
+  scale_color_manual(values = REGION_COLORS, breaks = REGION_LEVELS) +
+  scale_x_continuous(expand = expansion(mult = c(0.05, 0.30))) +
+  labs(
+    title = "Likelihood-ratio evidence: LEFT vs RIGHT NB2 dispersion (alpha)",
+    subtitle = "Every arm tested, Main track. RIGHT further right than LEFT, with a small p-value, supports RIGHT being more NB2-like.",
+    x = "alpha (NB2 dispersion, maximum-likelihood estimate)",
+    y = NULL,
+    color = NULL
+  ) +
+  theme_bw(base_size = 12) +
+  theme(legend.position = "bottom")
+
+ggsave(
+  file.path(OUT_ROOT, "Figure_LRT_Evidence_Summary.png"),
+  p_lrt, width = 11, height = 6.5, dpi = 300
+)
+
+# -----------------------------------------------------------------------------
+# Figure: DESeq2 dispersion-outlier fraction, LEFT vs RIGHT, every comparison.
+# -----------------------------------------------------------------------------
+
+outlier_plot_df <- dispersion_outlier_summary %>%
+  mutate(arm_label = paste0(comparison, " ", arm)) %>%
+  select(arm_label, outlier_frac_left, outlier_frac_right) %>%
+  pivot_longer(
+    cols = c(outlier_frac_left, outlier_frac_right),
+    names_to = "region",
+    values_to = "outlier_fraction"
+  ) %>%
+  mutate(region = ifelse(region == "outlier_frac_left", "LEFT", "RIGHT"))
+
+p_outlier <- ggplot(outlier_plot_df, aes(x = arm_label, y = outlier_fraction, fill = region)) +
+  geom_col(position = position_dodge(width = 0.7), width = 0.6) +
+  scale_fill_manual(values = REGION_COLORS, breaks = REGION_LEVELS) +
+  scale_y_continuous(labels = scales::percent) +
+  labs(
+    title = "DESeq2 dispersion-outlier fraction: LEFT vs RIGHT, every comparison",
+    subtitle = "A gene flagged as a dispersion outlier is not shrunk toward the fitted trend. A higher RIGHT fraction supports RIGHT genes departing from the bulk dispersion trend.",
+    x = NULL,
+    y = "Fraction of genes flagged as dispersion outliers",
+    fill = NULL
+  ) +
+  theme_bw(base_size = 11) +
+  theme(legend.position = "bottom", axis.text.x = element_text(angle = 25, hjust = 1))
+
+ggsave(
+  file.path(OUT_ROOT, "Figure_Dispersion_Outlier_Summary.png"),
+  p_outlier, width = 11, height = 6.5, dpi = 300
+)
 
 # -----------------------------------------------------------------------------
 # Zip archives: everything in one download for figures and for tables.
