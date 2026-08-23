@@ -1,0 +1,2 @@
+"Comparison","Analysis","Human_TWAS","Rat_Ortholog","Ortholog_mapping_source","TWAS_Disorders","TWAS_n","TWAS_PAS_n","TWAS_APA","WTTS_PAS_n","WTTS_APA","WTTS_DE_PAS","Apeglm_LFC","Std","Strong","Weak","HBFSS","Ovlp","Support","Std_BH","Strong_BH","Weak_BH","EmpP","HBFSS_score"
+"RT2_ZT8","NormEVS Rem","TUBB","Tubb5","babelgene","ANX(4), BIP(4), SCZ(6)",14,5,TRUE,2,TRUE,"315274",0.915090257819885,FALSE,FALSE,FALSE,TRUE,FALSE,"HBFSS",0.999931476033651,1,0.841928716699989,0.000197921446097205,3.38904330775822

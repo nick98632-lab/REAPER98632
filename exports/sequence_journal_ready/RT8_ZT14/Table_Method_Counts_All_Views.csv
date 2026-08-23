@@ -1,0 +1,6 @@
+"Comparison","Analysis","PAS_tested","Std","Strong","Weak","HBFSS","Ovlp"
+"RT8_ZT14","Original (No EVS)",31580,4,0,6,76,10
+"RT8_ZT14","NormEVS Lead",6787,1,0,0,12,1
+"RT8_ZT14","NormEVS Rem",24793,28,0,11,138,39
+"RT8_ZT14","RawEVS Lead",6556,4,0,0,6,4
+"RT8_ZT14","RawEVS Rem",25024,17,0,0,88,17

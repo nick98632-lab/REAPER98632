@@ -1,0 +1,2 @@
+"Comparison","Analysis","Human_TWAS","Rat_Ortholog","Ortholog_mapping_source","TWAS_Disorders","TWAS_n","TWAS_PAS_n","TWAS_APA","WTTS_PAS_n","WTTS_APA","Std","Strong","Weak","HBFSS","Ovlp","Std_PAS_n","Strong_PAS_n","Weak_PAS_n","HBFSS_PAS_n","Std_PAS_IDs","Strong_PAS_IDs","Weak_PAS_IDs","HBFSS_PAS_IDs","WTTS_DE_PAS_n","WTTS_DE_APA","WTTS_DE_PAS_IDs","Methods"
+"RT2_ZT8","Original (No EVS)","KHK","Khk","babelgene","PTSD(1), SCZ(1)",2,1,FALSE,3,TRUE,FALSE,FALSE,FALSE,TRUE,FALSE,0,0,0,1,NA,NA,NA,"440688",1,FALSE,"440688","HBFSS"

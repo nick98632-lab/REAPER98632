@@ -1,0 +1,6 @@
+"Comparison","Analysis","PAS_tested","Std","Strong","Weak","HBFSS","Ovlp"
+"RT4_ZT10","Original (No EVS)",31658,743,39,16,1100,759
+"RT4_ZT10","NormEVS Lead",7093,286,13,4,343,279
+"RT4_ZT10","NormEVS Rem",24565,686,55,29,1062,715
+"RT4_ZT10","RawEVS Lead",6741,295,15,9,337,287
+"RT4_ZT10","RawEVS Rem",24917,639,43,1,1092,640

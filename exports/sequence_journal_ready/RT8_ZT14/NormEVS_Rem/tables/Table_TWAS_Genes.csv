@@ -1,0 +1,4 @@
+"Comparison","Analysis","Human_TWAS","Rat_Ortholog","Ortholog_mapping_source","TWAS_Disorders","TWAS_n","TWAS_PAS_n","TWAS_APA","WTTS_PAS_n","WTTS_APA","Std","Strong","Weak","HBFSS","Ovlp","Std_PAS_n","Strong_PAS_n","Weak_PAS_n","HBFSS_PAS_n","Std_PAS_IDs","Strong_PAS_IDs","Weak_PAS_IDs","HBFSS_PAS_IDs","WTTS_DE_PAS_n","WTTS_DE_APA","WTTS_DE_PAS_IDs","Methods"
+"RT8_ZT14","NormEVS Rem","MTRF1L","Mtrf1l","babelgene","SCZ(1)",1,1,FALSE,4,TRUE,TRUE,FALSE,FALSE,TRUE,TRUE,1,0,0,1,"35839",NA,NA,"35839",1,FALSE,"35839","Std+HBFSS"
+"RT8_ZT14","NormEVS Rem","TUBA1C","Tuba1c","babelgene","ADHD(2)",2,2,TRUE,1,FALSE,FALSE,FALSE,FALSE,TRUE,FALSE,0,0,0,1,NA,NA,NA,"499915",1,FALSE,"499915","HBFSS"
+"RT8_ZT14","NormEVS Rem","ZDHHC24","Zdhhc24","babelgene","BIP(1)",1,1,FALSE,1,FALSE,FALSE,FALSE,FALSE,TRUE,FALSE,0,0,0,1,NA,NA,NA,"56025",1,FALSE,"56025","HBFSS"

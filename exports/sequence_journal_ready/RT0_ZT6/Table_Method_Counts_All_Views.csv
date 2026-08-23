@@ -1,0 +1,6 @@
+"Comparison","Analysis","PAS_tested","Std","Strong","Weak","HBFSS","Ovlp"
+"RT0_ZT6","Original (No EVS)",31553,9,3,0,61,9
+"RT0_ZT6","NormEVS Lead",6722,3,1,0,15,3
+"RT0_ZT6","NormEVS Rem",24831,48,2,1,191,49
+"RT0_ZT6","RawEVS Lead",6629,3,0,0,16,3
+"RT0_ZT6","RawEVS Rem",24924,41,3,0,160,41

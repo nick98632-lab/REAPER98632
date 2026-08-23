@@ -1,0 +1,6 @@
+"Comparison","Analysis","Std","Strong","Weak","HBFSS","Ovlp","TWAS_APA","WTTS_APA","WTTS_DE_APA"
+"RT4_ZT10","Original (No EVS)",13,0,0,24,13,8,20,1
+"RT4_ZT10","NormEVS Lead",2,0,0,3,2,1,3,0
+"RT4_ZT10","NormEVS Rem",19,1,1,25,20,10,21,4
+"RT4_ZT10","RawEVS Lead",3,0,0,4,3,2,4,0
+"RT4_ZT10","RawEVS Rem",13,1,0,24,13,8,19,3

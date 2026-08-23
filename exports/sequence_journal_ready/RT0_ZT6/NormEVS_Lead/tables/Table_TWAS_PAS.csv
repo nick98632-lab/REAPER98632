@@ -1,0 +1,2 @@
+"Comparison","Analysis","Human_TWAS","Rat_Ortholog","Ortholog_mapping_source","TWAS_Disorders","TWAS_n","TWAS_PAS_n","TWAS_APA","WTTS_PAS_n","WTTS_APA","WTTS_DE_PAS","Apeglm_LFC","Std","Strong","Weak","HBFSS","Ovlp","Support","Std_BH","Strong_BH","Weak_BH","EmpP","HBFSS_score"
+"RT0_ZT6","NormEVS Lead","CISD2","Cisd2","babelgene","ADHD(2), ANX(1), ASD(1), DEP(1), SCZ(6)",11,2,TRUE,2,TRUE,"282293",1.12497163507176,FALSE,FALSE,FALSE,TRUE,FALSE,"HBFSS",0.763498150926664,1,0.902799917265403,0.0245642666662671,1.81086256228456
