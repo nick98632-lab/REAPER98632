@@ -1,6 +1,6 @@
 #!/usr/bin/env Rscript
 
-PIPELINE_BUILD <- "SEQUENCE_JOURNAL_READY_GITHUB_2026-08-22"
+PIPELINE_BUILD <- "SEQUENCE_JOURNAL_READY_GITHUB_FIXED_2026-08-22"
 
 # =============================================================================
 # SEQUENCE MANUSCRIPT ANALYSIS
@@ -1192,6 +1192,44 @@ publish_results_to_repository <- function(figure_zip, table_zip) {
     output_rel = output_rel
   )
 }
+
+# =============================================================================
+# SECTION 2 OF 5
+# IMPORT COUNT MATRIX AND ANNOTATION
+# =============================================================================
+
+count_file <- resolve_existing_file(count_file_candidates, "WTTS count file")
+
+message("Using count file: ", count_file)
+message("Repository root: ", repo_root)
+message("Output directory: ", output_dir)
+
+WTTS_Seq <- utils::read.csv(
+  count_file,
+  header = TRUE,
+  stringsAsFactors = FALSE,
+  check.names = FALSE
+)
+
+WTTS_Seq <- as.data.frame(
+  WTTS_Seq,
+  stringsAsFactors = FALSE
+)
+
+assert_required_columns(
+  WTTS_Seq,
+  c("OrigID", "Symbol"),
+  object_name = "WTTS count file"
+)
+
+assert_required_columns(
+  WTTS_Seq,
+  meta_all$id,
+  object_name = "WTTS count file sample columns"
+)
+
+WTTS_Seq$OrigID <- as.character(WTTS_Seq$OrigID)
+WTTS_Seq$Symbol <- as.character(WTTS_Seq$Symbol)
 
 coerce_count_column <- function(x) {
   suppressWarnings(
