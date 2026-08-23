@@ -752,6 +752,57 @@ shared_panel_legend <- function(plot_obj) {
   g$grobs[[guide_idx[1]]]
 }
 
+# A panel's real data can legitimately have zero rows for a method (e.g. no
+# Weak-CNH discoveries in a given view). When that happens to be true of the
+# specific panel a legend gets borrowed from, ggplot silently omits that
+# method's marker glyph from the legend key even with drop = FALSE. To
+# guarantee every manuscript legend always shows all four method markers,
+# build the shared legend from a small synthetic dataset that always
+# contains exactly one row per method, rather than reusing a real panel.
+build_full_method_legend <- function() {
+  dummy <- data.frame(
+    x = rep(0, length(significance_method_levels)),
+    y = rep(0, length(significance_method_levels)),
+    Method = factor(significance_method_levels, levels = significance_method_levels)
+  )
+
+  p <- ggplot(dummy, aes(x = x, y = y, color = Method, shape = Method, size = Method)) +
+    geom_point(alpha = 0.98, stroke = 0.90) +
+    scale_color_manual(
+      values = significance_method_colors,
+      breaks = significance_method_levels,
+      labels = unname(significance_method_labels[significance_method_levels]),
+      drop = FALSE,
+      name = "Method",
+      guide = guide_legend(
+        nrow = 1,
+        byrow = TRUE,
+        override.aes = list(
+          shape = unname(significance_method_shapes[significance_method_levels]),
+          color = unname(significance_method_colors[significance_method_levels]),
+          size = rep(3.4, length(significance_method_levels)),
+          alpha = rep(1, length(significance_method_levels)),
+          stroke = rep(0.85, length(significance_method_levels))
+        )
+      )
+    ) +
+    scale_shape_manual(
+      values = significance_method_shapes,
+      breaks = significance_method_levels,
+      drop = FALSE,
+      guide = "none"
+    ) +
+    scale_size_manual(
+      values = significance_method_sizes,
+      breaks = significance_method_levels,
+      guide = "none"
+    ) +
+    manuscript_theme() +
+    theme(legend.position = "bottom")
+
+  shared_panel_legend(p)
+}
+
 
 
 strip_legend <- function(p) {
@@ -765,7 +816,7 @@ assemble_one_legend_panel <- function(plot_list, panel_title, ncol = length(plot
     return(NULL)
   }
 
-  legend <- shared_panel_legend(plot_list[[1]])
+  legend <- build_full_method_legend()
   no_legend <- lapply(plot_list, strip_legend)
 
   row <- do.call(
@@ -1794,13 +1845,13 @@ make_hbfss_boundary_df <- function(plot_df, hbfss_threshold, y_limit) {
   )
 }
 
-plot_final_volcano <- function(df, dataset_name, short_title = NULL, label_genes = TRUE) {
+plot_final_volcano <- function(df, dataset_name, short_title = NULL, label_genes = TRUE, y_limit_override = NULL, n_labels = n_top_labels_volcano) {
   plot_df <- build_final_volcano_df(df, y_col = "neglog10_empirical_p")
   if (!nrow(plot_df)) stop("No finite volcano plotting rows for ", dataset_name)
 
   method_df <- build_significance_plot_long(plot_df)
   lab_df <- if (isTRUE(label_genes)) {
-    select_final_volcano_labels(plot_df, y_col = "neglog10_empirical_p")
+    select_final_volcano_labels(plot_df, y_col = "neglog10_empirical_p", n_labels = n_labels)
   } else {
     plot_df[0, , drop = FALSE]
   }
@@ -1811,7 +1862,15 @@ plot_final_volcano <- function(df, dataset_name, short_title = NULL, label_genes
     safe_neglog10(hc_raw)
   } else NA_real_
 
-  y_limit <- max(plot_df$neglog10_empirical_p, na.rm = TRUE) * 1.05
+  # A shared y_limit_override (computed once across every comparison/view)
+  # keeps all manuscript volcano panels on the same vertical scale, so
+  # significance magnitudes are visually comparable across timepoints
+  # instead of each panel silently rescaling to its own local maximum.
+  y_limit <- if (!is.null(y_limit_override) && is.finite(y_limit_override)) {
+    y_limit_override
+  } else {
+    max(plot_df$neglog10_empirical_p, na.rm = TRUE) * 1.05
+  }
   boundary_df <- make_hbfss_boundary_df(plot_df, htau, y_limit)
 
   std_n <- sum(df$standard_flag, na.rm = TRUE)
@@ -1904,7 +1963,7 @@ plot_final_volcano <- function(df, dataset_name, short_title = NULL, label_genes
       y = expression(-log[10]("Empirical p")),
       caption = compact_caption(count_text, width = 96)
     ) +
-    coord_cartesian(clip = "off") +
+    coord_cartesian(clip = "off", ylim = c(0, y_limit)) +
     manuscript_theme() +
     plot_expand_xy() +
     theme(
@@ -1947,11 +2006,16 @@ plot_final_volcano <- function(df, dataset_name, short_title = NULL, label_genes
       size = 2.05,
       color = "black",
       seed = 1,
-      max.overlaps = Inf,
-      force = 1.15,
-      force_pull = 0.35,
-      box.padding = 0.30,
-      point.padding = 0.14,
+      # A finite max.overlaps lets ggrepel silently drop the labels it
+      # genuinely cannot place without collision, rather than forcing every
+      # requested label onto the page and producing illegible overlapping
+      # text in dense regions (this matters most in the narrow 5-panel
+      # manuscript figures, where each subplot has limited width).
+      max.overlaps = 15,
+      force = 2.2,
+      force_pull = 0.25,
+      box.padding = 0.45,
+      point.padding = 0.18,
       min.segment.length = 0,
       segment.alpha = 0.60,
       segment.size = 0.22
@@ -2347,6 +2411,36 @@ read_result_table_for_panel <- function(comparison_name, track_key, dataset_key)
 }
 
 
+compute_global_volcano_y_limit <- function() {
+  views <- comparison_analysis_views()
+  running_max <- NA_real_
+
+  for (comparison_name in as.character(comparison_table$comparison_name)) {
+    for (i in seq_len(nrow(views))) {
+      df <- read_result_table_for_panel(
+        comparison_name = comparison_name,
+        track_key = views$track_key[i],
+        dataset_key = views$dataset_key[i]
+      )
+      if (is.null(df)) next
+
+      plot_df <- tryCatch(
+        build_final_volcano_df(df, y_col = "neglog10_empirical_p"),
+        error = function(e) NULL
+      )
+      if (is.null(plot_df) || !nrow(plot_df)) next
+
+      this_max <- suppressWarnings(max(plot_df$neglog10_empirical_p, na.rm = TRUE))
+      if (is.finite(this_max)) {
+        running_max <- if (is.na(running_max)) this_max else max(running_max, this_max)
+      }
+    }
+  }
+
+  if (is.na(running_max)) return(NULL)
+  running_max * 1.05
+}
+
 save_paper_volcano_panels <- function() {
   dir.create(paper_fig_dir, recursive = TRUE, showWarnings = FALSE)
   views <- comparison_analysis_views()
@@ -2357,6 +2451,10 @@ save_paper_volcano_panels <- function() {
     "RawEVS Lead" = "R-Lead",
     "RawEVS Rem" = "R-Rem"
   )
+
+  # Computed once so every comparison/view volcano in the manuscript shares
+  # the same y-axis scale (see plot_final_volcano's y_limit_override).
+  shared_y_limit <- compute_global_volcano_y_limit()
 
   for (comparison_name in as.character(comparison_table$comparison_name)) {
     plots <- list()
@@ -2372,7 +2470,9 @@ save_paper_volcano_panels <- function() {
         df = df,
         dataset_name = dataset_name,
         short_title = unname(short_view[analysis_label]),
-        label_genes = TRUE
+        label_genes = TRUE,
+        y_limit_override = shared_y_limit,
+        n_labels = 10L
       ) +
         theme(
           plot.title = element_text(size = base_theme_size, face = "bold"),
