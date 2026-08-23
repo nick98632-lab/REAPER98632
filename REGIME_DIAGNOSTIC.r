@@ -4,14 +4,21 @@
 # REGIME DIAGNOSTIC: EVS LEADING-EDGE / REMAINDER VALIDATION
 # =============================================================================
 #
-# This script is standalone. It does not modify, overwrite, or depend on
-# SEQUENCE.R or EMPERICALCUTOFF outputs. It reads the same raw count file
-# and reuses the same PC1-ranking convention (log1p-CPM, arm-specific PCA,
-# ranked by ascending |PC1 loading|) so results are directly comparable to
-# the existing pipeline.
+# This script is standalone. It does not modify or overwrite SEQUENCE.R or
+# EMPERICALCUTOFF.R. It reads the same raw count file and reuses the same
+# PC1-ranking convention (log1p-CPM, arm-specific PCA, ranked by ascending
+# |PC1 loading|) so results are directly comparable to the existing pipeline.
 #
-# It answers two questions, run under BOTH candidate cutoffs
-# (k = 5000 and k = 4077, the empirically-derived global k*):
+# DEPENDENCY: this script requires EMPERICALCUTOFF.R to have already been
+# run at least once, because it reads each comparison's own empirically-
+# derived cutoff (pairwise_weighted_k) directly from that script's
+# Table_Timepoints.csv output. Run EMPERICALCUTOFF.R first if that file
+# does not yet exist.
+#
+# It answers two questions, run under TWO cutoffs per comparison:
+#   - the paper-reference k = 5000, the same fixed value for every comparison
+#   - that comparison's own empirical k* (pairwise_weighted_k), which
+#     differs by comparison (e.g. RT0_ZT6 and RT4_ZT10 do not share a value)
 #
 # DIAGNOSTIC A: Is Leading-Edge membership gene-intrinsic, or does it track
 # the true condition split?
@@ -25,7 +32,8 @@
 #   real Leading-Edge set. If Leading-Edge membership is actually tracking
 #   the true condition effect, scrambling the labels destroys that signal
 #   and permuted Leading-Edge sets should look close to a structureless
-#   random baseline.
+#   random baseline. Remainder is reported symmetrically alongside Leading
+#   Edge, since both retain 100% of the data.
 #
 #   Two null references are reported alongside the real-vs-permuted
 #   overlap:
@@ -40,15 +48,18 @@
 #   computed from DESeq2-normalized counts. Excess-over-Poisson variance
 #   (variance minus mean, floored at 0) is regressed against mean (NB1,
 #   linear) and against mean^2 (NB2, quadratic) separately for Remainder
-#   and for Leading Edge. R-squared for each model in each set is reported,
-#   directly testing whether Remainder fits NB1 better and Leading Edge
-#   fits NB2 better.
+#   and for Leading Edge. Both R-squared and AIC are reported for each
+#   model in each set; AIC (delta_aic / preferred columns) is the primary
+#   comparison, since it is a more rigorous way to judge two non-nested
+#   models than raw R-squared on a through-origin fit. This directly tests
+#   whether Remainder fits NB1 better and Leading Edge fits NB2 better.
 #
 # OUTPUTS (written to a directory separate from the existing pipeline):
 #   Table_Permutation_Stability.csv
 #   Table_NB_Regime_Fit.csv
 #   Figure_Permutation_Stability.png
 #   Figure_NB_Regime_Fit.png
+#   Figure_NB_Regime_AIC.png
 # =============================================================================
 
 suppressPackageStartupMessages({
