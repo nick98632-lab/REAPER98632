@@ -87,7 +87,27 @@ COMPARISONS <- list(
   RT8_ZT14 = c(control = "RT8", treatment = "ZT14")
 )
 
-CANDIDATE_K <- c(5000L, 4077L)
+CUTOFF_TIMEPOINTS_FILE <- "/root/REAPER98632/exports/pc1_nb_manuscript_final/Table_Timepoints.csv"
+PAPER_REFERENCE_K <- 5000L
+
+load_pairwise_k_star <- function(path) {
+  if (!file.exists(path)) {
+    stop(
+      "Could not find ", path, ". Run EMPERICALCUTOFF_MANUSCRIPT_METHODS_ONLY.r ",
+      "first so its per-comparison pairwise_weighted_k values exist to read."
+    )
+  }
+  tp <- read.csv(path, stringsAsFactors = FALSE)
+  required_cols <- c("comparison", "pairwise_weighted_k")
+  missing_cols <- setdiff(required_cols, names(tp))
+  if (length(missing_cols) > 0L) {
+    stop(
+      "Table_Timepoints.csv is missing expected column(s): ",
+      paste(missing_cols, collapse = ", ")
+    )
+  }
+  setNames(as.integer(round(tp$pairwise_weighted_k)), tp$comparison)
+}
 N_PERMUTATIONS <- 500L
 
 # -----------------------------------------------------------------------------
@@ -263,7 +283,14 @@ fit_nb_regimes <- function(mean_var_df, feature_subset) {
   sub$excess <- pmax(sub$variance - sub$mean, 0)
 
   if (nrow(sub) < 10L) {
-    return(data.frame(model = c("NB1_linear", "NB2_quadratic"), r_squared = NA_real_, n_features = nrow(sub)))
+    return(data.frame(
+      model = c("NB1_linear", "NB2_quadratic"),
+      r_squared = NA_real_,
+      aic = NA_real_,
+      delta_aic = NA_real_,
+      preferred = NA,
+      n_features = nrow(sub)
+    ))
   }
 
   nb1_fit <- lm(excess ~ 0 + mean, data = sub)
@@ -277,9 +304,16 @@ fit_nb_regimes <- function(mean_var_df, feature_subset) {
     1 - ss_res / ss_tot
   }
 
+  aic1 <- stats::AIC(nb1_fit)
+  aic2 <- stats::AIC(nb2_fit)
+  best_aic <- min(aic1, aic2)
+
   data.frame(
     model = c("NB1_linear", "NB2_quadratic"),
     r_squared = c(r2(nb1_fit, sub$excess), r2(nb2_fit, sub$excess)),
+    aic = c(aic1, aic2),
+    delta_aic = c(aic1 - best_aic, aic2 - best_aic),
+    preferred = c(aic1 < aic2, aic2 < aic1),
     n_features = nrow(sub)
   )
 }
@@ -291,6 +325,9 @@ fit_nb_regimes <- function(mean_var_df, feature_subset) {
 message("Reading count matrix...")
 count_mat <- read_count_matrix(COUNT_FILE, GROUP_PATTERNS)
 n_total_features <- nrow(count_mat)
+
+message("Reading per-comparison empirical cutoffs from ", CUTOFF_TIMEPOINTS_FILE, " ...")
+pairwise_k_star <- load_pairwise_k_star(CUTOFF_TIMEPOINTS_FILE)
 
 stability_rows <- list()
 nb_rows <- list()
@@ -309,13 +346,25 @@ for (comparison_name in names(COMPARISONS)) {
   group_labels <- c(rep("control", n_control), rep("treatment", n_treatment))
   names(group_labels) <- all_ids
 
+  if (!comparison_name %in% names(pairwise_k_star) || is.na(pairwise_k_star[[comparison_name]])) {
+    stop(
+      "No pairwise_weighted_k found for comparison '", comparison_name,
+      "' in ", CUTOFF_TIMEPOINTS_FILE
+    )
+  }
+  comparison_k_values <- c(PAPER_REFERENCE_K, pairwise_k_star[[comparison_name]])
+  names(comparison_k_values) <- NULL
+
   message(sprintf(
-    "[%s] control n=%d, treatment n=%d", comparison_name, n_control, n_treatment
+    "[%s] control n=%d, treatment n=%d, k values = %s (paper reference + comparison-specific empirical k*)",
+    comparison_name, n_control, n_treatment, paste(comparison_k_values, collapse = ", ")
   ))
 
   comparison_mat <- count_mat[, all_ids, drop = FALSE]
 
-  for (k in CANDIDATE_K) {
+  for (k in comparison_k_values) {
+
+    k_type <- if (k == PAPER_REFERENCE_K) "paper_reference" else "empirical_k_star"
 
     # --- Real (unpermuted) Leading Edge / Remainder ---------------------
     real_le <- leading_edge_set(comparison_mat, control_ids, treatment_ids, k)
@@ -359,6 +408,7 @@ for (comparison_name in names(COMPARISONS)) {
       data.frame(
         comparison = comparison_name,
         k = k,
+        k_type = k_type,
         feature_set = feature_set,
         real_set_size = real_size,
         label_permutation_jaccard_mean = mean(perm_j, na.rm = TRUE),
@@ -395,6 +445,8 @@ for (comparison_name in names(COMPARISONS)) {
     fit_remainder$comparison <- comparison_name
     fit_le$k <- k
     fit_remainder$k <- k
+    fit_le$k_type <- k_type
+    fit_remainder$k_type <- k_type
 
     nb_rows[[length(nb_rows) + 1L]] <- fit_le
     nb_rows[[length(nb_rows) + 1L]] <- fit_remainder
@@ -421,7 +473,7 @@ write.csv(
 
 stability_long <- stability_table %>%
   dplyr::select(
-    comparison, k, feature_set,
+    comparison, k, k_type, feature_set,
     label_permutation_jaccard_mean,
     fully_random_jaccard_mean
   ) %>%
@@ -436,46 +488,80 @@ stability_long <- stability_table %>%
       label_permutation_jaccard_mean = "Label-permutation null",
       fully_random_jaccard_mean = "Fully-random null"
     ),
-    k_label = paste0("k=", k)
+    k_type_label = dplyr::recode(
+      k_type,
+      paper_reference = "Paper reference (k=5000, same for all)",
+      empirical_k_star = "Empirical k* (comparison-specific)"
+    ),
+    comparison_k_label = paste0(comparison, "\n(k=", k, ")")
   )
 
-p_stability <- ggplot(stability_long, aes(x = comparison, y = jaccard, fill = null_type)) +
+p_stability <- ggplot(stability_long, aes(x = comparison_k_label, y = jaccard, fill = null_type)) +
   geom_col(position = position_dodge(width = 0.7), width = 0.6) +
-  facet_grid(k_label ~ feature_set) +
+  facet_grid(k_type_label ~ feature_set) +
   labs(
     title = "Diagnostic A: membership stability under label permutation",
-    subtitle = "Reported symmetrically for Leading Edge and Remainder, since both retain 100% of the data. Higher label-permutation overlap relative to the fully-random floor supports a gene-intrinsic regime for that set.",
+    subtitle = "Reported symmetrically for Leading Edge and Remainder, since both retain 100% of the data. Each comparison uses its own empirical k* (see x-axis), not a shared global value. Higher label-permutation overlap relative to the fully-random floor supports a gene-intrinsic regime for that set.",
     x = NULL,
     y = "Mean Jaccard overlap with the real (unpermuted) set",
     fill = NULL
   ) +
   theme_bw(base_size = 11) +
-  theme(legend.position = "bottom")
+  theme(legend.position = "bottom", axis.text.x = element_text(size = 8))
 
 ggsave(
   file.path(OUT_ROOT, "Figure_Permutation_Stability.png"),
-  p_stability, width = 11, height = 7, dpi = 300
+  p_stability, width = 12, height = 7.5, dpi = 300
 )
 
 nb_plot_df <- nb_table %>%
-  dplyr::mutate(k_label = paste0("k=", k))
+  dplyr::mutate(
+    k_type_label = dplyr::recode(
+      k_type,
+      paper_reference = "Paper reference (k=5000, same for all)",
+      empirical_k_star = "Empirical k* (comparison-specific)"
+    ),
+    comparison_k_label = paste0(comparison, " (k=", k, ")")
+  )
 
-p_nb <- ggplot(nb_plot_df, aes(x = model, y = r_squared, fill = feature_set)) +
+p_nb_r2 <- ggplot(nb_plot_df, aes(x = model, y = r_squared, fill = feature_set)) +
   geom_col(position = position_dodge(width = 0.7), width = 0.6) +
-  facet_grid(k_label ~ comparison) +
+  facet_grid(k_type_label ~ comparison_k_label) +
   labs(
-    title = "Diagnostic B: NB1 (linear) vs NB2 (quadratic) mean-variance fit",
-    subtitle = "Remainder fitting NB1 better and Leading Edge fitting NB2 better would support the two-regime claim",
+    title = "Diagnostic B: NB1 (linear) vs NB2 (quadratic) mean-variance fit (R-squared)",
+    subtitle = "Remainder fitting NB1 better and Leading Edge fitting NB2 better would support the two-regime claim. Each comparison's empirical panel uses its own k* (see facet labels).",
     x = NULL,
     y = expression(R^2),
     fill = NULL
   ) +
-  theme_bw(base_size = 10) +
+  theme_bw(base_size = 9) +
   theme(legend.position = "bottom", axis.text.x = element_text(angle = 20, hjust = 1))
 
 ggsave(
   file.path(OUT_ROOT, "Figure_NB_Regime_Fit.png"),
-  p_nb, width = 12, height = 6.5, dpi = 300
+  p_nb_r2, width = 13, height = 7, dpi = 300
+)
+
+# AIC is the more rigorous comparison: delta_aic is 0 for the preferred model
+# and positive for the other, so a taller bar means a more decisively rejected
+# alternative. This is the primary figure for judging the two-regime claim;
+# the R-squared figure above is kept for interpretability alongside it.
+p_nb_aic <- ggplot(nb_plot_df, aes(x = model, y = delta_aic, fill = feature_set)) +
+  geom_col(position = position_dodge(width = 0.7), width = 0.6) +
+  facet_grid(k_type_label ~ comparison_k_label) +
+  labs(
+    title = "Diagnostic B: NB1 vs NB2 model comparison by AIC",
+    subtitle = "Delta AIC = 0 marks the preferred model for that set; taller bars mean the alternative model is more decisively rejected. Remainder preferring NB1 and Leading Edge preferring NB2 would support the two-regime claim.",
+    x = NULL,
+    y = "Delta AIC (0 = preferred model for that set)",
+    fill = NULL
+  ) +
+  theme_bw(base_size = 9) +
+  theme(legend.position = "bottom", axis.text.x = element_text(angle = 20, hjust = 1))
+
+ggsave(
+  file.path(OUT_ROOT, "Figure_NB_Regime_AIC.png"),
+  p_nb_aic, width = 13, height = 7, dpi = 300
 )
 
 message("Diagnostic complete. Outputs written to: ", OUT_ROOT)
@@ -483,3 +569,4 @@ message("  Table_Permutation_Stability.csv")
 message("  Table_NB_Regime_Fit.csv")
 message("  Figure_Permutation_Stability.png")
 message("  Figure_NB_Regime_Fit.png")
+message("  Figure_NB_Regime_AIC.png")
