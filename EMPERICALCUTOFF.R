@@ -1,6 +1,6 @@
 #!/usr/bin/env Rscript
 
-PIPELINE_BUILD <- "SEQUENCE_JOURNAL_READY_2026-08-22_1808"
+PIPELINE_BUILD <- "SEQUENCE_JOURNAL_READY_GITHUB_2026-08-22"
 
 # =============================================================================
 # SEQUENCE MANUSCRIPT ANALYSIS
@@ -158,6 +158,34 @@ BH_FDR_WEAK <- 0.20
 
 lfc_boundary <- 1.0
 
+
+# Published WTTS-seq sleep-pressure/TWAS reference from Flores et al. (2024),
+# Table 3. These values are used only as a runtime reproducibility assertion;
+# they do not alter any statistical call or create an additional result table.
+PUBLISHED_2024_TWAS_DE_REFERENCE <- data.frame(
+  PAS = c(
+    "467701", "467700", "191750", "218787", "549537", "35839",
+    "205547", "205543", "261774", "519450", "78129"
+  ),
+  Gene = c(
+    "Mark3", "Mark3", "Ndfip2", "Wac", "Sf3b1", "Mtrf1l",
+    "Gatad2a", "Gatad2a", "Spg7", "Snx19", "Plekhm1"
+  ),
+  Paper_LFC = c(
+    3.18, 3.00, -1.15, -1.51, -1.30, -1.60,
+    1.03, 1.42, 2.17, -1.18, 1.96
+  ),
+  Paper_p = c(
+    5.81e-09, 7.13e-08, 2.55e-08, 1.63e-04, 6.47e-04, 9.64e-04,
+    9.24e-05, 2.29e-03, 2.75e-04, 3.65e-04, 2.59e-03
+  ),
+  Paper_padj = c(
+    6.94e-06, 4.95e-05, 2.19e-05, 1.30e-02, 3.15e-02, 4.08e-02,
+    9.16e-03, 7.24e-02, 1.89e-02, 2.20e-02, 7.74e-02
+  ),
+  stringsAsFactors = FALSE
+)
+
 # EVS method specification: select exactly the 5,000 highest absolute PC1
 # loadings independently from each condition eigenvector.
 top_n_target <- 5000L
@@ -175,6 +203,15 @@ n_top_labels_volcano <- 20L
 EXPORT_ONLY_PAPER_FIGURES <- FALSE
 EXPORT_SUPPORT_FIGURES <- TRUE
 EXPORT_INDIVIDUAL_VIEW_FIGURES <- FALSE
+
+# Repository publication. After the complete analysis, export audit, and ZIP
+# creation succeed, the manuscript output tree and the running pipeline script
+# are committed and pushed to the current Git branch so the results are directly
+# accessible from the GitHub repository.
+PUBLISH_TO_GITHUB <- TRUE
+GIT_REMOTE <- "origin"
+GIT_COMMIT_PREFIX <- "Update SEQUENCE manuscript outputs"
+GITHUB_MAX_FILE_MB <- 95
 
 # -----------------------------------------------------------------------------
 # Statistical decision rules
@@ -798,34 +835,27 @@ assemble_one_legend_panel <- function(plot_list, panel_title, ncol = length(plot
   )
 }
 
-create_all_figures_zip <- function() {
-  # The manuscript figure archive contains curated PNG panels only. Individual
-  # per-view figures and duplicate PDF renditions remain available in the output
-  # tree when generated, but are excluded from the archive to avoid redundancy.
-  panel_patterns <- c(
-    "/Panels/.*\\.png$",
-    "/Combined_Figures/.*\\.png$",
-    "/TWAS/figures/Figure_TWAS_Gene_Support\\.png$"
-  )
 
-  all_png <- list.files(
+create_all_figures_zip <- function() {
+  # The manuscript figure archive contains only nonredundant, comparison-level
+  # panels plus the single global discovery-count summary.
+  panel_files <- list.files(
     output_dir,
     recursive = TRUE,
     full.names = TRUE,
-    pattern = "\\.png$",
-    ignore.case = TRUE
+    pattern = "Figure_.*_(PCA_EVS|Volcano_5Views|TWAS_5Views)\\.png$"
   )
-  all_png <- all_png[file.info(all_png)$isdir %in% FALSE]
 
-  normalized <- gsub("\\\\", "/", all_png)
-  keep <- rep(FALSE, length(all_png))
-  for (pat in panel_patterns) keep <- keep | grepl(pat, normalized)
-  figure_files <- all_png[keep]
+  figure_files <- c(
+    panel_files[
+      grepl("/Panels/", gsub("\\\\", "/", panel_files))
+    ],
+    file.path(paper_fig_dir, "Figure_Manuscript_Discovery_Counts.png")
+  )
 
-  # The global TWAS method-count figure is intentionally excluded because the
-  # per-comparison five-view TWAS panels already contain the same count summary.
   figure_files <- figure_files[
-    !grepl("Figure_TWAS_Method_Counts\\.png$", figure_files)
+    file.exists(figure_files) &
+      !(file.info(figure_files)$isdir %in% TRUE)
   ]
 
   if (!length(figure_files)) {
@@ -836,9 +866,8 @@ create_all_figures_zip <- function() {
   if (file.exists(zip_path)) unlink(zip_path, force = TRUE)
 
   root_norm <- normalizePath(output_dir, winslash = "/", mustWork = TRUE)
-  file_norm <- normalizePath(figure_files, winslash = "/", mustWork = TRUE)
-  relative_files <- substring(file_norm, nchar(root_norm) + 2L)
-  relative_files <- sort(unique(relative_files))
+  file_norm <- normalizePath(unique(figure_files), winslash = "/", mustWork = TRUE)
+  relative_files <- sort(substring(file_norm, nchar(root_norm) + 2L))
 
   old_wd <- getwd()
   on.exit(setwd(old_wd), add = TRUE)
@@ -849,10 +878,10 @@ create_all_figures_zip <- function() {
   normalizePath(zip_path, winslash = "/", mustWork = TRUE)
 }
 
+
 create_all_tables_zip <- function() {
-  # The manuscript table archive contains the concise tables used to interpret
-  # significance, EVS/PCA evidence, and 3'aTWAS overlap. Per-view working tables
-  # remain in their comparison folders but are not duplicated in the archive.
+  # The table archive contains concise manuscript-level results while preserving
+  # a time-group-specific organization.
   wanted <- character(0)
 
   add_if_exists <- function(path) {
@@ -872,6 +901,26 @@ create_all_tables_zip <- function() {
       output_dir,
       comparison_name,
       "Table_Method_Counts_All_Views.csv"
+    ))
+    add_if_exists(file.path(
+      output_dir,
+      comparison_name,
+      paste0("Table_", comparison_name, "_EVS_PCA_Evidence.csv")
+    ))
+    add_if_exists(file.path(
+      output_dir,
+      comparison_name,
+      paste0("Table_", comparison_name, "_TWAS_PAS_All_Views.csv")
+    ))
+    add_if_exists(file.path(
+      output_dir,
+      comparison_name,
+      paste0("Table_", comparison_name, "_TWAS_Genes_All_Views.csv")
+    ))
+    add_if_exists(file.path(
+      output_dir,
+      comparison_name,
+      paste0("Table_", comparison_name, "_TWAS_Method_Counts_All_Views.csv")
     ))
   }
 
@@ -898,43 +947,251 @@ create_all_tables_zip <- function() {
   normalizePath(zip_path, winslash = "/", mustWork = TRUE)
 }
 
-# =============================================================================
-# SECTION 2 OF 5
-# IMPORT COUNT MATRIX AND ANNOTATION
-# =============================================================================
 
-count_file <- resolve_existing_file(count_file_candidates, "WTTS count file")
+# -----------------------------------------------------------------------------
+# Repository publication helpers
+# -----------------------------------------------------------------------------
 
-message("Using count file: ", count_file)
-message("Repository root: ", repo_root)
-message("Output directory: ", output_dir)
+git_exec <- function(args, fail = TRUE) {
+  if (!nzchar(Sys.which("git"))) {
+    if (isTRUE(fail)) stop("git is not installed or is not on PATH.")
+    return(list(status = 127L, output = "git not found"))
+  }
 
-WTTS_Seq <- read.csv(
-  count_file,
-  header = TRUE,
-  stringsAsFactors = FALSE,
-  check.names = FALSE
-)
+  old_wd <- getwd()
+  on.exit(setwd(old_wd), add = TRUE)
+  setwd(repo_root)
 
-WTTS_Seq <- as.data.frame(
-  WTTS_Seq,
-  stringsAsFactors = FALSE
-)
+  out <- suppressWarnings(
+    system2("git", args = args, stdout = TRUE, stderr = TRUE)
+  )
+  status <- attr(out, "status")
+  if (is.null(status)) status <- 0L
 
-WTTS_Seq$OrigID <- as.character(WTTS_Seq$OrigID)
-WTTS_Seq$Symbol <- as.character(WTTS_Seq$Symbol)
+  if (isTRUE(fail) && status != 0L) {
+    stop(
+      "Git command failed: git ", paste(args, collapse = " "), "\n",
+      paste(out, collapse = "\n")
+    )
+  }
 
-assert_required_columns(
-  WTTS_Seq,
-  c("OrigID", "Symbol"),
-  object_name = "WTTS count file"
-)
+  list(status = as.integer(status), output = as.character(out))
+}
 
-assert_required_columns(
-  WTTS_Seq,
-  meta_all$id,
-  object_name = "WTTS count file sample columns"
-)
+repo_relative_path <- function(path) {
+  root_norm <- normalizePath(repo_root, winslash = "/", mustWork = TRUE)
+  path_norm <- normalizePath(path, winslash = "/", mustWork = FALSE)
+
+  prefix <- paste0(root_norm, "/")
+  if (!startsWith(path_norm, prefix) && path_norm != root_norm) {
+    return(NA_character_)
+  }
+
+  if (path_norm == root_norm) return(".")
+  substring(path_norm, nchar(prefix) + 1L)
+}
+
+write_repository_index <- function(figure_zip, table_zip) {
+  index_path <- file.path(output_dir, "README.md")
+
+  comparison_lines <- unlist(lapply(
+    as.character(comparison_table$comparison_name),
+    function(cmp) {
+      c(
+        paste0("### ", cmp),
+        paste0("- [Panels](./", cmp, "/Panels/)"),
+        paste0("- [All-view significant PAS table](./", cmp, "/Table_", cmp, "_Significant_Sites_All_Views.csv)"),
+        paste0("- [All-view method counts](./", cmp, "/Table_Method_Counts_All_Views.csv)"),
+        paste0("- [EVS/PCA evidence](./", cmp, "/Table_", cmp, "_EVS_PCA_Evidence.csv)"),
+        paste0("- [TWAS PAS overlap](./", cmp, "/Table_", cmp, "_TWAS_PAS_All_Views.csv)"),
+        paste0("- [TWAS gene overlap](./", cmp, "/Table_", cmp, "_TWAS_Genes_All_Views.csv)"),
+        ""
+      )
+    }
+  ))
+
+  lines <- c(
+    "# SEQUENCE manuscript outputs",
+    "",
+    paste0("Build: `", PIPELINE_BUILD, "`"),
+    "",
+    "This directory is generated only after the complete analysis and final export audit pass.",
+    "",
+    "## Downloadable archives",
+    paste0("- [All manuscript figures](./", basename(figure_zip), ")"),
+    paste0("- [All manuscript tables](./", basename(table_zip), ")"),
+    "",
+    "## Manuscript methods",
+    "- [Methods_Manuscript.md](./Methods_Manuscript.md)",
+    "",
+    "## Time-group results",
+    comparison_lines,
+    "## Combined summaries",
+    "- [Discovery counts](./Summary_Tables/Table_DE_Method_Counts.csv)",
+    "- [EVS/PCA evidence](./Summary_Tables/Table_EVS_PCA_Evidence.csv)",
+    "- [Combined TWAS PAS overlap](./TWAS/tables/Table_TWAS_Overlap_PAS.csv)",
+    "- [Combined TWAS gene overlap](./TWAS/tables/Table_TWAS_Overlap_Genes.csv)",
+    "- [Combined TWAS method counts](./TWAS/tables/Table_TWAS_Method_Counts.csv)",
+    ""
+  )
+
+  writeLines(lines, index_path, useBytes = TRUE)
+  normalizePath(index_path, winslash = "/", mustWork = TRUE)
+}
+
+copy_pipeline_snapshot <- function() {
+  script_path <- get_script_path()
+  if (is.na(script_path) || !file.exists(script_path)) return(NA_character_)
+
+  snapshot_path <- file.path(
+    output_dir,
+    paste0("Pipeline_", basename(script_path))
+  )
+
+  ok <- file.copy(script_path, snapshot_path, overwrite = TRUE)
+  if (!isTRUE(ok)) stop("Could not copy pipeline snapshot to output directory.")
+  normalizePath(snapshot_path, winslash = "/", mustWork = TRUE)
+}
+
+assert_github_file_sizes <- function(paths) {
+  paths <- unique(paths[file.exists(paths)])
+  if (!length(paths)) return(invisible(TRUE))
+
+  expanded <- unlist(lapply(paths, function(p) {
+    if (dir.exists(p)) {
+      list.files(p, recursive = TRUE, full.names = TRUE, all.files = TRUE, no.. = TRUE)
+    } else {
+      p
+    }
+  }))
+
+  expanded <- unique(expanded[file.exists(expanded) & !dir.exists(expanded)])
+  if (!length(expanded)) return(invisible(TRUE))
+
+  size_mb <- file.info(expanded)$size / (1024^2)
+  too_large <- expanded[is.finite(size_mb) & size_mb > GITHUB_MAX_FILE_MB]
+
+  if (length(too_large)) {
+    stop(
+      "Repository publication stopped because GitHub-sized file limit would be exceeded: ",
+      paste0(basename(too_large), collapse = ", "),
+      ". Reduce these files or use Git LFS before publishing."
+    )
+  }
+
+  invisible(TRUE)
+}
+
+github_repo_base_from_remote <- function(remote_url) {
+  x <- trimws(remote_url)
+  x <- sub("\\.git$", "", x)
+
+  if (grepl("^https://github\\.com/", x)) return(x)
+  if (grepl("^http://github\\.com/", x)) return(sub("^http://", "https://", x))
+
+  if (grepl("^git@github\\.com:", x)) {
+    return(sub("^git@github\\.com:", "https://github.com/", x))
+  }
+
+  if (grepl("^ssh://git@github\\.com/", x)) {
+    return(sub("^ssh://git@github\\.com/", "https://github.com/", x))
+  }
+
+  NA_character_
+}
+
+publish_results_to_repository <- function(figure_zip, table_zip) {
+  if (!isTRUE(PUBLISH_TO_GITHUB)) {
+    return(list(published = FALSE, commit = NA_character_, url = NA_character_))
+  }
+
+  if (!dir.exists(file.path(repo_root, ".git"))) {
+    stop("PUBLISH_TO_GITHUB is TRUE, but repository root has no .git directory: ", repo_root)
+  }
+
+  # Create a repository landing page and an exact snapshot of the pipeline that
+  # generated these outputs before staging anything.
+  write_repository_index(figure_zip, table_zip)
+  copy_pipeline_snapshot()
+
+  output_rel <- repo_relative_path(output_dir)
+  if (is.na(output_rel)) stop("Output directory is not inside the Git repository.")
+
+  script_path <- get_script_path()
+  script_rel <- if (!is.na(script_path)) repo_relative_path(script_path) else NA_character_
+  publish_paths <- unique(c(output_rel, script_rel[!is.na(script_rel)]))
+
+  assert_github_file_sizes(c(output_dir, script_path[!is.na(script_path)]))
+
+  branch_res <- git_exec(c("symbolic-ref", "--quiet", "--short", "HEAD"), fail = FALSE)
+  if (branch_res$status != 0L || !length(branch_res$output) || !nzchar(branch_res$output[1])) {
+    stop("Repository publication requires a named Git branch; detached HEAD is not supported.")
+  }
+  branch <- trimws(branch_res$output[1])
+
+  remote_check <- git_exec(c("remote", "get-url", GIT_REMOTE), fail = FALSE)
+  if (remote_check$status != 0L || !length(remote_check$output)) {
+    stop("Git remote '", GIT_REMOTE, "' is not configured.")
+  }
+  remote_url <- trimws(remote_check$output[1])
+
+  # Force-add generated exports even when an exports rule exists in .gitignore.
+  git_exec(c("add", "-f", "--", publish_paths))
+
+  diff_res <- git_exec(c("diff", "--cached", "--quiet", "--", publish_paths), fail = FALSE)
+
+  commit_created <- FALSE
+  if (diff_res$status == 1L) {
+    commit_message <- paste0(
+      GIT_COMMIT_PREFIX,
+      " | ",
+      format(Sys.time(), "%Y-%m-%d %H:%M:%S")
+    )
+
+    # --only ensures unrelated files that happened to be staged before the run
+    # are not included in the automated manuscript-output commit.
+    git_exec(c(
+      "commit", "--only", "-m", shQuote(commit_message), "--", publish_paths
+    ))
+    commit_created <- TRUE
+  } else if (diff_res$status != 0L) {
+    stop("Could not determine whether manuscript outputs changed in the Git index.")
+  }
+
+  # Push the current HEAD explicitly to the branch that ran the analysis. This
+  # works even when the branch does not yet have an upstream tracking branch.
+  git_exec(c("push", GIT_REMOTE, paste0("HEAD:", branch)))
+
+  commit_res <- git_exec(c("rev-parse", "HEAD"))
+  commit_hash <- trimws(commit_res$output[1])
+
+  repo_base <- github_repo_base_from_remote(remote_url)
+  github_url <- if (!is.na(repo_base)) {
+    paste0(
+      repo_base,
+      "/tree/",
+      utils::URLencode(branch, reserved = FALSE),
+      "/",
+      utils::URLencode(output_rel, reserved = FALSE)
+    )
+  } else {
+    NA_character_
+  }
+
+  message(
+    "Repository publication complete. Branch: ", branch,
+    " | commit: ", substr(commit_hash, 1, 12),
+    if (isTRUE(commit_created)) " | new commit created" else " | no new commit required"
+  )
+
+  list(
+    published = TRUE,
+    branch = branch,
+    commit = commit_hash,
+    url = github_url,
+    output_rel = output_rel
+  )
+}
 
 coerce_count_column <- function(x) {
   suppressWarnings(
@@ -1011,7 +1268,7 @@ OrigID_Symbol <- OrigID_Symbol %>%
 
 valid_gene_symbol <- function(x) {
   x <- trimws(as.character(x))
-  !is.na(x) & nzchar(x) & x != "-" & grepl("[A-Za-z0-9]", x)
+  !is.na(x) & nzchar(x) & x != "-" & grepl("[A-Za-z]", x)
 }
 
 gene_key <- function(x) {
@@ -1025,6 +1282,16 @@ collapse_unique <- function(x, sep = "; ") {
   x <- x[!is.na(x) & nzchar(x)]
   if (!length(x)) return(NA_character_)
   paste(sort(x), collapse = sep)
+}
+
+collapse_counts_by_label <- function(x) {
+  x <- trimws(as.character(x))
+  x <- x[!is.na(x) & nzchar(x)]
+  if (!length(x)) return(NA_character_)
+
+  tab <- table(x)
+  tab <- tab[order(names(tab))]
+  paste0(names(tab), "(", as.integer(tab), ")", collapse = ", ")
 }
 
 safe_min_numeric <- function(x) {
@@ -2287,17 +2554,17 @@ write_methods_note <- function() {
     "Overlap was the number of unique HBFSS-significant PASs that also satisfied at least one DESeq2 criterion (Standard, Strong, or Weak-CNH). Overlap was a comparison quantity, not a separate significance test. Because final Weak required HBFSS, every final Weak PAS contributed to the overlap set.",
     "",
     "## PCA comparison after eigenvector splitting",
-    "PCA comparison figures used the same matrices that defined EVS: full-comparison median-of-ratios normalized counts for NormEVS and raw counts for RawEVS. No additional log transformation or post-split re-normalization was applied. Original, Leading Edge, and Remainder were compared within the same preprocessing scale. For each view, the full PCA eigenspectrum was used to calculate the percentage of total variance explained by PC1 and PC2. PC1 eigenvalue retention was calculated as the first eigenvalue of the view divided by the first eigenvalue of the corresponding Original matrix. Original-PC1 loading energy captured by a feature subset was calculated as the sum of squared Original PC1 loadings for that subset divided by the sum of squared Original PC1 loadings for all PASs. Leading Edge and Remainder loading-energy fractions were required to sum to 100%. Treatment-control separation was summarized in the PC1-PC2 plane as centroid distance divided by pooled within-group root-mean-square distance. PCA panels reported PAS count, PC1 explained variance, PC1 eigenvalue retention, Original-PC1 loading-energy fraction, and the separation ratio.",
+    "PCA comparison figures used the same matrices that defined EVS: full-comparison median-of-ratios normalized counts for NormEVS and raw counts for RawEVS. No additional log transformation or post-split re-normalization was applied. Original, Leading Edge, and Remainder were compared within the same preprocessing scale. For each view, the full PCA eigenspectrum was used to calculate the percentage of total variance explained by PC1 and PC2. PC1 eigenvalue retention was calculated as the first eigenvalue of the view divided by the first eigenvalue of the corresponding Original matrix. Original-PC1 loading energy captured by a feature subset was calculated as the sum of squared Original PC1 loadings for that subset divided by the sum of squared Original PC1 loadings for all PASs; Leading Edge and Remainder fractions were required to sum to 100%. Treatment-control separation was summarized in the PC1-PC2 plane as centroid distance divided by pooled within-group root-mean-square distance. The PCA/EVS manuscript panel combined the six Original/Leading Edge/Remainder PCA views with a 100% stacked summary of how Original PC1 squared-loading energy partitioned between Leading Edge and Remainder; exact numerical PCA/EVS metrics were retained in the corresponding evidence table.",
     "",
     "## Volcano figures and tables",
     sprintf("All significance volcanoes used the HBFSS plotting coordinates: apeglm-shrunken log2 fold change on the x-axis and -log10(empirical-null p) on the y-axis. Standard DESeq2, Strong greaterAbs, and Weak lessAbs significance were determined from their own DESeq2 p-values and BH-adjusted p-values, then their markers were projected onto these common HBFSS coordinates only for visual comparison. The HBFSS boundary y=Htau/|LFC| and HCp reference were drawn on the same axes. The same key was used throughout: Std = green diamond, Strong = red square, Weak = blue triangle, HBFSS = purple star. Multiple method markers were superimposed at the same PAS coordinate. LessAbs-only PASs remained background. Each volcano reported the number of significant PASs for Std, Strong, Weak, HBFSS, and their HBFSS/DESeq2 overlap and labeled at most %d final significant PASs.", n_top_labels_volcano),
     "Each comparison/view folder contained one significant-PAS table and one method-count table. Significant-PAS tables contained only the union of final Standard, Strong, Weak, and HBFSS discoveries and reported the DESeq2 p-values/BH-adjusted p-values used by the applicable DESeq2 tests together with empirical p, HBFSS, HCp, Htau, apeglm LFC, and explicit method indicators.",
     "",
     "## 3'aTWAS ortholog overlap",
-    "Human 3'aTWAS gene symbols were mapped to rat gene symbols by combining database-supported babelgene human-to-rat ortholog mappings (top=FALSE) with direct case-insensitive symbol-equivalent matches present in the WTTS annotation. For every comparison and analysis view, mapped TWAS orthologs were intersected with Standard, Strong, Weak, and HBFSS WTTS discoveries. Concise TWAS tables reported the human TWAS symbol, rat ortholog, total TWAS records, distinct TWAS transcript count, TWAS multi-transcript/APA status, total WTTS PAS count, WTTS multi-PAS/APA status, significant WTTS PAS identifiers, significant multi-PAS status, and the method(s) and analysis view in which significance was observed.",
+    "Human 3'aTWAS gene symbols were mapped to rat gene symbols by combining database-supported babelgene human-to-rat ortholog mappings (top=FALSE) with direct case-insensitive symbol-equivalent matches present in the WTTS annotation. Each source TWAS row was assigned a unique record identifier before ortholog expansion. The expected many-to-many gene/ortholog relationship was retained explicitly, exact human-rat mapping duplicates were removed, and TWAS record/transcript counts were calculated from distinct source identifiers so ortholog expansion could not inflate counts. For every comparison and analysis view, mapped TWAS orthologs were intersected with Standard, Strong, Weak, and HBFSS WTTS discoveries. TWAS tables reported human TWAS symbols, rat orthologs, mapping source, TWAS disorder annotations, distinct TWAS records and PAS/transcript IDs, TWAS multi-PAS/APA status, total WTTS PAS count, WTTS multi-PAS/APA status, significant WTTS PAS identifiers, method-specific PAS identifiers/counts, significant multi-PAS status, and the method(s) and analysis view in which significance was observed.",
     "",
     "## Output organization",
-    "Original (No EVS), NormEVS Lead, NormEVS Rem, RawEVS Lead, and RawEVS Rem were written to separate folders within each comparison for view-specific tables. Manuscript figures were organized as comparison-level panels so related volcano, PCA/EVS, and 3'aTWAS results could be reviewed side by side without redundant individual images. The curated figure archive SEQUENCE_ALL_FIGURES.zip contained manuscript PNG panels only. The separate archive SEQUENCE_ALL_TABLES.zip contained the overall differential-expression method-count table, quantitative EVS/PCA evidence table, one all-view significant-PAS table and method-count table for each comparison, and the combined 3'aTWAS PAS-, gene-, and method-summary tables."
+    "Original (No EVS), NormEVS Lead, NormEVS Rem, RawEVS Lead, and RawEVS Rem were written to separate folders within each comparison for view-specific tables. Each RT/ZT comparison also contained combined all-view differential-expression and 3'aTWAS tables. Manuscript figures were restricted to nonredundant comparison-level PCA/EVS, volcano, and 3'aTWAS panels plus one global discovery-count panel. The curated figure archive SEQUENCE_ALL_FIGURES.zip contained those PNG panels only. The separate archive SEQUENCE_ALL_TABLES.zip contained the overall differential-expression method-count table, quantitative EVS/PCA evidence table, comparison-specific all-view significant-PAS/method-count tables, comparison-specific all-view TWAS PAS/gene/count tables, and the combined 3'aTWAS PAS-, gene-, and method-summary tables. After the final export audit passed, the complete manuscript output directory, downloadable figure and table archives, methods file, repository index, and the exact pipeline script used for the run were committed and pushed to the active repository branch."
   )
 
   writeLines(methods_text, file.path(output_dir, "Methods_Manuscript.md"), useBytes = TRUE)
@@ -2678,137 +2945,65 @@ build_evs_pca_evidence_table <- function(comparison_name) {
   if (!length(rows)) data.frame() else dplyr::bind_rows(rows)
 }
 
+
 plot_evs_pca_evidence <- function(comparison_name) {
   tbl <- build_evs_pca_evidence_table(comparison_name)
   if (!nrow(tbl)) return(NULL)
 
-  tbl$Dataset <- factor(tbl$Dataset, levels = c("Orig", "Lead", "Rem"))
+  split_tbl <- tbl[tbl$Dataset %in% c("Lead", "Rem"), , drop = FALSE]
+  if (!nrow(split_tbl)) return(NULL)
 
-  # Three directly interpretable quantities are shown together: PC1 explained
-  # variance, PC1 eigenvalue retained relative to Orig, and the fraction of the
-  # Original PC1 squared-loading energy contained in each feature subset.
-  long <- tbl %>%
-    dplyr::select(
-      Comparison, Track, Dataset,
-      PC1_explained_pct,
-      PC1_eigenvalue_retained_pct,
-      Original_PC1_loading_energy_pct
-    ) %>%
-    tidyr::pivot_longer(
-      cols = c(
-        PC1_explained_pct,
-        PC1_eigenvalue_retained_pct,
-        Original_PC1_loading_energy_pct
-      ),
-      names_to = "Metric",
-      values_to = "Percent"
-    ) %>%
-    dplyr::mutate(
-      Metric = factor(
-        Metric,
-        levels = c(
-          "PC1_explained_pct",
-          "PC1_eigenvalue_retained_pct",
-          "Original_PC1_loading_energy_pct"
-        ),
-        labels = c("PC1 explained", "λ1 vs Orig", "Orig PC1 energy")
-      )
+  split_tbl$Dataset <- factor(
+    split_tbl$Dataset,
+    levels = c("Lead", "Rem"),
+    labels = c("Leading Edge", "Remainder")
+  )
+
+  ggplot(
+    split_tbl,
+    aes(
+      x = Track,
+      y = Original_PC1_loading_energy_pct,
+      fill = Dataset
     )
-
-  ggplot(long, aes(Dataset, Percent, group = Metric, shape = Metric)) +
-    geom_hline(yintercept = 100, linewidth = 0.3, linetype = "dashed", colour = "grey70") +
-    geom_line(aes(linetype = Metric), linewidth = 0.55, position = position_dodge(width = 0.08)) +
-    geom_point(size = 2.6, position = position_dodge(width = 0.08)) +
+  ) +
+    geom_col(
+      width = 0.62,
+      position = "stack",
+      color = "white",
+      linewidth = 0.35
+    ) +
     geom_text(
-      aes(label = paste0(round(Percent, 1), "%")),
-      position = position_dodge(width = 0.08),
-      vjust = -0.7,
-      size = 2.5,
-      check_overlap = TRUE
+      aes(
+        label = ifelse(
+          Original_PC1_loading_energy_pct >= 1,
+          paste0(round(Original_PC1_loading_energy_pct, 1), "%"),
+          paste0(format(round(Original_PC1_loading_energy_pct, 2), nsmall = 2), "%")
+        )
+      ),
+      position = position_stack(vjust = 0.5),
+      size = 3.2,
+      fontface = "bold"
     ) +
-    facet_wrap(~ Track, nrow = 1) +
-    scale_y_continuous(expand = expansion(mult = c(0.05, 0.20))) +
+    scale_y_continuous(
+      limits = c(0, 100),
+      breaks = seq(0, 100, 20),
+      expand = expansion(mult = c(0, 0.03))
+    ) +
     labs(
-      title = paste0(comparison_name, " | quantitative EVS/PC1 evidence"),
+      title = paste0(comparison_name, " | original PC1 signal partition after EVS"),
+      subtitle = "Squared-loading energy of the Original PC1 eigenvector",
       x = NULL,
-      y = "Percent",
-      shape = NULL,
-      linetype = NULL
+      y = "Original PC1 loading energy (%)",
+      fill = NULL
     ) +
     manuscript_theme() +
-    theme(legend.position = "bottom")
+    theme(
+      legend.position = "bottom",
+      plot.margin = margin(8, 12, 8, 12)
+    )
 }
 
-plot_empirical_hbfss_support <- function(df, short_title) {
-  req <- c("empirical_p", "HBFSS", "hc_p_threshold_dataset", "hbfss_threshold_dataset")
-  if (length(setdiff(req, names(df))) > 0L) return(NULL)
-
-  plot_df <- df[
-    is.finite(df$empirical_p) & !is.na(df$empirical_p) &
-      is.finite(df$HBFSS) & !is.na(df$HBFSS),
-    ,
-    drop = FALSE
-  ]
-  if (!nrow(plot_df)) return(NULL)
-
-  plot_df$empirical_p <- pmax(plot_df$empirical_p, 1e-300)
-  method_df <- build_significance_plot_long(plot_df)
-
-  hc_raw <- suppressWarnings(as.numeric(plot_df$hc_p_threshold_dataset[1]))
-  htau <- suppressWarnings(as.numeric(plot_df$hbfss_threshold_dataset[1]))
-
-  p <- ggplot() +
-    geom_point(
-      data = plot_df,
-      aes(empirical_p, HBFSS),
-      color = plot_palette$background,
-      size = 0.45,
-      alpha = 0.20
-    ) +
-    geom_point(
-      data = method_df,
-      aes(empirical_p, HBFSS, color = Method, shape = Method),
-      size = 2.25,
-      alpha = 0.98,
-      stroke = 0.80
-    ) +
-    scale_color_manual(
-      values = significance_method_colors,
-      breaks = significance_method_levels,
-      labels = unname(significance_method_labels[significance_method_levels]),
-      drop = FALSE,
-      name = "Method",
-      guide = guide_legend(override.aes = list(size = 3.0, stroke = 0.95))
-    ) +
-    scale_shape_manual(
-      values = significance_method_shapes,
-      breaks = significance_method_levels,
-      labels = unname(significance_method_labels[significance_method_levels]),
-      drop = FALSE,
-      name = "Method"
-    ) +
-    scale_x_log10(labels = scales::label_scientific()) +
-    labs(
-      title = short_title,
-      x = "Empirical p",
-      y = "HBFSS",
-      caption = paste0(
-        if (is.finite(hc_raw) && !is.na(hc_raw)) paste0("HCp=", signif(hc_raw, 3)) else "HCp=NA",
-        "  ",
-        if (is.finite(htau) && !is.na(htau)) paste0("Hτ=", signif(htau, 3)) else "Hτ=NA"
-      )
-    ) +
-    manuscript_theme() +
-    theme(legend.position = "bottom")
-
-  if (is.finite(hc_raw) && !is.na(hc_raw) && hc_raw > 0 && hc_raw <= 1) {
-    p <- p + geom_vline(xintercept = hc_raw, color = plot_palette$hc, linewidth = 0.55, linetype = "dotted")
-  }
-  if (is.finite(htau) && !is.na(htau)) {
-    p <- p + geom_hline(yintercept = htau, color = plot_palette$hbfss_line, linewidth = 0.55, linetype = "dashed")
-  }
-  p
-}
 
 save_paper_pca_panels <- function() {
   if (!isTRUE(EXPORT_SUPPORT_FIGURES)) return(invisible(FALSE))
@@ -2849,17 +3044,6 @@ save_paper_pca_panels <- function() {
     panel_dir <- file.path(output_dir, comparison_name, "Panels")
     dir.create(panel_dir, recursive = TRUE, showWarnings = FALSE)
 
-    if (length(plots)) {
-      panel <- assemble_one_legend_panel(
-        plots,
-        panel_title = paste0(comparison_name, " | PCA structure before and after EVS"),
-        ncol = 3
-      )
-      base <- file.path(panel_dir, paste0("Figure_", comparison_name, "_PCA_EVS_2x3"))
-      save_grob(panel, paste0(base, ".png"), width = 16.5, height = 10.8)
-      save_grob(panel, paste0(base, ".pdf"), width = 16.5, height = 10.8)
-    }
-
     evidence_tbl <- build_evs_pca_evidence_table(comparison_name)
     if (nrow(evidence_tbl)) {
       all_evidence[[comparison_name]] <- evidence_tbl
@@ -2870,10 +3054,28 @@ save_paper_pca_panels <- function() {
     }
 
     pevidence <- plot_evs_pca_evidence(comparison_name)
-    if (!is.null(pevidence)) {
-      base <- file.path(panel_dir, paste0("Figure_", comparison_name, "_EVS_PC1_Evidence"))
-      save_grob(pevidence, paste0(base, ".png"), width = 11.0, height = 5.2)
-      save_grob(pevidence, paste0(base, ".pdf"), width = 11.0, height = 5.2)
+
+    if (length(plots)) {
+      pca_grid <- assemble_one_legend_panel(
+        plots,
+        panel_title = paste0(comparison_name, " | PCA structure before and after EVS"),
+        ncol = 3
+      )
+
+      combined <- if (!is.null(pevidence)) {
+        gridExtra::arrangeGrob(
+          pca_grid,
+          pevidence,
+          ncol = 1,
+          heights = c(2.8, 1.0)
+        )
+      } else {
+        pca_grid
+      }
+
+      base <- file.path(panel_dir, paste0("Figure_", comparison_name, "_PCA_EVS"))
+      save_grob(combined, paste0(base, ".png"), width = 17.0, height = 13.6)
+      save_grob(combined, paste0(base, ".pdf"), width = 17.0, height = 13.6)
     }
   }
 
@@ -2883,79 +3085,6 @@ save_paper_pca_panels <- function() {
   }
 
   invisible(evidence_all)
-}
-
-save_paper_empirical_hbfss_panels <- function() {
-  if (!isTRUE(EXPORT_SUPPORT_FIGURES)) {
-    return(invisible(FALSE))
-  }
-
-  comparison_order <- as.character(comparison_table$comparison_name)
-
-  for (dataset_key in dataset_key_order) {
-    plots <- list()
-
-    if (identical(dataset_key, "raw_dataset")) {
-      track_order_use <- "normalized_evs"
-      panel_title <- "HBFSS calibration | Orig"
-      output_suffix <- "Raw_AllComparisons"
-      panel_height <- 5.8
-    } else {
-      track_order_use <- c("normalized_evs", "raw_evs")
-      panel_title <- paste0("HBFSS calibration | ", unname(dataset_short[dataset_key]), " (Norm vs Raw)")
-      output_suffix <- paste0(unname(dataset_short[dataset_key]), "_AllComparisons_NormEVS_vs_RawEVS")
-      panel_height <- 11.0
-    }
-
-    for (track_key in track_order_use) {
-      for (comparison_name in comparison_order) {
-        df <- read_result_table_for_panel(
-          comparison_name = comparison_name,
-          track_key = track_key,
-          dataset_key = dataset_key
-        )
-
-        if (is.null(df)) {
-          next
-        }
-
-        short_title <- if (identical(dataset_key, "raw_dataset")) {
-          comparison_name
-        } else {
-          paste0(comparison_name, "\n", unname(track_short[track_key]))
-        }
-
-        plots[[length(plots) + 1L]] <- plot_empirical_hbfss_support(
-          df = df,
-          short_title = short_title
-        )
-      }
-    }
-
-    plots <- Filter(Negate(is.null), plots)
-
-    if (length(plots) == 0L) {
-      next
-    }
-
-    panel <- assemble_one_legend_panel(
-      plots,
-      panel_title = panel_title,
-      ncol = length(comparison_order)
-    )
-
-    save_grob(
-      panel,
-      file.path(
-        paper_fig_dir,
-        paste0("Figure_Manuscript_Empirical_HBFSS_", output_suffix, ".png")
-      ),
-      width = 18.0,
-      height = panel_height
-    )
-  }
-
-  invisible(TRUE)
 }
 
 build_discovery_long_table <- function(summary_df) {
@@ -3005,7 +3134,7 @@ save_discovery_count_panel <- function(summary_df) {
       color = "black",
       show.legend = FALSE
     ) +
-    facet_wrap(~ Analysis, scales = "free_y", ncol = 3) +
+    facet_wrap(~ Analysis, scales = "free_y", ncol = 5) +
     scale_y_continuous(expand = expansion(mult = c(0.04, 0.16))) +
     scale_color_manual(
       values = significance_method_colors,
@@ -3035,10 +3164,11 @@ save_discovery_count_panel <- function(summary_df) {
       strip.text = element_text(face = "bold")
     )
 
-  save_grob(p, file.path(paper_fig_dir, "Figure_Manuscript_Discovery_Counts.png"), width = 14.5, height = 8.2)
-  save_grob(p, file.path(paper_fig_dir, "Figure_Manuscript_Discovery_Counts.pdf"), width = 14.5, height = 8.2)
+  save_grob(p, file.path(paper_fig_dir, "Figure_Manuscript_Discovery_Counts.png"), width = 20.0, height = 5.8)
+  save_grob(p, file.path(paper_fig_dir, "Figure_Manuscript_Discovery_Counts.pdf"), width = 20.0, height = 5.8)
   invisible(TRUE)
 }
+
 
 save_paper_support_figures <- function(summary_df) {
   if (!isTRUE(EXPORT_SUPPORT_FIGURES)) {
@@ -3047,7 +3177,6 @@ save_paper_support_figures <- function(summary_df) {
 
   support_steps <- list(
     PCA = function() save_paper_pca_panels(),
-    Empirical_HBFSS = function() save_paper_empirical_hbfss_panels(),
     Counts = function() save_discovery_count_panel(summary_df)
   )
 
@@ -3062,11 +3191,6 @@ save_paper_support_figures <- function(summary_df) {
 
   invisible(TRUE)
 }
-
-
-# =============================================================================
-# FINAL 3'aTWAS ORTHOLOG COMPARISON
-# =============================================================================
 
 ensure_babelgene <- function() {
   if (requireNamespace("babelgene", quietly = TRUE)) {
@@ -3095,8 +3219,9 @@ ensure_babelgene <- function() {
   TRUE
 }
 
+
 read_twas_study <- function(path) {
-  twas <- utils::read.csv(
+  twas_raw <- utils::read.csv(
     path,
     skip = 1,
     header = TRUE,
@@ -3105,22 +3230,27 @@ read_twas_study <- function(path) {
   )
 
   assert_required_columns(
-    twas,
+    twas_raw,
     c("Disease", "PANEL", "Transcript ID", "Gene symbol", "3'aTWAS.Z", "3'aTWAS.P"),
     object_name = "3'aTWAS file"
   )
 
-  twas %>%
+  twas_raw$TWAS_Source_Row <- seq_len(nrow(twas_raw))
+
+  twas_raw %>%
     dplyr::transmute(
+      TWAS_Record_ID = paste0("TWAS_", TWAS_Source_Row),
+      TWAS_Source_Row = as.integer(TWAS_Source_Row),
       Disease = trimws(as.character(Disease)),
       Panel = trimws(as.character(PANEL)),
       TWAS_Transcript = trimws(as.character(`Transcript ID`)),
       Human_TWAS_Gene = trimws(as.character(`Gene symbol`)),
       TWAS_Z = suppressWarnings(as.numeric(`3'aTWAS.Z`)),
       TWAS_P = suppressWarnings(as.numeric(`3'aTWAS.P`)),
-      COLOC_PP4 = if ("COLOC.PP4" %in% names(twas)) suppressWarnings(as.numeric(COLOC.PP4)) else NA_real_
+      COLOC_PP4 = if ("COLOC.PP4" %in% names(twas_raw)) suppressWarnings(as.numeric(COLOC.PP4)) else NA_real_
     ) %>%
-    dplyr::filter(valid_gene_symbol(Human_TWAS_Gene))
+    dplyr::filter(valid_gene_symbol(Human_TWAS_Gene)) %>%
+    dplyr::distinct(TWAS_Record_ID, .keep_all = TRUE)
 }
 
 build_twas_ortholog_map <- function(twas) {
@@ -3196,21 +3326,35 @@ build_twas_ortholog_map <- function(twas) {
     dplyr::distinct(Human_TWAS_Gene, Rat_Ortholog, .keep_all = TRUE)
 }
 
+
 build_twas_rat_metadata <- function(twas, mapping) {
+  # A human TWAS gene can legitimately have multiple TWAS records and can also
+  # map to more than one supported rat ortholog. The relationship is therefore
+  # explicitly many-to-many. Counts are subsequently computed from distinct
+  # source-record IDs/transcripts so ortholog expansion cannot inflate them.
   mapped <- twas %>%
-    dplyr::left_join(mapping, by = "Human_TWAS_Gene") %>%
-    dplyr::filter(!is.na(gene_key))
+    dplyr::left_join(
+      mapping,
+      by = "Human_TWAS_Gene",
+      relationship = "many-to-many"
+    ) %>%
+    dplyr::filter(!is.na(gene_key), valid_gene_symbol(Rat_Ortholog)) %>%
+    dplyr::distinct(
+      TWAS_Record_ID,
+      Human_TWAS_Gene,
+      Rat_Ortholog,
+      .keep_all = TRUE
+    )
 
   mapped %>%
-    dplyr::group_by(gene_key) %>%
+    dplyr::group_by(gene_key, Rat_Ortholog) %>%
     dplyr::summarise(
-      Rat_Ortholog = dplyr::first(Rat_Ortholog[valid_gene_symbol(Rat_Ortholog)]),
       Human_TWAS_Genes = collapse_unique(Human_TWAS_Gene),
-      TWAS_Diseases = collapse_unique(Disease),
-      TWAS_n = dplyr::n(),
-      TWAS_Panel_n = dplyr::n_distinct(Panel),
-      TWAS_Transcript_n = dplyr::n_distinct(TWAS_Transcript),
-      TWAS_APA = dplyr::n_distinct(TWAS_Transcript) >= 2L,
+      TWAS_Disorders = collapse_counts_by_label(Disease),
+      TWAS_n = dplyr::n_distinct(TWAS_Record_ID),
+      TWAS_Panel_n = dplyr::n_distinct(Panel, na.rm = TRUE),
+      TWAS_PAS_n = dplyr::n_distinct(TWAS_Transcript, na.rm = TRUE),
+      TWAS_APA = dplyr::n_distinct(TWAS_Transcript, na.rm = TRUE) >= 2L,
       TWAS_min_P = safe_min_numeric(TWAS_P),
       TWAS_max_abs_Z = safe_max_numeric(abs(TWAS_Z)),
       TWAS_max_COLOC_PP4 = safe_max_numeric(COLOC_PP4),
@@ -3268,12 +3412,17 @@ collect_twas_analysis_results <- function() {
   dplyr::bind_rows(rows) %>% dplyr::filter(!is.na(gene_key))
 }
 
+
 build_twas_overlap_pas_table <- function(all_results, twas_rat_meta) {
   if (!nrow(all_results) || !nrow(twas_rat_meta)) return(data.frame())
 
   all_results %>%
     dplyr::filter(Std | Strong | Weak | HBFSS) %>%
-    dplyr::inner_join(twas_rat_meta, by = "gene_key") %>%
+    dplyr::inner_join(
+      twas_rat_meta,
+      by = "gene_key",
+      relationship = "many-to-many"
+    ) %>%
     dplyr::mutate(
       Support = vapply(seq_len(dplyr::n()), function(i) {
         tags <- c(
@@ -3284,25 +3433,34 @@ build_twas_overlap_pas_table <- function(all_results, twas_rat_meta) {
         )
         paste(tags, collapse = "+")
       }, character(1)),
-      Analysis = factor(Analysis, levels = c(
-        "Original (No EVS)",
-        "NormEVS Lead", "NormEVS Rem",
-        "RawEVS Lead", "RawEVS Rem"
-      ))
+      Analysis = factor(
+        Analysis,
+        levels = c(
+          "Original (No EVS)",
+          "NormEVS Lead", "NormEVS Rem",
+          "RawEVS Lead", "RawEVS Rem"
+        )
+      )
     ) %>%
     dplyr::transmute(
       Comparison,
       Analysis = as.character(Analysis),
       Human_TWAS = Human_TWAS_Genes,
       Rat_Ortholog,
+      Ortholog_mapping_source,
+      TWAS_Disorders,
       TWAS_n,
-      TWAS_Transcript_n,
+      TWAS_PAS_n,
       TWAS_APA,
       WTTS_PAS_n,
       WTTS_APA = APA_multi_PAS,
       WTTS_DE_PAS = PAS,
       Apeglm_LFC,
-      Std, Strong, Weak, HBFSS, Ovlp,
+      Std,
+      Strong,
+      Weak,
+      HBFSS,
+      Ovlp,
       Support,
       Std_BH,
       Strong_BH,
@@ -3310,17 +3468,28 @@ build_twas_overlap_pas_table <- function(all_results, twas_rat_meta) {
       EmpP,
       HBFSS_score
     ) %>%
+    dplyr::distinct(
+      Comparison,
+      Analysis,
+      Rat_Ortholog,
+      WTTS_DE_PAS,
+      .keep_all = TRUE
+    ) %>%
     dplyr::arrange(
       Comparison,
-      factor(Analysis, levels = c(
-        "Original (No EVS)",
-        "NormEVS Lead", "NormEVS Rem",
-        "RawEVS Lead", "RawEVS Rem"
-      )),
+      factor(
+        Analysis,
+        levels = c(
+          "Original (No EVS)",
+          "NormEVS Lead", "NormEVS Rem",
+          "RawEVS Lead", "RawEVS Rem"
+        )
+      ),
       Rat_Ortholog,
       WTTS_DE_PAS
     )
 }
+
 
 build_twas_overlap_gene_table <- function(pas_table) {
   if (!nrow(pas_table)) return(data.frame())
@@ -3338,8 +3507,10 @@ build_twas_overlap_gene_table <- function(pas_table) {
       Analysis,
       Human_TWAS,
       Rat_Ortholog,
+      Ortholog_mapping_source,
+      TWAS_Disorders,
       TWAS_n,
-      TWAS_Transcript_n,
+      TWAS_PAS_n,
       TWAS_APA,
       WTTS_PAS_n,
       WTTS_APA
@@ -3354,6 +3525,10 @@ build_twas_overlap_gene_table <- function(pas_table) {
       Strong_PAS_n = dplyr::n_distinct(WTTS_DE_PAS[Strong_flag]),
       Weak_PAS_n = dplyr::n_distinct(WTTS_DE_PAS[Weak_flag]),
       HBFSS_PAS_n = dplyr::n_distinct(WTTS_DE_PAS[HBFSS_flag]),
+      Std_PAS_IDs = collapse_unique(WTTS_DE_PAS[Std_flag]),
+      Strong_PAS_IDs = collapse_unique(WTTS_DE_PAS[Strong_flag]),
+      Weak_PAS_IDs = collapse_unique(WTTS_DE_PAS[Weak_flag]),
+      HBFSS_PAS_IDs = collapse_unique(WTTS_DE_PAS[HBFSS_flag]),
       WTTS_DE_PAS_n = dplyr::n_distinct(WTTS_DE_PAS),
       WTTS_DE_APA = dplyr::n_distinct(WTTS_DE_PAS) >= 2L,
       WTTS_DE_PAS_IDs = collapse_unique(WTTS_DE_PAS),
@@ -3370,19 +3545,43 @@ build_twas_overlap_gene_table <- function(pas_table) {
     ) %>%
     dplyr::arrange(
       Comparison,
-      factor(Analysis, levels = c(
-        "Original (No EVS)",
-        "NormEVS Lead", "NormEVS Rem",
-        "RawEVS Lead", "RawEVS Rem"
-      )),
+      factor(
+        Analysis,
+        levels = c(
+          "Original (No EVS)",
+          "NormEVS Lead", "NormEVS Rem",
+          "RawEVS Lead", "RawEVS Rem"
+        )
+      ),
       Rat_Ortholog
     )
 }
 
-build_twas_overlap_summary <- function(gene_table) {
-  if (!nrow(gene_table)) return(data.frame())
 
-  gene_table %>%
+build_twas_overlap_summary <- function(gene_table) {
+  view_levels <- c(
+    "Original (No EVS)",
+    "NormEVS Lead",
+    "NormEVS Rem",
+    "RawEVS Lead",
+    "RawEVS Rem"
+  )
+
+  grid <- expand.grid(
+    Comparison = as.character(comparison_table$comparison_name),
+    Analysis = view_levels,
+    stringsAsFactors = FALSE
+  )
+
+  if (!nrow(gene_table)) {
+    out <- grid
+    for (nm in c("Std", "Strong", "Weak", "HBFSS", "Ovlp", "TWAS_APA", "WTTS_APA", "WTTS_DE_APA")) {
+      out[[nm]] <- 0L
+    }
+    return(out)
+  }
+
+  observed <- gene_table %>%
     dplyr::group_by(Comparison, Analysis) %>%
     dplyr::summarise(
       Std = sum(Std, na.rm = TRUE),
@@ -3395,29 +3594,78 @@ build_twas_overlap_summary <- function(gene_table) {
       WTTS_DE_APA = sum(WTTS_DE_APA, na.rm = TRUE),
       .groups = "drop"
     )
+
+  grid %>%
+    dplyr::left_join(observed, by = c("Comparison", "Analysis")) %>%
+    dplyr::mutate(
+      dplyr::across(
+        c(Std, Strong, Weak, HBFSS, Ovlp, TWAS_APA, WTTS_APA, WTTS_DE_APA),
+        ~ as.integer(dplyr::coalesce(.x, 0))
+      ),
+      Analysis = factor(Analysis, levels = view_levels)
+    ) %>%
+    dplyr::arrange(
+      match(Comparison, as.character(comparison_table$comparison_name)),
+      Analysis
+    ) %>%
+    dplyr::mutate(Analysis = as.character(Analysis))
 }
 
-plot_twas_gene_support <- function(gene_table, figure_dir) {
-  if (!nrow(gene_table)) return(invisible(NULL))
 
+plot_twas_comparison_gene_panel <- function(gene_table, comparison_name) {
   analysis_map <- c(
-    "Original (No EVS)"="Orig",
-    "NormEVS Lead"="N-Lead",
-    "NormEVS Rem"="N-Rem",
-    "RawEVS Lead"="R-Lead",
-    "RawEVS Rem"="R-Rem"
+    "Original (No EVS)" = "Orig",
+    "NormEVS Lead" = "N-Lead",
+    "NormEVS Rem" = "N-Rem",
+    "RawEVS Lead" = "R-Lead",
+    "RawEVS Rem" = "R-Rem"
   )
   analysis_levels <- unname(analysis_map)
 
+  sub <- gene_table[gene_table$Comparison == comparison_name, , drop = FALSE]
+
+  if (!nrow(sub)) {
+    empty <- data.frame(
+      Analysis = factor(analysis_levels, levels = analysis_levels),
+      y = 0
+    )
+    return(
+      ggplot(empty, aes(Analysis, y)) +
+        geom_blank() +
+        annotate(
+          "text",
+          x = 3,
+          y = 0,
+          label = "No 3'aTWAS/WTTS significant-gene overlap",
+          size = 4
+        ) +
+        scale_x_discrete(drop = FALSE) +
+        scale_y_continuous(NULL, breaks = NULL) +
+        labs(
+          title = paste0(comparison_name, " | 3'aTWAS ortholog overlap"),
+          x = NULL,
+          y = NULL
+        ) +
+        manuscript_theme() +
+        theme(legend.position = "none")
+    )
+  }
+
   method_rows <- list()
   for (method in c("Std", "Strong", "Weak", "HBFSS")) {
-    keep <- !is.na(gene_table[[method]]) & gene_table[[method]]
+    keep <- !is.na(sub[[method]]) & sub[[method]]
     if (!any(keep)) next
-    tmp <- gene_table[keep, , drop = FALSE]
-    tmp$Method <- c(Std="Standard", Strong="Strong", Weak="Weak", HBFSS="HBFSS")[[method]]
+    tmp <- sub[keep, , drop = FALSE]
+    tmp$Method <- c(
+      Std = "Standard",
+      Strong = "Strong",
+      Weak = "Weak",
+      HBFSS = "HBFSS"
+    )[[method]]
     method_rows[[method]] <- tmp
   }
-  if (!length(method_rows)) return(invisible(NULL))
+
+  if (!length(method_rows)) return(NULL)
 
   long <- dplyr::bind_rows(method_rows) %>%
     dplyr::mutate(
@@ -3430,18 +3678,59 @@ plot_twas_gene_support <- function(gene_table, figure_dir) {
       )
     )
 
-  long$Gene_label <- factor(long$Gene_label, levels = rev(sort(unique(long$Gene_label))))
+  gene_order <- sort(unique(long$Gene_label))
+  long$Gene_label <- factor(long$Gene_label, levels = rev(gene_order))
+  n_gene <- length(gene_order)
 
-  p <- ggplot(long, aes(Analysis, Gene_label, color = Method, shape = Method)) +
-    geom_point(position = position_dodge(width = 0.42), size = 2.7, alpha = 0.98, stroke = 0.85) +
-    facet_wrap(~ Comparison, ncol = 2, scales = "free_y") +
+  observed_counts <- sub %>%
+    dplyr::group_by(Analysis) %>%
+    dplyr::summarise(
+      Std = sum(Std, na.rm = TRUE),
+      Strong = sum(Strong, na.rm = TRUE),
+      Weak = sum(Weak, na.rm = TRUE),
+      HBFSS = sum(HBFSS, na.rm = TRUE),
+      Ovlp = sum(Ovlp, na.rm = TRUE),
+      .groups = "drop"
+    )
+
+  count_grid <- data.frame(
+    Analysis = names(analysis_map),
+    Short = unname(analysis_map),
+    stringsAsFactors = FALSE
+  ) %>%
+    dplyr::left_join(observed_counts, by = "Analysis") %>%
+    dplyr::mutate(
+      dplyr::across(
+        c(Std, Strong, Weak, HBFSS, Ovlp),
+        ~ as.integer(dplyr::coalesce(.x, 0))
+      ),
+      Axis_label = paste0(
+        Short,
+        "\nStd=", Std,
+        " Str=", Strong,
+        " W=", Weak,
+        " H=", HBFSS,
+        " O=", Ovlp
+      )
+    )
+
+  x_labels <- stats::setNames(count_grid$Axis_label, count_grid$Short)
+
+  ggplot(long, aes(Analysis, Gene_label, color = Method, shape = Method)) +
+    geom_point(
+      position = position_dodge(width = 0.48),
+      size = 3.0,
+      alpha = 0.98,
+      stroke = 0.90
+    ) +
+    scale_x_discrete(drop = FALSE, labels = x_labels) +
     scale_color_manual(
       values = significance_method_colors,
       breaks = significance_method_levels,
       labels = unname(significance_method_labels[significance_method_levels]),
       drop = FALSE,
       name = "Method",
-      guide = guide_legend(override.aes = list(size = 3.2, stroke = 0.95))
+      guide = guide_legend(override.aes = list(size = 3.3, stroke = 1.0))
     ) +
     scale_shape_manual(
       values = significance_method_shapes,
@@ -3451,137 +3740,338 @@ plot_twas_gene_support <- function(gene_table, figure_dir) {
       name = "Method"
     ) +
     labs(
-      title = "3'aTWAS ortholog genes identified in WTTS-Seq",
+      title = paste0(comparison_name, " | 3'aTWAS ortholog overlap"),
+      subtitle = paste0(
+        "Significant WTTS ortholog genes across five analysis views",
+        " | genes=", dplyr::n_distinct(sub$Rat_Ortholog)
+      ),
       x = NULL,
-      y = "Rat ortholog [human TWAS]"
+      y = "Rat ortholog"
     ) +
     manuscript_theme() +
     theme(
       axis.text.x = element_text(angle = 25, hjust = 1),
-      axis.text.y = element_text(size = 6.8),
+      axis.text.y = element_text(size = if (n_gene > 30) 6.2 else 7.5),
       legend.position = "bottom",
       plot.margin = margin(10, 18, 10, 18)
     )
-
-  max_genes <- max(table(long$Comparison))
-  height <- min(24, max(8.0, 5.0 + 0.17 * max_genes))
-  save_grob(p, file.path(figure_dir, "Figure_TWAS_Gene_Support.png"), width = 15.5, height = height)
-  save_grob(p, file.path(figure_dir, "Figure_TWAS_Gene_Support.pdf"), width = 15.5, height = height)
-  invisible(p)
 }
 
-plot_twas_view_counts <- function(summary_row, title) {
-  if (!nrow(summary_row)) return(NULL)
-  df <- data.frame(
-    Method = factor(c("Standard", "Strong", "Weak", "HBFSS"), levels = significance_method_levels),
-    n = c(summary_row$Std[1], summary_row$Strong[1], summary_row$Weak[1], summary_row$HBFSS[1]),
-    stringsAsFactors = FALSE
-  )
-
-  ggplot(df, aes(Method, n, color = Method, shape = Method)) +
-    geom_point(size = 3.2, stroke = 0.90) +
-    geom_text(aes(label = n), vjust = -0.8, size = 3.0, show.legend = FALSE) +
-    scale_color_manual(values = significance_method_colors, breaks = significance_method_levels,
-                       labels = unname(significance_method_labels[significance_method_levels]), name = "Method") +
-    scale_shape_manual(values = significance_method_shapes, breaks = significance_method_levels,
-                       labels = unname(significance_method_labels[significance_method_levels]), name = "Method") +
-    scale_x_discrete(labels = unname(significance_method_labels[significance_method_levels])) +
-    scale_y_continuous(expand = expansion(mult = c(0.04, 0.18))) +
-    labs(
-      title = compact_title(title, width = 42),
-      subtitle = paste0("Ovlp=", summary_row$Ovlp[1],
-                        "  TWAS-APA=", summary_row$TWAS_APA[1],
-                        "  WTTS-DE-APA=", summary_row$WTTS_DE_APA[1]),
-      x = NULL,
-      y = "TWAS genes"
-    ) +
-    manuscript_theme() +
-    theme(legend.position = "none", plot.margin = margin(10, 14, 10, 14))
-}
 
 export_twas_by_view <- function(pas_table, gene_table, summary_table) {
   views <- comparison_analysis_views()
 
   for (comparison_name in as.character(comparison_table$comparison_name)) {
+    pas_cmp <- pas_table[pas_table$Comparison == comparison_name, , drop = FALSE]
+    gene_cmp <- gene_table[gene_table$Comparison == comparison_name, , drop = FALSE]
+    summary_cmp <- summary_table[summary_table$Comparison == comparison_name, , drop = FALSE]
+
+    save_csv(
+      pas_cmp,
+      file.path(
+        output_dir,
+        comparison_name,
+        paste0("Table_", comparison_name, "_TWAS_PAS_All_Views.csv")
+      )
+    )
+    save_csv(
+      gene_cmp,
+      file.path(
+        output_dir,
+        comparison_name,
+        paste0("Table_", comparison_name, "_TWAS_Genes_All_Views.csv")
+      )
+    )
+    save_csv(
+      summary_cmp,
+      file.path(
+        output_dir,
+        comparison_name,
+        paste0("Table_", comparison_name, "_TWAS_Method_Counts_All_Views.csv")
+      )
+    )
+
     for (i in seq_len(nrow(views))) {
       track_key <- views$track_key[i]
       dataset_key <- views$dataset_key[i]
       analysis_label <- analysis_view_label(track_key, dataset_key)
       paths <- analysis_view_paths(comparison_name, track_key, dataset_key)
 
-      pas_sub <- if (nrow(pas_table)) {
-        pas_table[
-          pas_table$Comparison == comparison_name & pas_table$Analysis == analysis_label,
-          ,
-          drop = FALSE
-        ]
-      } else pas_table
-
-      gene_sub <- if (nrow(gene_table)) {
-        gene_table[
-          gene_table$Comparison == comparison_name & gene_table$Analysis == analysis_label,
-          ,
-          drop = FALSE
-        ]
-      } else gene_table
-
-      summary_sub <- summary_table[
-        summary_table$Comparison == comparison_name & summary_table$Analysis == analysis_label,
-        ,
-        drop = FALSE
-      ]
+      pas_sub <- pas_cmp[pas_cmp$Analysis == analysis_label, , drop = FALSE]
+      gene_sub <- gene_cmp[gene_cmp$Analysis == analysis_label, , drop = FALSE]
 
       save_csv(pas_sub, file.path(paths$tables, "Table_TWAS_PAS.csv"))
       save_csv(gene_sub, file.path(paths$tables, "Table_TWAS_Genes.csv"))
-
-      if (isTRUE(EXPORT_INDIVIDUAL_VIEW_FIGURES)) {
-        p <- plot_twas_view_counts(
-          summary_sub,
-          paste0(comparison_name, " | ", analysis_label, " | 3'aTWAS")
-        )
-        if (!is.null(p)) {
-          save_grob(p, file.path(paths$figures, "TWAS_Overlap.png"), width = 7.2, height = 5.4)
-          save_grob(p, file.path(paths$figures, "TWAS_Overlap.pdf"), width = 7.2, height = 5.4)
-        }
-      }
     }
   }
 
   invisible(TRUE)
 }
 
-save_twas_comparison_panels <- function(summary_table) {
+
+save_twas_comparison_panels <- function(gene_table) {
   for (comparison_name in as.character(comparison_table$comparison_name)) {
-    sub <- summary_table[summary_table$Comparison == comparison_name, , drop = FALSE]
-    if (!nrow(sub)) next
+    p <- plot_twas_comparison_gene_panel(gene_table, comparison_name)
+    if (is.null(p)) next
 
-    views <- c("Original (No EVS)", "NormEVS Lead", "NormEVS Rem", "RawEVS Lead", "RawEVS Rem")
-    plots <- lapply(views, function(v) {
-      one <- sub[sub$Analysis == v, , drop = FALSE]
-      if (!nrow(one)) return(NULL)
-      short <- c(
-        "Original (No EVS)"="Orig",
-        "NormEVS Lead"="N-Lead",
-        "NormEVS Rem"="N-Rem",
-        "RawEVS Lead"="R-Lead",
-        "RawEVS Rem"="R-Rem"
-      )[[v]]
-      plot_twas_view_counts(one, short)
-    })
-    plots <- Filter(Negate(is.null), plots)
-    if (!length(plots)) next
-
-    panel <- assemble_one_legend_panel(
-      lapply(plots, function(p) p + theme(legend.position = "bottom")),
-      panel_title = paste0(comparison_name, " | 3'aTWAS overlap across five views"),
-      ncol = 5
+    n_gene <- dplyr::n_distinct(
+      gene_table$Rat_Ortholog[gene_table$Comparison == comparison_name]
     )
+    height <- min(14.0, max(5.6, 4.5 + 0.23 * n_gene))
+
     panel_dir <- file.path(output_dir, comparison_name, "Panels")
     dir.create(panel_dir, recursive = TRUE, showWarnings = FALSE)
+
     base <- file.path(panel_dir, paste0("Figure_", comparison_name, "_TWAS_5Views"))
-    save_grob(panel, paste0(base, ".png"), width = 20.0, height = 6.0)
-    save_grob(panel, paste0(base, ".pdf"), width = 20.0, height = 6.0)
+    save_grob(p, paste0(base, ".png"), width = 12.5, height = height)
+    save_grob(p, paste0(base, ".pdf"), width = 12.5, height = height)
   }
+  invisible(TRUE)
+}
+
+
+
+audit_published_2024_twas_reference <- function(all_results) {
+  ref <- PUBLISHED_2024_TWAS_DE_REFERENCE
+
+  obs <- all_results %>%
+    dplyr::filter(
+      Comparison == "RT4_ZT10",
+      Analysis == "RawEVS Rem",
+      as.character(PAS) %in% ref$PAS
+    ) %>%
+    dplyr::select(
+      PAS,
+      WTTS_Gene,
+      Apeglm_LFC,
+      Std_p,
+      Std_BH,
+      Std
+    )
+
+  merged <- ref %>%
+    dplyr::left_join(obs, by = "PAS")
+
+  if (nrow(merged) != nrow(ref) ||
+      any(is.na(merged$WTTS_Gene)) ||
+      dplyr::n_distinct(merged$Gene) != 9L ||
+      !all(!is.na(merged$Std) & merged$Std)) {
+    stop(
+      "Published 2024 WTTS/TWAS benchmark was not reproduced: ",
+      "expected 11 Standard PASs representing 9 genes in RT4_ZT10 RawEVS Rem."
+    )
+  }
+
+  gene_ok <- toupper(merged$Gene) == toupper(merged$WTTS_Gene)
+  lfc_ok <- abs(merged$Apeglm_LFC - merged$Paper_LFC) <= 0.02
+
+  p_ok <- abs(merged$Std_p - merged$Paper_p) <= pmax(
+    5e-8,
+    abs(merged$Paper_p) * 0.05
+  )
+
+  padj_ok <- abs(merged$Std_BH - merged$Paper_padj) <= pmax(
+    5e-6,
+    abs(merged$Paper_padj) * 0.05
+  )
+
+  if (!all(gene_ok & lfc_ok & p_ok & padj_ok)) {
+    bad <- merged$PAS[!(gene_ok & lfc_ok & p_ok & padj_ok)]
+    stop(
+      "Published 2024 WTTS/TWAS numeric benchmark mismatch for PAS(s): ",
+      paste(bad, collapse = ", ")
+    )
+  }
+
+  message(
+    "Published 2024 WTTS/TWAS benchmark reproduced: ",
+    "11 PASs / 9 genes in RT4_ZT10 RawEVS Rem."
+  )
+
+  invisible(TRUE)
+}
+
+
+audit_final_exports <- function(overall_summary, twas_results) {
+  expected_views <- c(
+    "Original (No EVS)",
+    "NormEVS Lead",
+    "NormEVS Rem",
+    "RawEVS Lead",
+    "RawEVS Rem"
+  )
+
+  if (!is.data.frame(overall_summary) ||
+      nrow(overall_summary) != nrow(comparison_table) * length(expected_views)) {
+    stop("Final export audit failed: differential-expression summary does not contain all comparison/view rows.")
+  }
+
+  twas_summary <- twas_results$summary
+  if (!is.data.frame(twas_summary) ||
+      nrow(twas_summary) != nrow(comparison_table) * length(expected_views)) {
+    stop("Final export audit failed: TWAS summary does not contain all five views for every comparison.")
+  }
+
+  twas_pas <- twas_results$pas
+  if (nrow(twas_pas)) {
+    twas_pas_key <- paste(
+      twas_pas$Comparison,
+      twas_pas$Analysis,
+      twas_pas$Rat_Ortholog,
+      twas_pas$WTTS_DE_PAS,
+      sep = "||"
+    )
+    if (anyDuplicated(twas_pas_key)) {
+      stop("Final export audit failed: duplicate TWAS PAS rows were detected.")
+    }
+  }
+
+  for (comparison_name in as.character(comparison_table$comparison_name)) {
+    panel_dir <- file.path(output_dir, comparison_name, "Panels")
+
+    required_panels <- file.path(
+      panel_dir,
+      c(
+        paste0("Figure_", comparison_name, "_PCA_EVS.png"),
+        paste0("Figure_", comparison_name, "_Volcano_5Views.png"),
+        paste0("Figure_", comparison_name, "_TWAS_5Views.png")
+      )
+    )
+
+    missing_panels <- required_panels[
+      !file.exists(required_panels) |
+        is.na(file.info(required_panels)$size) |
+        file.info(required_panels)$size <= 0
+    ]
+
+    if (length(missing_panels)) {
+      stop(
+        "Final export audit failed: missing/empty panel(s) for ",
+        comparison_name, ": ",
+        paste(basename(missing_panels), collapse = ", ")
+      )
+    }
+
+    required_tables <- c(
+      file.path(
+        output_dir,
+        comparison_name,
+        paste0("Table_", comparison_name, "_Significant_Sites_All_Views.csv")
+      ),
+      file.path(
+        output_dir,
+        comparison_name,
+        "Table_Method_Counts_All_Views.csv"
+      ),
+      file.path(
+        output_dir,
+        comparison_name,
+        paste0("Table_", comparison_name, "_TWAS_PAS_All_Views.csv")
+      ),
+      file.path(
+        output_dir,
+        comparison_name,
+        paste0("Table_", comparison_name, "_TWAS_Genes_All_Views.csv")
+      ),
+      file.path(
+        output_dir,
+        comparison_name,
+        paste0("Table_", comparison_name, "_TWAS_Method_Counts_All_Views.csv")
+      )
+    )
+
+    missing_tables <- required_tables[!file.exists(required_tables)]
+    if (length(missing_tables)) {
+      stop(
+        "Final export audit failed: missing table(s) for ",
+        comparison_name, ": ",
+        paste(basename(missing_tables), collapse = ", ")
+      )
+    }
+
+    sig_tbl <- utils::read.csv(
+      file.path(
+        output_dir,
+        comparison_name,
+        paste0("Table_", comparison_name, "_Significant_Sites_All_Views.csv")
+      ),
+      stringsAsFactors = FALSE,
+      check.names = FALSE
+    )
+
+    count_tbl <- utils::read.csv(
+      file.path(
+        output_dir,
+        comparison_name,
+        "Table_Method_Counts_All_Views.csv"
+      ),
+      stringsAsFactors = FALSE,
+      check.names = FALSE
+    )
+
+    if (!setequal(count_tbl$Analysis, expected_views)) {
+      stop("Final export audit failed: incomplete DE method-count views for ", comparison_name, ".")
+    }
+
+    for (analysis_name in expected_views) {
+      one_count <- count_tbl[count_tbl$Analysis == analysis_name, , drop = FALSE]
+      one_sig <- sig_tbl[sig_tbl$Analysis == analysis_name, , drop = FALSE]
+
+      if (nrow(one_count) != 1L) {
+        stop("Final export audit failed: duplicate/missing DE count row for ", comparison_name, " / ", analysis_name, ".")
+      }
+
+      observed <- c(
+        Std = sum(one_sig$Std, na.rm = TRUE),
+        Strong = sum(one_sig$Strong, na.rm = TRUE),
+        Weak = sum(one_sig$Weak, na.rm = TRUE),
+        HBFSS = sum(one_sig$HBFSS_sig, na.rm = TRUE),
+        Ovlp = sum(one_sig$Ovlp, na.rm = TRUE)
+      )
+
+      reported <- as.numeric(one_count[1, c("Std", "Strong", "Weak", "HBFSS", "Ovlp")])
+      names(reported) <- c("Std", "Strong", "Weak", "HBFSS", "Ovlp")
+
+      if (!identical(as.integer(observed), as.integer(reported))) {
+        stop(
+          "Final export audit failed: significant-site counts disagree for ",
+          comparison_name, " / ", analysis_name, "."
+        )
+      }
+    }
+
+    twas_count_path <- file.path(
+      output_dir,
+      comparison_name,
+      paste0("Table_", comparison_name, "_TWAS_Method_Counts_All_Views.csv")
+    )
+    twas_count_tbl <- utils::read.csv(
+      twas_count_path,
+      stringsAsFactors = FALSE,
+      check.names = FALSE
+    )
+
+    if (!setequal(twas_count_tbl$Analysis, expected_views) ||
+        nrow(twas_count_tbl) != length(expected_views)) {
+      stop("Final export audit failed: incomplete TWAS views for ", comparison_name, ".")
+    }
+  }
+
+  discovery_panel <- file.path(
+    paper_fig_dir,
+    "Figure_Manuscript_Discovery_Counts.png"
+  )
+  if (!file.exists(discovery_panel) ||
+      is.na(file.info(discovery_panel)$size) ||
+      file.info(discovery_panel)$size <= 0) {
+    stop("Final export audit failed: global discovery-count panel is missing or empty.")
+  }
+
+  message(
+    "Final export audit passed: all comparison/view tables, curated panels, ",
+    "method counts, TWAS rows, and published benchmark are internally consistent."
+  )
+
   invisible(TRUE)
 }
 
@@ -3594,25 +4084,31 @@ run_twas_overlap_analysis <- function() {
   rat_meta <- build_twas_rat_metadata(twas, mapping)
   all_results <- collect_twas_analysis_results()
 
+  audit_published_2024_twas_reference(all_results)
+
   pas_table <- build_twas_overlap_pas_table(all_results, rat_meta)
   gene_table <- build_twas_overlap_gene_table(pas_table)
   summary_table <- build_twas_overlap_summary(gene_table)
 
   twas_dir <- file.path(output_dir, "TWAS")
-  twas_fig_dir <- file.path(twas_dir, "figures")
   twas_tab_dir <- file.path(twas_dir, "tables")
-  dir.create(twas_fig_dir, recursive = TRUE, showWarnings = FALSE)
   dir.create(twas_tab_dir, recursive = TRUE, showWarnings = FALSE)
 
   save_csv(pas_table, file.path(twas_tab_dir, "Table_TWAS_Overlap_PAS.csv"))
   save_csv(gene_table, file.path(twas_tab_dir, "Table_TWAS_Overlap_Genes.csv"))
   save_csv(summary_table, file.path(twas_tab_dir, "Table_TWAS_Method_Counts.csv"))
 
-  plot_twas_gene_support(gene_table, twas_fig_dir)
   export_twas_by_view(pas_table, gene_table, summary_table)
-  save_twas_comparison_panels(summary_table)
+  save_twas_comparison_panels(gene_table)
 
-  invisible(list(mapping = mapping, pas = pas_table, genes = gene_table, summary = summary_table))
+  invisible(
+    list(
+      mapping = mapping,
+      pas = pas_table,
+      genes = gene_table,
+      summary = summary_table
+    )
+  )
 }
 
 comparison_inputs <- lapply(seq_len(nrow(comparison_table)), function(i) {
@@ -3681,8 +4177,13 @@ save_paper_support_figures(overall_summary)
 # Final analytical stage: 3'aTWAS ortholog overlap with every reported WTTS method.
 twas_results <- run_twas_overlap_analysis()
 
+audit_final_exports(overall_summary, twas_results)
+
 figure_zip <- create_all_figures_zip()
 table_zip <- create_all_tables_zip()
+
+# Publish only after every analysis, export, audit, and archive step succeeds.
+repo_publish <- publish_results_to_repository(figure_zip, table_zip)
 
 cat("\n=====================================================\n")
 cat("Pipeline complete.\n")
@@ -3692,6 +4193,15 @@ cat("Output directory:\n", output_dir, "\n", sep = "")
 cat("3'aTWAS overlap: complete\n")
 cat("Figure ZIP:\n", figure_zip, "\n", sep = "")
 cat("Table ZIP:\n", table_zip, "\n", sep = "")
+if (isTRUE(repo_publish$published)) {
+  cat("Git branch:\n", repo_publish$branch, "\n", sep = "")
+  cat("Git commit:\n", repo_publish$commit, "\n", sep = "")
+  if (!is.na(repo_publish$url) && nzchar(repo_publish$url)) {
+    cat("GitHub output folder:\n", repo_publish$url, "\n", sep = "")
+  } else {
+    cat("Repository output path:\n", repo_publish$output_rel, "\n", sep = "")
+  }
+}
 cat("=====================================================\n\n")
 
 if (nrow(overall_summary) > 0L) print(overall_summary)
