@@ -67,8 +67,27 @@ options(stringsAsFactors = FALSE)
 #       alpha = max((variance - mu) / mu^2, 0)
 #    Under variance = mu + alpha*mu^2, this is a normalized NB2-linked signal.
 #
-# These are descriptive corroborative diagnostics. They are not formal
-# likelihood-ratio statistics.
+# These three quantities are descriptive medians with no test attached to
+# them on their own; they motivate the comparison but do not establish it
+# statistically.
+#
+# FORMAL LIKELIHOOD-RATIO TEST (LRT)
+#
+# A formal test is computed alongside the descriptive quantities above:
+#   H0: LEFT and RIGHT share one NB2 dispersion parameter (alpha)
+#   H1: LEFT and RIGHT have their own separate alpha
+# Each feature's mean (mu) is held fixed at its own empirical mean; alpha is
+# estimated by maximum likelihood under Var = mu + alpha*mu^2 (equivalently
+# dnbinom size = 1/alpha). H1 has exactly one more free parameter than H0
+# (two alphas vs one shared alpha), so:
+#   LRT = 2 * (loglik_H1 - loglik_H0)  ~  chi-square(df = 1) under H0
+# This LRT, its p-value, and the preferred direction (RIGHT_more_NB2 vs
+# LEFT_more_NB2) are written to the cutoff summary table for every arm and
+# track, and the p-value is shown in each figure's summary-panel subtitle.
+# It is strictly appropriate for the Main track (raw integer counts); for
+# the DESeq2-normalized supplement track, counts are continuous and the
+# same test is still reported but is a looser applied approximation, marked
+# by the lrt_is_integer_count_track column in the output table.
 #
 # METHODS-LEVEL VALIDATION
 #
@@ -402,6 +421,100 @@ summarize_regions <- function(feature_df, anchor_rank, total_n) {
   )
 }
 
+# =============================================================================
+# FORMAL LIKELIHOOD-RATIO TEST: LEFT vs RIGHT NB2 dispersion
+# =============================================================================
+#
+# The NB2/NB2-NB1/alpha*mu quantities above are descriptive medians with no
+# associated test. This section adds a formal likelihood-ratio test of
+# H0: LEFT and RIGHT share one NB2 dispersion parameter (alpha)
+# H1: LEFT and RIGHT have their own separate alpha
+#
+# Each feature's mean (mu) is held fixed at its own empirical mean, exactly
+# as already computed in compute_ranked_feature_metrics; only the dispersion
+# parameter alpha is estimated by maximum likelihood, under the standard NB2
+# parameterization Var = mu + alpha*mu^2 (equivalently dnbinom size = 1/alpha).
+# H1 has exactly one more free parameter than H0 (separate alpha_L, alpha_R
+# vs one shared alpha), so:
+#   LRT = 2 * (loglik_H1 - loglik_H0)  ~  chi-square(df = 1) under H0
+#
+# This is only strictly appropriate for integer count data (the "Main" track,
+# raw counts). For the DESeq2-normalized supplement track, counts are
+# continuous, so dnbinom's continuous extension is used as a common applied
+# approximation; the result is still reported but is a looser statistic and
+# is labeled as such in the output table.
+
+region_indices_from_anchor <- function(anchor_rank, total_n) {
+  right_idx <- seq.int(anchor_rank, total_n)
+  right_n <- length(right_idx)
+
+  left_end <- anchor_rank - 1L
+  left_start <- left_end - right_n + 1L
+  if (left_start < 1L) stop("LEFT block extends below rank 1.")
+
+  list(left_idx = seq.int(left_start, left_end), right_idx = right_idx)
+}
+
+nb2_region_loglik <- function(alpha, counts_block, mu_vec) {
+  if (!is.finite(alpha) || alpha <= 0) return(-Inf)
+  size <- 1 / alpha
+  mu_rep <- rep(mu_vec, times = ncol(counts_block))
+  counts_vec <- as.vector(counts_block)
+  keep <- is.finite(counts_vec) & is.finite(mu_rep) & mu_rep > 0 & counts_vec >= 0
+  if (!any(keep)) return(-Inf)
+  sum(stats::dnbinom(counts_vec[keep], size = size, mu = mu_rep[keep], log = TRUE))
+}
+
+fit_region_alpha_mle <- function(counts_block, mu_vec) {
+  obj <- function(a) -nb2_region_loglik(a, counts_block, mu_vec)
+  opt <- stats::optimize(obj, lower = 1e-8, upper = 100, tol = 1e-8)
+  list(alpha_mle = opt$minimum, loglik = -opt$objective)
+}
+
+compute_region_lrt <- function(metric_matrix, feature_df, left_idx, right_idx) {
+  left_ids <- feature_df$feature_id[left_idx]
+  right_ids <- feature_df$feature_id[right_idx]
+
+  left_block <- metric_matrix[left_ids, , drop = FALSE]
+  right_block <- metric_matrix[right_ids, , drop = FALSE]
+
+  left_mu <- feature_df$mu[left_idx]
+  right_mu <- feature_df$mu[right_idx]
+
+  fit_left <- fit_region_alpha_mle(left_block, left_mu)
+  fit_right <- fit_region_alpha_mle(right_block, right_mu)
+
+  pooled_block <- rbind(left_block, right_block)
+  pooled_mu <- c(left_mu, right_mu)
+  fit_pooled <- fit_region_alpha_mle(pooled_block, pooled_mu)
+
+  loglik_h1 <- fit_left$loglik + fit_right$loglik
+  loglik_h0 <- fit_pooled$loglik
+
+  lrt_stat <- 2 * (loglik_h1 - loglik_h0)
+  # Numerical optimization can occasionally yield a tiny negative value
+  # (H1 should never fit worse than H0 at the true optimum); floor at 0.
+  lrt_stat <- max(lrt_stat, 0)
+  lrt_p <- stats::pchisq(lrt_stat, df = 1, lower.tail = FALSE)
+
+  data.frame(
+    alpha_left_mle = fit_left$alpha_mle,
+    alpha_right_mle = fit_right$alpha_mle,
+    alpha_pooled_mle = fit_pooled$alpha_mle,
+    loglik_left = fit_left$loglik,
+    loglik_right = fit_right$loglik,
+    loglik_pooled = fit_pooled$loglik,
+    lrt_stat = lrt_stat,
+    lrt_df = 1L,
+    lrt_p = lrt_p,
+    lrt_direction = ifelse(
+      fit_right$alpha_mle > fit_left$alpha_mle,
+      "RIGHT_more_NB2", "LEFT_more_NB2"
+    ),
+    stringsAsFactors = FALSE
+  )
+}
+
 validate_method_level <- function(feature_df, interval_info, region_summary, total_n) {
   anchor <- interval_info$anchor
   ref <- interval_info$ref
@@ -498,6 +611,7 @@ build_main_figure <- function(comparison_name,
                               feature_df,
                               interval_info,
                               region_summary,
+                              lrt_result,
                               out_file,
                               fig_tag,
                               rank_tag,
@@ -692,6 +806,16 @@ build_main_figure <- function(comparison_name,
     stringsAsFactors = FALSE
   )
 
+  lrt_p_label <- if (is.finite(lrt_result$lrt_p)) {
+    formatC(lrt_result$lrt_p, format = "e", digits = 2)
+  } else {
+    "NA"
+  }
+  lrt_subtitle <- paste0(
+    "Points farther right indicate stronger NB2-related corroboration  |  ",
+    "LRT p = ", lrt_p_label, " (", lrt_result$lrt_direction, ")"
+  )
+
   p3 <- ggplot(summary_df, aes(y = metric)) +
     geom_segment(aes(x = LEFT, xend = RIGHT, yend = metric), color = "#7A7A7A", linewidth = 0.8) +
     geom_point(aes(x = LEFT, color = "LEFT"), size = 3.4) +
@@ -699,7 +823,7 @@ build_main_figure <- function(comparison_name,
     scale_color_manual(values = REGION_COLORS, breaks = REGION_LEVELS) +
     labs(
       title = paste0(comparison_name, " ", arm_name, ": summary"),
-      subtitle = "Points farther right indicate stronger NB2-related corroboration",
+      subtitle = lrt_subtitle,
       x = "Median",
       y = NULL,
       color = NULL
@@ -753,6 +877,15 @@ run_one_track <- function(comparison_name,
 
   region_summary <- summarize_regions(feature_df, interval_info$anchor, total_n)
 
+  region_idx <- region_indices_from_anchor(interval_info$anchor, total_n)
+  lrt_result <- compute_region_lrt(
+    metric_matrix = metric_matrix,
+    feature_df = feature_df,
+    left_idx = region_idx$left_idx,
+    right_idx = region_idx$right_idx
+  )
+  lrt_result$lrt_is_integer_count_track <- identical(track, "Main")
+
   validate_method_level(
     feature_df = feature_df,
     interval_info = interval_info,
@@ -774,7 +907,7 @@ run_one_track <- function(comparison_name,
     stringsAsFactors = FALSE
   )
 
-  cutoff_summary <- bind_cols(selected_df, region_summary) %>%
+  cutoff_summary <- bind_cols(selected_df, region_summary, lrt_result) %>%
     mutate(
       LeftSize = region_summary$left_n,
       RightSize = region_summary$right_n,
@@ -822,6 +955,7 @@ run_one_track <- function(comparison_name,
     feature_df = feature_df,
     interval_info = interval_info,
     region_summary = region_summary,
+    lrt_result = lrt_result,
     out_file = fig_path,
     fig_tag = fig_tag,
     rank_tag = rank_tag,
