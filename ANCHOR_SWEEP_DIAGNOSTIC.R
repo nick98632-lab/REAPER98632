@@ -1,49 +1,35 @@
 #!/usr/bin/env Rscript
 
 # =============================================================================
-# ANCHOR SWEEP DIAGNOSTIC: is the LEFT/RIGHT LRT signal specific to the
-# established leading-edge boundary, or just a smooth global gradient?
+# ANCHOR SWEEP: LEFT/RIGHT NB2 DISPERSION ACROSS THE PC1-RANK AXIS
 # =============================================================================
 #
 # This script is standalone. It does not modify SEQUENCE.R, EMPERICALCUTOFF.R,
 # REGIME_DIAGNOSTIC.r, REMNB1_LEADNB2.R, or LFC_BALANCE_DIAGNOSTIC.R.
 #
-# MOTIVATING QUESTION
-# REMNB1_LEADNB2.R's likelihood-ratio test compares a LEFT block against a
-# RIGHT block that are defined relative to one specific anchor: the
-# established leading-edge boundary (near the paper-reference/empirical k*
-# cutoff). It found RIGHT more NB2-like than LEFT there, significantly, in
-# every arm tested. The open question: is that specific to the established
-# boundary, or would picking almost any anchor along the PC1-rank axis show
-# the same pattern, because NB2-ness increases smoothly and monotonically
-# across the whole ranking with no distinct feature at that particular point?
+# For each arm of each comparison, features are ranked by absolute PC1
+# loading. At a candidate anchor rank:
+#   RIGHT = all ranks from the anchor through the most extreme end of the
+#           ranking
+#   LEFT  = an equal-sized matched block immediately below the anchor
+# A likelihood-ratio test compares a shared NB2 dispersion parameter (alpha)
+# for LEFT and RIGHT against separate alphas for each (see REMNB1_LEADNB2.R
+# for the full LRT specification; this script uses the same raw-count
+# likelihood). Because RIGHT always extends to the most extreme rank, LEFT
+# (equal-sized) is only feasible once the anchor is past roughly the
+# midpoint of the ranking; the swept anchor range is restricted accordingly.
 #
-# WHAT THIS SCRIPT DOES
-# For each arm (control, treatment) of each comparison, this sweeps the
-# anchor rank across a systematic range of positions and, at each one,
-# reruns the same LEFT/RIGHT alpha-MLE likelihood-ratio test used in
-# REMNB1_LEADNB2.R (raw counts only -- the track with a trustworthy fit).
-#
-# IMPORTANT DESIGN NOTE, unchanged from REMNB1_LEADNB2.R: RIGHT is defined
-# as [anchor, total_n] -- i.e. anchor all the way to the most extreme end of
-# the PC1-rank axis, not a small local window next to the anchor. LEFT is an
-# equal-sized block immediately below anchor. This means RIGHT always
-# contains the genuine extreme tail no matter where the anchor sits; moving
-# the anchor down only dilutes RIGHT with more mid-rank genes. If the true
-# NB2 signal is concentrated specifically in the extreme tail (supporting a
-# real, localized transition near the established boundary), diff_alpha and
-# the LRT statistic should visibly weaken as the anchor moves away from that
-# boundary. If they stay roughly flat across the whole sweep, that supports
-# the skeptical reading: a smooth global gradient, not a distinct boundary.
-#
-# Because RIGHT always reaches to total_n, LEFT (equal-sized) becomes
-# infeasible once the anchor is much below roughly total_n / 2 (LEFT would
-# need to extend below rank 1). The sweep range below is therefore
-# restricted to anchors where both blocks fit.
+# This is run at a systematic range of anchor positions per arm, not only
+# the established leading-edge boundary (paper-reference k = 5000), to
+# characterize how the LEFT/RIGHT dispersion gap (diff_alpha) varies across
+# the whole rank axis, and where it is maximized relative to the
+# established boundary.
 #
 # OUTPUTS:
-#   Table_Anchor_Sweep.csv
-#   Figure_Anchor_Sweep_<comparison>_<arm>.png
+#   Table_Anchor_Sweep.csv            one row per anchor position tested
+#   Table_Peak_vs_Established.csv     established boundary vs. the anchor
+#                                      that maximizes diff_alpha, per arm
+#   Figure_Anchor_Sweep_<comparison>.png
 # =============================================================================
 
 suppressPackageStartupMessages({
@@ -81,8 +67,8 @@ COMPARISONS <- list(
 
 # Established boundary reference: paper-reference k = 5000. total_n varies
 # slightly per arm (a handful of all-zero features get dropped per arm), so
-# the reference anchor is computed per arm below as total_n - 5000 + 1,
-# matching REMNB1_LEADNB2.R's reference_rank convention exactly.
+# the reference anchor is computed per arm as total_n - 5000 + 1, matching
+# REMNB1_LEADNB2.R's reference_rank convention exactly.
 PAPER_REFERENCE_K <- 5000L
 
 # Sweep step size across the feasible anchor range.
@@ -198,6 +184,7 @@ message("Reading count matrix...")
 count_mat <- read_count_matrix(COUNT_FILE, GROUP_PATTERNS)
 
 sweep_rows <- list()
+peak_rows <- list()
 
 for (comparison_name in names(COMPARISONS)) {
   pair <- COMPARISONS[[comparison_name]]
@@ -220,16 +207,12 @@ for (comparison_name in names(COMPARISONS)) {
     established_anchor <- total_n - PAPER_REFERENCE_K + 1L
 
     # Feasible range: anchor must be high enough that an equal-sized LEFT
-    # block still fits below rank 1. right_n = total_n - anchor + 1, and we
-    # need anchor - right_n >= 1, i.e. anchor >= (total_n + 1) / 2
-    # (approximately) -- solved numerically below per anchor instead of by
-    # formula, to stay exactly consistent with lrt_at_anchor's own check.
+    # block still fits below rank 1.
     candidate_anchors <- seq(
       from = max(SWEEP_STEP, round(total_n * 0.5)),
       to = total_n - 100L,
       by = SWEEP_STEP
     )
-    # Always include the established boundary itself as a reference point.
     candidate_anchors <- sort(unique(c(candidate_anchors, established_anchor)))
 
     message(sprintf(
@@ -237,13 +220,33 @@ for (comparison_name in names(COMPARISONS)) {
       comparison_name, arm_name, total_n, established_anchor, length(candidate_anchors)
     ))
 
+    arm_rows <- list()
     for (anchor in candidate_anchors) {
       res <- lrt_at_anchor(count_mat_arm, mu_by_rank, rank_order, anchor, total_n)
       if (is.null(res)) next
       res$comparison <- comparison_name
       res$arm <- arm_name
       res$is_established_boundary <- (anchor == established_anchor)
+      arm_rows[[length(arm_rows) + 1L]] <- res
       sweep_rows[[length(sweep_rows) + 1L]] <- res
+    }
+
+    arm_table <- dplyr::bind_rows(arm_rows)
+    if (nrow(arm_table) > 0L) {
+      peak_row <- arm_table[which.max(arm_table$diff_alpha), ]
+      established_row <- arm_table[arm_table$is_established_boundary, ][1, ]
+
+      peak_rows[[length(peak_rows) + 1L]] <- data.frame(
+        comparison = comparison_name,
+        arm = arm_name,
+        established_anchor = established_row$anchor_rank,
+        established_diff_alpha = established_row$diff_alpha,
+        peak_anchor = peak_row$anchor_rank,
+        peak_diff_alpha = peak_row$diff_alpha,
+        rank_distance = established_row$anchor_rank - peak_row$anchor_rank,
+        pct_of_peak_achieved = 100 * established_row$diff_alpha / peak_row$diff_alpha,
+        stringsAsFactors = FALSE
+      )
     }
   }
 }
@@ -251,39 +254,88 @@ for (comparison_name in names(COMPARISONS)) {
 sweep_table <- dplyr::bind_rows(sweep_rows)
 write.csv(sweep_table, file.path(OUT_ROOT, "Table_Anchor_Sweep.csv"), row.names = FALSE)
 
+peak_table <- dplyr::bind_rows(peak_rows)
+write.csv(peak_table, file.path(OUT_ROOT, "Table_Peak_vs_Established.csv"), row.names = FALSE)
+
 # -----------------------------------------------------------------------------
 # Figures: one per comparison, faceted by arm
 # -----------------------------------------------------------------------------
+
+MARKER_LEVELS <- c("Sweep point", "At search bound (unreliable)", "Established boundary", "Empirical peak")
+MARKER_COLORS <- c(
+  "Sweep point" = "#3B6FA0",
+  "At search bound (unreliable)" = "#B0B0B0",
+  "Established boundary" = "#C0392B",
+  "Empirical peak" = "#E8A33D"
+)
+MARKER_SHAPES <- c(
+  "Sweep point" = 16,
+  "At search bound (unreliable)" = 4,
+  "Established boundary" = 17,
+  "Empirical peak" = 18
+)
+MARKER_SIZES <- c(
+  "Sweep point" = 1.8,
+  "At search bound (unreliable)" = 2.4,
+  "Established boundary" = 3.6,
+  "Empirical peak" = 3.6
+)
 
 for (comparison_name in names(COMPARISONS)) {
   sub <- sweep_table[sweep_table$comparison == comparison_name, , drop = FALSE]
   if (nrow(sub) == 0L) next
 
-  marker_df <- sub[sub$is_established_boundary, , drop = FALSE]
+  marker_df <- sub %>%
+    group_by(arm) %>%
+    mutate(
+      marker_type = case_when(
+        is_established_boundary ~ "Established boundary",
+        anchor_rank == anchor_rank[which.max(diff_alpha)] ~ "Empirical peak",
+        any_at_bound ~ "At search bound (unreliable)",
+        TRUE ~ "Sweep point"
+      )
+    ) %>%
+    ungroup() %>%
+    mutate(marker_type = factor(marker_type, levels = MARKER_LEVELS))
 
-  p <- ggplot(sub, aes(x = anchor_rank, y = diff_alpha)) +
-    geom_line(color = "#3B6FA0", linewidth = 0.7) +
-    geom_point(aes(shape = any_at_bound), size = 1.6, color = "#3B6FA0") +
-    geom_point(data = marker_df, aes(x = anchor_rank, y = diff_alpha),
-               color = "#C0392B", size = 3.2, shape = 17) +
+  subtitle_text <- paste(
+    strwrap(
+      "Points colored by type below. A curve that stays flat across the sweep would indicate no boundary-specific effect.",
+      width = 70
+    ),
+    collapse = "\n"
+  )
+
+  p <- ggplot(marker_df, aes(x = anchor_rank, y = diff_alpha)) +
+    geom_line(color = "grey60", linewidth = 0.6) +
+    geom_point(aes(color = marker_type, shape = marker_type, size = marker_type)) +
     facet_wrap(~arm, ncol = 1, scales = "free_y") +
-    scale_shape_manual(values = c(`FALSE` = 16, `TRUE` = 4), guide = "none") +
+    scale_color_manual(values = MARKER_COLORS, breaks = MARKER_LEVELS, drop = FALSE, name = NULL) +
+    scale_shape_manual(values = MARKER_SHAPES, breaks = MARKER_LEVELS, drop = FALSE, name = NULL) +
+    scale_size_manual(values = MARKER_SIZES, breaks = MARKER_LEVELS, drop = FALSE, guide = "none") +
+    guides(color = guide_legend(nrow = 2, byrow = TRUE, override.aes = list(size = 3.2))) +
     labs(
-      title = paste0(comparison_name, ": diff_alpha (RIGHT - LEFT) across the anchor sweep"),
-      subtitle = "Red triangle = established leading-edge boundary. A flat curve across the sweep would support a smooth global gradient rather than a boundary-specific effect.",
+      title = paste0(comparison_name, ": LEFT/RIGHT dispersion gap across the anchor sweep"),
+      subtitle = subtitle_text,
       x = "Anchor rank",
-      y = "alpha_right_mle - alpha_left_mle"
+      y = "diff_alpha (alpha_right - alpha_left)"
     ) +
-    theme_bw(base_size = 11)
+    theme_bw(base_size = 11) +
+    theme(
+      legend.position = "bottom",
+      plot.title = element_text(size = 12),
+      plot.subtitle = element_text(size = 9)
+    )
 
   ggsave(
     file.path(OUT_ROOT, paste0("Figure_Anchor_Sweep_", comparison_name, ".png")),
-    p, width = 9, height = 7, dpi = 300
+    p, width = 10, height = 7.5, dpi = 300
   )
 }
 
 message("Diagnostic complete. Outputs written to: ", OUT_ROOT)
 message("  Table_Anchor_Sweep.csv")
+message("  Table_Peak_vs_Established.csv")
 message("  Figure_Anchor_Sweep_<comparison>.png")
 
 # -----------------------------------------------------------------------------
