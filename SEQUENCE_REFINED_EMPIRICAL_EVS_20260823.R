@@ -1,6 +1,13 @@
+# =============================================================================
+# HC10 REVISION — 2026-08-23
+# Higher Criticism is restricted to the lowest 10% of ordered empirical-null
+# p-values (HC_ALPHA0 = 0.10) and requires HCmax > 0. This revision writes to
+# a separate output tree so it cannot overwrite the prior empirical-EVS run.
+# =============================================================================
+
 #!/usr/bin/env Rscript
 
-PIPELINE_BUILD <- "SEQUENCE_REFINED_EMPIRICAL_EVS_2026-08-23"
+PIPELINE_BUILD <- "SEQUENCE_REFINED_EMPIRICAL_EVS_HC10_2026-08-23"
 
 # =============================================================================
 # SEQUENCE MANUSCRIPT ANALYSIS
@@ -55,15 +62,21 @@ PIPELINE_BUILD <- "SEQUENCE_REFINED_EMPIRICAL_EVS_2026-08-23"
 #
 # EMPIRICAL NULL, HIGHER CRITICISM, AND HBFSS
 # Finite DESeq2 Wald statistics are calibrated with fdrtool using a normal
-# empirical-null model. HBFSS uses the resulting empirical p-values. Higher
-# criticism is applied to the sorted empirical p-values to obtain HCp. With the
-# manuscript LFC boundary c = 1:
+# empirical-null model. HBFSS uses the resulting empirical p-values. Empirical
+# Higher-Criticism scores are calculated from the sorted empirical p-values.
+# The HC maximization is restricted a priori to the lowest 10% of ordered
+# empirical p-values (alpha0 = 0.10), preventing the threshold from being chosen
+# from the uninformative p~1 boundary. A dataset/view receives an HC threshold
+# only when the maximum HC score within that search region is strictly positive;
+# otherwise HCp and Htau are undefined and HBFSS significance is disabled for
+# that dataset/view. With the manuscript LFC boundary c = 1:
 #
 #   Htau = -log10(HCp) * c
 #   HBFSS = |apeglm LFC| * [-log10(empirical p)]
 #
-# A PAS is HBFSS-significant when HBFSS > Htau. HCp is used to derive Htau and
-# is not imposed as an additional significance gate.
+# When a valid positive-HC threshold exists, a PAS is HBFSS-significant when
+# HBFSS > Htau. HCp is used to derive Htau and is not imposed as an additional
+# significance gate.
 #
 # VOLCANO FIGURES
 # Volcano x-axis: apeglm-shrunken log2 fold change.
@@ -163,6 +176,17 @@ BH_FDR_WEAK <- 0.20
 
 lfc_boundary <- 1.0
 
+# Higher Criticism searches only the lower tail of the ordered empirical-null
+# p-value distribution. alpha0 = 0.10 means that the maximum HC score is sought
+# only among the lowest 10% of empirical p-values. A non-positive maximum HC
+# score yields no HC threshold and therefore no HBFSS discoveries in that view.
+HC_ALPHA0 <- 0.10
+
+if (!is.numeric(HC_ALPHA0) || length(HC_ALPHA0) != 1L ||
+    !is.finite(HC_ALPHA0) || HC_ALPHA0 <= 0 || HC_ALPHA0 > 1) {
+  stop("HC_ALPHA0 must be a single finite number in (0, 1].")
+}
+
 # EVS selection size is comparison-specific and is defined in comparison_table
 # below from the empirically estimated weighted-Pareto optimum (k*). No global
 # fixed top-N cutoff is used in this refined pipeline.
@@ -197,7 +221,9 @@ EXPORT_INDIVIDUAL_VIEW_FIGURES <- FALSE
 #   Overlap   = HBFSS AND (Std OR Strong OR Weak-CNH)
 #
 # HCp is the higher-criticism empirical-p threshold used to calculate Htau.
-# It is not applied again as a second HBFSS significance gate.
+# HC is maximized only over the lowest HC_ALPHA0 fraction of ordered empirical
+# p-values and must attain a strictly positive maximum. HCp is not applied again
+# as a second HBFSS significance gate.
 #
 # -----------------------------------------------------------------------------
 # Palette
@@ -382,7 +408,7 @@ repo_root <- find_repo_root()
 output_dir <- file.path(
   repo_root,
   "exports",
-  "sequence_refined_empirical_evs"
+  "sequence_refined_empirical_evs_hc10"
 )
 
 if (dir.exists(output_dir)) {
@@ -603,39 +629,118 @@ safe_hc_thresh <- function(empirical_p, dataset_name) {
     decreasing = FALSE
   )
 
-  if (length(sorted_empirical_p) < 5L) {
+  n_total <- length(sorted_empirical_p)
+
+  if (n_total < 5L) {
+    message(sprintf("[%s] Fewer than 5 empirical p-values were available for Higher Criticism.", dataset_name))
     return(NA_real_)
   }
 
-  out <- suppressWarnings(
+  hc_scores <- suppressWarnings(
     tryCatch(
-      fdrtool::hc.thresh(as.vector(sorted_empirical_p)),
+      fdrtool::hc.score(as.vector(sorted_empirical_p)),
       error = function(e) {
         message(
           sprintf(
-            "[%s] hc.thresh failed: %s",
+            "[%s] hc.score failed: %s",
             dataset_name,
             conditionMessage(e)
           )
         )
-        NA_real_
+        rep(NA_real_, n_total)
       }
     )
   )
 
-  out <- as.numeric(out[1])
-
-  # Retain the hc.thresh result whenever it is a valid probability. No
-  # additional near-1 exclusion is imposed. HCp = 1 is allowed and yields
-  # Htau = 0 under the stated HBFSS rule.
-  if (!is.finite(out) ||
-      is.na(out) ||
-      out <= 0 ||
-      out > 1) {
+  if (length(hc_scores) != n_total) {
+    message(sprintf("[%s] Higher-Criticism score length mismatch.", dataset_name))
     return(NA_real_)
   }
 
-  out
+  # Match fdrtool::hc.thresh(alpha0 = HC_ALPHA0): maximize HC only over the
+  # lowest alpha0 fraction of ordered empirical p-values. The explicit score
+  # calculation additionally permits the required positive-HC safeguard.
+  n_search <- max(1L, min(n_total, floor(HC_ALPHA0 * n_total)))
+  search_idx <- seq_len(n_search)
+
+  valid_idx <- search_idx[
+    is.finite(hc_scores[search_idx]) &
+      !is.na(hc_scores[search_idx]) &
+      is.finite(sorted_empirical_p[search_idx]) &
+      !is.na(sorted_empirical_p[search_idx]) &
+      sorted_empirical_p[search_idx] > 0 &
+      sorted_empirical_p[search_idx] < 1
+  ]
+
+  if (length(valid_idx) == 0L) {
+    message(sprintf("[%s] No valid Higher-Criticism search points were available.", dataset_name))
+    return(NA_real_)
+  }
+
+  best_idx <- valid_idx[which.max(hc_scores[valid_idx])]
+  best_hc <- as.numeric(hc_scores[best_idx])
+  hc_p <- as.numeric(sorted_empirical_p[best_idx])
+
+  # Runtime consistency audit: when fdrtool::hc.thresh succeeds, our selected
+  # lower-tail threshold must match hc.thresh(alpha0 = HC_ALPHA0). We calculate
+  # scores explicitly only so that a non-positive maximum can be rejected.
+  package_hc_p <- suppressWarnings(
+    tryCatch(
+      as.numeric(
+        fdrtool::hc.thresh(
+          as.vector(sorted_empirical_p),
+          alpha0 = HC_ALPHA0,
+          plot = FALSE
+        )[1]
+      ),
+      error = function(e) NA_real_
+    )
+  )
+
+  if (is.finite(package_hc_p) && !is.na(package_hc_p) &&
+      !isTRUE(all.equal(hc_p, package_hc_p, tolerance = 1e-12))) {
+    stop(
+      sprintf(
+        "[%s] Internal HC audit failed: explicit lower-tail HCp %.17g != fdrtool::hc.thresh(alpha0=%.3f) %.17g.",
+        dataset_name,
+        hc_p,
+        HC_ALPHA0,
+        package_hc_p
+      )
+    )
+  }
+
+  # A non-positive maximum indicates no excess of small empirical p-values in
+  # the prespecified HC search region. In that case no HC/HBFSS threshold is
+  # asserted for the dataset/view.
+  if (!is.finite(best_hc) || is.na(best_hc) || best_hc <= 0) {
+    message(
+      sprintf(
+        "[%s] No positive Higher-Criticism signal within the lowest %.1f%% of empirical p-values; HBFSS disabled for this view.",
+        dataset_name,
+        100 * HC_ALPHA0
+      )
+    )
+    return(NA_real_)
+  }
+
+  if (!is.finite(hc_p) || is.na(hc_p) || hc_p <= 0 || hc_p >= 1) {
+    return(NA_real_)
+  }
+
+  message(
+    sprintf(
+      "[%s] HC calibration: alpha0=%.3f, HCmax=%.6f, HCp=%.8g, search=%d/%d empirical p-values.",
+      dataset_name,
+      HC_ALPHA0,
+      best_hc,
+      hc_p,
+      n_search,
+      n_total
+    )
+  )
+
+  hc_p
 }
 
 # -----------------------------------------------------------------------------
@@ -2241,6 +2346,9 @@ export_comparison_manuscript_tables <- function(comparison_name) {
       Analysis = analysis_label,
       EVS_k_per_condition = if (identical(dataset_key, "raw_dataset")) NA_integer_ else get_empirical_evs_cutoff(comparison_name),
       PAS_tested = nrow(df),
+      HC_alpha0 = HC_ALPHA0,
+      HCp = hc,
+      Htau = htau,
       Std = sum(df$standard_flag, na.rm = TRUE),
       Strong = sum(df$strong_cnh_flag, na.rm = TRUE),
       Weak = sum(df$weak_significant_flag, na.rm = TRUE),
@@ -2295,6 +2403,7 @@ export_comparison_manuscript_tables <- function(comparison_name) {
         Weak_BH = as.numeric(sig$resLA_padj),
         EmpP = as.numeric(sig$empirical_p),
         HBFSS = as.numeric(sig$HBFSS),
+        HC_alpha0 = HC_ALPHA0,
         HCp = hc,
         Htau = htau,
         Std = as.logical(sig$standard_flag),
@@ -2420,8 +2529,18 @@ write_methods_note <- function() {
     sprintf("Weak-effect support was tested with DESeq2 results(..., lfcThreshold=%.1f, altHypothesis='lessAbs'). Weak-CNH support required Benjamini-Hochberg adjusted p-value < %.2f and |apeglm LFC| < %.1f. A lessAbs rejection alone was not reported as differential expression. A PAS was reported as final Weak only when the same sub-boundary PAS also passed HBFSS.", lfc_boundary, BH_FDR_WEAK, lfc_boundary),
     "",
     "## Empirical-null calibration, higher criticism, and HBFSS",
-    "The ordinary DESeq2 Wald statistics were supplied to fdrtool with statistic='normal' to estimate an empirical null distribution and empirical p-values. These empirical p-values were distinct from the ordinary DESeq2 Wald p-values and from the greaterAbs/lessAbs p-values. Higher criticism was applied to the empirical p-values with fdrtool::hc.thresh to obtain the dataset-specific HCp threshold.",
-    sprintf("For each PAS, HBFSS = |apeglm-shrunken LFC| x [-log10(empirical p)]. With c=%.1f, Htau = -log10(HCp) x c. A PAS was HBFSS-significant when HBFSS > Htau. HBFSS significance did not use a DESeq2 adjusted-p-value gate.", lfc_boundary),
+    sprintf(
+      paste0(
+        "Finite ordinary DESeq2 Wald statistics were supplied directly to fdrtool with statistic='normal' and cutoff.method='fndr' to estimate a zero-centered normal empirical null and the corresponding empirical-null p-values. ",
+        "These empirical p-values were distinct from the ordinary DESeq2 Wald p-values and from the greaterAbs/lessAbs p-values. ",
+        "Higher-Criticism scores were then calculated from the ordered empirical-null p-values with fdrtool::hc.score. ",
+        "The HC maximization region was prespecified as the lowest %.0f%% of ordered empirical p-values (alpha0=%.2f), matching the lower-tail restriction provided by fdrtool::hc.thresh(alpha0=...). ",
+        "Within that region, HCp was the empirical p-value at the maximum HC score. A dataset/view was assigned an HCp threshold only when that maximum HC score was strictly positive; if the maximum HC score was non-positive or no valid search point existed, HCp and Htau were left undefined and no PAS in that dataset/view was called HBFSS-significant."
+      ),
+      100 * HC_ALPHA0,
+      HC_ALPHA0
+    ),
+    sprintf("For each PAS, HBFSS = |apeglm-shrunken LFC| x [-log10(empirical p)]. With c=%.1f, Htau = -log10(HCp) x c when a valid positive-HC threshold existed. A PAS was HBFSS-significant when HBFSS > Htau. HCp served only to derive Htau and was not imposed as an additional per-PAS significance gate. HBFSS significance did not use a DESeq2 adjusted-p-value gate.", lfc_boundary),
     "",
     "## Overlap",
     "Overlap was the number of unique HBFSS-significant PASs that also satisfied at least one DESeq2 criterion (Standard, Strong, or Weak-CNH). Overlap was a comparison quantity, not a separate significance test. Because final Weak required HBFSS, every final Weak PAS contributed to the overlap set.",
@@ -2431,7 +2550,7 @@ write_methods_note <- function() {
     "",
     "## Volcano figures and tables",
     sprintf("All significance volcanoes used the HBFSS plotting coordinates: apeglm-shrunken log2 fold change on the x-axis and -log10(empirical-null p) on the y-axis. Standard DESeq2, Strong greaterAbs, and Weak lessAbs significance were determined from their own DESeq2 p-values and BH-adjusted p-values, then their markers were projected onto these common HBFSS coordinates only for visual comparison. The HBFSS boundary y=Htau/|LFC| and HCp reference were drawn on the same axes. The same key was used throughout: Std = green diamond, Strong = red square, Weak = blue triangle, HBFSS = purple star. Multiple method markers were superimposed at the same PAS coordinate. LessAbs-only PASs remained background. Each volcano reported the number of significant PASs for Std, Strong, Weak, HBFSS, and their HBFSS/DESeq2 overlap and labeled at most %d final significant PASs.", n_top_labels_volcano),
-    "Each comparison/view folder contained one significant-PAS table and one method-count table. Significant-PAS tables contained only the union of final Standard, Strong, Weak, and HBFSS discoveries and reported the DESeq2 p-values/BH-adjusted p-values used by the applicable DESeq2 tests together with empirical p, HBFSS, HCp, Htau, apeglm LFC, and explicit method indicators.",
+    "Each comparison/view folder contained one significant-PAS table and one method-count table. Significant-PAS tables contained only the union of final Standard, Strong, Weak, and HBFSS discoveries and reported the DESeq2 p-values/BH-adjusted p-values used by the applicable DESeq2 tests together with empirical p, HBFSS, HC alpha0, HCp, Htau, apeglm LFC, and explicit method indicators. Method-count tables also reported HC alpha0, HCp, and Htau for view-level calibration auditing.",
     "",
     "## 3'aTWAS ortholog overlap",
     "Human 3'aTWAS gene symbols were mapped to rat gene symbols by combining database-supported babelgene human-to-rat ortholog mappings (top=FALSE) with direct case-insensitive symbol-equivalent matches present in the WTTS annotation. For every comparison and analysis view, mapped TWAS orthologs were intersected with Standard, Strong, Weak, and HBFSS WTTS discoveries. Concise TWAS tables reported the human TWAS symbol, rat ortholog, total TWAS records, distinct TWAS transcript count, TWAS multi-transcript/APA status, total WTTS PAS count, WTTS multi-PAS/APA status, significant WTTS PAS identifiers, significant multi-PAS status, and the method(s) and analysis view in which significance was observed.",
@@ -3479,6 +3598,7 @@ collect_twas_analysis_results <- function() {
         Weak_BH = suppressWarnings(as.numeric(df$resLA_padj)),
         EmpP = suppressWarnings(as.numeric(df$empirical_p)),
         HBFSS_score = suppressWarnings(as.numeric(df$HBFSS)),
+        HC_alpha0 = HC_ALPHA0,
         HCp = suppressWarnings(as.numeric(df$hc_p_threshold_dataset)),
         Htau = suppressWarnings(as.numeric(df$hbfss_threshold_dataset)),
         Std = !is.na(df$standard_flag) & df$standard_flag,
