@@ -8,16 +8,18 @@ suppressPackageStartupMessages({
 
 options(stringsAsFactors = FALSE)
 
+# BUILD: 2026-08-24_PAIRWISE_ONLY_CLEAN_KEY
 # =============================================================================
-# PC1-NB REGIME GEOMETRY + WEIGHTED PARETO EIGENVECTOR SPLITTING
+# PC1-NB REGIME GEOMETRY + COMPARISON-SPECIFIC WEIGHTED PARETO EVS
 # =============================================================================
 #
 # PURPOSE
 # -------
 # Identify variance regimes along independently ranked PC1 axes and determine
-# a common top-k eigenvector-splitting cutoff that maximizes retention of Joint
-# and permissible Disjoint sites while minimizing recruitment of sites whose
-# opposite-arm rank falls into the Remainder.
+# a separate comparison-specific top-k eigenvector-splitting cutoff for each
+# RT/ZT pair. Each k* maximizes retention of Joint and permissible Disjoint sites
+# while minimizing recruitment of sites whose opposite-arm rank falls into the
+# Remainder.
 #
 #
 # 1. ARM-SPECIFIC PC1 RANKING
@@ -224,28 +226,11 @@ options(stringsAsFactors = FALSE)
 #     3. larger k
 #
 #
-# 8. GLOBAL COMMON CUTOFF
-# -----------------------
-# The four comparison-specific scans are aggregated at each common k:
-#
-#     G_total(k) = sum_m G_m(k)
-#
-#     R_total(k) = sum_m R_m(k)
-#
-# The same weighted Pareto rule is then applied to:
-#
-#     [R_total(k), G_total(k)]
-#
-# to obtain the global common cutoff:
-#
-#     k_global*
-#
-#
-# 9. PRESPECIFIED 5,000-SITE REFERENCE
-# ------------------------------------
-# The 5,000-site cutoff is plotted and tabulated as a prespecified reference.
-# It is not used to estimate c1, c2, the Pareto frontier, the normalized
-# utility, or k*.
+# 8. FINAL COMPARISON-SPECIFIC CUTOFFS
+# --------------------------------------
+# The four RT/ZT comparisons retain their own independently selected weighted-
+# Pareto k*. Each comparison-specific optimum is carried forward to its own
+# site classification, tables, and figure.
 #
 #
 # FIGURES
@@ -256,11 +241,14 @@ options(stringsAsFactors = FALSE)
 #   Figure_RT4_ZT10.png
 #   Figure_RT8_ZT14.png
 #
-# Each figure contains:
+# Each comparison-specific figure contains:
 #
 #   A. Raw-count variance geometry
 #   B. Cumulative PC1-NB variance-mass divergence
-#   C. Weighted Pareto top-k optimization
+#   C. Comparison-specific weighted Pareto top-k optimization
+#
+# Figure_Overall contains only the shared experiment-wide variance/divergence
+# geometry (Panels A-B).
 #
 #
 # OUTPUTS
@@ -279,7 +267,7 @@ options(stringsAsFactors = FALSE)
 
 COUNT_FILE <- "/root/REAPER98632/data/WTTS-Seq_2022.2_DE_raw_read_numbers.csv"
 
-OUT_ROOT <- "/root/REAPER98632/exports/pc1_nb_manuscript_final"
+OUT_ROOT <- "/root/REAPER98632/exports/pc1_nb_manuscript_pairwise_only_clean_key"
 FIG_DIR  <- file.path(OUT_ROOT, "Figures")
 
 dir.create(OUT_ROOT, recursive = TRUE, showWarnings = FALSE)
@@ -303,7 +291,6 @@ COMPARISONS <- list(
   RT8_ZT14 = c(control = "RT8", treatment = "ZT14")
 )
 
-PAPER_REFERENCE_K <- 5000L
 
 # Display-only smoothing. These values never determine boundaries/cutoffs.
 DISPLAY_VAR_SPAR <- 0.72
@@ -336,8 +323,6 @@ COL <- list(
   c1 = "#D73027",
   c2 = "#1A9850",
   selected = "#B5179E",
-  paper = "#F39C12",
-
   candidate_line = "#9AA0A6",
   pareto = "#5E3C99"
 )
@@ -364,7 +349,13 @@ theme_manuscript <- function(base_size = 11.5) {
     )
 }
 
-save_panels <- function(plots, path, height_in) {
+save_panels <- function(
+    plots,
+    path,
+    height_in,
+    key_grob = NULL,
+    key_height_in = 0.48) {
+
   grDevices::png(
     filename = path,
     width = PNG_WIDTH_IN,
@@ -376,11 +367,23 @@ save_panels <- function(plots, path, height_in) {
 
   grid.newpage()
 
+  if (is.null(key_grob)) {
+    layout_heights <- unit(rep(1, length(plots)), "null")
+    n_rows <- length(plots)
+  } else {
+    layout_heights <- unit.c(
+      unit(rep(1, length(plots)), "null"),
+      unit(key_height_in, "in")
+    )
+    n_rows <- length(plots) + 1L
+  }
+
   pushViewport(
     viewport(
       layout = grid.layout(
-        nrow = length(plots),
-        ncol = 1L
+        nrow = n_rows,
+        ncol = 1L,
+        heights = layout_heights
       )
     )
   )
@@ -395,7 +398,104 @@ save_panels <- function(plots, path, height_in) {
     )
   }
 
+  if (!is.null(key_grob)) {
+    pushViewport(
+      viewport(
+        layout.pos.row = n_rows,
+        layout.pos.col = 1L
+      )
+    )
+    grid.draw(key_grob)
+    popViewport()
+  }
+
   dev.off()
+}
+
+make_figure_key_grob <- function(items, fontsize = 9.4) {
+  n <- length(items)
+  grobs <- list()
+
+  for (i in seq_along(items)) {
+    item <- items[[i]]
+    center <- (i - 0.5) / n
+    x0 <- center - 0.070
+    x1 <- center - 0.020
+    xt <- center - 0.005
+
+    grobs[[length(grobs) + 1L]] <- segmentsGrob(
+      x0 = unit(x0, "npc"),
+      x1 = unit(x1, "npc"),
+      y0 = unit(0.5, "npc"),
+      y1 = unit(0.5, "npc"),
+      gp = gpar(
+        col = item$color,
+        lty = item$lty,
+        lwd = item$lwd %||% 2.0
+      )
+    )
+
+    if (!is.null(item$pch)) {
+      grobs[[length(grobs) + 1L]] <- pointsGrob(
+        x = unit((x0 + x1) / 2, "npc"),
+        y = unit(0.5, "npc"),
+        pch = item$pch,
+        size = unit(2.5, "mm"),
+        gp = gpar(
+          col = item$color,
+          fill = item$fill %||% item$color
+        )
+      )
+    }
+
+    grobs[[length(grobs) + 1L]] <- textGrob(
+      label = item$label,
+      x = unit(xt, "npc"),
+      y = unit(0.5, "npc"),
+      just = c("left", "center"),
+      gp = gpar(
+        col = "#222222",
+        fontsize = fontsize
+      )
+    )
+  }
+
+  do.call(grobTree, grobs)
+}
+
+`%||%` <- function(x, y) {
+  if (is.null(x)) y else x
+}
+
+make_comparison_key <- function(selected_k) {
+  make_figure_key_grob(
+    list(
+      list(label = "Control", color = COL$control, lty = "solid"),
+      list(label = "Treatment", color = COL$treatment, lty = "solid"),
+      list(label = "c1", color = COL$c1, lty = "dashed"),
+      list(label = "c2", color = COL$c2, lty = "longdash"),
+      list(
+        label = paste0("k*=", selected_k),
+        color = COL$selected,
+        lty = "dotdash",
+        pch = 23L,
+        fill = COL$selected
+      ),
+      list(label = "Pareto frontier", color = COL$pareto, lty = "solid")
+    )
+  )
+}
+
+make_overall_key <- function() {
+  make_figure_key_grob(
+    list(
+      list(label = "Raw variance", color = COL$raw, lty = "solid"),
+      list(label = "D(r)", color = COL$divergence, lty = "solid"),
+      list(label = "Shared fit", color = COL$fit, lty = "solid"),
+      list(label = "c1", color = COL$c1, lty = "dashed"),
+      list(label = "c2", color = COL$c2, lty = "longdash")
+    )
+  )
 }
 
 rank_cutoff_from_k <- function(N, k) {
@@ -900,6 +1000,7 @@ fit_shared_knots <- function(group_results) {
 
   colnames(D_full) <- groups
 
+  # 5,000 here is ONLY the knot-search grid size; it is not an EVS cutoff.
   opt_n <- min(5000L, N)
 
   opt_idx <- unique(
@@ -1663,113 +1764,6 @@ select_weighted_pareto_optimum <- function(
   )
 }
 
-aggregate_global_cutoff_scan <- function(
-    pair_scans) {
-
-  all_pair_scan <- bind_rows(
-    pair_scans
-  )
-
-  global <- all_pair_scan %>%
-    group_by(k) %>%
-    summarise(
-      cutoff_rank = first(
-        cutoff_rank
-      ),
-
-      joint_n = sum(
-        joint_n
-      ),
-
-      disjoint_control_opposite_le_n = sum(
-        disjoint_control_opposite_le_n
-      ),
-
-      disjoint_treatment_opposite_le_n = sum(
-        disjoint_treatment_opposite_le_n
-      ),
-
-      disjoint_opposite_le_n = sum(
-        disjoint_opposite_le_n
-      ),
-
-      disjoint_control_opposite_divergence_n = sum(
-        disjoint_control_opposite_divergence_n
-      ),
-
-      disjoint_treatment_opposite_divergence_n = sum(
-        disjoint_treatment_opposite_divergence_n
-      ),
-
-      disjoint_opposite_divergence_n = sum(
-        disjoint_opposite_divergence_n
-      ),
-
-      permissible_disjoint_control_n = sum(
-        permissible_disjoint_control_n
-      ),
-
-      permissible_disjoint_treatment_n = sum(
-        permissible_disjoint_treatment_n
-      ),
-
-      permissible_disjoint_n = sum(
-        permissible_disjoint_n
-      ),
-
-      good_n = sum(
-        good_n
-      ),
-
-      remainder_cross_n = sum(
-        remainder_cross_n
-      ),
-
-      union_n = sum(
-        union_n
-      ),
-
-      .groups = "drop"
-    ) %>%
-    mutate(
-      comparison = "GLOBAL",
-      control_group = NA_character_,
-      treatment_group = NA_character_,
-
-      retained_fraction = ifelse(
-        union_n > 0,
-        good_n / union_n,
-        NA_real_
-      ),
-
-      remainder_cross_fraction = ifelse(
-        union_n > 0,
-        remainder_cross_n / union_n,
-        NA_real_
-      ),
-
-      divergence_disjoint_fraction = ifelse(
-        union_n > 0,
-        disjoint_opposite_divergence_n / union_n,
-        NA_real_
-      ),
-
-      jaccard_top_k = ifelse(
-        union_n > 0,
-        joint_n / union_n,
-        NA_real_
-      )
-    )
-
-  # Pair-direction fields do not have a unique global direction.
-  global$remainder_cross_control_n <-
-    NA_integer_
-
-  global$remainder_cross_treatment_n <-
-    NA_integer_
-
-  global
-}
 
 
 classify_pair_at_k <- function(
@@ -2252,297 +2246,78 @@ summarize_classification <- function(
 # =============================================================================
 
 build_timepoint_table <- function(
-    group_results,
     comparisons,
     pair_optima,
     selected_summaries,
-    paper_summaries,
-    global_k,
-    global_opt,
     c1,
     c2,
-    paper_k,
     N) {
 
   rows <- list()
 
-  for (comparison_name in names(
-    comparisons
-  )) {
-    mapping <- comparisons[[
-      comparison_name
-    ]]
+  for (comparison_name in names(comparisons)) {
+    mapping <- comparisons[[comparison_name]]
+    pair_opt <- pair_optima[[comparison_name]]
+    selected_summary <- selected_summaries[[comparison_name]]
 
-    control_group <- unname(
-      mapping[["control"]]
-    )
-
-    treatment_group <- unname(
-      mapping[["treatment"]]
-    )
-
-    pair_opt <- pair_optima[[
-      comparison_name
-    ]]
-
-    selected_summary <- selected_summaries[[
-      comparison_name
-    ]]
-
-    paper_summary <- paper_summaries[[
-      comparison_name
-    ]]
-
-    rows[[
-      length(rows) + 1L
-    ]] <- data.frame(
+    rows[[length(rows) + 1L]] <- data.frame(
       comparison = comparison_name,
-      control_group = control_group,
-      treatment_group = treatment_group,
-
+      control_group = unname(mapping[["control"]]),
+      treatment_group = unname(mapping[["treatment"]]),
       c1 = c1,
       c2 = c2,
       max_candidate_k = N - c2,
-
-
-      pairwise_weighted_k =
-        pair_opt$selected_k,
-
-      pairwise_weighted_utility =
-        pair_opt$selected_utility,
-
-      pairwise_good_norm =
-        pair_opt$selected_good_norm,
-
-      pairwise_remainder_norm =
-        pair_opt$selected_remainder_norm,
-
-      pairwise_max_zero_remainder_crossing_k =
-        pair_opt$max_zero_remainder_crossing_k,
-
-      global_weighted_k =
-        global_k,
-
-      global_selected_cutoff_rank =
-        rank_cutoff_from_k(
-          N,
-          global_k
-        ),
-
-      benefit_weight =
-        global_opt$benefit_weight,
-
-      contamination_weight =
-        global_opt$contamination_weight,
-
-      selected_joint_n =
-        selected_summary$joint_n,
-
-      selected_disjoint_opposite_le_n =
-        selected_summary$disjoint_opposite_le_n,
-
-      selected_disjoint_opposite_divergence_n =
-        selected_summary$disjoint_opposite_divergence_n,
-
-      selected_permissible_disjoint_n =
-        selected_summary$permissible_disjoint_n,
-
-      selected_good_n =
-        selected_summary$good_n,
-
-      selected_remainder_cross_n =
-        selected_summary$remainder_cross_n,
-
-      selected_union_n =
-        selected_summary$union_n,
-
-      selected_retained_fraction =
-        selected_summary$retained_fraction,
-
-      selected_remainder_cross_fraction =
-        selected_summary$remainder_cross_fraction,
-
-      paper_reference_k =
-        paper_k,
-
-      paper_reference_cutoff_rank =
-        rank_cutoff_from_k(
-          N,
-          paper_k
-        ),
-
-      paper_joint_n =
-        paper_summary$joint_n,
-
-      paper_disjoint_opposite_le_n =
-        paper_summary$disjoint_opposite_le_n,
-
-      paper_disjoint_opposite_divergence_n =
-        paper_summary$disjoint_opposite_divergence_n,
-
-      paper_permissible_disjoint_n =
-        paper_summary$permissible_disjoint_n,
-
-      paper_good_n =
-        paper_summary$good_n,
-
-      paper_remainder_cross_n =
-        paper_summary$remainder_cross_n,
-
-      paper_union_n =
-        paper_summary$union_n,
-
-      paper_retained_fraction =
-        paper_summary$retained_fraction,
-
-      paper_remainder_cross_fraction =
-        paper_summary$remainder_cross_fraction,
-
+      selected_k = pair_opt$selected_k,
+      selected_cutoff_rank = rank_cutoff_from_k(N, pair_opt$selected_k),
+      weighted_utility = pair_opt$selected_utility,
+      good_norm = pair_opt$selected_good_norm,
+      remainder_norm = pair_opt$selected_remainder_norm,
+      max_zero_remainder_crossing_k = pair_opt$max_zero_remainder_crossing_k,
+      benefit_weight = pair_opt$benefit_weight,
+      contamination_weight = pair_opt$contamination_weight,
+      selected_joint_n = selected_summary$joint_n,
+      selected_disjoint_opposite_le_n = selected_summary$disjoint_opposite_le_n,
+      selected_disjoint_opposite_divergence_n = selected_summary$disjoint_opposite_divergence_n,
+      selected_permissible_disjoint_n = selected_summary$permissible_disjoint_n,
+      selected_good_n = selected_summary$good_n,
+      selected_remainder_cross_n = selected_summary$remainder_cross_n,
+      selected_union_n = selected_summary$union_n,
+      selected_retained_fraction = selected_summary$retained_fraction,
+      selected_remainder_cross_fraction = selected_summary$remainder_cross_fraction,
       stringsAsFactors = FALSE
     )
   }
 
-  bind_rows(
-    rows
-  )
+  bind_rows(rows)
 }
-
 
 build_key_table <- function(
     timepoint_table,
-    global_opt,
-    global_scan,
     N,
     c1,
     c2,
-    paper_k,
     shared_sse) {
 
-  global_selected <- global_scan %>%
-    filter(
-      k ==
-      global_opt$selected_k
-    ) %>%
-    slice(1L)
-
-  paper_row <- global_scan %>%
-    filter(
-      k ==
-      paper_k
-    ) %>%
-    slice(1L)
+  k_map <- stats::setNames(
+    timepoint_table$selected_k,
+    timepoint_table$comparison
+  )
 
   data.frame(
     n_features = N,
-
     shared_c1 = c1,
     shared_c2 = c2,
-
-    remainder_size =
-      c1 - 1L,
-
-    divergence_interval_size =
-      c2 - c1 + 1L,
-
-    leading_edge_size =
-      N - c2,
-
-    max_candidate_k =
-      N - c2,
-
-    global_weighted_k =
-      global_opt$selected_k,
-
-    global_selected_cutoff_rank =
-      rank_cutoff_from_k(
-        N,
-        global_opt$selected_k
-      ),
-
-    global_weighted_utility =
-      global_opt$selected_utility,
-
-    global_good_norm =
-      global_opt$selected_good_norm,
-
-    global_remainder_norm =
-      global_opt$selected_remainder_norm,
-
-    benefit_weight =
-      global_opt$benefit_weight,
-
-    contamination_weight =
-      global_opt$contamination_weight,
-
-    global_max_zero_remainder_crossing_k =
-      global_opt$max_zero_remainder_crossing_k,
-
-    selected_joint_n =
-      global_selected$joint_n[1L],
-
-    selected_disjoint_opposite_le_n =
-      global_selected$disjoint_opposite_le_n[1L],
-
-    selected_disjoint_opposite_divergence_n =
-      global_selected$disjoint_opposite_divergence_n[1L],
-
-    selected_permissible_disjoint_n =
-      global_selected$permissible_disjoint_n[1L],
-
-    selected_good_n =
-      global_selected$good_n[1L],
-
-    selected_remainder_cross_n =
-      global_selected$remainder_cross_n[1L],
-
-    selected_union_n =
-      global_selected$union_n[1L],
-
-    selected_retained_fraction =
-      global_selected$retained_fraction[1L],
-
-    paper_reference_k =
-      paper_k,
-
-    paper_reference_cutoff_rank =
-      rank_cutoff_from_k(
-        N,
-        paper_k
-      ),
-
-    paper_reference_used_in_analysis =
-      FALSE,
-
-    paper_good_n = if (
-      nrow(paper_row) == 1L
-    ) {
-      paper_row$good_n[1L]
-    } else {
-      NA_real_
-    },
-
-    paper_remainder_cross_n = if (
-      nrow(paper_row) == 1L
-    ) {
-      paper_row$remainder_cross_n[1L]
-    } else {
-      NA_real_
-    },
-
-    pairwise_k_min = min(
-      timepoint_table$pairwise_weighted_k
-    ),
-
-    pairwise_k_median = median(
-      timepoint_table$pairwise_weighted_k
-    ),
-
-    pairwise_k_max = max(
-      timepoint_table$pairwise_weighted_k
-    ),
-    shared_model_SSE =
-      shared_sse,
-
+    remainder_size = c1 - 1L,
+    divergence_interval_size = c2 - c1 + 1L,
+    leading_edge_size = N - c2,
+    max_candidate_k = N - c2,
+    benefit_weight = BENEFIT_WEIGHT,
+    contamination_weight = CONTAMINATION_WEIGHT,
+    RT0_ZT6_k = unname(k_map[["RT0_ZT6"]]),
+    RT2_ZT8_k = unname(k_map[["RT2_ZT8"]]),
+    RT4_ZT10_k = unname(k_map[["RT4_ZT10"]]),
+    RT8_ZT14_k = unname(k_map[["RT8_ZT14"]]),
+    shared_model_SSE = shared_sse,
     stringsAsFactors = FALSE
   )
 }
@@ -2675,43 +2450,22 @@ add_rank_regions <- function(
 make_cutoff_panel <- function(
     scan_df,
     selected_k,
-    paper_k,
-    title_text,
-    extra_k = NULL,
-    extra_label = "Global weighted k*") {
+    title_text) {
 
   selected <- scan_df %>%
-    filter(
-      k == selected_k
-    ) %>%
+    filter(k == selected_k) %>%
     slice(1L)
 
   if (nrow(selected) != 1L) {
     stop("Selected k not present in cutoff scan.")
   }
 
-  paper <- scan_df %>%
-    filter(
-      k == paper_k
-    ) %>%
-    slice(1L)
-
   frontier <- scan_df %>%
-    filter(
-      is_pareto
-    ) %>%
-    arrange(
-      remainder_cross_n,
-      good_n,
-      k
-    ) %>%
-    distinct(
-      remainder_cross_n,
-      good_n,
-      .keep_all = TRUE
-    )
+    filter(is_pareto) %>%
+    arrange(remainder_cross_n, good_n, k) %>%
+    distinct(remainder_cross_n, good_n, .keep_all = TRUE)
 
-  p <- ggplot() +
+  ggplot() +
     geom_path(
       data = scan_df,
       aes(
@@ -2741,19 +2495,19 @@ make_cutoff_panel <- function(
       aes(
         x = remainder_cross_n,
         y = good_n,
-        color = "Pareto frontier",
         group = 1
       ),
+      color = COL$pareto,
       linewidth = 1.30
     ) +
     geom_point(
       data = selected,
       aes(
         x = remainder_cross_n,
-        y = good_n,
-        color = "Weighted optimum"
+        y = good_n
       ),
       shape = 23,
+      color = COL$selected,
       fill = COL$selected,
       size = 4.7,
       stroke = 1.15
@@ -2762,79 +2516,12 @@ make_cutoff_panel <- function(
       "text",
       x = selected$remainder_cross_n,
       y = selected$good_n,
-      label = paste0(
-        "k*=",
-        selected_k
-      ),
+      label = paste0("k*=", selected_k),
       vjust = 1.85,
       size = 3.0,
       fontface = "bold",
       color = COL$selected
-    )
-
-  if (nrow(paper) == 1L) {
-    p <- p +
-      geom_point(
-        data = paper,
-        aes(
-          x = remainder_cross_n,
-          y = good_n,
-          color = "5,000 reference"
-        ),
-        shape = 21,
-        fill = "white",
-        size = 4.0,
-        stroke = 1.25
-      ) +
-      annotate(
-        "text",
-        x = paper$remainder_cross_n,
-        y = paper$good_n,
-        label = "5k",
-        vjust = -0.9,
-        size = 2.8,
-        color = COL$paper
-      )
-  }
-
-  if (
-    !is.null(extra_k) &&
-    is.finite(extra_k) &&
-    extra_k != selected_k
-  ) {
-    extra <- scan_df %>%
-      filter(
-        k == extra_k
-      ) %>%
-      slice(1L)
-
-    if (nrow(extra) == 1L) {
-      p <- p +
-        geom_point(
-          data = extra,
-          aes(
-            x = remainder_cross_n,
-            y = good_n,
-            color = extra_label
-          ),
-          shape = 8,
-          size = 3.7,
-          stroke = 1.15
-        )
-    }
-  }
-
-  color_values <- c(
-    "Pareto frontier" = COL$pareto,
-    "Weighted optimum" = COL$selected,
-    "5,000 reference" = COL$paper,
-    stats::setNames(
-      COL$treatment,
-      extra_label
-    )
-  )
-
-  p +
+    ) +
     scale_fill_gradientn(
       colors = c(
         "#2C7BB6",
@@ -2847,26 +2534,6 @@ make_cutoff_panel <- function(
       ),
       guide = "none"
     ) +
-    scale_color_manual(
-      values = color_values,
-      breaks = intersect(
-        names(color_values),
-        c(
-          "Pareto frontier",
-          "Weighted optimum",
-          "5,000 reference",
-          extra_label
-        )
-      )
-    ) +
-    guides(
-      color = guide_legend(
-        order = 1,
-        override.aes = list(
-          linewidth = 1.1
-        )
-      )
-    ) +
     labs(
       title = title_text,
       subtitle = "Weighted utility: U = Gnorm - Rnorm (1:1)",
@@ -2874,9 +2541,7 @@ make_cutoff_panel <- function(
       y = "Joint + permissible disjoint sites"
     ) +
     theme_manuscript() +
-    theme(
-      legend.box = "horizontal"
-    )
+    theme(legend.position = "none")
 }
 
 
@@ -2886,188 +2551,55 @@ make_cutoff_panel <- function(
 
 make_overall_figure <- function(
     overall_df,
-    global_scan,
-    global_opt,
     c1,
     c2,
-    selected_k,
-    paper_k,
     out_file) {
 
-  N <- nrow(
-    overall_df
-  )
+  N <- nrow(overall_df)
 
-  selected_rank <- rank_cutoff_from_k(
-    N,
-    selected_k
-  )
-
-  paper_rank <- rank_cutoff_from_k(
-    N,
-    paper_k
-  )
-
-  # -----------------------------------------------------------------------
-  # A. Raw-count variance geometry.
-  # -----------------------------------------------------------------------
-
-  a_lines <- data.frame(
-    rank = c(
-      c1,
-      c2,
-      selected_rank,
-      paper_rank
-    ),
-    key = c(
-      "c1",
-      "c2",
-      paste0(
-        "k*=",
-        selected_k
-      ),
-      "5,000 ref"
-    ),
+  boundary_lines <- data.frame(
+    rank = c(c1, c2),
+    key = c("c1", "c2"),
     stringsAsFactors = FALSE
   )
 
-  selected_key <- paste0(
-    "k*=",
-    selected_k
-  )
-
-  a_colors <- c(
-    "Raw variance" = COL$raw,
+  boundary_colors <- c(
     "c1" = COL$c1,
-    "c2" = COL$c2,
-    stats::setNames(
-      COL$selected,
-      selected_key
-    ),
-    "5,000 ref" = COL$paper
+    "c2" = COL$c2
   )
 
-  a_types <- c(
-    "Raw variance" = "solid",
+  boundary_types <- c(
     "c1" = "dashed",
-    "c2" = "longdash",
-    stats::setNames(
-      "dotdash",
-      selected_key
-    ),
-    "5,000 ref" = "dotted"
+    "c2" = "longdash"
   )
 
-  pA <- ggplot()
-
-  pA <- add_rank_regions(
-    pA,
-    c1,
-    c2,
-    N
-  )
-
-  pA <- pA +
+  pA <- add_rank_regions(ggplot(), c1, c2, N) +
     geom_vline(
-      data = a_lines,
-      aes(
-        xintercept = rank,
-        color = key,
-        linetype = key
-      ),
+      data = boundary_lines,
+      aes(xintercept = rank, color = key, linetype = key),
       linewidth = 0.85
     ) +
     geom_line(
       data = overall_df,
-      aes(
-        x = rank,
-        y = raw_variance,
-        color = "Raw variance",
-        linetype = "Raw variance"
-      ),
+      aes(x = rank, y = raw_variance),
+      color = COL$raw,
       linewidth = 1.20
     ) +
-    scale_color_manual(
-      values = a_colors,
-      breaks = names(
-        a_colors
-      )
-    ) +
-    scale_linetype_manual(
-      values = a_types,
-      breaks = names(
-        a_types
-      )
-    ) +
+    scale_color_manual(values = boundary_colors) +
+    scale_linetype_manual(values = boundary_types) +
     labs(
       title = "A. Raw-count variance geometry",
       subtitle = "Empirical variance along the PC1-ranked axis",
       x = "PC1 rank: low |loading| -> high |loading|",
       y = "Smoothed log(1 + raw-count variance)"
     ) +
-    theme_manuscript()
+    theme_manuscript() +
+    theme(legend.position = "none")
 
-  # -----------------------------------------------------------------------
-  # B. Cumulative divergence.
-  # -----------------------------------------------------------------------
-
-  b_lines <- data.frame(
-    rank = c(
-      c1,
-      c2,
-      selected_rank,
-      paper_rank
-    ),
-    key = c(
-      "c1",
-      "c2",
-      selected_key,
-      "5,000 ref"
-    ),
-    stringsAsFactors = FALSE
-  )
-
-  b_colors <- c(
-    "D(r)" = COL$divergence,
-    "Shared fit" = COL$fit,
-    "c1" = COL$c1,
-    "c2" = COL$c2,
-    stats::setNames(
-      COL$selected,
-      selected_key
-    ),
-    "5,000 ref" = COL$paper
-  )
-
-  b_types <- c(
-    "D(r)" = "solid",
-    "Shared fit" = "solid",
-    "c1" = "dashed",
-    "c2" = "longdash",
-    stats::setNames(
-      "dotdash",
-      selected_key
-    ),
-    "5,000 ref" = "dotted"
-  )
-
-  pB <- ggplot()
-
-  pB <- add_rank_regions(
-    pB,
-    c1,
-    c2,
-    N
-  )
-
-  pB <- pB +
+  pB <- add_rank_regions(ggplot(), c1, c2, N) +
     geom_vline(
-      data = b_lines,
-      aes(
-        xintercept = rank,
-        color = key,
-        linetype = key
-      ),
+      data = boundary_lines,
+      aes(xintercept = rank, color = key, linetype = key),
       linewidth = 0.85
     ) +
     geom_hline(
@@ -3078,72 +2610,33 @@ make_overall_figure <- function(
     ) +
     geom_line(
       data = overall_df,
-      aes(
-        x = rank,
-        y = D,
-        color = "D(r)",
-        linetype = "D(r)"
-      ),
+      aes(x = rank, y = D),
+      color = COL$divergence,
       linewidth = 0.95,
       alpha = 0.72
     ) +
     geom_line(
       data = overall_df,
-      aes(
-        x = rank,
-        y = D_fit,
-        color = "Shared fit",
-        linetype = "Shared fit"
-      ),
+      aes(x = rank, y = D_fit),
+      color = COL$fit,
       linewidth = 1.30
     ) +
-    scale_color_manual(
-      values = b_colors,
-      breaks = names(
-        b_colors
-      )
-    ) +
-    scale_linetype_manual(
-      values = b_types,
-      breaks = names(
-        b_types
-      )
-    ) +
+    scale_color_manual(values = boundary_colors) +
+    scale_linetype_manual(values = boundary_types) +
     labs(
       title = "B. Cumulative PC1-NB variance-mass divergence",
       subtitle = "Shared c1/c2 fitted across all 8 arms",
       x = "PC1 rank",
       y = "D(r) = F_E(r) - F_P(r)"
     ) +
-    theme_manuscript()
-
-  # -----------------------------------------------------------------------
-  # C. Weighted Pareto cutoff optimization.
-  # -----------------------------------------------------------------------
-
-  pC <- make_cutoff_panel(
-    scan_df = global_scan,
-    selected_k = selected_k,
-    paper_k = paper_k,
-    title_text = "C. Global weighted Pareto optimization"
-  ) +
-    labs(
-      subtitle = paste0(
-        "c1 hard boundary | weighted utility ",
-        global_opt$benefit_weight,
-        ":",
-        global_opt$contamination_weight
-      )
-    )
+    theme_manuscript() +
+    theme(legend.position = "none")
 
   save_panels(
-    list(
-      pA,
-      pB,
-      pC
-    ),
+    list(pA, pB),
     out_file,
-    height_in = 11.8
+    height_in = 8.3,
+    key_grob = make_overall_key()
   )
 }
 
@@ -3158,215 +2651,71 @@ make_timepoint_figure <- function(
     group_results,
     pair_scan,
     pair_optimum,
-    global_k,
     c1,
     c2,
-    paper_k,
     out_file) {
 
-  control_group <- unname(
-    mapping[["control"]]
-  )
+  control_group <- unname(mapping[["control"]])
+  treatment_group <- unname(mapping[["treatment"]])
+  control <- group_results[[control_group]]$data
+  treatment <- group_results[[treatment_group]]$data
+  N <- nrow(control)
 
-  treatment_group <- unname(
-    mapping[["treatment"]]
-  )
+  selected_k <- pair_optimum$selected_k
+  selected_rank <- rank_cutoff_from_k(N, selected_k)
+  selected_key <- paste0("k*=", selected_k)
 
-  control <- group_results[[
-    control_group
-  ]]$data
-
-  treatment <- group_results[[
-    treatment_group
-  ]]$data
-
-  N <- nrow(
-    control
-  )
-
-  selected_rank <- rank_cutoff_from_k(
-    N,
-    global_k
-  )
-
-  paper_rank <- rank_cutoff_from_k(
-    N,
-    paper_k
-  )
-
-  selected_key <- paste0(
-    "k*=",
-    global_k
-  )
-
-  # -----------------------------------------------------------------------
-  # A. Raw-count variance geometry.
-  # -----------------------------------------------------------------------
-
-  a_lines <- data.frame(
-    rank = c(
-      c1,
-      c2,
-      selected_rank,
-      paper_rank
-    ),
-    key = c(
-      "c1",
-      "c2",
-      selected_key,
-      "5,000 ref"
-    ),
+  boundary_lines <- data.frame(
+    rank = c(c1, c2, selected_rank),
+    key = c("c1", "c2", selected_key),
     stringsAsFactors = FALSE
   )
 
-  a_colors <- c(
-    "Control" = COL$control,
-    "Treatment" = COL$treatment,
+  boundary_colors <- c(
     "c1" = COL$c1,
     "c2" = COL$c2,
-    stats::setNames(
-      COL$selected,
-      selected_key
-    ),
-    "5,000 ref" = COL$paper
+    stats::setNames(COL$selected, selected_key)
   )
 
-  a_types <- c(
-    "Control" = "solid",
-    "Treatment" = "solid",
+  boundary_types <- c(
     "c1" = "dashed",
     "c2" = "longdash",
-    stats::setNames(
-      "dotdash",
-      selected_key
-    ),
-    "5,000 ref" = "dotted"
+    stats::setNames("dotdash", selected_key)
   )
 
-  pA <- ggplot()
-
-  pA <- add_rank_regions(
-    pA,
-    c1,
-    c2,
-    N
-  )
-
-  pA <- pA +
+  pA <- add_rank_regions(ggplot(), c1, c2, N) +
     geom_vline(
-      data = a_lines,
-      aes(
-        xintercept = rank,
-        color = key,
-        linetype = key
-      ),
+      data = boundary_lines,
+      aes(xintercept = rank, color = key, linetype = key),
       linewidth = 0.84
     ) +
     geom_line(
       data = control,
-      aes(
-        x = rank,
-        y = display_log1p_raw_empirical_variance,
-        color = "Control",
-        linetype = "Control"
-      ),
+      aes(x = rank, y = display_log1p_raw_empirical_variance),
+      color = COL$control,
       linewidth = 1.10
     ) +
     geom_line(
       data = treatment,
-      aes(
-        x = rank,
-        y = display_log1p_raw_empirical_variance,
-        color = "Treatment",
-        linetype = "Treatment"
-      ),
+      aes(x = rank, y = display_log1p_raw_empirical_variance),
+      color = COL$treatment,
       linewidth = 1.10
     ) +
-    scale_color_manual(
-      values = a_colors,
-      breaks = names(
-        a_colors
-      )
-    ) +
-    scale_linetype_manual(
-      values = a_types,
-      breaks = names(
-        a_types
-      )
-    ) +
+    scale_color_manual(values = boundary_colors) +
+    scale_linetype_manual(values = boundary_types) +
     labs(
-      title = paste0(
-        "A. ",
-        comparison_name,
-        " raw-count variance geometry"
-      ),
+      title = paste0("A. ", comparison_name, " raw-count variance geometry"),
       subtitle = "Empirical variance along independently ranked PC1 axes",
       x = "PC1 rank: low |loading| -> high |loading|",
       y = "Smoothed log(1 + raw-count variance)"
     ) +
-    theme_manuscript()
+    theme_manuscript() +
+    theme(legend.position = "none")
 
-  # -----------------------------------------------------------------------
-  # B. Cumulative divergence.
-  # -----------------------------------------------------------------------
-
-  b_lines <- data.frame(
-    rank = c(
-      c1,
-      c2,
-      selected_rank,
-      paper_rank
-    ),
-    key = c(
-      "c1",
-      "c2",
-      selected_key,
-      "5,000 ref"
-    ),
-    stringsAsFactors = FALSE
-  )
-
-  b_colors <- c(
-    "Control D(r)" = COL$control,
-    "Treatment D(r)" = COL$treatment,
-    "c1" = COL$c1,
-    "c2" = COL$c2,
-    stats::setNames(
-      COL$selected,
-      selected_key
-    ),
-    "5,000 ref" = COL$paper
-  )
-
-  b_types <- c(
-    "Control D(r)" = "solid",
-    "Treatment D(r)" = "solid",
-    "c1" = "dashed",
-    "c2" = "longdash",
-    stats::setNames(
-      "dotdash",
-      selected_key
-    ),
-    "5,000 ref" = "dotted"
-  )
-
-  pB <- ggplot()
-
-  pB <- add_rank_regions(
-    pB,
-    c1,
-    c2,
-    N
-  )
-
-  pB <- pB +
+  pB <- add_rank_regions(ggplot(), c1, c2, N) +
     geom_vline(
-      data = b_lines,
-      aes(
-        xintercept = rank,
-        color = key,
-        linetype = key
-      ),
+      data = boundary_lines,
+      aes(xintercept = rank, color = key, linetype = key),
       linewidth = 0.84
     ) +
     geom_hline(
@@ -3377,82 +2726,38 @@ make_timepoint_figure <- function(
     ) +
     geom_line(
       data = control,
-      aes(
-        x = rank,
-        y = display_D,
-        color = "Control D(r)",
-        linetype = "Control D(r)"
-      ),
+      aes(x = rank, y = display_D),
+      color = COL$control,
       linewidth = 1.08
     ) +
     geom_line(
       data = treatment,
-      aes(
-        x = rank,
-        y = display_D,
-        color = "Treatment D(r)",
-        linetype = "Treatment D(r)"
-      ),
+      aes(x = rank, y = display_D),
+      color = COL$treatment,
       linewidth = 1.08
     ) +
-    scale_color_manual(
-      values = b_colors,
-      breaks = names(
-        b_colors
-      )
-    ) +
-    scale_linetype_manual(
-      values = b_types,
-      breaks = names(
-        b_types
-      )
-    ) +
+    scale_color_manual(values = boundary_colors) +
+    scale_linetype_manual(values = boundary_types) +
     labs(
-      title = paste0(
-        "B. ",
-        comparison_name,
-        " cumulative PC1-NB divergence"
-      ),
+      title = paste0("B. ", comparison_name, " cumulative PC1-NB divergence"),
       subtitle = "Shared c1/c2",
       x = "PC1 rank",
       y = "D(r) = F_E(r) - F_P(r)"
     ) +
-    theme_manuscript()
-
-  # -----------------------------------------------------------------------
-  # C. Pair-specific weighted Pareto optimization.
-  # -----------------------------------------------------------------------
+    theme_manuscript() +
+    theme(legend.position = "none")
 
   pC <- make_cutoff_panel(
     scan_df = pair_scan,
-    selected_k =
-      pair_optimum$selected_k,
-    paper_k = paper_k,
-    title_text = paste0(
-      "C. ",
-      comparison_name,
-      " weighted Pareto optimization"
-    ),
-    extra_k = global_k,
-    extra_label = "Global weighted k*"
-  ) +
-    labs(
-      subtitle = paste0(
-        "Pair k*=",
-        pair_optimum$selected_k,
-        " | global k*=",
-        global_k
-      )
-    )
+    selected_k = selected_k,
+    title_text = paste0("C. ", comparison_name, " weighted Pareto optimization")
+  )
 
   save_panels(
-    list(
-      pA,
-      pB,
-      pC
-    ),
+    list(pA, pB, pC),
     out_file,
-    height_in = 11.8
+    height_in = 11.8,
+    key_grob = make_comparison_key(selected_k)
   )
 }
 
@@ -3491,18 +2796,6 @@ N <- nrow(
   count_mat
 )
 
-if (
-  PAPER_REFERENCE_K >= N
-) {
-  stop(
-    "PAPER_REFERENCE_K must be smaller than N."
-  )
-}
-
-PAPER_REFERENCE_RANK <- rank_cutoff_from_k(
-  N,
-  PAPER_REFERENCE_K
-)
 
 # -------------------------------------------------------------------------
 # Global DESeq2 normalization and pooled within-group empirical variance.
@@ -3626,16 +2919,6 @@ message(
   MAX_CANDIDATE_K
 )
 
-if (
-  PAPER_REFERENCE_K >
-  MAX_CANDIDATE_K
-) {
-  warning(
-    "The prespecified top-5,000 reference extends left of c2 and therefore ",
-    "falls outside the own-arm leading-edge candidate domain. It is retained ",
-    "for descriptive comparison only."
-  )
-}
 
 # -------------------------------------------------------------------------
 # Pairwise top-k scans.
@@ -3729,238 +3012,39 @@ for (comparison_name in names(
 }
 
 # -------------------------------------------------------------------------
-# Global common cutoff from pooled pairwise counts.
-# -------------------------------------------------------------------------
-
-global_scan_raw <- aggregate_global_cutoff_scan(
-  pair_scans
-)
-
-global_opt <- select_weighted_pareto_optimum(
-  global_scan_raw,
-  good_col = "good_n",
-  cost_col = "remainder_cross_n"
-)
-
-global_scan <- global_opt$scan
-
-GLOBAL_K <- global_opt$selected_k
-
-GLOBAL_CUTOFF_RANK <- rank_cutoff_from_k(
-  N,
-  GLOBAL_K
-)
-
-global_selected_row <- global_scan %>%
-  filter(
-    k ==
-    GLOBAL_K
-  ) %>%
-  slice(1L)
-
-message(
-  "GLOBAL k*=",
-  GLOBAL_K,
-  " (cutoff rank ",
-  GLOBAL_CUTOFF_RANK,
-  ")"
-)
-
-message(
-  "Global weighted utility=",
-  signif(global_opt$selected_utility, 5),
-  "; retained=",
-  global_selected_row$good_n[1L],
-  "; divergence-disjoint=",
-  global_selected_row$disjoint_opposite_divergence_n[1L],
-  "; remainder crossings=",
-  global_selected_row$remainder_cross_n[1L]
-)
-
-message(
-  "Prespecified reference k=",
-  PAPER_REFERENCE_K,
-  " (cutoff rank ",
-  PAPER_REFERENCE_RANK,
-  "; descriptive reference)"
-)
-
-# -------------------------------------------------------------------------
-# Classify actual sites at GLOBAL_K.
-#
-# Retained:
-#   Joint
-#   + Disjoint / opposite Leading Edge
-#   + Disjoint / opposite Divergence
-#
-# Excluded:
-#   Disjoint / opposite Remainder
+# Classify and export sites at each comparison-specific weighted-Pareto k*.
+# Each comparison uses its own weighted-Pareto optimum downstream.
 # -------------------------------------------------------------------------
 
 selected_rows <- list()
 excluded_rows <- list()
 
 selected_summaries <- list()
-paper_summaries <- list()
 
-make_na_summary <- function(
-    k,
-    cutoff_rank) {
-
-  data.frame(
-    k = k,
-    cutoff_rank = cutoff_rank,
-
-    joint_n = NA_integer_,
-
-    disjoint_control_opposite_le_n =
-      NA_integer_,
-
-    disjoint_treatment_opposite_le_n =
-      NA_integer_,
-
-    disjoint_opposite_le_n =
-      NA_integer_,
-
-    disjoint_control_opposite_divergence_n =
-      NA_integer_,
-
-    disjoint_treatment_opposite_divergence_n =
-      NA_integer_,
-
-    disjoint_opposite_divergence_n =
-      NA_integer_,
-
-    permissible_disjoint_control_n =
-      NA_integer_,
-
-    permissible_disjoint_treatment_n =
-      NA_integer_,
-
-    permissible_disjoint_n =
-      NA_integer_,
-
-    good_n = NA_integer_,
-
-    remainder_cross_n =
-      NA_integer_,
-
-    union_n = NA_integer_,
-
-    retained_fraction =
-      NA_real_,
-
-    remainder_cross_fraction =
-      NA_real_,
-
-    stringsAsFactors = FALSE
-  )
-}
-
-for (comparison_name in names(
-  COMPARISONS
-)) {
-  mapping <- COMPARISONS[[
-    comparison_name
-  ]]
-
-  control_group <- unname(
-    mapping[["control"]]
-  )
-
-  treatment_group <- unname(
-    mapping[["treatment"]]
-  )
+for (comparison_name in names(COMPARISONS)) {
+  mapping <- COMPARISONS[[comparison_name]]
+  control_group <- unname(mapping[["control"]])
+  treatment_group <- unname(mapping[["treatment"]])
+  selected_k <- pair_optima[[comparison_name]]$selected_k
 
   selected_all <- classify_pair_at_k(
-    control_df =
-      group_results[[
-        control_group
-      ]]$data,
-
-    treatment_df =
-      group_results[[
-        treatment_group
-      ]]$data,
-
-    k = GLOBAL_K,
-
+    control_df = group_results[[control_group]]$data,
+    treatment_df = group_results[[treatment_group]]$data,
+    k = selected_k,
     c1 = C1,
     c2 = C2,
-
-    comparison_name =
-      comparison_name,
-
-    control_group =
-      control_group,
-
-    treatment_group =
-      treatment_group
+    comparison_name = comparison_name,
+    control_group = control_group,
+    treatment_group = treatment_group
   )
 
-  selected_summaries[[
-    comparison_name
-  ]] <- summarize_classification(
-    selected_all
-  )
+  selected_summaries[[comparison_name]] <- summarize_classification(selected_all)
 
-  selected_rows[[
-    comparison_name
-  ]] <- selected_all %>%
-    filter(
-      retained_for_analysis
-    )
+  selected_rows[[comparison_name]] <- selected_all %>%
+    filter(retained_for_analysis)
 
-  excluded_rows[[
-    comparison_name
-  ]] <- selected_all %>%
-    filter(
-      cross_into_remainder
-    )
-
-  if (
-    PAPER_REFERENCE_K <=
-    MAX_CANDIDATE_K
-  ) {
-    paper_all <- classify_pair_at_k(
-      control_df =
-        group_results[[
-          control_group
-        ]]$data,
-
-      treatment_df =
-        group_results[[
-          treatment_group
-        ]]$data,
-
-      k = PAPER_REFERENCE_K,
-
-      c1 = C1,
-      c2 = C2,
-
-      comparison_name =
-        comparison_name,
-
-      control_group =
-        control_group,
-
-      treatment_group =
-        treatment_group
-    )
-
-    paper_summaries[[
-      comparison_name
-    ]] <- summarize_classification(
-      paper_all
-    )
-  } else {
-    paper_summaries[[
-      comparison_name
-    ]] <- make_na_summary(
-      PAPER_REFERENCE_K,
-      PAPER_REFERENCE_RANK
-    )
-  }
+  excluded_rows[[comparison_name]] <- selected_all %>%
+    filter(cross_into_remainder)
 }
 
 selected_sites <- bind_rows(
@@ -3994,86 +3078,36 @@ write.csv(
 # -------------------------------------------------------------------------
 
 timepoint_table <- build_timepoint_table(
-  group_results =
-    group_results,
-
-  comparisons =
-    COMPARISONS,
-
-  pair_optima =
-    pair_optima,
-
-  selected_summaries =
-    selected_summaries,
-
-  paper_summaries =
-    paper_summaries,
-
-  global_k =
-    GLOBAL_K,
-
-  global_opt =
-    global_opt,
-
+  comparisons = COMPARISONS,
+  pair_optima = pair_optima,
+  selected_summaries = selected_summaries,
   c1 = C1,
   c2 = C2,
-
-  paper_k =
-    PAPER_REFERENCE_K,
-
   N = N
 )
 
 key_table <- build_key_table(
-  timepoint_table =
-    timepoint_table,
-
-  global_opt =
-    global_opt,
-
-  global_scan =
-    global_scan,
-
+  timepoint_table = timepoint_table,
   N = N,
-
   c1 = C1,
   c2 = C2,
-
-  paper_k =
-    PAPER_REFERENCE_K,
-
-  shared_sse =
-    knot_fit$SSE
+  shared_sse = knot_fit$SSE
 )
 
 write.csv(
   key_table,
-  file.path(
-    OUT_ROOT,
-    "Table_Key_Results.csv"
-  ),
+  file.path(OUT_ROOT, "Table_Key_Results.csv"),
   row.names = FALSE
 )
 
 write.csv(
   timepoint_table,
-  file.path(
-    OUT_ROOT,
-    "Table_Timepoints.csv"
-  ),
+  file.path(OUT_ROOT, "Table_Timepoints.csv"),
   row.names = FALSE
 )
 
-cutoff_table <- bind_rows(
-  bind_rows(
-    pair_scans
-  ),
-  global_scan
-) %>%
-  arrange(
-    comparison,
-    k
-  )
+cutoff_table <- bind_rows(pair_scans) %>%
+  arrange(comparison, k)
 
 write.csv(
   cutoff_table,
@@ -4089,99 +3123,41 @@ write.csv(
 # -------------------------------------------------------------------------
 
 overall_df <- build_overall_figure_data(
-  group_results =
-    group_results,
-
-  knot_fit =
-    knot_fit
+  group_results = group_results,
+  knot_fit = knot_fit
 )
 
 figure_paths <- character(0)
 
-overall_path <- file.path(
-  FIG_DIR,
-  "Figure_Overall.png"
-)
+overall_path <- file.path(FIG_DIR, "Figure_Overall.png")
 
 make_overall_figure(
-  overall_df =
-    overall_df,
-
-  global_scan =
-    global_scan,
-
-  global_opt =
-    global_opt,
-
+  overall_df = overall_df,
   c1 = C1,
   c2 = C2,
-
-  selected_k =
-    GLOBAL_K,
-
-  paper_k =
-    PAPER_REFERENCE_K,
-
-  out_file =
-    overall_path
+  out_file = overall_path
 )
 
-figure_paths <- c(
-  figure_paths,
-  overall_path
-)
+figure_paths <- c(figure_paths, overall_path)
 
-for (comparison_name in names(
-  COMPARISONS
-)) {
+for (comparison_name in names(COMPARISONS)) {
   fig_path <- file.path(
     FIG_DIR,
-    paste0(
-      "Figure_",
-      comparison_name,
-      ".png"
-    )
+    paste0("Figure_", comparison_name, ".png")
   )
 
   make_timepoint_figure(
-    comparison_name =
-      comparison_name,
-
-    mapping =
-      COMPARISONS[[
-        comparison_name
-      ]],
-
-    group_results =
-      group_results,
-
-    pair_scan =
-      pair_scans[[
-        comparison_name
-      ]],
-
-    pair_optimum =
-      pair_optima[[
-        comparison_name
-      ]],
-
-    global_k =
-      GLOBAL_K,
-
+    comparison_name = comparison_name,
+    mapping = COMPARISONS[[comparison_name]],
+    group_results = group_results,
+    pair_scan = pair_scans[[comparison_name]],
+    pair_optimum = pair_optima[[comparison_name]],
     c1 = C1,
     c2 = C2,
-
-    paper_k =
-      PAPER_REFERENCE_K,
-
-    out_file =
-      fig_path
+    out_file = fig_path
   )
 
-  figure_paths <- c(
-    figure_paths,
-    fig_path
-  )
+  figure_paths <- c(figure_paths, fig_path)
 }
 
 # -------------------------------------------------------------------------
@@ -4276,28 +3252,9 @@ message(
   MAX_CANDIDATE_K
 )
 
-message(
-  "Global weighted k* = ",
-  GLOBAL_K,
-  " | utility = ",
-  signif(global_opt$selected_utility, 5),
-  " | weights = ",
-  global_opt$benefit_weight,
-  ":",
-  global_opt$contamination_weight
-)
 
 message(
-  "At global k*: retained=",
-  global_selected_row$good_n[1L],
-  " | divergence-disjoint=",
-  global_selected_row$disjoint_opposite_divergence_n[1L],
-  " | remainder crossings=",
-  global_selected_row$remainder_cross_n[1L]
-)
-
-message(
-  "Pair-specific weighted k*: ",
+  "Comparison-specific weighted k*: ",
   paste(
     names(
       pair_optima
@@ -4314,9 +3271,6 @@ message(
   )
 )
 
-message(
-  "Prespecified 5,000 reference used in optimization: FALSE"
-)
 
 message(
   "Figures: ",
