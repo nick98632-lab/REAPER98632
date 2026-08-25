@@ -10,68 +10,80 @@ suppressPackageStartupMessages({
 options(stringsAsFactors = FALSE)
 
 # =============================================================================
-# LEFT/RIGHT NB2 DISPERSION EVIDENCE
+# EMPIRICAL-k* LEFT/RIGHT NB1/NB2 CORROBORATION
 # =============================================================================
 #
-# For each comparison arm, this script tests whether features at the extreme
-# (RIGHT) end of the PC1-loading rank axis show stronger NB2-like
-# overdispersion than a matched block (LEFT) immediately below them.
+# PURPOSE
+# -------
+# Use the already-established comparison-specific empirical EVS cutoffs:
 #
-# GEOMETRY
+#   RT0_ZT6  k* = 3532
+#   RT2_ZT8  k* = 4617
+#   RT4_ZT10 k* = 3983
+#   RT8_ZT14 k* = 5664
 #
-# Features are ranked within each arm by absolute PC1 loading. Along that
-# rank axis, empirical variance is computed feature-wise and transformed as
-# log(1 + variance). A smoothing spline is fit to the ranked variance
-# trajectory, and its second derivative is used to locate zero-crossings.
+# RANKING AND REFERENCE
+# ---------------------
+# For each arm, PCA is performed on arm-specific log1p(CPM) expression with
+# centering and without feature scaling. PASs are ordered from LOW to HIGH
+# absolute PC1 loading, so the comparison-specific top-k* begins at:
 #
-# A fixed leading-edge reference rank is defined as the rank leaving exactly
-# FIXED_LEADING_EDGE_SIZE features on the right side, including that rank.
-# The Anchor and Terminal are the nearest second-derivative zero-crossings
-# immediately left and right of that reference rank.
+#   reference_rank = N - k* + 1.
 #
-#   RIGHT = all ranks from Anchor through the right edge of the ranking
-#   LEFT  = equal-sized matched block immediately left of Anchor
+# TRANSITION RANGE
+# ----------------
+# The original REMNB1/LEADNB2 geometry is preserved. Feature-wise empirical
+# variance is calculated from RAW COUNTS across the biological replicates in
+# the arm, transformed as log1p[Var(raw count)], and smoothed along the PC1
+# rank axis. The nearest second-derivative sign changes immediately to the
+# left and right of the k* reference define:
 #
-# DESCRIPTIVE NB2 QUANTITIES
+#   Anchor < k* reference < Terminal.
 #
-# Let mu denote empirical mean and variance denote empirical variance.
-#   NB2      = log(1 + variance - mu)                  extra-Poisson signal
-#   NB2-NB1  = NB2 - log(1 + mu)                        excess relative to mean
-#   alpha*mu = log(1 + alpha*mu), alpha = max((variance-mu)/mu^2, 0)
+# RIGHT is Anchor through the end of the rank axis. LEFT is the immediately
+# preceding block with the same number of PASs as RIGHT. Thus the displayed
+# LEFT/RIGHT range is built from the comparison-specific empirical k*.
 #
-# FORMAL LIKELIHOOD-RATIO TEST
+# DESCRIPTIVE RAW-COUNT NB2 QUANTITIES
+# ------------------------------------
+# For each PAS, with raw-count sample mean mu and raw-count sample variance s^2:
 #
-# H0: LEFT and RIGHT share one NB2 dispersion parameter (alpha)
-# H1: LEFT and RIGHT each have their own alpha
-# Each feature's mean is held fixed at its own empirical mean; alpha is
-# estimated by maximum likelihood under Var = mu + alpha*mu^2 (equivalently
-# dnbinom size = 1/alpha). Counts are rounded to the nearest non-negative
-# integer before this likelihood is computed, since dnbinom's likelihood is
-# defined for integer counts. H1 has exactly one more free parameter than
-# H0, so:
-#   LRT = 2 * (loglik_H1 - loglik_H0)  ~  chi-square(df = 1) under H0
+#   NB2 excess = log1p[max(s^2 - mu, 0)]
 #
-# DESEQ2 DISPERSION SHRINKAGE
+#   NB2-NB1    = log1p[max(s^2 - mu, 0)] - log1p(mu)
 #
-# For the DESeq2 track, DESeq2's own dispersion-shrinkage pipeline
-# (estimateDispersions) is run on each arm. Region medians of the final
-# shrunk dispersion are reported (alpha_left_deseq2_shrunk /
-# alpha_right_deseq2_shrunk / diff_deseq2_shrunk), alongside the fraction
-# of LEFT and RIGHT genes DESeq2 flags as dispersion outliers -- genes
-# whose dispersion is not shrunk toward the fitted trend.
+#   alpha_hat  = max[(s^2 - mu)/mu^2, 0]
+#   alpha*mu   = log1p(alpha_hat * mu)
 #
-# METHODS-LEVEL VALIDATION
+# RIGHT-LEFT values shown in the figures are DESCRIPTIVE differences between
+# the corresponding region medians.
 #
-# For every comparison arm and every analysis track, the script verifies:
-# - Anchor < Ref < Terminal
-# - LEFT and RIGHT have equal size
-# - reported summary medians exactly match the sliced plotted regions
+# FORMAL LEFT-vs-RIGHT NB2 DISPERSION LRT
+# ---------------------------------------
+# The formal p-value is calculated from RAW INTEGER COUNTS only.
 #
-# FIGURE RULES
+#   H0: LEFT and RIGHT share one NB2 dispersion parameter alpha.
+#   H1: LEFT and RIGHT have separate NB2 dispersion parameters.
 #
-# - 3 panels per per-arm figure; no separate legend-strip panels
-# - no annotation boxes in the cutoff zone; short labels only inside panels
-# - file names start with Figure_ or Table_
+# Feature-specific empirical means are held fixed in both models. Under the
+# NB2 parameterization Var(Y)=mu+alpha*mu^2, dnbinom size=1/alpha.
+#
+#   LRT = 2 * (logLik_H1 - logLik_H0)
+#
+# H1 has one additional dispersion parameter, so the reference distribution is
+# chi-square with 1 df. The figure labels this specifically as the
+# "LEFT-vs-RIGHT NB2-dispersion LRT p"; it is not presented as a p-value for
+# the descriptive median NB2-NB1 difference.
+#
+# FIGURES
+# -------
+# One three-panel figure is produced for each of the eight arms:
+#
+#   A. Smoothed log1p raw-count variance and the k*-anchored transition range.
+#   B. Raw-count NB2 corroboration signals along the PC1 rank.
+#   C. LEFT vs RIGHT median NB2-NB1 contrast, RIGHT-LEFT difference, and the
+#      formal LEFT-vs-RIGHT NB2-dispersion LRT p-value.
+#
 # =============================================================================
 
 # =============================================================================
@@ -79,24 +91,45 @@ options(stringsAsFactors = FALSE)
 # =============================================================================
 
 COUNT_FILE <- "/root/REAPER98632/data/WTTS-Seq_2022.2_DE_raw_read_numbers.csv"
-OUT_ROOT   <- "/root/REAPER98632/exports/remnb1_leadnb2_manuscript"
+OUT_ROOT   <- "/root/REAPER98632/exports/remnb1_leadnb2_empirical_kstar_simple"
 
-FIXED_LEADING_EDGE_SIZE <- 5000L
-VAR_SPLINE_SPAR         <- 0.60
+# Locked inputs from the empirical weighted-Pareto cutoff analysis.
+EMPIRICAL_K <- c(
+  RT0_ZT6  = 3532L,
+  RT2_ZT8  = 4617L,
+  RT4_ZT10 = 3983L,
+  RT8_ZT14 = 5664L
+)
+
+VAR_SPLINE_SPAR <- 0.60
+NB_DISPLAY_SPAR  <- 0.65
 
 PNG_WIDTH_IN  <- 14
 PNG_HEIGHT_IN <- 10.8
-PNG_DPI       <- 260
-
-RUN_DESEQ2_SUPPLEMENT <- TRUE
-DESEQ2_RANK_METHOD <- "normalized_log1p"   # "normalized_log1p" or "vst"
+PNG_DPI       <- 300
 
 COMPARISONS <- list(
-  RT0_ZT6  = list(control = "^R0_", treatment = "^ZT6_"),
-  RT2_ZT8  = list(control = "^R2_", treatment = "^ZT8_"),
-  RT4_ZT10 = list(control = "^R4_", treatment = "^ZT10_"),
-  RT8_ZT14 = list(control = "^R8_", treatment = "^ZT14_")
+  RT0_ZT6 = list(
+    RT0 = "^R0_",
+    ZT6 = "^ZT6_"
+  ),
+  RT2_ZT8 = list(
+    RT2 = "^R2_",
+    ZT8 = "^ZT8_"
+  ),
+  RT4_ZT10 = list(
+    RT4 = "^R4_",
+    ZT10 = "^ZT10_"
+  ),
+  RT8_ZT14 = list(
+    RT8 = "^R8_",
+    ZT14 = "^ZT14_"
+  )
 )
+
+if (!identical(names(EMPIRICAL_K), names(COMPARISONS))) {
+  stop("EMPIRICAL_K and COMPARISONS must contain the same comparisons in the same order.")
+}
 
 dir.create(OUT_ROOT, recursive = TRUE, showWarnings = FALSE)
 
@@ -110,28 +143,24 @@ COL <- list(
   nb_gap    = "#CC1E8C",
   alpha_mu  = "#386CB0",
 
-  left_fill    = "#CBE3F8",
-  right_fill   = "#DDF2D5",
-  interval_fill = "#9E9E9E",
+  left_fill     = "#CBE3F8",
+  right_fill    = "#DDF2D5",
+  interval_fill = "#BDBDBD",
 
   anchor   = "#000000",
-  ref      = "#E69F00",
+  kstar    = "#E69F00",
   terminal = "#D95F02",
 
   left_pt  = "#5B8FD1",
   right_pt = "#43A047"
 )
 
-EVENT_LEVELS <- c("Anchor", "Ref", "Terminal")
-EVENT_COLORS <- c("Anchor" = COL$anchor, "Ref" = COL$ref, "Terminal" = COL$terminal)
-EVENT_SHAPES <- c("Anchor" = 16, "Ref" = 18, "Terminal" = 1)
-EVENT_LTY    <- c("Anchor" = "solid", "Ref" = "dashed", "Terminal" = "dotted")
-
-TRACE_LEVELS <- c("NB2", "NB2-NB1", "alpha*mu")
-TRACE_COLORS <- c("NB2" = COL$nb2, "NB2-NB1" = COL$nb_gap, "alpha*mu" = COL$alpha_mu)
-
-REGION_LEVELS <- c("LEFT", "RIGHT")
-REGION_COLORS <- c("LEFT" = COL$left_pt, "RIGHT" = COL$right_pt)
+TRACE_LEVELS <- c("NB2 excess", "NB2-NB1", "alpha*mu")
+TRACE_COLORS <- c(
+  "NB2 excess" = COL$nb2,
+  "NB2-NB1" = COL$nb_gap,
+  "alpha*mu" = COL$alpha_mu
+)
 
 # =============================================================================
 # HELPERS
@@ -174,72 +203,6 @@ normalize_cpm_log1p <- function(count_mat_arm) {
   log1p(cpm)
 }
 
-compute_deseq2_matrices <- function(count_mat_arm, rank_method = "normalized_log1p") {
-  if (!requireNamespace("DESeq2", quietly = TRUE)) return(NULL)
-  if (!requireNamespace("SummarizedExperiment", quietly = TRUE)) return(NULL)
-
-  col_data <- data.frame(
-    row.names = colnames(count_mat_arm),
-    intercept = factor(rep("one", ncol(count_mat_arm)))
-  )
-
-  dds <- DESeq2::DESeqDataSetFromMatrix(
-    countData = round(count_mat_arm),
-    colData = col_data,
-    design = ~ 1
-  )
-
-  dds <- DESeq2::estimateSizeFactors(dds)
-
-  # estimateDispersions fits gene-wise dispersion, the mean-dispersion
-  # trend, and the final MAP (empirical-Bayes shrunk) dispersion per gene.
-  # dispersion_final is the shrunk per-gene dispersion DESeq2 normally uses
-  # before testing.
-  dds <- tryCatch(
-    DESeq2::estimateDispersions(dds, quiet = TRUE),
-    error = function(e) {
-      message("estimateDispersions failed, dispersion_final will be NA: ", conditionMessage(e))
-      dds
-    }
-  )
-  dispersion_final <- tryCatch(DESeq2::dispersions(dds), error = function(e) rep(NA_real_, nrow(dds)))
-
-  # Genes flagged as dispersion outliers by DESeq2 are not shrunk toward
-  # the trend, so their dispersion_final value is an unshrunk gene-wise
-  # estimate. Exposed here so the LEFT/RIGHT outlier fraction can be
-  # reported directly.
-  dispersion_is_outlier <- tryCatch(
-    S4Vectors::mcols(dds)$dispOutlier,
-    error = function(e) rep(NA, nrow(dds))
-  )
-  if (is.null(dispersion_is_outlier)) dispersion_is_outlier <- rep(NA, nrow(dds))
-
-  norm_counts <- DESeq2::counts(dds, normalized = TRUE)
-
-  vst_mat <- NULL
-  if (rank_method == "vst") {
-    vst_obj <- tryCatch(DESeq2::vst(dds, blind = TRUE), error = function(e) NULL)
-    if (!is.null(vst_obj)) {
-      vst_mat <- SummarizedExperiment::assay(vst_obj)
-    }
-  }
-
-  ranking_matrix <- switch(
-    rank_method,
-    normalized_log1p = log1p(norm_counts),
-    vst = if (!is.null(vst_mat)) vst_mat else log1p(norm_counts),
-    log1p(norm_counts)
-  )
-
-  list(
-    normalized_counts = norm_counts,
-    ranking_matrix = ranking_matrix,
-    size_factors = DESeq2::sizeFactors(dds),
-    dispersion_final = setNames(dispersion_final, rownames(count_mat_arm)),
-    dispersion_is_outlier = setNames(dispersion_is_outlier, rownames(count_mat_arm))
-  )
-}
-
 compute_abs_pc1_loadings <- function(norm_mat_arm) {
   pca <- prcomp(t(norm_mat_arm), center = TRUE, scale. = FALSE, rank. = 1)
   out <- abs(pca$rotation[, 1L])
@@ -261,7 +224,7 @@ compute_ranked_variance_curve <- function(metric_mat_arm, rank_order, spar = 0.6
   smooth_y <- as.numeric(stats::predict(spline_fit, x = ranks, deriv = 0)$y)
   smooth_d2 <- as.numeric(stats::predict(spline_fit, x = ranks, deriv = 2)$y)
 
-  dense_x <- seq(min(ranks), max(ranks), length.out = max(5000L, length(ranks) * 4L))
+  dense_x <- seq(min(ranks), max(ranks), length.out = length(ranks) * 4L)
   dense_y  <- as.numeric(stats::predict(spline_fit, x = dense_x, deriv = 0)$y)
   dense_d2 <- as.numeric(stats::predict(spline_fit, x = dense_x, deriv = 2)$y)
 
@@ -433,11 +396,7 @@ summarize_regions <- function(feature_df, anchor_rank, total_n) {
 # vs one shared alpha), so:
 #   LRT = 2 * (loglik_H1 - loglik_H0)  ~  chi-square(df = 1) under H0
 #
-# This is only strictly appropriate for integer count data (the "Main" track,
-# raw counts). For the DESeq2-normalized supplement track, counts are
-# continuous, so dnbinom's continuous extension is used as a common applied
-# approximation; the result is still reported but is a looser statistic and
-# is labeled as such in the output table.
+# This script applies the formal likelihood-ratio test to raw integer counts only.
 
 region_indices_from_anchor <- function(anchor_rank, total_n) {
   right_idx <- seq.int(anchor_rank, total_n)
@@ -483,7 +442,7 @@ fit_region_alpha_mle <- function(counts_block, mu_vec, log_alpha_lower = -15, lo
   list(alpha_mle = exp(opt$minimum), loglik = -opt$objective, at_bound = at_bound)
 }
 
-compute_region_lrt <- function(metric_matrix, feature_df, left_idx, right_idx, deseq2_dispersion = NULL, deseq2_outlier_flag = NULL) {
+compute_region_lrt <- function(metric_matrix, feature_df, left_idx, right_idx) {
   left_ids <- feature_df$feature_id[left_idx]
   right_ids <- feature_df$feature_id[right_idx]
 
@@ -507,7 +466,27 @@ compute_region_lrt <- function(metric_matrix, feature_df, left_idx, right_idx, d
   # Numerical optimization can occasionally yield a tiny negative value
   # (H1 should never fit worse than H0 at the true optimum); floor at 0.
   lrt_stat <- max(lrt_stat, 0)
-  lrt_p <- stats::pchisq(lrt_stat, df = 1, lower.tail = FALSE)
+
+  # Compute the chi-square tail in log space so extremely small p-values are
+  # retained rather than silently underflowing to zero.
+  lrt_log_p <- stats::pchisq(
+    lrt_stat,
+    df = 1,
+    lower.tail = FALSE,
+    log.p = TRUE
+  )
+  lrt_log10_p <- lrt_log_p / log(10)
+  lrt_p <- if (is.finite(lrt_log_p)) {
+    if (lrt_log_p > log(.Machine$double.xmin)) {
+      exp(lrt_log_p)
+    } else {
+      0
+    }
+  } else if (is.infinite(lrt_log_p) && lrt_log_p < 0) {
+    0
+  } else {
+    NA_real_
+  }
 
   out <- data.frame(
     alpha_left_mle = fit_left$alpha_mle,
@@ -522,6 +501,8 @@ compute_region_lrt <- function(metric_matrix, feature_df, left_idx, right_idx, d
     lrt_stat = lrt_stat,
     lrt_df = 1L,
     lrt_p = lrt_p,
+    lrt_log_p = lrt_log_p,
+    lrt_log10_p = lrt_log10_p,
     # If any of the three fits saturated at the search boundary, the
     # direction call is not meaningful -- report NA rather than a
     # misleading "RIGHT_more_NB2" / "LEFT_more_NB2" label built on a
@@ -533,37 +514,6 @@ compute_region_lrt <- function(metric_matrix, feature_df, left_idx, right_idx, d
     ),
     stringsAsFactors = FALSE
   )
-
-  # When DESeq2's own final shrunk dispersion is available (DESeq2 track
-  # only), also report region medians of that shrunk estimate as a
-  # complementary, shrinkage-stabilized companion to the full-likelihood
-  # alpha_left_mle / alpha_right_mle above, which are unshrunk MLE fits.
-  if (!is.null(deseq2_dispersion)) {
-    disp_left <- deseq2_dispersion[left_ids]
-    disp_right <- deseq2_dispersion[right_ids]
-    out$alpha_left_deseq2_shrunk <- stats::median(disp_left, na.rm = TRUE)
-    out$alpha_right_deseq2_shrunk <- stats::median(disp_right, na.rm = TRUE)
-    out$diff_deseq2_shrunk <- out$alpha_right_deseq2_shrunk - out$alpha_left_deseq2_shrunk
-  } else {
-    out$alpha_left_deseq2_shrunk <- NA_real_
-    out$alpha_right_deseq2_shrunk <- NA_real_
-    out$diff_deseq2_shrunk <- NA_real_
-  }
-
-  # Fraction of LEFT/RIGHT genes DESeq2 flagged as dispersion outliers, i.e.
-  # NOT shrunk toward the trend, reverting instead to the unshrunk gene-wise
-  # estimate. If RIGHT (toward the leading edge) shows a much higher outlier
-  # fraction than LEFT, that directly confirms alpha_right_deseq2_shrunk is
-  # less "shrunk" in practice than its name implies for that region.
-  if (!is.null(deseq2_outlier_flag)) {
-    outlier_left <- deseq2_outlier_flag[left_ids]
-    outlier_right <- deseq2_outlier_flag[right_ids]
-    out$frac_dispersion_outlier_left <- mean(outlier_left, na.rm = TRUE)
-    out$frac_dispersion_outlier_right <- mean(outlier_right, na.rm = TRUE)
-  } else {
-    out$frac_dispersion_outlier_left <- NA_real_
-    out$frac_dispersion_outlier_right <- NA_real_
-  }
 
   out
 }
@@ -613,18 +563,6 @@ validate_method_level <- function(feature_df, interval_info, region_summary, tot
   invisible(TRUE)
 }
 
-make_display_event_df <- function(event_df, total_n) {
-  offset_big <- max(12L, round(total_n * 0.006))
-  event_df %>%
-    mutate(
-      rank_display = case_when(
-        event == "Anchor" ~ rank - offset_big,
-        event == "Ref" ~ rank,
-        event == "Terminal" ~ rank + offset_big,
-        TRUE ~ rank
-      )
-    )
-}
 
 save_three_panel_plot <- function(plot_list, filename) {
   png(filename, width = PNG_WIDTH_IN, height = PNG_HEIGHT_IN, units = "in", res = PNG_DPI, bg = "white")
@@ -640,39 +578,82 @@ save_three_panel_plot <- function(plot_list, filename) {
   dev.off()
 }
 
-compute_text_positions <- function(total_n, anchor, ref, terminal) {
-  pad <- max(50L, round(total_n * 0.04))
-  safe_right_limit <- max(200L, anchor - pad)
 
-  left_x <- max(5L, round(total_n * 0.035))
-  stat_x <- min(max(150L, round(total_n * 0.26)), safe_right_limit)
 
-  if (stat_x <= left_x + 50L) {
-    stat_x <- left_x + 60L
+smooth_signal_for_display <- function(rank, value, spar = NB_DISPLAY_SPAR) {
+  ok <- is.finite(rank) & is.finite(value)
+  out <- rep(NA_real_, length(value))
+
+  if (sum(ok) < 8L) {
+    return(out)
   }
 
-  list(left_x = left_x, stat_x = stat_x)
+  fit <- tryCatch(
+    stats::smooth.spline(
+      x = rank[ok],
+      y = value[ok],
+      spar = spar
+    ),
+    error = function(e) NULL
+  )
+
+  if (is.null(fit)) {
+    return(out)
+  }
+
+  out[ok] <- as.numeric(
+    stats::predict(
+      fit,
+      x = rank[ok],
+      deriv = 0
+    )$y
+  )
+
+  out
+}
+
+
+format_lrt_p <- function(lrt_p, lrt_log10_p) {
+  if (is.finite(lrt_log10_p)) {
+    exponent <- floor(lrt_log10_p)
+    mantissa <- 10^(lrt_log10_p - exponent)
+
+    if (lrt_log10_p < -4) {
+      return(
+        paste0(
+          formatC(mantissa, format = "f", digits = 2),
+          "e",
+          exponent
+        )
+      )
+    }
+  }
+
+  if (is.finite(lrt_p)) {
+    return(formatC(lrt_p, format = "g", digits = 4))
+  }
+
+  "NA"
 }
 
 # =============================================================================
 # FIGURE BUILDER
 # =============================================================================
 
-build_main_figure <- function(comparison_name,
-                              arm_name,
-                              variance_df,
-                              feature_df,
-                              interval_info,
-                              region_summary,
-                              lrt_result,
-                              out_file,
-                              fig_tag,
-                              rank_tag,
-                              metric_tag) {
+build_main_figure <- function(
+    comparison_name,
+    arm_label,
+    k_star,
+    variance_df,
+    feature_df,
+    interval_info,
+    region_summary,
+    lrt_result,
+    out_file) {
 
   total_n <- nrow(feature_df)
   anchor <- interval_info$anchor
-  ref <- interval_info$ref
+  kstar_rank <- interval_info$ref
   terminal <- interval_info$terminal
 
   left_n <- region_summary$left_n
@@ -681,169 +662,211 @@ build_main_figure <- function(comparison_name,
   right_min <- anchor
   right_max <- total_n
 
-  event_df <- data.frame(
-    event = factor(EVENT_LEVELS, levels = EVENT_LEVELS),
-    rank = c(anchor, ref, terminal),
-    y = c(
-      variance_df$smooth_log1p_empirical_variance[anchor],
-      variance_df$smooth_log1p_empirical_variance[ref],
-      variance_df$smooth_log1p_empirical_variance[terminal]
-    ),
-    stringsAsFactors = FALSE
-  )
-  event_display_df <- make_display_event_df(event_df, total_n)
-
-  vline_df <- data.frame(
-    event = factor(EVENT_LEVELS, levels = EVENT_LEVELS),
-    xint = c(anchor, ref, terminal),
-    stringsAsFactors = FALSE
-  )
-
-  nb_long <- feature_df %>%
-    select(rank, NB2, NB2_NB1, alpha_mu) %>%
-    pivot_longer(cols = c(NB2, NB2_NB1, alpha_mu), names_to = "metric", values_to = "value") %>%
-    mutate(
-      metric = factor(metric, levels = c("NB2", "NB2_NB1", "alpha_mu"),
-                      labels = c("NB2", "NB2-NB1", "alpha*mu"))
+  nb_display <- feature_df %>%
+    transmute(
+      rank = rank,
+      NB2 = smooth_signal_for_display(rank, NB2),
+      NB2_NB1 = smooth_signal_for_display(rank, NB2_NB1),
+      alpha_mu = smooth_signal_for_display(rank, alpha_mu)
     )
 
-  pos <- compute_text_positions(total_n, anchor, ref, terminal)
-
-  top_y <- max(variance_df$smooth_log1p_empirical_variance, na.rm = TRUE)
-  mid_y <- max(nb_long$value, na.rm = TRUE)
-
-  box1 <- paste(fig_tag, rank_tag, metric_tag, "Blue = LEFT", "Green = RIGHT", "Grey = interval", sep = "\n")
-  box2 <- paste0(
-    "Anchor = ", anchor, "\n",
-    "Ref = ", ref, "\n",
-    "Terminal = ", terminal, "\n",
-    "Interval = [", anchor, ", ", terminal, "]\n",
-    "LEFT n = ", region_summary$left_n, "\n",
-    "RIGHT n = ", region_summary$right_n
-  )
-
-  box3 <- paste("RIGHT = Anchor to end", "LEFT = matched block", "Higher RIGHT = more NB2-like", sep = "\n")
-  box4 <- paste0(
-    "LEFT NB2 = ", round(region_summary$left_NB2, 3), "\n",
-    "RIGHT NB2 = ", round(region_summary$right_NB2, 3), "\n",
-    "RIGHT-LEFT NB2 = ", round(region_summary$diff_NB2, 3), "\n",
-    "LEFT NB2-NB1 = ", round(region_summary$left_gap, 3), "\n",
-    "RIGHT NB2-NB1 = ", round(region_summary$right_gap, 3), "\n",
-    "RIGHT-LEFT NB2-NB1 = ", round(region_summary$diff_gap, 3), "\n",
-    "LEFT alpha*mu = ", round(region_summary$left_alpha, 3), "\n",
-    "RIGHT alpha*mu = ", round(region_summary$right_alpha, 3), "\n",
-    "RIGHT-LEFT alpha*mu = ", round(region_summary$diff_alpha, 3)
-  )
-
-  p1 <- ggplot(variance_df, aes(rank, smooth_log1p_empirical_variance)) +
-    annotate("rect", xmin = left_min, xmax = left_max, ymin = -Inf, ymax = Inf, fill = COL$left_fill, alpha = 0.70) +
-    annotate("rect", xmin = right_min, xmax = right_max, ymin = -Inf, ymax = Inf, fill = COL$right_fill, alpha = 0.70) +
-    annotate("rect", xmin = anchor, xmax = terminal, ymin = -Inf, ymax = Inf, fill = COL$interval_fill, alpha = 0.18) +
-    geom_line(color = COL$var_curve, linewidth = 1.0) +
-    geom_vline(
-      data = vline_df,
-      aes(xintercept = xint, color = event, linetype = event),
-      linewidth = 0.9
-    ) +
-    geom_point(
-      data = event_display_df,
-      aes(rank_display, y, color = event, shape = event),
-      size = 3.4,
-      stroke = 1.0
-    ) +
-    annotate(
-      "label",
-      x = pos$left_x,
-      y = top_y * 0.96,
-      label = box1,
-      hjust = 0,
-      vjust = 1,
-      size = 2.8,
-      label.size = 0.25,
-      fill = grDevices::adjustcolor("white", alpha.f = 0.96)
-    ) +
-    annotate(
-      "label",
-      x = pos$stat_x,
-      y = top_y * 0.70,
-      label = box2,
-      hjust = 0,
-      vjust = 1,
-      size = 2.8,
-      label.size = 0.25,
-      fill = grDevices::adjustcolor("white", alpha.f = 0.96)
-    ) +
-    scale_color_manual(
-      values = EVENT_COLORS,
-      breaks = EVENT_LEVELS,
-      guide = guide_legend(
-        override.aes = list(
-          shape = unname(EVENT_SHAPES),
-          linetype = unname(EVENT_LTY),
-          linewidth = 1.0,
-          size = 3.4
-        )
+  nb_long <- nb_display %>%
+    pivot_longer(
+      cols = c(NB2, NB2_NB1, alpha_mu),
+      names_to = "metric",
+      values_to = "value"
+    ) %>%
+    mutate(
+      metric = factor(
+        metric,
+        levels = c("NB2", "NB2_NB1", "alpha_mu"),
+        labels = TRACE_LEVELS
       )
+    )
+
+  # -------------------------------------------------------------------------
+  # A. k*-anchored raw-count variance geometry.
+  # -------------------------------------------------------------------------
+
+  y_top <- max(
+    variance_df$smooth_log1p_empirical_variance,
+    na.rm = TRUE
+  )
+
+  line_df <- data.frame(
+    x = c(anchor, kstar_rank, terminal),
+    event = c("Anchor", paste0("k*=", k_star), "Terminal"),
+    color = c(COL$anchor, COL$kstar, COL$terminal),
+    lty = c("solid", "dashed", "dotted"),
+    stringsAsFactors = FALSE
+  )
+
+  p1 <- ggplot(
+    variance_df,
+    aes(rank, smooth_log1p_empirical_variance)
+  ) +
+    annotate(
+      "rect",
+      xmin = left_min,
+      xmax = left_max,
+      ymin = -Inf,
+      ymax = Inf,
+      fill = COL$left_fill,
+      alpha = 0.65
     ) +
-    scale_shape_manual(values = EVENT_SHAPES, guide = "none") +
-    scale_linetype_manual(values = EVENT_LTY, guide = "none") +
+    annotate(
+      "rect",
+      xmin = right_min,
+      xmax = right_max,
+      ymin = -Inf,
+      ymax = Inf,
+      fill = COL$right_fill,
+      alpha = 0.65
+    ) +
+    annotate(
+      "rect",
+      xmin = anchor,
+      xmax = terminal,
+      ymin = -Inf,
+      ymax = Inf,
+      fill = COL$interval_fill,
+      alpha = 0.18
+    ) +
+    geom_line(
+      color = COL$var_curve,
+      linewidth = 1.0
+    )
+
+  for (i in seq_len(nrow(line_df))) {
+    p1 <- p1 +
+      geom_vline(
+        xintercept = line_df$x[i],
+        color = line_df$color[i],
+        linetype = line_df$lty[i],
+        linewidth = 0.9
+      )
+  }
+
+  # Direct labels replace the repeated multi-item event legend.
+  label_y <- y_top * c(0.98, 0.88, 0.78)
+  for (i in seq_len(nrow(line_df))) {
+    p1 <- p1 +
+      annotate(
+        "text",
+        x = line_df$x[i],
+        y = label_y[i],
+        label = line_df$event[i],
+        color = line_df$color[i],
+        angle = 90,
+        hjust = 1,
+        vjust = -0.35,
+        size = 3.0,
+        fontface = if (i == 2L) "bold" else "plain"
+      )
+  }
+
+  p1 <- p1 +
+    annotate(
+      "text",
+      x = (left_min + left_max) / 2,
+      y = y_top * 0.98,
+      label = paste0("LEFT (n=", region_summary$left_n, ")"),
+      vjust = 1,
+      size = 3.0,
+      fontface = "bold"
+    ) +
+    annotate(
+      "text",
+      x = (right_min + right_max) / 2,
+      y = y_top * 0.98,
+      label = paste0("RIGHT (n=", region_summary$right_n, ")"),
+      vjust = 1,
+      size = 3.0,
+      fontface = "bold"
+    ) +
     labs(
-      title = paste0(comparison_name, " ", arm_name, ": geometry"),
-      subtitle = "Anchor, Ref, and Terminal define the custom interval",
-      x = "Rank",
-      y = "Smoothed log(1 + variance)",
-      color = NULL
+      title = paste0(
+        comparison_name,
+        " — ",
+        arm_label,
+        " | empirical k* = ",
+        k_star
+      ),
+      subtitle = paste0(
+        "Raw-count variance across ",
+        arm_label,
+        " replicates, smoothed along ascending |PC1 loading| rank; ",
+        "transition range = Anchor ",
+        anchor,
+        " to Terminal ",
+        terminal
+      ),
+      x = "PAS rank by ascending absolute PC1 loading",
+      y = "Smoothed log1p[Var(raw counts across arm replicates)]"
     ) +
     theme_bw(base_size = 11) +
     theme(
       panel.grid.minor = element_blank(),
-      legend.position = "bottom"
+      legend.position = "none"
     )
 
+  # -------------------------------------------------------------------------
+  # B. Raw-count NB2-related descriptive signals.
+  # -------------------------------------------------------------------------
+
   p2 <- ggplot() +
-    annotate("rect", xmin = left_min, xmax = left_max, ymin = -Inf, ymax = Inf, fill = COL$left_fill, alpha = 0.70) +
-    annotate("rect", xmin = right_min, xmax = right_max, ymin = -Inf, ymax = Inf, fill = COL$right_fill, alpha = 0.70) +
-    annotate("rect", xmin = anchor, xmax = terminal, ymin = -Inf, ymax = Inf, fill = COL$interval_fill, alpha = 0.18) +
+    annotate(
+      "rect",
+      xmin = left_min,
+      xmax = left_max,
+      ymin = -Inf,
+      ymax = Inf,
+      fill = COL$left_fill,
+      alpha = 0.65
+    ) +
+    annotate(
+      "rect",
+      xmin = right_min,
+      xmax = right_max,
+      ymin = -Inf,
+      ymax = Inf,
+      fill = COL$right_fill,
+      alpha = 0.65
+    ) +
+    annotate(
+      "rect",
+      xmin = anchor,
+      xmax = terminal,
+      ymin = -Inf,
+      ymax = Inf,
+      fill = COL$interval_fill,
+      alpha = 0.18
+    ) +
     geom_vline(
-      data = vline_df,
-      aes(xintercept = xint),
-      color = "grey35",
+      xintercept = kstar_rank,
+      color = COL$kstar,
       linetype = "dashed",
-      linewidth = 0.5
+      linewidth = 0.8
     ) +
     geom_line(
       data = nb_long,
       aes(rank, value, color = metric),
-      linewidth = 0.95
+      linewidth = 0.85
     ) +
-    annotate(
-      "label",
-      x = pos$left_x,
-      y = mid_y * 0.96,
-      label = box3,
-      hjust = 0,
-      vjust = 1,
-      size = 2.8,
-      label.size = 0.25,
-      fill = grDevices::adjustcolor("white", alpha.f = 0.96)
+    scale_color_manual(
+      values = TRACE_COLORS,
+      breaks = TRACE_LEVELS,
+      labels = c(
+        "NB2 excess" = "NB2 excess: log1p[max(s²−μ,0)]",
+        "NB2-NB1" = "NB2−NB1: excess−log1p(μ)",
+        "alpha*mu" = "α̂μ: log1p(α̂μ)"
+      )
     ) +
-    annotate(
-      "label",
-      x = pos$stat_x,
-      y = mid_y * 0.70,
-      label = box4,
-      hjust = 0,
-      vjust = 1,
-      size = 2.8,
-      label.size = 0.25,
-      fill = grDevices::adjustcolor("white", alpha.f = 0.96)
-    ) +
-    scale_color_manual(values = TRACE_COLORS, breaks = TRACE_LEVELS) +
     labs(
-      title = paste0(comparison_name, " ", arm_name, ": corroboration"),
-      subtitle = "RIGHT is compared directly against the matched LEFT block",
-      x = "Rank",
-      y = "NB2-related signal",
+      title = "Raw-count NB2 corroboration along the same PC1 rank",
+      subtitle = "Display curves are smoothed only for readability; μ and s² are PAS-level raw-count mean and sample variance within this arm",
+      x = "PAS rank by ascending absolute PC1 loading",
+      y = "Smoothed raw-count NB2 corroboration metric",
       color = NULL
     ) +
     theme_bw(base_size = 11) +
@@ -852,96 +875,197 @@ build_main_figure <- function(comparison_name,
       legend.position = "bottom"
     )
 
+  # -------------------------------------------------------------------------
+  # C. Minimal LEFT-vs-RIGHT summary.
+  # -------------------------------------------------------------------------
+
   summary_df <- data.frame(
-    metric = factor(c("NB2", "NB2-NB1", "alpha*mu"), levels = rev(c("NB2", "NB2-NB1", "alpha*mu"))),
-    LEFT = c(region_summary$left_NB2, region_summary$left_gap, region_summary$left_alpha),
-    RIGHT = c(region_summary$right_NB2, region_summary$right_gap, region_summary$right_alpha),
+    region = c("LEFT", "RIGHT"),
+    value = c(
+      region_summary$left_gap,
+      region_summary$right_gap
+    ),
     stringsAsFactors = FALSE
   )
 
-  lrt_p_label <- if (is.finite(lrt_result$lrt_p)) {
-    formatC(lrt_result$lrt_p, format = "e", digits = 2)
-  } else {
-    "NA"
-  }
-  lrt_subtitle <- paste0(
-    "Points farther right indicate stronger NB2-related corroboration  |  ",
-    "LRT p = ", lrt_p_label, " (", lrt_result$lrt_direction, ")"
+  delta_gap <- region_summary$diff_gap
+  p_label <- format_lrt_p(
+    lrt_result$lrt_p,
+    lrt_result$lrt_log10_p
   )
 
-  p3 <- ggplot(summary_df, aes(y = metric)) +
-    geom_segment(aes(x = LEFT, xend = RIGHT, yend = metric), color = "#7A7A7A", linewidth = 0.8) +
-    geom_point(aes(x = LEFT, color = "LEFT"), size = 3.4) +
-    geom_point(aes(x = RIGHT, color = "RIGHT"), size = 3.4) +
-    scale_color_manual(values = REGION_COLORS, breaks = REGION_LEVELS) +
+  lrt_direction_text <- if (
+    isTRUE(
+      lrt_result$alpha_right_mle >
+        lrt_result$alpha_left_mle
+    )
+  ) {
+    "αRIGHT > αLEFT"
+  } else {
+    "αRIGHT ≤ αLEFT"
+  }
+
+  summary_subtitle <- paste0(
+    "RIGHT−LEFT median (NB2−NB1) = ",
+    formatC(delta_gap, format = "f", digits = 3),
+    "   |   LEFT-vs-RIGHT NB2-dispersion LRT: χ²(1)=",
+    formatC(lrt_result$lrt_stat, format = "f", digits = 2),
+    ", p=",
+    p_label,
+    "   |   ",
+    lrt_direction_text
+  )
+
+  p3 <- ggplot(summary_df, aes(x = value, y = 1)) +
+    geom_segment(
+      aes(
+        x = summary_df$value[1L],
+        xend = summary_df$value[2L],
+        y = 1,
+        yend = 1
+      ),
+      color = "grey45",
+      linewidth = 0.9
+    ) +
+    geom_point(
+      data = summary_df[summary_df$region == "LEFT", , drop = FALSE],
+      aes(x = value, y = 1),
+      color = COL$left_pt,
+      size = 4
+    ) +
+    geom_point(
+      data = summary_df[summary_df$region == "RIGHT", , drop = FALSE],
+      aes(x = value, y = 1),
+      color = COL$right_pt,
+      size = 4
+    ) +
+    geom_text(
+      data = summary_df[summary_df$region == "LEFT", , drop = FALSE],
+      aes(x = value, y = 1, label = paste0("LEFT  ", formatC(value, format = "f", digits = 3))),
+      color = COL$left_pt,
+      vjust = -1.0,
+      hjust = 0.5,
+      size = 3.2,
+      fontface = "bold"
+    ) +
+    geom_text(
+      data = summary_df[summary_df$region == "RIGHT", , drop = FALSE],
+      aes(x = value, y = 1, label = paste0("RIGHT  ", formatC(value, format = "f", digits = 3))),
+      color = COL$right_pt,
+      vjust = -1.0,
+      hjust = 0.5,
+      size = 3.2,
+      fontface = "bold"
+    ) +
+    scale_y_continuous(
+      breaks = NULL,
+      limits = c(0.82, 1.18)
+    ) +
     labs(
-      title = paste0(comparison_name, " ", arm_name, ": summary"),
-      subtitle = lrt_subtitle,
-      x = "Median",
+      title = "LEFT vs RIGHT median NB2−NB1 contrast",
+      subtitle = summary_subtitle,
+      x = "Median raw-count NB2−NB1 contrast",
       y = NULL,
-      color = NULL
+      caption = paste0(
+        "Descriptive Δ uses region medians. LRT p tests H0: one shared NB2 dispersion α for LEFT and RIGHT. ",
+        "Reference rank = N−k*+1 = ",
+        kstar_rank,
+        "."
+      )
     ) +
     theme_bw(base_size = 11) +
     theme(
-      panel.grid.minor = element_blank(),
-      legend.position = "bottom"
+      panel.grid = element_blank(),
+      legend.position = "none",
+      plot.caption = element_text(hjust = 0, size = 8.5)
     )
 
-  save_three_panel_plot(list(p1, p2, p3), out_file)
+  save_three_panel_plot(
+    list(p1, p2, p3),
+    out_file
+  )
 }
 
 # =============================================================================
 # ONE ANALYSIS TRACK
 # =============================================================================
 
-run_one_track <- function(comparison_name,
-                          arm_name,
-                          rank_matrix,
-                          metric_matrix,
-                          output_dir,
-                          track,
-                          fig_tag,
-                          rank_tag,
-                          metric_tag,
-                          metric_name,
-                          deseq2_dispersion = NULL,
-                          deseq2_outlier_flag = NULL) {
+run_one_arm <- function(
+    comparison_name,
+    arm_label,
+    k_star,
+    count_mat_arm,
+    output_dir) {
 
+  # PCA ranking is kept identical to the original Main track:
+  # log1p(CPM) expression -> centered PCA -> ascending absolute PC1 loading.
+  rank_matrix <- normalize_cpm_log1p(count_mat_arm)
   abs_loadings <- compute_abs_pc1_loadings(rank_matrix)
   rank_order <- order(abs_loadings, decreasing = FALSE)
   total_n <- length(rank_order)
 
-  if (FIXED_LEADING_EDGE_SIZE >= total_n) {
-    stop("FIXED_LEADING_EDGE_SIZE must be < total_n")
+  if (!is.finite(k_star) || k_star < 1L || k_star >= total_n) {
+    stop(
+      "Invalid empirical k* for ",
+      comparison_name,
+      ": ",
+      k_star,
+      " with N=",
+      total_n
+    )
   }
 
-  reference_rank <- total_n - FIXED_LEADING_EDGE_SIZE + 1L
+  # The empirical top-k* begins at this rank on the ascending loading axis.
+  reference_rank <- total_n - as.integer(k_star) + 1L
 
   variance_df <- compute_ranked_variance_curve(
-    metric_mat_arm = metric_matrix,
+    metric_mat_arm = count_mat_arm,
     rank_order = rank_order,
     spar = VAR_SPLINE_SPAR
   )
 
-  dense_curve_df <- attr(variance_df, "dense_curve_df")
-  zero_df <- find_d2_zero_crossings(dense_curve_df)
-  interval_info <- select_custom_interval(zero_df, reference_rank, total_n)
+  dense_curve_df <- attr(
+    variance_df,
+    "dense_curve_df"
+  )
 
-  feature_df <- compute_ranked_feature_metrics(metric_matrix, rank_order)
-  feature_df$abs_pc1_loading <- abs_loadings[rank_order]
+  zero_df <- find_d2_zero_crossings(
+    dense_curve_df
+  )
 
-  region_summary <- summarize_regions(feature_df, interval_info$anchor, total_n)
+  interval_info <- select_custom_interval(
+    zero_df = zero_df,
+    reference_rank = reference_rank,
+    total_n = total_n
+  )
 
-  region_idx <- region_indices_from_anchor(interval_info$anchor, total_n)
+  feature_df <- compute_ranked_feature_metrics(
+    metric_mat_arm = count_mat_arm,
+    rank_order = rank_order
+  )
+
+  feature_df$abs_pc1_loading <- abs_loadings[
+    rank_order
+  ]
+
+  region_summary <- summarize_regions(
+    feature_df = feature_df,
+    anchor_rank = interval_info$anchor,
+    total_n = total_n
+  )
+
+  region_idx <- region_indices_from_anchor(
+    anchor_rank = interval_info$anchor,
+    total_n = total_n
+  )
+
+  # Formal likelihood test is intentionally raw-count only.
   lrt_result <- compute_region_lrt(
-    metric_matrix = metric_matrix,
+    metric_matrix = count_mat_arm,
     feature_df = feature_df,
     left_idx = region_idx$left_idx,
-    right_idx = region_idx$right_idx,
-    deseq2_dispersion = deseq2_dispersion,
-    deseq2_outlier_flag = deseq2_outlier_flag
+    right_idx = region_idx$right_idx
   )
-  lrt_result$lrt_is_integer_count_track <- identical(track, "Main")
 
   validate_method_level(
     feature_df = feature_df,
@@ -951,74 +1075,136 @@ run_one_track <- function(comparison_name,
   )
 
   selected_df <- data.frame(
-    comp = comparison_name,
-    arm = arm_name,
-    track = track,
-    rank_method = rank_tag,
-    metric_matrix = metric_name,
+    comparison = comparison_name,
+    arm = arm_label,
+    empirical_k = as.integer(k_star),
+    total_ranked_PAS = total_n,
+    kstar_reference_rank = reference_rank,
     Anchor = interval_info$anchor,
-    Ref = interval_info$ref,
     Terminal = interval_info$terminal,
-    IntMin = interval_info$interval_min,
-    IntMax = interval_info$interval_max,
+    transition_width = interval_info$terminal - interval_info$anchor + 1L,
+    left_start = min(region_idx$left_idx),
+    left_end = max(region_idx$left_idx),
+    right_start = min(region_idx$right_idx),
+    right_end = max(region_idx$right_idx),
     stringsAsFactors = FALSE
   )
 
-  cutoff_summary <- bind_cols(selected_df, region_summary, lrt_result) %>%
+  summary_row <- bind_cols(
+    selected_df,
+    region_summary,
+    lrt_result
+  ) %>%
     mutate(
-      LeftSize = region_summary$left_n,
-      RightSize = region_summary$right_n,
-      Call_NB2 = ifelse(diff_NB2 > 0, "RIGHT", "NOT_RIGHT"),
-      Call_Gap = ifelse(diff_gap > 0, "RIGHT", "NOT_RIGHT"),
-      Call_Alpha = ifelse(diff_alpha > 0, "RIGHT", "NOT_RIGHT")
+      right_minus_left_NB2_NB1 = diff_gap,
+      lrt_p_label = format_lrt_p(
+        lrt_p,
+        lrt_log10_p
+      )
     )
 
-  valid_path <- file.path(output_dir, paste0("Table_Valid_", comparison_name, "_", arm_name, "_", track, ".csv"))
-  rank_path  <- file.path(output_dir, paste0("Table_Rank_", comparison_name, "_", arm_name, "_", track, ".csv"))
-  cut_path   <- file.path(output_dir, paste0("Table_Cutoff_", comparison_name, "_", arm_name, "_", track, ".csv"))
-  fig_path   <- file.path(output_dir, paste0("Figure_", track, "_", comparison_name, "_", arm_name, ".png"))
-
-  write.csv(
-    data.frame(
-      comp = comparison_name,
-      arm = arm_name,
-      track = track,
-      Status = "PASS",
-      Anchor_lt_Ref = interval_info$anchor < interval_info$ref,
-      Ref_lt_Terminal = interval_info$ref < interval_info$terminal,
-      LeftN = region_summary$left_n,
-      RightN = region_summary$right_n,
-      stringsAsFactors = FALSE
-    ),
-    valid_path,
-    row.names = FALSE
+  rank_path <- file.path(
+    output_dir,
+    paste0(
+      "Table_Rank_",
+      comparison_name,
+      "_",
+      arm_label,
+      ".csv"
+    )
   )
 
+  summary_path <- file.path(
+    output_dir,
+    paste0(
+      "Table_Summary_",
+      comparison_name,
+      "_",
+      arm_label,
+      ".csv"
+    )
+  )
+
+  fig_path <- file.path(
+    output_dir,
+    paste0(
+      "Figure_",
+      comparison_name,
+      "_",
+      arm_label,
+      ".png"
+    )
+  )
+
+  rank_export <- feature_df %>%
+    left_join(
+      variance_df,
+      by = "rank"
+    ) %>%
+    mutate(
+      empirical_k = as.integer(k_star),
+      kstar_reference_rank = reference_rank,
+      region = case_when(
+        rank %in% region_idx$left_idx ~ "LEFT",
+        rank %in% region_idx$right_idx ~ "RIGHT",
+        TRUE ~ "OTHER"
+      ),
+      in_transition_range = (
+        rank >= interval_info$anchor &
+        rank <= interval_info$terminal
+      )
+    )
+
   write.csv(
-    feature_df %>% left_join(variance_df, by = "rank"),
+    rank_export,
     rank_path,
     row.names = FALSE
   )
 
-  write.csv(cutoff_summary, cut_path, row.names = FALSE)
+  write.csv(
+    summary_row,
+    summary_path,
+    row.names = FALSE
+  )
 
   build_main_figure(
     comparison_name = comparison_name,
-    arm_name = arm_name,
+    arm_label = arm_label,
+    k_star = k_star,
     variance_df = variance_df,
     feature_df = feature_df,
     interval_info = interval_info,
     region_summary = region_summary,
     lrt_result = lrt_result,
-    out_file = fig_path,
-    fig_tag = fig_tag,
-    rank_tag = rank_tag,
-    metric_tag = metric_tag
+    out_file = fig_path
+  )
+
+  message(
+    comparison_name,
+    " ",
+    arm_label,
+    " | k*=",
+    k_star,
+    " | reference rank=",
+    reference_rank,
+    " | Anchor=",
+    interval_info$anchor,
+    " | Terminal=",
+    interval_info$terminal,
+    " | RIGHT-LEFT NB2-NB1=",
+    signif(region_summary$diff_gap, 5),
+    " | LRT p=",
+    format_lrt_p(
+      lrt_result$lrt_p,
+      lrt_result$lrt_log10_p
+    )
   )
 
   list(
-    summary = cutoff_summary,
-    selected = selected_df
+    summary = summary_row,
+    figure = fig_path,
+    rank_table = rank_path,
+    summary_table = summary_path
   )
 }
 
@@ -1026,265 +1212,285 @@ run_one_track <- function(comparison_name,
 # RUN
 # =============================================================================
 
-count_mat <- read_count_matrix(COUNT_FILE)
-message("Using count file: ", COUNT_FILE)
-message("Count matrix dimensions: ", nrow(count_mat), " features x ", ncol(count_mat), " samples")
+count_mat <- read_count_matrix(
+  COUNT_FILE
+)
+
+message(
+  "Using count file: ",
+  COUNT_FILE
+)
+
+message(
+  "Count matrix dimensions: ",
+  nrow(count_mat),
+  " features x ",
+  ncol(count_mat),
+  " samples"
+)
 
 overall_rows <- list()
+figure_paths <- character(0)
+table_paths <- character(0)
 
 for (comparison_name in names(COMPARISONS)) {
-  comp_dir <- file.path(OUT_ROOT, comparison_name)
-  dir.create(comp_dir, recursive = TRUE, showWarnings = FALSE)
 
-  pats <- COMPARISONS[[comparison_name]]
+  k_star <- as.integer(
+    EMPIRICAL_K[[comparison_name]]
+  )
 
-  for (arm_name in c("control", "treatment")) {
-    sample_idx <- grep(pats[[arm_name]], colnames(count_mat))
+  comp_dir <- file.path(
+    OUT_ROOT,
+    comparison_name
+  )
+
+  dir.create(
+    comp_dir,
+    recursive = TRUE,
+    showWarnings = FALSE
+  )
+
+  arm_patterns <- COMPARISONS[[
+    comparison_name
+  ]]
+
+  for (arm_label in names(arm_patterns)) {
+
+    sample_idx <- grep(
+      arm_patterns[[arm_label]],
+      colnames(count_mat)
+    )
+
     if (length(sample_idx) < 2L) {
-      stop("Not enough samples for ", comparison_name, " ", arm_name)
+      stop(
+        "Not enough samples for ",
+        comparison_name,
+        " ",
+        arm_label
+      )
     }
 
-    count_mat_arm <- count_mat[, sample_idx, drop = FALSE]
+    count_mat_arm <- count_mat[
+      ,
+      sample_idx,
+      drop = FALSE
+    ]
 
-    main_rank_matrix <- normalize_cpm_log1p(count_mat_arm)
-
-    main_res <- run_one_track(
+    result <- run_one_arm(
       comparison_name = comparison_name,
-      arm_name = arm_name,
-      rank_matrix = main_rank_matrix,
-      metric_matrix = count_mat_arm,
-      output_dir = comp_dir,
-      track = "Main",
-      fig_tag = "Main",
-      rank_tag = "Rank: CPM log1p",
-      metric_tag = "Metrics: raw counts",
-      metric_name = "raw_counts"
+      arm_label = arm_label,
+      k_star = k_star,
+      count_mat_arm = count_mat_arm,
+      output_dir = comp_dir
     )
 
-    overall_rows[[length(overall_rows) + 1L]] <- main_res$summary
+    overall_rows[[
+      length(overall_rows) + 1L
+    ]] <- result$summary
 
-    message(
-      "[Main] ", comparison_name, " ", arm_name,
-      " | Anchor=", main_res$selected$Anchor,
-      " Ref=", main_res$selected$Ref,
-      " Terminal=", main_res$selected$Terminal
+    figure_paths <- c(
+      figure_paths,
+      result$figure
     )
 
-    if (RUN_DESEQ2_SUPPLEMENT) {
-      deseq2_obj <- compute_deseq2_matrices(count_mat_arm, rank_method = DESEQ2_RANK_METHOD)
-
-      if (is.null(deseq2_obj)) {
-        message("[DESeq2] skipped: package not available for ", comparison_name, " ", arm_name)
-      } else {
-        deseq2_rank_tag <- if (DESEQ2_RANK_METHOD == "vst") {
-          "Rank: DESeq2 VST"
-        } else {
-          "Rank: DESeq2 log1p"
-        }
-
-        deseq2_res <- run_one_track(
-          comparison_name = comparison_name,
-          arm_name = arm_name,
-          rank_matrix = deseq2_obj$ranking_matrix,
-          metric_matrix = deseq2_obj$normalized_counts,
-          output_dir = comp_dir,
-          track = "DESeq2",
-          fig_tag = "DESeq2 supplement",
-          rank_tag = deseq2_rank_tag,
-          metric_tag = "Metrics: DESeq2 normalized",
-          metric_name = "deseq2_normalized_counts",
-          deseq2_dispersion = deseq2_obj$dispersion_final,
-          deseq2_outlier_flag = deseq2_obj$dispersion_is_outlier
-        )
-
-        write.csv(
-          data.frame(
-            sample = names(deseq2_obj$size_factors),
-            size_factor = as.numeric(deseq2_obj$size_factors),
-            stringsAsFactors = FALSE
-          ),
-          file.path(comp_dir, paste0("Table_SizeFactor_", comparison_name, "_", arm_name, ".csv")),
-          row.names = FALSE
-        )
-
-        overall_rows[[length(overall_rows) + 1L]] <- deseq2_res$summary
-
-        message(
-          "[DESeq2] ", comparison_name, " ", arm_name,
-          " | Anchor=", deseq2_res$selected$Anchor,
-          " Ref=", deseq2_res$selected$Ref,
-          " Terminal=", deseq2_res$selected$Terminal
-        )
-      }
-    }
+    table_paths <- c(
+      table_paths,
+      result$rank_table,
+      result$summary_table
+    )
   }
 }
 
-overall_summary <- bind_rows(overall_rows)
+overall_summary <- bind_rows(
+  overall_rows
+)
+
+# Hard validation: every comparison must carry exactly its prescribed k* in
+# both arms; no global/fixed top-k can silently enter the output.
+observed_k <- overall_summary %>%
+  distinct(
+    comparison,
+    empirical_k
+  )
+
+observed_k <- observed_k[
+  match(names(EMPIRICAL_K), observed_k$comparison),
+  ,
+  drop = FALSE
+]
+
+if (
+  nrow(observed_k) != length(EMPIRICAL_K) ||
+  any(is.na(observed_k$comparison)) ||
+  !identical(
+    as.integer(observed_k$empirical_k),
+    as.integer(EMPIRICAL_K)
+  )
+) {
+  stop(
+    "Comparison-specific empirical k* validation failed."
+  )
+}
+
+overall_path <- file.path(
+  OUT_ROOT,
+  "Table_Overall_NB1_NB2_Corroboration.csv"
+)
+
+lrt_path <- file.path(
+  OUT_ROOT,
+  "Table_LRT_LEFT_vs_RIGHT_NB2_Dispersion.csv"
+)
+
+cutoff_path <- file.path(
+  OUT_ROOT,
+  "Table_Empirical_kstar_Inputs.csv"
+)
 
 write.csv(
   overall_summary,
-  file.path(OUT_ROOT, "Table_Overall_Cutoff.csv"),
+  overall_path,
   row.names = FALSE
 )
-
-# -----------------------------------------------------------------------------
-# Clean summary tables: each table only contains columns that are populated
-# for its track, so neither has structural NA columns.
-# -----------------------------------------------------------------------------
-
-lrt_summary <- overall_summary %>%
-  filter(track == "Main") %>%
-  transmute(
-    comparison = comp,
-    arm = arm,
-    left_n = left_n,
-    right_n = right_n,
-    alpha_left = alpha_left_mle,
-    alpha_right = alpha_right_mle,
-    diff_alpha = alpha_right_mle - alpha_left_mle,
-    lrt_stat = lrt_stat,
-    lrt_p = lrt_p,
-    direction = lrt_direction
-  )
 
 write.csv(
-  lrt_summary,
-  file.path(OUT_ROOT, "Table_LRT_Main.csv"),
+  overall_summary %>%
+    transmute(
+      comparison = comparison,
+      arm = arm,
+      empirical_k = empirical_k,
+      kstar_reference_rank = kstar_reference_rank,
+      left_n = left_n,
+      right_n = right_n,
+      alpha_left_mle = alpha_left_mle,
+      alpha_right_mle = alpha_right_mle,
+      lrt_stat = lrt_stat,
+      lrt_df = lrt_df,
+      lrt_p = lrt_p,
+      lrt_log10_p = lrt_log10_p,
+      lrt_p_label = lrt_p_label,
+      direction = lrt_direction,
+      median_NB2_NB1_LEFT = left_gap,
+      median_NB2_NB1_RIGHT = right_gap,
+      right_minus_left_NB2_NB1 = right_minus_left_NB2_NB1
+    ),
+  lrt_path,
   row.names = FALSE
 )
-
-dispersion_outlier_summary <- overall_summary %>%
-  filter(track == "DESeq2") %>%
-  transmute(
-    comparison = comp,
-    arm = arm,
-    left_n = left_n,
-    right_n = right_n,
-    alpha_left_shrunk = alpha_left_deseq2_shrunk,
-    alpha_right_shrunk = alpha_right_deseq2_shrunk,
-    diff_shrunk = diff_deseq2_shrunk,
-    outlier_frac_left = frac_dispersion_outlier_left,
-    outlier_frac_right = frac_dispersion_outlier_right
-  )
 
 write.csv(
-  dispersion_outlier_summary,
-  file.path(OUT_ROOT, "Table_Dispersion_Outlier_DESeq2.csv"),
+  data.frame(
+    comparison = names(EMPIRICAL_K),
+    empirical_k = as.integer(EMPIRICAL_K),
+    cutoff_scope = "comparison-specific weighted-Pareto k*",
+    stringsAsFactors = FALSE
+  ),
+  cutoff_path,
   row.names = FALSE
 )
 
-message("Done. Outputs written to: ", OUT_ROOT)
-
-# -----------------------------------------------------------------------------
-# Figure: LRT evidence across every comparison (Main track). One row of
-# points per arm, LEFT vs RIGHT alpha, with the LRT p-value labeled.
-# -----------------------------------------------------------------------------
-
-lrt_plot_df <- lrt_summary %>%
-  mutate(
-    arm_label = paste0(comparison, " ", arm),
-    p_label = ifelse(
-      lrt_p < 1e-10,
-      paste0("p<1e-10"),
-      paste0("p=", formatC(lrt_p, format = "e", digits = 2))
-    )
-  )
-
-p_lrt <- ggplot(lrt_plot_df, aes(y = reorder(arm_label, diff_alpha))) +
-  geom_segment(aes(x = alpha_left, xend = alpha_right, yend = arm_label), color = "#7A7A7A", linewidth = 0.9) +
-  geom_point(aes(x = alpha_left, color = "LEFT"), size = 3.6) +
-  geom_point(aes(x = alpha_right, color = "RIGHT"), size = 3.6) +
-  geom_text(aes(x = pmax(alpha_left, alpha_right), label = p_label), hjust = -0.15, size = 3) +
-  scale_color_manual(values = REGION_COLORS, breaks = REGION_LEVELS) +
-  scale_x_continuous(expand = expansion(mult = c(0.05, 0.30))) +
-  labs(
-    title = "Likelihood-ratio evidence: LEFT vs RIGHT NB2 dispersion (alpha)",
-    subtitle = "Every arm tested, Main track. RIGHT further right than LEFT, with a small p-value, supports RIGHT being more NB2-like.",
-    x = "alpha (NB2 dispersion, maximum-likelihood estimate)",
-    y = NULL,
-    color = NULL
-  ) +
-  theme_bw(base_size = 12) +
-  theme(legend.position = "bottom")
-
-ggsave(
-  file.path(OUT_ROOT, "Figure_LRT_Evidence_Summary.png"),
-  p_lrt, width = 11, height = 6.5, dpi = 300
+table_paths <- c(
+  table_paths,
+  overall_path,
+  lrt_path,
+  cutoff_path
 )
 
-# -----------------------------------------------------------------------------
-# Figure: DESeq2 dispersion-outlier fraction, LEFT vs RIGHT, every comparison.
-# -----------------------------------------------------------------------------
+# =============================================================================
+# ZIP ARCHIVES
+# =============================================================================
 
-outlier_plot_df <- dispersion_outlier_summary %>%
-  mutate(arm_label = paste0(comparison, " ", arm)) %>%
-  select(arm_label, outlier_frac_left, outlier_frac_right) %>%
-  pivot_longer(
-    cols = c(outlier_frac_left, outlier_frac_right),
-    names_to = "region",
-    values_to = "outlier_fraction"
-  ) %>%
-  mutate(region = ifelse(region == "outlier_frac_left", "LEFT", "RIGHT"))
-
-p_outlier <- ggplot(outlier_plot_df, aes(x = arm_label, y = outlier_fraction, fill = region)) +
-  geom_col(position = position_dodge(width = 0.7), width = 0.6) +
-  scale_fill_manual(values = REGION_COLORS, breaks = REGION_LEVELS) +
-  scale_y_continuous(labels = scales::percent) +
-  labs(
-    title = "DESeq2 dispersion-outlier fraction: LEFT vs RIGHT, every comparison",
-    subtitle = "A gene flagged as a dispersion outlier is not shrunk toward the fitted trend. A higher RIGHT fraction supports RIGHT genes departing from the bulk dispersion trend.",
-    x = NULL,
-    y = "Fraction of genes flagged as dispersion outliers",
-    fill = NULL
-  ) +
-  theme_bw(base_size = 11) +
-  theme(legend.position = "bottom", axis.text.x = element_text(angle = 25, hjust = 1))
-
-ggsave(
-  file.path(OUT_ROOT, "Figure_Dispersion_Outlier_Summary.png"),
-  p_outlier, width = 11, height = 6.5, dpi = 300
+message(
+  "Creating zip archives..."
 )
 
-# -----------------------------------------------------------------------------
-# Zip archives: everything in one download for figures and for tables.
-# Outputs live in per-comparison subfolders (OUT_ROOT/RT0_ZT6/, etc.), so
-# this searches recursively. Wrapped in tryCatch so that if the zip utility
-# is unavailable, the actual results above are still kept intact.
-# -----------------------------------------------------------------------------
-
-message("Creating zip archives...")
-
-zip_result <- tryCatch(
+tryCatch(
   {
-    figure_files <- list.files(OUT_ROOT, pattern = "\\.png$", full.names = TRUE, recursive = TRUE)
-    table_files <- list.files(OUT_ROOT, pattern = "\\.csv$", full.names = TRUE, recursive = TRUE)
+    figures_zip_path <- file.path(
+      OUT_ROOT,
+      "REMNB1_LEADNB2_EmpiricalK_Figures.zip"
+    )
 
-    if (length(figure_files) > 0L) {
-      figures_zip_path <- file.path(OUT_ROOT, "REMNB1_LEADNB2_Figures.zip")
-      if (file.exists(figures_zip_path)) file.remove(figures_zip_path)
-      utils::zip(figures_zip_path, files = figure_files, flags = "-j")
-      message("  REMNB1_LEADNB2_Figures.zip (", length(figure_files), " files)")
-    } else {
-      message("  No .png files found; skipping REMNB1_LEADNB2_Figures.zip")
+    tables_zip_path <- file.path(
+      OUT_ROOT,
+      "REMNB1_LEADNB2_EmpiricalK_Tables.zip"
+    )
+
+    if (file.exists(figures_zip_path)) {
+      file.remove(figures_zip_path)
     }
 
-    if (length(table_files) > 0L) {
-      tables_zip_path <- file.path(OUT_ROOT, "REMNB1_LEADNB2_Tables.zip")
-      if (file.exists(tables_zip_path)) file.remove(tables_zip_path)
-      utils::zip(tables_zip_path, files = table_files, flags = "-j")
-      message("  REMNB1_LEADNB2_Tables.zip (", length(table_files), " files)")
-    } else {
-      message("  No .csv files found; skipping REMNB1_LEADNB2_Tables.zip")
+    if (file.exists(tables_zip_path)) {
+      file.remove(tables_zip_path)
     }
 
-    TRUE
+    if (length(figure_paths) > 0L) {
+      utils::zip(
+        figures_zip_path,
+        files = unique(figure_paths),
+        flags = "-j"
+      )
+
+      message(
+        "  Figures ZIP: ",
+        figures_zip_path,
+        " (",
+        length(unique(figure_paths)),
+        " files)"
+      )
+    }
+
+    if (length(table_paths) > 0L) {
+      utils::zip(
+        tables_zip_path,
+        files = unique(table_paths),
+        flags = "-j"
+      )
+
+      message(
+        "  Tables ZIP: ",
+        tables_zip_path,
+        " (",
+        length(unique(table_paths)),
+        " files)"
+      )
+    }
   },
   error = function(e) {
-    message(
-      "Zip archive creation failed (individual files above are still ",
-      "intact and usable): ", conditionMessage(e)
+    warning(
+      "ZIP creation failed; individual outputs remain intact: ",
+      conditionMessage(e)
     )
-    FALSE
   }
+)
+
+message(
+  "============================================================"
+)
+
+message(
+  "EMPIRICAL-k* NB1/NB2 CORROBORATION COMPLETE"
+)
+
+message(
+  "Comparison-specific k*: ",
+  paste(
+    names(EMPIRICAL_K),
+    EMPIRICAL_K,
+    sep = "=",
+    collapse = "; "
+  )
+)
+
+message(
+  "Formal LRT track: raw integer counts only."
+)
+
+message(
+  "Outputs: ",
+  OUT_ROOT
+)
+
+message(
+  "============================================================"
 )
