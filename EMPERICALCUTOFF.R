@@ -9,7 +9,7 @@ suppressPackageStartupMessages({
 
 options(stringsAsFactors = FALSE)
 
-SCRIPT_BUILD <- "EMPIRICAL_CUTOFF_COMPARISON_SPECIFIC_KSTAR_v4"
+SCRIPT_BUILD <- "EMPIRICAL_CUTOFF_COMPARISON_SPECIFIC_KSTAR_v5"
 
 # =============================================================================
 # EMPIRICAL EVS CUTOFF: WEIGHTED PARETO SELECTION + NB LOG-RATIO EVIDENCE
@@ -96,9 +96,12 @@ SCRIPT_BUILD <- "EMPIRICAL_CUTOFF_COMPARISON_SPECIFIC_KSTAR_v4"
 #   NB1: Var(Y) = mu + alpha*mu,   size = mu/alpha
 #   NB2: Var(Y) = mu + alpha*mu^2, size = 1/alpha,
 #
-# and the block is scored by the log ratio
+# and reported alongside the per-PAS moment contrast
 #
-#   L(block) = log10( L_NB2 / L_NB1 ),   delta = L(RIGHT) - L(LEFT).
+#   NB2-NB1 = log(1 + max(variance - mean, 0)) - log(1 + mean),
+#
+# summarized by its median within each block so the two blocks are compared on
+# the same per-feature scale.
 #
 # The dispersion change is then tested under NB2 as a nested hypothesis: H0
 # holds one shared alpha across both blocks, H1 gives each block its own alpha.
@@ -106,17 +109,22 @@ SCRIPT_BUILD <- "EMPIRICAL_CUTOFF_COMPARISON_SPECIFIC_KSTAR_v4"
 #
 #   LRT = 2*(logLik_H1 - logLik_H0) ~ chi-square(df = 1).
 #
-# delta > 0 with alpha_RIGHT > alpha_LEFT and a small p-value is the evidence
-# that the dispersion regime changes at the selected cutoff.
+# A higher median NB2-NB1 in the selected block, with alpha_RIGHT > alpha_LEFT
+# and a small p-value, is the evidence that the overdispersion regime changes
+# at the selected cutoff.
 #
 # OUTPUTS
 # -------
-# Two manuscript figures in <OUT_ROOT>/Figures/:
+# Three manuscript figures in <OUT_ROOT>/Figures/:
 #
-#   Figure_1_Cutoff_Selection.png        how k* was selected, one panel per
-#                                        comparison
-#   Figure_2_NB_LogRatio_Evidence.png    LEFT/RIGHT log-ratio evidence and the
-#                                        chi-square test, one row per arm
+#   Figure_1_Rank_Regimes.png            cumulative divergence and the c1/c2
+#                                        regimes that G(k) and R(k) are counted
+#                                        against, one panel per comparison
+#   Figure_2_Cutoff_Selection.png        U(k) across candidate k and the
+#                                        selected k*, one panel per comparison
+#   Figure_3_Overdispersion_Evidence.png median NB2-NB1 in the matched LEFT and
+#                                        RIGHT blocks with the chi-square test,
+#                                        one row per arm
 #
 # Per comparison, <OUT_ROOT>/<comparison>/Tables/ holds the EVS membership
 # table (one row per PAS) and the weighted-Pareto scan (one row per candidate
@@ -131,7 +139,7 @@ SCRIPT_BUILD <- "EMPIRICAL_CUTOFF_COMPARISON_SPECIFIC_KSTAR_v4"
 # =============================================================================
 
 COUNT_FILE <- "/root/REAPER98632/data/WTTS-Seq_2022.2_DE_raw_read_numbers.csv"
-OUT_ROOT   <- "/root/REAPER98632/exports/empirical_cutoff_comparison_specific_kstar_v4"
+OUT_ROOT   <- "/root/REAPER98632/exports/empirical_cutoff_comparison_specific_kstar_v5"
 
 GROUP_PATTERNS <- c(
   RT0  = "^R0_",
@@ -181,8 +189,13 @@ dir.create(SUMMARY_TAB_DIR, recursive = TRUE, showWarnings = FALSE)
 
 COL <- list(
   candidate_line = "#A7A7A7",
-  pareto         = "#5E3C99",
+  utility        = "#5E3C99",
   selected       = "#B5179E",
+  control        = "#386CB0",
+  treatment      = "#159D91",
+  remainder      = "#DCE6F2",
+  interval       = "#FFF0B3",
+  leading        = "#D8F3E7",
   left           = "#386CB0",
   right          = "#159D91"
 )
@@ -514,6 +527,8 @@ compute_raw_variance_geometry <- function(
     raw_counts_arm,
     rank_order) {
 
+  raw_mu <- rowMeans(raw_counts_arm, na.rm = TRUE)
+
   raw_var <- apply(
     raw_counts_arm,
     1L,
@@ -521,14 +536,31 @@ compute_raw_variance_geometry <- function(
     na.rm = TRUE
   )
 
+  raw_mu[!is.finite(raw_mu)] <- 0
   raw_var[!is.finite(raw_var)] <- 0
+  raw_mu <- pmax(raw_mu, 0)
   raw_var <- pmax(raw_var, 0)
 
+  raw_mu_ranked <- raw_mu[rank_order]
   raw_var_ranked <- raw_var[rank_order]
+
+  # Per-feature moment quantities on the raw-count scale.
+  #   NB2      = log(1 + max(variance - mean, 0))
+  #   NB2-NB1  = NB2 - log(1 + mean)
+  #   alpha*mu = log(1 + alpha*mean), alpha = max((variance - mean)/mean^2, 0)
+  excess <- pmax(raw_var_ranked - raw_mu_ranked, 0)
+
+  alpha_hat <- rep(0, length(raw_mu_ranked))
+  pos <- raw_mu_ranked > 0
+  alpha_hat[pos] <- pmax(excess[pos] / (raw_mu_ranked[pos]^2), 0)
 
   data.frame(
     rank = seq_along(rank_order),
+    raw_empirical_mean = raw_mu_ranked,
     raw_empirical_variance = raw_var_ranked,
+    NB2 = log1p(excess),
+    NB2_NB1 = log1p(excess) - log1p(raw_mu_ranked),
+    alpha_mu = log1p(alpha_hat * raw_mu_ranked),
     stringsAsFactors = FALSE
   )
 }
@@ -1876,6 +1908,31 @@ block_observations <- function(
   list(y = y[ok], mu = mu[ok])
 }
 
+# Median per-feature moment contrast in each matched block. The quantity that
+# separates the blocks is NB2-NB1: it is computed feature by feature and is
+# therefore comparable across blocks at different expression levels.
+block_moment_medians <- function(rank_df, k) {
+  blocks <- assign_matched_regions(rank_df, k)
+
+  left_df <- blocks[blocks$block == "LEFT", , drop = FALSE]
+  right_df <- blocks[blocks$block == "RIGHT", , drop = FALSE]
+
+  data.frame(
+    NB2_left = stats::median(left_df$NB2, na.rm = TRUE),
+    NB2_right = stats::median(right_df$NB2, na.rm = TRUE),
+    NB2_NB1_left = stats::median(left_df$NB2_NB1, na.rm = TRUE),
+    NB2_NB1_right = stats::median(right_df$NB2_NB1, na.rm = TRUE),
+    alpha_mu_left = stats::median(left_df$alpha_mu, na.rm = TRUE),
+    alpha_mu_right = stats::median(right_df$alpha_mu, na.rm = TRUE),
+    stringsAsFactors = FALSE
+  ) %>%
+    mutate(
+      diff_NB2 = NB2_right - NB2_left,
+      diff_NB2_NB1 = NB2_NB1_right - NB2_NB1_left,
+      diff_alpha_mu = alpha_mu_right - alpha_mu_left
+    )
+}
+
 build_arm_log_ratio_evidence <- function(
     arm_label,
     raw_counts_arm,
@@ -1950,10 +2007,21 @@ build_arm_log_ratio_evidence <- function(
     right_row$alpha_NB2_at_bound |
     fit_pooled$at_bound
 
+  moments <- block_moment_medians(rank_df, k)
+
   summary_row <- data.frame(
     arm = arm_label,
     left_n_features = left_row$n_features,
     right_n_features = right_row$n_features,
+    NB2_NB1_left = moments$NB2_NB1_left,
+    NB2_NB1_right = moments$NB2_NB1_right,
+    diff_NB2_NB1 = moments$diff_NB2_NB1,
+    NB2_left = moments$NB2_left,
+    NB2_right = moments$NB2_right,
+    diff_NB2 = moments$diff_NB2,
+    alpha_mu_left = moments$alpha_mu_left,
+    alpha_mu_right = moments$alpha_mu_right,
+    diff_alpha_mu = moments$diff_alpha_mu,
     log10_LR_left = left_row$log10_LR_NB2_over_NB1,
     log10_LR_right = right_row$log10_LR_NB2_over_NB1,
     delta_log10_LR = right_row$log10_LR_NB2_over_NB1 -
@@ -1987,89 +2055,168 @@ build_arm_log_ratio_evidence <- function(
 # FIGURE BUILDERS
 # =============================================================================
 
-# Figure 1 panel: the weighted-Pareto scan and the selected cutoff for one
-# comparison. This is the selection step itself.
+REGION_LEVELS <- c("Remainder", "Divergence", "Leading edge")
+
+REGION_FILLS <- c(
+  "Remainder"    = COL$remainder,
+  "Divergence"   = COL$interval,
+  "Leading edge" = COL$leading
+)
+
+# Figure 1 panel: the cumulative divergence D(r) that defines the rank regimes.
+# The shaded bands are the Remainder, Divergence, and Leading-edge regimes that
+# the Pareto benefit G(k) and cost R(k) are counted against.
+make_divergence_panel <- function(
+    comparison_name,
+    control_group,
+    treatment_group,
+    group_results,
+    knot_fit,
+    c1,
+    c2) {
+
+  control <- group_results[[control_group]]$data
+  N <- nrow(control)
+
+  observed <- bind_rows(
+    control %>% transmute(rank, arm = control_group, D = cumulative_divergence),
+    group_results[[treatment_group]]$data %>%
+      transmute(rank, arm = treatment_group, D = cumulative_divergence)
+  )
+
+  fit_idx <- match(c(control_group, treatment_group), knot_fit$groups)
+  if (anyNA(fit_idx)) {
+    stop("Pair arms were not found in the shared knot fit.")
+  }
+
+  fitted <- bind_rows(lapply(fit_idx, function(j) {
+    data.frame(
+      rank = seq_len(N),
+      arm = knot_fit$groups[j],
+      D = knot_fit$fitted[, j],
+      stringsAsFactors = FALSE
+    )
+  }))
+
+  region_df <- data.frame(
+    xmin = c(1, c1, c2),
+    xmax = c(c1, c2, N),
+    region = factor(REGION_LEVELS, levels = REGION_LEVELS),
+    stringsAsFactors = FALSE
+  )
+
+  arm_colors <- c(
+    stats::setNames(COL$control, control_group),
+    stats::setNames(COL$treatment, treatment_group)
+  )
+
+  ggplot() +
+    geom_rect(
+      data = region_df,
+      aes(xmin = xmin, xmax = xmax, ymin = -Inf, ymax = Inf, fill = region),
+      inherit.aes = FALSE,
+      alpha = 0.45
+    ) +
+    geom_hline(yintercept = 0, color = "grey55", linetype = "dotted", linewidth = 0.35) +
+    geom_line(
+      data = observed,
+      aes(rank, D, color = arm),
+      linewidth = 0.6,
+      alpha = 0.45
+    ) +
+    geom_line(
+      data = fitted,
+      aes(rank, D, color = arm),
+      linewidth = 1.2
+    ) +
+    geom_vline(xintercept = c1, color = "#D73027", linetype = "dashed", linewidth = 0.7) +
+    geom_vline(xintercept = c2, color = "#1A9850", linetype = "longdash", linewidth = 0.7) +
+    annotate("text", x = c1, y = Inf, label = "c1", vjust = 1.6, hjust = 1.25, size = 3.4, fontface = "bold") +
+    annotate("text", x = c2, y = Inf, label = "c2", vjust = 1.6, hjust = -0.35, size = 3.4, fontface = "bold") +
+    scale_fill_manual(name = NULL, values = REGION_FILLS, drop = FALSE) +
+    scale_color_manual(name = NULL, values = arm_colors) +
+    labs(
+      title = comparison_name,
+      x = "Absolute PC1 loading rank",
+      y = "D(r) = F_E(r) - F_P(r)"
+    ) +
+    theme_manuscript(base_size = 12) +
+    guides(
+      fill = guide_legend(nrow = 1, order = 1),
+      color = guide_legend(nrow = 1, order = 2)
+    )
+}
+
+# Figure 2 panel: the weighted utility across every candidate k, with the
+# maximum marking the selected cutoff. This is the selection step itself.
 make_pareto_panel <- function(scan_df, selected_k, comparison_name) {
   selected <- scan_df %>%
     filter(k == selected_k) %>%
     slice(1L)
 
-  frontier <- scan_df %>%
-    filter(is_pareto) %>%
-    arrange(remainder_cross_n, good_n, k) %>%
-    distinct(remainder_cross_n, good_n, .keep_all = TRUE)
-
-  ggplot() +
-    geom_path(
-      data = scan_df,
-      aes(remainder_cross_n, good_n, group = 1),
-      color = COL$candidate_line,
-      linewidth = 0.5,
-      alpha = 0.6
-    ) +
-    geom_path(
-      data = frontier,
-      aes(remainder_cross_n, good_n, color = "Pareto frontier", group = 1),
-      linewidth = 1.3
+  ggplot(scan_df, aes(k, weighted_utility)) +
+    geom_hline(yintercept = 0, color = "grey60", linetype = "dotted", linewidth = 0.35) +
+    geom_line(color = COL$utility, linewidth = 0.9) +
+    geom_vline(
+      xintercept = selected_k,
+      color = COL$selected,
+      linetype = "dashed",
+      linewidth = 0.8
     ) +
     geom_point(
       data = selected,
-      aes(remainder_cross_n, good_n, color = "Selected k*"),
+      aes(k, weighted_utility),
       shape = 23,
       fill = COL$selected,
-      size = 5.0,
-      stroke = 1.1
+      color = COL$selected,
+      size = 4.6,
+      stroke = 1.0
     ) +
     annotate(
       "label",
-      x = selected$remainder_cross_n,
-      y = selected$good_n,
+      x = selected$k,
+      y = selected$weighted_utility,
       label = paste0(
         "k* = ", selected_k,
         "\nG = ", selected$good_n,
         "\nR = ", selected$remainder_cross_n
       ),
-      hjust = -0.08,
-      vjust = 1.1,
-      size = 3.4,
+      hjust = -0.12,
+      vjust = 1.05,
+      size = 3.3,
       label.size = 0.25,
       fill = "white"
     ) +
-    scale_color_manual(
-      name = NULL,
-      values = c(
-        "Pareto frontier" = COL$pareto,
-        "Selected k*" = COL$selected
-      )
-    ) +
-    scale_x_continuous(expand = expansion(mult = c(0.05, 0.22))) +
+    scale_x_continuous(expand = expansion(mult = c(0.02, 0.16))) +
     labs(
       title = comparison_name,
-      x = "Cost R(k): opposite-arm Remainder crossings",
-      y = "Benefit G(k): retained PASs"
+      x = "Candidate top-k",
+      y = "U(k) = G_norm(k) - R_norm(k)"
     ) +
-    theme_manuscript(base_size = 13) +
-    guides(color = guide_legend(nrow = 1))
+    theme_manuscript(base_size = 12) +
+    theme(legend.position = "none")
 }
 
-make_cutoff_selection_figure <- function(panels, out_file) {
+make_grid_figure <- function(panels, out_file) {
   if (length(panels) != 4L) {
-    stop("The cutoff selection figure expects one panel per comparison.")
+    stop("This figure expects one panel per comparison.")
   }
 
   save_grid_2x2(
     panels,
     out_file,
-    width = 13.5,
+    width = 14.0,
     height = 10.0
   )
 }
 
-# Figure 2: the log-ratio evidence. One row per arm. The segment runs from the
-# LEFT block score to the RIGHT block score, so a rightward segment is the
-# result being claimed: the selected block is more NB2-like than the matched
-# block below it.
-make_log_ratio_figure <- function(evidence_all, out_file) {
+# Figure 3: the per-feature moment contrast on either side of the cutoff.
+# NB2-NB1 = log(1 + max(variance - mean, 0)) - log(1 + mean) is computed for
+# every PAS and summarized by its median within each matched block, so the two
+# blocks are compared on the same per-feature scale. The chi-square p-value is
+# the nested NB2 test of a shared dispersion against separate LEFT/RIGHT
+# dispersions.
+make_evidence_figure <- function(evidence_all) {
   df <- evidence_all %>%
     mutate(
       arm_label = paste0(comparison, "  |  ", arm),
@@ -2086,30 +2233,25 @@ make_log_ratio_figure <- function(evidence_all, out_file) {
     arrange(comparison, arm) %>%
     mutate(arm_label = factor(arm_label, levels = rev(unique(arm_label))))
 
-  x_span <- range(c(df$log10_LR_left, df$log10_LR_right), na.rm = TRUE)
-  pad <- diff(x_span) * 0.28
+  x_span <- range(c(df$NB2_NB1_left, df$NB2_NB1_right), na.rm = TRUE)
+  pad <- diff(x_span) * 0.55
   if (!is.finite(pad) || pad <= 0) pad <- 1
 
   ggplot(df, aes(y = arm_label)) +
-    geom_vline(
-      xintercept = 0,
-      linetype = "dashed",
-      color = "grey45",
-      linewidth = 0.5
-    ) +
     geom_segment(
-      aes(x = log10_LR_left, xend = log10_LR_right, yend = arm_label),
+      aes(x = NB2_NB1_left, xend = NB2_NB1_right, yend = arm_label),
       color = "grey55",
       linewidth = 0.9,
       arrow = arrow(length = unit(0.13, "in"), type = "closed")
     ) +
-    geom_point(aes(x = log10_LR_left, color = "LEFT: matched block below k*"), size = 3.6) +
-    geom_point(aes(x = log10_LR_right, color = "RIGHT: selected top-k* block"), size = 3.6) +
+    geom_point(aes(x = NB2_NB1_left, color = "LEFT: matched block below k*"), size = 3.8) +
+    geom_point(aes(x = NB2_NB1_right, color = "RIGHT: selected top-k* block"), size = 3.8) +
     geom_text(
       aes(
-        x = pmax(log10_LR_left, log10_LR_right),
+        x = pmax(NB2_NB1_left, NB2_NB1_right),
         label = paste0(
-          "delta = ", formatC(delta_log10_LR, format = "f", digits = 1),
+          "RIGHT - LEFT = ",
+          formatC(diff_NB2_NB1, format = "f", digits = 3),
           ",  ", p_label
         )
       ),
@@ -2123,13 +2265,13 @@ make_log_ratio_figure <- function(evidence_all, out_file) {
         "RIGHT: selected top-k* block" = COL$right
       )
     ) +
-    scale_x_continuous(expand = expansion(add = c(pad * 0.15, pad))) +
+    scale_x_continuous(expand = expansion(add = c(pad * 0.12, pad))) +
     labs(
-      title = "NB2 versus NB1 evidence on either side of the selected cutoff",
-      subtitle = "Values right of zero favor NB2 over NB1. Rightward arrows show the selected block is the more NB2-like of the two.",
-      x = "log10( L_NB2 / L_NB1 )",
+      title = "Overdispersion on either side of the selected cutoff",
+      subtitle = "Median per-PAS NB2-NB1 contrast. Rightward arrows show the selected block is the more NB2-like of the two.",
+      x = "Median NB2-NB1  =  log(1 + variance - mean) - log(1 + mean)",
       y = NULL,
-      caption = "delta = log10 LR (RIGHT) - log10 LR (LEFT). p is the chi-square(1) test of a shared NB2 dispersion against separate LEFT/RIGHT dispersions."
+      caption = "p is the chi-square test on one degree of freedom of a single shared NB2 dispersion across both blocks against separate LEFT and RIGHT dispersions."
     ) +
     theme_manuscript(base_size = 12) +
     theme(legend.position = "bottom")
@@ -2191,17 +2333,19 @@ write_methods_manuscript <- function(cutoff_summary, evidence_all) {
     paste0(
       "The cutoff was evaluated after selection by comparing the selected top-k* block (RIGHT) with the matched equal-sized block immediately below it (LEFT) in each arm. ",
       "Expected counts were each PAS's arm-specific normalized mean scaled by the sample DESeq2 size factor, and observed counts were rounded to non-negative integers. ",
-      "Within each block, NB1 (Var = mu + alpha*mu, negative-binomial size = mu/alpha) and NB2 (Var = mu + alpha*mu^2, size = 1/alpha) were each fitted over a single dispersion parameter by maximum likelihood, ",
-      "and the block was scored by the log ratio log10(L_NB2 / L_NB1). ",
-      "Values above zero indicate that the block is better described by quadratic than by linear overdispersion, and the contrast between blocks is delta = log10 LR(RIGHT) - log10 LR(LEFT)."
+      "For every PAS, the raw-count mean mu and empirical variance were used to form the moment contrast NB2-NB1 = log(1 + max(variance - mu, 0)) - log(1 + mu), ",
+      "together with NB2 = log(1 + max(variance - mu, 0)) and alpha*mu = log(1 + alpha_hat*mu), where alpha_hat = max((variance - mu)/mu^2, 0). ",
+      "Each block was summarized by the median of these per-PAS quantities, so the blocks are compared on the same per-feature scale regardless of their expression levels, and the reported contrast is the RIGHT minus LEFT difference in medians."
     ),
     "",
     paste0(
-      "The dispersion change itself was tested under NB2 as a nested hypothesis: H0 held a single alpha across the pooled LEFT and RIGHT observations, and H1 gave each block its own alpha. ",
-      "H1 adds exactly one free parameter, so LRT = 2*(logLik_H1 - logLik_H0) was referred to a chi-square distribution with one degree of freedom. ",
-      "A positive delta together with alpha_RIGHT > alpha_LEFT and a small LRT p-value indicates that the selected block is more NB2-like than the block immediately below the cutoff, ",
-      "and therefore that the dispersion regime changes at the selected k*. ",
-      "These quantities were computed after k* was fixed and did not enter the Pareto optimization."
+      "The dispersion change was then tested under NB2 as a nested hypothesis. ",
+      "NB1 (Var = mu + alpha*mu, negative-binomial size = mu/alpha) and NB2 (Var = mu + alpha*mu^2, size = 1/alpha) were each fitted to a block over a single dispersion parameter by maximum likelihood, ",
+      "with expected counts given by each PAS's arm-specific normalized mean scaled by the sample DESeq2 size factor and observed counts rounded to non-negative integers. ",
+      "H0 held a single alpha across the pooled LEFT and RIGHT observations and H1 gave each block its own alpha; H1 adds exactly one free parameter, ",
+      "so LRT = 2*(logLik_H1 - logLik_H0) was referred to a chi-square distribution with one degree of freedom. ",
+      "A higher median NB2-NB1 in the selected block, together with alpha_RIGHT > alpha_LEFT and a small LRT p-value, indicates that the overdispersion regime changes at the selected k*. ",
+      "All of these quantities were computed after k* was fixed and none of them entered the Pareto optimization."
     ),
     "",
     "## Selected cutoffs",
@@ -2209,12 +2353,19 @@ write_methods_manuscript <- function(cutoff_summary, evidence_all) {
     cutoff_text,
     "",
     paste0(
-      "In every arm the selected block was the more NB2-like of the two (delta > 0), ",
-      "with delta ranging from ",
-      formatC(min(evidence_all$delta_log10_LR, na.rm = TRUE), format = "f", digits = 1),
+      "The median NB2-NB1 contrast was higher in the selected block than in the matched block below it in ",
+      sum(evidence_all$diff_NB2_NB1 > 0, na.rm = TRUE),
+      " of ",
+      nrow(evidence_all),
+      " arms, with RIGHT minus LEFT ranging from ",
+      formatC(min(evidence_all$diff_NB2_NB1, na.rm = TRUE), format = "f", digits = 3),
       " to ",
-      formatC(max(evidence_all$delta_log10_LR, na.rm = TRUE), format = "f", digits = 1),
-      " and a maximum LRT p-value of ",
+      formatC(max(evidence_all$diff_NB2_NB1, na.rm = TRUE), format = "f", digits = 3),
+      ". The fitted NB2 dispersion was higher in the selected block in ",
+      sum(evidence_all$alpha_NB2_right > evidence_all$alpha_NB2_left, na.rm = TRUE),
+      " of ",
+      nrow(evidence_all),
+      " arms, with a maximum likelihood-ratio p-value of ",
       formatC(max(evidence_all$lrt_p, na.rm = TRUE), format = "e", digits = 2),
       "."
     )
@@ -2402,6 +2553,7 @@ cutoff_rows <- list()
 comparison_optima <- list()
 evidence_rows <- list()
 block_fit_rows <- list()
+divergence_panels <- list()
 pareto_panels <- list()
 expected_figure_paths <- character(0)
 expected_table_paths <- character(0)
@@ -2619,6 +2771,16 @@ for (comparison_name in names(COMPARISONS)) {
   comp_tab_dir <- file.path(OUT_ROOT, comparison_name, "Tables")
   dir.create(comp_tab_dir, recursive = TRUE, showWarnings = FALSE)
 
+  divergence_panels[[comparison_name]] <- make_divergence_panel(
+    comparison_name = comparison_name,
+    control_group = control_group,
+    treatment_group = treatment_group,
+    group_results = group_results,
+    knot_fit = knot_fit,
+    c1 = c1,
+    c2 = c2
+  )
+
   pareto_panels[[comparison_name]] <- make_pareto_panel(
     scan_df = scan_df,
     selected_k = selected_k,
@@ -2664,9 +2826,9 @@ for (comparison_name in names(COMPARISONS)) {
     " | Remainder=", length(rem_ids),
     " | G=", selected_scan_row$good_n,
     " | R=", selected_scan_row$remainder_cross_n,
-    " | delta log10LR=",
+    " | RIGHT-LEFT NB2-NB1=",
     paste(
-      formatC(evidence_table$delta_log10_LR, format = "f", digits = 1),
+      formatC(evidence_table$diff_NB2_NB1, format = "f", digits = 3),
       collapse = ", "
     )
   )
@@ -2759,30 +2921,39 @@ write_csv(size_factor_table, summary_sf_path)
 # MANUSCRIPT FIGURES
 # =============================================================================
 #
-# Figure 1: how each cutoff was selected, one panel per comparison.
-# Figure 2: the NB2-versus-NB1 log-ratio evidence on either side of each cutoff.
+# Figure 1: the cumulative divergence and the c1/c2 regimes that G(k) and R(k)
+#           are counted against, one panel per comparison.
+# Figure 2: the weighted utility across candidate k and the selected cutoff.
+# Figure 3: the NB2-NB1 contrast on either side of each cutoff.
 
-fig1_path <- file.path(FIG_DIR, "Figure_1_Cutoff_Selection.png")
-fig2_path <- file.path(FIG_DIR, "Figure_2_NB_LogRatio_Evidence.png")
+fig1_path <- file.path(FIG_DIR, "Figure_1_Rank_Regimes.png")
+fig2_path <- file.path(FIG_DIR, "Figure_2_Cutoff_Selection.png")
+fig3_path <- file.path(FIG_DIR, "Figure_3_Overdispersion_Evidence.png")
 
-make_cutoff_selection_figure(
-  pareto_panels[names(COMPARISONS)],
+make_grid_figure(
+  divergence_panels[names(COMPARISONS)],
   fig1_path
 )
 
+make_grid_figure(
+  pareto_panels[names(COMPARISONS)],
+  fig2_path
+)
+
 save_figure(
-  make_log_ratio_figure(evidence_all),
-  fig2_path,
-  width = 12.0,
+  make_evidence_figure(evidence_all),
+  fig3_path,
+  width = 12.5,
   height = 7.0
 )
 
-expected_figure_paths <- c(fig1_path, fig2_path)
+expected_figure_paths <- c(fig1_path, fig2_path, fig3_path)
 if (isTRUE(EXPORT_PDF)) {
   expected_figure_paths <- c(
     expected_figure_paths,
     sub("\\.png$", ".pdf", fig1_path),
-    sub("\\.png$", ".pdf", fig2_path)
+    sub("\\.png$", ".pdf", fig2_path),
+    sub("\\.png$", ".pdf", fig3_path)
   )
 }
 
@@ -2845,7 +3016,7 @@ message(
     collapse = "; "
   )
 )
-message("Figures: 2 manuscript figures in ", FIG_DIR)
+message("Figures: 3 manuscript figures in ", FIG_DIR)
 message("Figures ZIP: ", fig_zip)
 message("Complete ZIP: ", all_zip)
 message("Build: ", SCRIPT_BUILD)
