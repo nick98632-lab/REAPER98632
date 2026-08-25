@@ -9,33 +9,34 @@ suppressPackageStartupMessages({
 
 options(stringsAsFactors = FALSE)
 
-SCRIPT_BUILD <- "EMPERICALCUTOFF_FINAL_COMPARISON_SPECIFIC_KSTAR_2026-08-23_v2"
-
-# CRITICAL SCOPE RULE
-# -------------------
-# There is NO single global EVS k* in this analysis. The experiment-wide
-# feature universe, normalization/variance reference, and shared c1/c2 regime
-# model define a common rank geometry only. Each RT/ZT comparison then receives
-# its own independent weighted-Pareto scan and its own selected k*.
+SCRIPT_BUILD <- "EMPIRICAL_CUTOFF_COMPARISON_SPECIFIC_KSTAR_v3"
 
 # =============================================================================
-# EMPIRICAL EVS CUTOFF: NORMEVS PC1-NB GEOMETRY + WEIGHTED PARETO
+# EMPIRICAL EVS CUTOFF: PC1-NB VARIANCE GEOMETRY + WEIGHTED PARETO SELECTION
 # =============================================================================
 #
-# PURPOSE
-# -------
-# Determine one empirical eigenvector-splitting cutoff k* independently for
-# each comparison:
+# SCOPE
+# -----
+# One empirical eigenvector-splitting (EVS) cutoff k* is estimated separately
+# for each comparison:
 #
 #   RT0_ZT6, RT2_ZT8, RT4_ZT10, RT8_ZT14.
 #
-# The cutoff-estimation core preserves the validated historical procedure.
-# PASs are filtered once across the complete RT/ZT matrix. For PC1 ranking, raw
-# counts are used directly with no CPM normalization and no log transform.
-# PCA is centered and not feature-scaled; the loading scores themselves are NOT
-# transformed, and PASs are ranked by raw absolute PC1 loading. DESeq2
-# median-of-ratios normalization is estimated globally across all 40 samples for
-# the pooled within-group NB variance term.
+# The feature universe, the DESeq2 normalization and variance reference, and
+# the c1/c2 regime boundaries are estimated once across the full 40-sample
+# RT/ZT matrix and define a rank geometry common to all eight arms. Within that
+# geometry each comparison receives its own weighted-Pareto scan and its own
+# k*.
+#
+# PREPROCESSING AND PC1 RANKING
+# -----------------------------
+# PASs with zero counts across all 40 samples are removed once. Within each
+# arm, raw counts are library-size normalized to counts per million (CPM) and
+# log1p-transformed, and PCA is applied to that expression matrix with
+# centering and without feature scaling. The PC1 loading values are not
+# transformed: PASs are ranked from lowest to highest absolute PC1 loading.
+# DESeq2 median-of-ratios size factors are estimated once across all 40 samples
+# and supply the pooled within-group negative-binomial variance term.
 #
 # CUTOFF CALCULATION
 # ------------------
@@ -43,19 +44,18 @@ SCRIPT_BUILD <- "EMPERICALCUTOFF_FINAL_COMPARISON_SPECIFIC_KSTAR_2026-08-23_v2"
 #
 #   P_ig = lambda_1g * loading_ig^2.
 #
-# Within each comparison, DESeq2-normalized counts are also used to estimate
-# pooled within-group variance V_pool,i. For each arm,
+# DESeq2-normalized counts give the pooled within-group variance V_pool,i, and
+# for each arm the excess-over-Poisson variance is
 #
-#   E_ig = max(V_pool,i - mu_ig, 0)
+#   E_ig = max(V_pool,i - mu_ig, 0).
 #
-# is the excess-over-Poisson variance. PC1 contribution P and excess variance E
-# are normalized to rank-wise probability masses and accumulated along the
-# absolute-PC1-loading rank:
+# P and E are normalized to rank-wise probability masses and accumulated along
+# the absolute-PC1-loading rank:
 #
 #   D_g(r) = F_E,g(r) - F_P,g(r).
 #
-# A single shared two-knot continuous linear spline is fitted jointly to the
-# D_g(r) curves from all eight RT/ZT arms. The fitted knots define:
+# A single two-knot continuous linear spline is fitted jointly to the D_g(r)
+# curves of all eight arms. The fitted knots define:
 #
 #   rank < c1          : Remainder regime
 #   c1 <= rank <= c2   : Divergence interval
@@ -69,61 +69,56 @@ SCRIPT_BUILD <- "EMPERICALCUTOFF_FINAL_COMPARISON_SPECIFIC_KSTAR_2026-08-23_v2"
 #
 #   R(k) = Disjoint with opposite arm in Remainder.
 #
-# The Pareto frontier is formed by maximizing G while minimizing R. On the
-# frontier, G and R are min-max normalized and the equal-weight utility is
+# The Pareto frontier maximizes G while minimizing R. On the frontier, G and R
+# are min-max normalized and the equal-weight utility is
 #
 #   U(k) = G_norm(k) - R_norm(k).
 #
-# The comparison-specific empirical cutoff is the Pareto-optimal k that
-# maximizes U(k), with ties resolved by greater G, lower R, then larger k.
+# The empirical cutoff is the Pareto-optimal k that maximizes U(k), with ties
+# resolved by greater G, then lower R, then larger k.
 #
-# FINAL EVS MEMBERSHIP
-# --------------------
-# The selected k* is applied independently to both arm-specific absolute-PC1
-# loading rankings. The final Leading Edge is the union of the two top-k* sets;
-# Joint and all Disjoint PASs remain members of the Leading Edge. Remainder is
-# the complement of that union. Opposite-arm Remainder crossings are used only
-# as the Pareto cost R(k); they do not override union membership.
+# EVS MEMBERSHIP
+# --------------
+# k* is applied independently to both arm-specific absolute-PC1-loading
+# rankings. The Leading Edge is the union of the two top-k* sets; Joint and all
+# Disjoint PASs are members. The Remainder is the complement of that union.
+# Opposite-arm Remainder crossings enter the Pareto cost R(k) and are reported
+# as a flag on the membership table.
 #
 # NB1/NB2 CORROBORATION
 # ---------------------
-# After k* is locked, each arm's selected top-k* region (RIGHT) is compared with
-# an immediately preceding equal-sized rank block (LEFT). Moment-based
-# corroboration is calculated from raw count moments:
+# Corroboration is computed after k* is selected. In each arm the selected
+# top-k* block (RIGHT) is compared with the immediately preceding equal-sized
+# rank block (LEFT). Moment-based quantities come from raw count moments:
 #
 #   NB2 excess signal = log[1 + max(variance - mean, 0)]
 #   NB2-NB1 contrast  = NB2 excess signal - log(1 + mean)
 #   alpha_hat         = max[(variance - mean)/mean^2, 0]
 #   alpha*mu signal   = log(1 + alpha_hat*mean).
 #
-# Likelihood-based corroboration is calculated from raw counts with expected
-# means adjusted by the comparison-specific DESeq2 size factors. NB1 and NB2
-# models each fit one dispersion parameter by maximum likelihood:
+# Likelihood-based quantities use raw counts with expected means scaled by the
+# DESeq2 size factors. NB1 and NB2 each fit one dispersion parameter by
+# maximum likelihood:
 #
-#   NB1: Var(Y) = mu + alpha*mu
-#   NB2: Var(Y) = mu + alpha*mu^2.
+#   NB1: Var(Y) = mu + alpha*mu,   size = mu/alpha
+#   NB2: Var(Y) = mu + alpha*mu^2, size = 1/alpha.
 #
-# For the negative-binomial PMF, NB1 uses size = mu/alpha and NB2 uses
-# size = 1/alpha. The exported likelihood evidence includes log-likelihoods,
-# 2*(logLik_NB2-logLik_NB1) and log10(L_NB2/L_NB1).
-# Positive 2-delta-log-likelihood and positive log10 likelihood ratio favor NB2.
-# These corroboration quantities are calculated only after k* is selected and
-# do not enter the Pareto optimization.
+# Reported evidence is the fitted log-likelihoods, 2*(logLik_NB2-logLik_NB1)
+# and log10(L_NB2/L_NB1); positive values favor NB2.
 #
-# OUTPUT ORGANIZATION
-# -------------------
-# Each comparison receives:
+# OUTPUTS
+# -------
+# Per comparison, <OUT_ROOT>/<comparison>/ holds two manuscript figures and
+# three tables:
 #
-#   <OUT_ROOT>/<comparison>/Figures/
-#   <OUT_ROOT>/<comparison>/Tables/
+#   Table_<comparison>_EVS_Membership.csv       one row per PAS
+#   Table_<comparison>_Weighted_Pareto_Scan.csv one row per candidate k
+#   Table_<comparison>_NB1_NB2_Corroboration.csv  one row per arm x block
 #
-# with two manuscript figures and all supporting tables. Root-level Summary/
-# folders contain cross-comparison summaries. Every generated figure is
-# included in Figures_All.zip, every generated CSV table in Tables_All.zip, and
-# the complete output tree in Empirical_Cutoff_All_Outputs.zip.
-#
-# Methods_Manuscript.md is generated from the same constants and equations used
-# by the code so the methods description and implementation remain aligned.
+# <OUT_ROOT>/Summary/ holds the cutoff summary figure, the cross-comparison
+# cutoff table, the pooled corroboration table, and the DESeq2 size factors.
+# Methods_Manuscript.md and Figure_Legends.md are written from the same
+# constants used by the code.
 # =============================================================================
 
 # =============================================================================
@@ -131,7 +126,7 @@ SCRIPT_BUILD <- "EMPERICALCUTOFF_FINAL_COMPARISON_SPECIFIC_KSTAR_2026-08-23_v2"
 # =============================================================================
 
 COUNT_FILE <- "/root/REAPER98632/data/WTTS-Seq_2022.2_DE_raw_read_numbers.csv"
-OUT_ROOT   <- "/root/REAPER98632/exports/empirical_cutoff_comparison_specific_kstar_final_20260823_v2"
+OUT_ROOT   <- "/root/REAPER98632/exports/empirical_cutoff_comparison_specific_kstar_v3"
 
 GROUP_PATTERNS <- c(
   RT0  = "^R0_",
@@ -154,28 +149,6 @@ COMPARISONS <- list(
 # Equal normalized weights in the weighted Pareto utility.
 BENEFIT_WEIGHT       <- 1.0
 CONTAMINATION_WEIGHT <- 1.0
-
-# Validated regression targets from a prior run. These values are NOT used to
-# select k*; they are checked only after k* has been recomputed from the
-# data, so an unintended implementation change fails loudly instead of
-# silently replacing the validated cutoffs.
-#
-# The four values below were computed under a PC1-ranking procedure that
-# incorrectly CPM-normalized and log1p-transformed raw counts before PCA.
-# That transform has been removed (PC1 ranking now runs on raw counts
-# directly, matching the actual EVS methodology), so these four values are
-# stale and the regression guard is disabled until a fresh baseline is
-# established. After running once with the corrected ranking, replace the
-# values below with the newly computed k* for each comparison, then set
-# ENFORCE_VALIDATED_K_REGRESSION back to TRUE.
-VALIDATED_REFERENCE_K <- c(
-  RT0_ZT6  = 3532L,
-  RT2_ZT8  = 4617L,
-  RT4_ZT10 = 3983L,
-  RT8_ZT14 = 5664L
-)
-ENFORCE_VALIDATED_K_REGRESSION <- FALSE
-
 
 # Numerical optimization uses a coarse starting grid and then refits the
 # selected knot solution on every rank. This value controls computation only;
@@ -430,6 +403,22 @@ assign_groups <- function(sample_names, group_patterns) {
   out
 }
 
+# Library-size normalization to counts per million followed by log1p. This is
+# the expression matrix that enters PCA for the ranking step.
+normalize_cpm_log1p <- function(count_mat_arm) {
+  lib_size <- colSums(count_mat_arm, na.rm = TRUE)
+  lib_size[!is.finite(lib_size) | lib_size <= 0] <- 1
+
+  cpm <- sweep(
+    count_mat_arm,
+    2L,
+    lib_size / 1e6,
+    "/"
+  )
+
+  log1p(cpm)
+}
+
 normalize_deseq2_comparison <- function(count_mat, group_labels) {
   if (!requireNamespace("DESeq2", quietly = TRUE)) {
     stop("DESeq2 is required for normalized-before-EVS cutoff calibration.")
@@ -615,9 +604,9 @@ compute_group_analysis <- function(
     normalized_counts_arm,
     pooled_variance) {
 
-  # PC1 ranking runs directly on raw counts, no CPM normalization and no log
-  # transform. PASs are ranked by the raw absolute PC1 loading.
-  rank_matrix <- raw_counts_arm
+  # PCA is applied to log1p(CPM) expression. The PC1 loading values themselves
+  # are not transformed; PASs are ranked by absolute PC1 loading.
+  rank_matrix <- normalize_cpm_log1p(raw_counts_arm)
 
   pc1 <- compute_pc1_rank(rank_matrix)
   rank_order <- pc1$rank_order
@@ -1096,7 +1085,7 @@ scan_pair_cutoffs <- function(
   # -----------------------------------------------------------------------
   # DISJOINT, OPPOSITE ARM IN DIVERGENCE INTERVAL
   # -----------------------------------------------------------------------
-  # These sites are intentionally PERMISSIBLE.
+  # These sites are permissible.
   #
   # The selecting arm is in its own top-k subset and therefore >c2.
   # The opposite arm lies between c1 and c2 and never enters a top-k list
@@ -1827,159 +1816,6 @@ classify_pair_at_k <- function(
   out
 }
 
-summarize_classification <- function(
-    class_df) {
-
-  if (
-    nrow(class_df) < 1L
-  ) {
-    stop(
-      "Cannot summarize empty classification."
-    )
-  }
-
-  joint_n <- sum(
-    class_df$base_class ==
-    "Joint"
-  )
-
-  control_only <- (
-    class_df$control_top_k &
-    !class_df$treatment_top_k
-  )
-
-  treatment_only <- (
-    class_df$treatment_top_k &
-    !class_df$control_top_k
-  )
-
-  disjoint_control_opposite_le_n <- sum(
-    control_only &
-    class_df$disjoint_opposite_leading_edge
-  )
-
-  disjoint_treatment_opposite_le_n <- sum(
-    treatment_only &
-    class_df$disjoint_opposite_leading_edge
-  )
-
-  disjoint_control_opposite_divergence_n <- sum(
-    control_only &
-    class_df$disjoint_opposite_divergence
-  )
-
-  disjoint_treatment_opposite_divergence_n <- sum(
-    treatment_only &
-    class_df$disjoint_opposite_divergence
-  )
-
-  disjoint_opposite_le_n <- (
-    disjoint_control_opposite_le_n +
-    disjoint_treatment_opposite_le_n
-  )
-
-  disjoint_opposite_divergence_n <- (
-    disjoint_control_opposite_divergence_n +
-    disjoint_treatment_opposite_divergence_n
-  )
-
-  permissible_disjoint_control_n <- (
-    disjoint_control_opposite_le_n +
-    disjoint_control_opposite_divergence_n
-  )
-
-  permissible_disjoint_treatment_n <- (
-    disjoint_treatment_opposite_le_n +
-    disjoint_treatment_opposite_divergence_n
-  )
-
-  permissible_disjoint_n <- (
-    permissible_disjoint_control_n +
-    permissible_disjoint_treatment_n
-  )
-
-  good_n <- (
-    joint_n +
-    permissible_disjoint_n
-  )
-
-  remainder_cross_n <- sum(
-    class_df$cross_into_remainder
-  )
-
-  union_n <- nrow(
-    class_df
-  )
-
-  if (
-    good_n +
-    remainder_cross_n !=
-    union_n
-  ) {
-    stop(
-      "Classification counts do not sum to union size."
-    )
-  }
-
-  data.frame(
-    k = unique(
-      class_df$selected_k
-    )[1L],
-
-    cutoff_rank = unique(
-      class_df$cutoff_rank
-    )[1L],
-
-    joint_n = joint_n,
-
-    disjoint_control_opposite_le_n =
-      disjoint_control_opposite_le_n,
-
-    disjoint_treatment_opposite_le_n =
-      disjoint_treatment_opposite_le_n,
-
-    disjoint_opposite_le_n =
-      disjoint_opposite_le_n,
-
-    disjoint_control_opposite_divergence_n =
-      disjoint_control_opposite_divergence_n,
-
-    disjoint_treatment_opposite_divergence_n =
-      disjoint_treatment_opposite_divergence_n,
-
-    disjoint_opposite_divergence_n =
-      disjoint_opposite_divergence_n,
-
-    permissible_disjoint_control_n =
-      permissible_disjoint_control_n,
-
-    permissible_disjoint_treatment_n =
-      permissible_disjoint_treatment_n,
-
-    permissible_disjoint_n =
-      permissible_disjoint_n,
-
-    good_n = good_n,
-
-    remainder_cross_n =
-      remainder_cross_n,
-
-    union_n = union_n,
-
-    retained_fraction = (
-      good_n /
-      union_n
-    ),
-
-    remainder_cross_fraction = (
-      remainder_cross_n /
-      union_n
-    ),
-
-    stringsAsFactors = FALSE
-  )
-}
-
 
 # =============================================================================
 # NB1 / NB2 CORROBORATION
@@ -2254,25 +2090,39 @@ build_corroboration_for_arm <- function(
 # FIGURE BUILDERS
 # =============================================================================
 
+REGION_LEVELS <- c("Remainder", "Divergence", "Leading edge")
+
+REGION_FILLS <- c(
+  "Remainder"    = COL$remainder,
+  "Divergence"   = COL$interval,
+  "Leading edge" = COL$leading
+)
+
 add_rank_regions <- function(p, c1, c2, N) {
+  region_df <- data.frame(
+    xmin = c(1, c1, c2),
+    xmax = c(c1, c2, N),
+    region = factor(REGION_LEVELS, levels = REGION_LEVELS),
+    stringsAsFactors = FALSE
+  )
+
   p +
-    annotate(
-      "rect",
-      xmin = 1, xmax = c1,
-      ymin = -Inf, ymax = Inf,
-      fill = COL$remainder, alpha = 0.42
+    geom_rect(
+      data = region_df,
+      aes(
+        xmin = xmin,
+        xmax = xmax,
+        ymin = -Inf,
+        ymax = Inf,
+        fill = region
+      ),
+      inherit.aes = FALSE,
+      alpha = 0.40
     ) +
-    annotate(
-      "rect",
-      xmin = c1, xmax = c2,
-      ymin = -Inf, ymax = Inf,
-      fill = COL$interval, alpha = 0.38
-    ) +
-    annotate(
-      "rect",
-      xmin = c2, xmax = N,
-      ymin = -Inf, ymax = Inf,
-      fill = COL$leading, alpha = 0.40
+    scale_fill_manual(
+      name = "Rank regime",
+      values = REGION_FILLS,
+      drop = FALSE
     )
 }
 
@@ -2428,15 +2278,16 @@ make_cutoff_framework_figure <- function(
     ) +
     labs(
       title = paste0("A. ", comparison_name, ": absolute PC1 loading rank"),
-      subtitle = "Raw counts entered into PCA, no CPM normalization or log transform; untransformed absolute PC1 loadings ranked",
+      subtitle = "PCA on arm-specific log1p(CPM) expression; PASs ranked by untransformed absolute PC1 loading",
       x = "PC1 rank: low |loading| to high |loading|",
       y = "|PC1 loading|",
-      caption = "c1 = Remainder/Divergence boundary; c2 = Divergence/Leading-edge boundary; k* = weighted-Pareto top-k cutoff."
+      caption = "Shading: Remainder (rank < c1), Divergence (c1 to c2), Leading edge (rank > c2). k* is the selected top-k cutoff."
     ) +
     theme_manuscript() +
     theme(legend.position = "none") +
     guides(
-      color = guide_legend(nrow = 2, byrow = TRUE),
+      color = "none",
+      fill = "none",
       linetype = "none"
     )
 
@@ -2463,15 +2314,16 @@ make_cutoff_framework_figure <- function(
     ) +
     labs(
       title = paste0("B. ", comparison_name, ": raw-count variance geometry"),
-      subtitle = "Raw-count sample variance shown on a log(1+x) display scale along the same PC1 rank",
+      subtitle = "Raw-count sample variance on a log(1+x) display scale along the same PC1 rank",
       x = "PC1 rank",
       y = "Smoothed log(1 + raw-count variance)",
-      caption = "Region shading follows c1 and c2; the selected k* is shown as the top-k boundary on the ranked axis."
+      caption = "Descriptive display curve. Shading and boundaries as in panel A."
     ) +
     theme_manuscript() +
     theme(legend.position = "none") +
     guides(
-      color = guide_legend(nrow = 2, byrow = TRUE),
+      color = "none",
+      fill = "none",
       linetype = "none"
     )
 
@@ -2527,14 +2379,15 @@ make_cutoff_framework_figure <- function(
     ) +
     labs(
       title = paste0("C. ", comparison_name, ": PC1-NB cumulative divergence"),
-      subtitle = "One two-knot fit shared across all eight RT/ZT arms; pair shown here",
+      subtitle = "Thin lines: observed D(r). Thick lines: two-knot spline fitted jointly across all eight arms",
       x = "PC1 rank",
       y = "D(r) = F_E(r) - F_P(r)",
-      caption = "F_E is cumulative excess-over-Poisson variance mass; F_P is cumulative PC1 variance-contribution mass."
+      caption = "F_E is cumulative excess-over-Poisson variance mass; F_P is cumulative PC1 variance-contribution mass. c1 and c2 are the fitted knots."
     ) +
     theme_manuscript() +
     guides(
       color = guide_legend(nrow = 2, byrow = TRUE),
+      fill = guide_legend(nrow = 1, order = 2),
       linetype = "none"
     )
 
@@ -2920,72 +2773,70 @@ write_methods_manuscript <- function(cutoff_summary) {
   )
 
   lines <- c(
-    "# Empirical eigenvector-splitting cutoff methods",
+    "# Empirical eigenvector-splitting cutoff",
     "",
-    "## Comparison-specific preprocessing and PC1 ranking",
+    "## Preprocessing and PC1 ranking",
     "",
     paste0(
-      "Empirical EVS cutoffs were estimated independently for RT0_ZT6, RT2_ZT8, RT4_ZT10, and RT8_ZT14; no single global EVS k* was estimated or applied across comparisons. ",
-      "PASs with zero counts across the complete 40-sample RT/ZT matrix were removed once before cutoff estimation. ",
-      "For PC1 ranking, raw counts were used directly with no CPM normalization and no log transform before PCA. ",
-      "PCA was performed independently within each arm with centering and without feature scaling. The PC1 loading values themselves were not transformed; PASs were ordered from lowest to highest raw absolute PC1 loading."
+      "An empirical eigenvector-splitting (EVS) cutoff k* was estimated separately for each of four comparisons: RT0_ZT6, RT2_ZT8, RT4_ZT10, and RT8_ZT14. ",
+      "PASs with zero counts across the complete 40-sample RT/ZT matrix were removed once, giving a single feature universe of N PASs shared by all eight arms. ",
+      "Within each arm, raw counts were library-size normalized to counts per million (CPM) and log1p-transformed, and principal component analysis was applied to that expression matrix with centering and without feature scaling. ",
+      "The PC1 loadings were not transformed; PASs were ordered from lowest to highest absolute PC1 loading."
     ),
     "",
     "## PC1-NB variance-mass divergence",
     "",
     paste0(
-      "For PAS i in arm g, PC1 variance contribution was P_ig = lambda_1g * loading_ig^2, where lambda_1g is the PC1 eigenvalue. ",
-      "DESeq2 median-of-ratios size factors were estimated once across all 40 samples, and pooled within-group variance was calculated from those normalized counts across all eight RT/ZT arms. ",
-      "For each arm, excess-over-Poisson variance was E_ig = max(V_pool,i - mu_ig, 0). ",
-      "P and E were normalized separately to rank-wise probability masses and accumulated along the absolute-PC1-loading rank. ",
-      "Cumulative divergence was D_g(r) = F_E,g(r) - F_P,g(r)."
+      "For PAS i in arm g, the PC1 variance contribution was P_ig = lambda_1g * loading_ig^2, where lambda_1g is the PC1 eigenvalue. ",
+      "DESeq2 median-of-ratios size factors were estimated once across all 40 samples, and pooled within-group variance V_pool,i was computed from the resulting normalized counts across all eight arms. ",
+      "Excess-over-Poisson variance was E_ig = max(V_pool,i - mu_ig, 0), where mu_ig is the normalized arm mean. ",
+      "P and E were separately normalized to rank-wise probability masses and accumulated along the absolute-PC1-loading rank, giving the cumulative divergence D_g(r) = F_E,g(r) - F_P,g(r)."
     ),
     "",
-    "## Comparison-specific variance regimes",
+    "## Rank regimes",
     "",
     paste0(
-      "A single shared two-knot continuous linear spline was fitted jointly to the cumulative-divergence curves from all eight RT/ZT arms. ",
-      "The shared fitted knots defined c1 and c2 for every comparison. Ranks below c1 were classified as the Remainder regime, ranks from c1 through c2 as the Divergence interval, and ranks above c2 as the Leading-edge regime."
+      "A two-knot continuous linear spline was fitted jointly to the cumulative-divergence curves of all eight arms by least squares, with knot positions c1 and c2 estimated numerically. ",
+      "Ranks below c1 defined the Remainder regime, ranks from c1 through c2 the Divergence interval, and ranks above c2 the Leading-edge regime."
     ),
     "",
     "## Weighted Pareto cutoff",
     "",
     paste0(
-      "For each RT/ZT pair, candidate top-k values were restricted to 1 <= k <= N-c2 using the globally shared c2 so each selecting arm contributed PASs from its own Leading-edge regime. ",
-      "For each k, the benefit G(k) was the number of Joint PASs plus Disjoint PASs whose opposite-arm rank lay in either the Leading-edge regime or Divergence interval. ",
-      "The cost R(k) was the number of Disjoint PASs whose opposite-arm rank lay in the Remainder regime. ",
-      "Pareto-optimal candidates were those for which no other candidate simultaneously increased G and decreased R. ",
-      "Within the Pareto frontier, G and R were min-max normalized and equal weights were used: U(k) = G_norm(k) - R_norm(k). ",
-      "The empirical cutoff k* maximized U(k); ties were resolved by greater G, then lower R, then larger k."
+      "For each comparison, candidate top-k values were restricted to 1 <= k <= N - c2, so that a selecting arm drew only from its own Leading-edge regime. ",
+      "At each k, a PAS was Joint if both arms placed it in their top k and Disjoint if only one arm did. ",
+      "The benefit G(k) was the number of Joint PASs plus Disjoint PASs whose opposite-arm rank fell in the Leading-edge regime or the Divergence interval; ",
+      "the cost R(k) was the number of Disjoint PASs whose opposite-arm rank fell in the Remainder regime. ",
+      "Candidates for which no other candidate simultaneously increased G and decreased R formed the Pareto frontier. ",
+      "On that frontier G and R were min-max normalized and combined with equal weights as U(k) = G_norm(k) - R_norm(k). ",
+      "The cutoff k* maximized U(k), with ties resolved by greater G, then lower R, then larger k."
     ),
     "",
     "## EVS membership",
     "",
     paste0(
-      "After k* was selected, the k* highest absolute-PC1-loading PASs were selected independently in the two arms. ",
-      "The Leading Edge was the union of the two top-k* sets, including Joint and all Disjoint PASs, and the Remainder was the complement. ",
-      "Opposite-arm Remainder crossings contributed to the Pareto cost but did not override union membership."
+      "The selected k* was applied independently to both arm-specific rankings. ",
+      "The Leading Edge was the union of the two top-k* sets, comprising Joint and all Disjoint PASs; the Remainder was its complement within the shared feature universe. ",
+      "Opposite-arm Remainder crossings entered R(k) and are reported as a flag on each PAS."
     ),
     "",
     "## NB1/NB2 corroboration",
     "",
     paste0(
-      "After k* was fixed, each arm's selected top-k* block was designated RIGHT and compared with the immediately preceding equal-sized rank block, designated LEFT. ",
-      "From raw counts, PAS-level sample mean and variance were used to calculate NB2 excess signal = log[1+max(variance-mean,0)], ",
-      "NB2-NB1 contrast = NB2 excess signal - log(1+mean), and alpha*mu signal = log(1+alpha_hat*mean), ",
-      "where alpha_hat = max[(variance-mean)/mean^2,0]."
+      "Corroboration was computed after k* was selected. ",
+      "In each arm the selected top-k* block (RIGHT) was compared with the immediately preceding equal-sized rank block (LEFT). ",
+      "From raw-count PAS-level means and variances, NB2 excess signal = log[1+max(variance-mean,0)], NB2-NB1 contrast = NB2 excess signal - log(1+mean), ",
+      "and alpha*mu signal = log(1+alpha_hat*mean), where alpha_hat = max[(variance-mean)/mean^2,0]."
     ),
     "",
     paste0(
-      "Likelihood-based NB1/NB2 corroboration used the raw counts and comparison-specific DESeq2 size factors. ",
-      "Expected raw-count means were obtained by multiplying each PAS's arm-specific normalized mean by the sample size factor. ",
-      "NB1 and NB2 models each fitted one dispersion parameter alpha by maximum likelihood. ",
-      "NB1 used Var(Y)=mu+alpha*mu and negative-binomial size=mu/alpha; NB2 used Var(Y)=mu+alpha*mu^2 and size=1/alpha. ",
-      "Model support was summarized by the fitted log-likelihoods, 2*(logLik_NB2-logLik_NB1), and log10(L_NB2/L_NB1). ",
-      "The NB corroboration analysis was performed only after cutoff selection and did not contribute to k*."
+      "Likelihood-based corroboration used raw counts with expected means obtained by scaling each PAS's arm-specific normalized mean by the sample DESeq2 size factor. ",
+      "NB1 and NB2 each fitted a single dispersion parameter alpha by maximum likelihood: NB1 with Var(Y)=mu+alpha*mu and negative-binomial size=mu/alpha, ",
+      "NB2 with Var(Y)=mu+alpha*mu^2 and size=1/alpha. ",
+      "Support was summarized by the fitted log-likelihoods, 2*(logLik_NB2-logLik_NB1), and log10(L_NB2/L_NB1), with positive values favoring NB2."
     ),
     "",
-    "## Selected empirical cutoffs",
+    "## Selected cutoffs",
     "",
     cutoff_text
   )
@@ -3000,14 +2851,32 @@ write_figure_legends <- function() {
   lines <- c(
     "# Figure legends",
     "",
-    "## Figure 1. Comparison-specific normalized-EVS cutoff framework",
-    "For each RT/ZT comparison, Panel A shows PASs ordered from low to high raw absolute PC1 loading after PCA was applied to arm-specific raw counts, with no CPM normalization or log transform; the loading values themselves are not transformed. Panel B shows the corresponding raw-count variance geometry on the same PC1-ranked axis; this smoothed display curve is descriptive. Panel C shows the cumulative divergence D(r)=F_E(r)-F_P(r) between normalized excess-over-Poisson variance mass and PC1 variance-contribution mass, with the single c1 and c2 regime boundaries shared across all eight arms. Panel D shows the complete weighted-Pareto candidate set, the Pareto frontier, and the selected comparison-specific k*. Benefit G(k) retains Joint PASs and permissible Disjoint PASs; cost R(k) counts Disjoint PASs whose opposite-arm rank lies in the Remainder regime. The selected k* maximizes U(k)=G_norm(k)-R_norm(k) on the Pareto frontier.",
+    "## Figure 1. Empirical EVS cutoff framework",
+    paste0(
+      "(A) PASs ordered from low to high absolute PC1 loading, with PCA applied to arm-specific log1p(CPM) expression and the loading values left untransformed. ",
+      "Background shading marks the Remainder regime (rank < c1), the Divergence interval (c1 to c2), and the Leading-edge regime (rank > c2); ",
+      "the vertical lines mark c1, c2, and the rank corresponding to the selected k*. ",
+      "(B) Raw-count sample variance on a log(1+x) display scale along the same rank axis; the curve is smoothed for display only. ",
+      "(C) Cumulative divergence D(r) = F_E(r) - F_P(r) between excess-over-Poisson variance mass and PC1 variance-contribution mass. ",
+      "Thin lines are observed values and thick lines the two-knot spline fitted jointly across all eight arms, which defines c1 and c2. ",
+      "(D) Weighted-Pareto candidate set, Pareto frontier, and selected k*. ",
+      "G(k) counts Joint PASs plus Disjoint PASs whose opposite-arm rank lies in the Leading-edge or Divergence regime; ",
+      "R(k) counts Disjoint PASs whose opposite-arm rank lies in the Remainder regime. The selected k* maximizes U(k) = G_norm(k) - R_norm(k) on the frontier."
+    ),
     "",
-    "## Figure 2. NB1/NB2 and likelihood corroboration",
-    "For each RT/ZT comparison, the independently selected weighted-Pareto k* is fixed before corroboration. Panel A shows the NB2 excess, NB2-NB1, and alpha*mu signals along the absolute-PC1-loading rank for the matched LEFT block and selected RIGHT block. Panel B shows PAS-level raw-count mean-variance observations with maximum-likelihood NB1 and NB2 variance-model curves. Panel C compares the matched LEFT and RIGHT median corroboration signals. Panel D shows 2*(logLik_NB2-logLik_NB1) and labels log10(L_NB2/L_NB1) for each arm and rank block; positive values favor NB2. These corroboration quantities do not enter the Pareto optimization or change k*.",
+    "## Figure 2. NB1/NB2 corroboration of the selected cutoff",
+    paste0(
+      "(A) NB2 excess, NB2-NB1, and alpha*mu signals along the absolute-PC1-loading rank in each arm, smoothed for display. ",
+      "RIGHT is the selected top-k* block and LEFT the immediately preceding equal-sized block. ",
+      "(B) PAS-level raw-count mean-variance observations by arm and block, overlaid with the maximum-likelihood NB1 and NB2 variance curves. ",
+      "(C) Median corroboration signals in the matched LEFT and RIGHT blocks. ",
+      "(D) 2*(logLik_NB2 - logLik_NB1) per arm and block, labeled with log10(L_NB2/L_NB1); positive values favor NB2."
+    ),
     "",
-    "## Summary figure. Comparison-specific empirical EVS cutoffs",
-    "The summary figure displays the independently selected top-k* value for RT0_ZT6, RT2_ZT8, RT4_ZT10, and RT8_ZT14 together with the retained-benefit G(k*) and Remainder-crossing cost R(k*) at each selected weighted-Pareto optimum. No global k* is substituted for these four comparison-specific optima."
+    "## Figure 3. Selected empirical cutoffs",
+    paste0(
+      "Selected top-k* for each comparison, annotated with the benefit G(k*) and cost R(k*) at the weighted-Pareto optimum."
+    )
   )
 
   writeLines(
@@ -3095,9 +2964,8 @@ input <- read_count_data(
 all_counts <- input$counts
 annotation <- input$annotation
 
-# EXPERIMENT-WIDE FEATURE UNIVERSE (NOT A GLOBAL k*):
-# zero filtering occurs once across all 40 RT/ZT samples, not separately inside
-# each comparison. This keeps N and every arm-specific rank axis identical.
+# Feature universe: zero filtering is applied once across all 40 RT/ZT samples,
+# so N and every arm-specific rank axis are identical.
 experiment_keep <- rowSums(all_counts) > 0
 all_counts <- all_counts[experiment_keep, , drop = FALSE]
 annotation <- annotation[
@@ -3114,9 +2982,9 @@ experiment_group_labels <- assign_groups(
   GROUP_PATTERNS
 )
 
-# EXPERIMENT-WIDE NORMALIZATION/VARIANCE REFERENCE (NOT A GLOBAL k*):
-# size factors are estimated once across all 40 samples; pooled within-group
-# variance is then estimated across all eight arms.
+# Normalization and variance reference: DESeq2 size factors are estimated once
+# across all 40 samples, and pooled within-group variance is then estimated
+# across all eight arms.
 experiment_deseq <- normalize_deseq2_comparison(
   count_mat = all_counts,
   group_labels = experiment_group_labels
@@ -3130,9 +2998,8 @@ experiment_pooled <- compute_pooled_within_group_variance(
   group_labels = experiment_group_labels
 )
 
-# ARM-SPECIFIC PC1 RANKINGS:
-# each arm ranks by raw absolute PC1 loading, computed from raw counts with no
-# CPM normalization or log transform.
+# Arm-specific PC1 rankings: PCA is run on log1p(CPM) expression within each
+# arm and PASs are ranked by absolute PC1 loading, which is left untransformed.
 experiment_group_results <- vector("list", length(levels(experiment_group_labels)))
 names(experiment_group_results) <- levels(experiment_group_labels)
 
@@ -3148,9 +3015,8 @@ for (g in levels(experiment_group_labels)) {
   )
 }
 
-# SHARED EIGHT-ARM REGIME MODEL (BOUNDARIES ONLY; k* REMAINS COMPARISON-SPECIFIC):
-# one c1/c2 fit is estimated jointly across all eight arms and is then held
-# fixed while each of the four RT/ZT pairs receives its own Pareto-optimal k*.
+# Regime boundaries: one c1/c2 fit is estimated jointly across all eight arms
+# and held fixed while each comparison is scanned for its own k*.
 shared_regime_fit <- fit_shared_knots(experiment_group_results)
 SHARED_C1 <- shared_regime_fit$c1
 SHARED_C2 <- shared_regime_fit$c2
@@ -3164,8 +3030,6 @@ message("Shared regime-derived candidate ceiling k <= ", SHARED_MAX_CANDIDATE_K)
 cutoff_rows <- list()
 comparison_optima <- list()
 corroboration_rows <- list()
-selected_site_rows <- list()
-remainder_site_rows <- list()
 expected_figure_paths <- character(0)
 expected_table_paths <- character(0)
 
@@ -3183,17 +3047,6 @@ for (comparison_name in names(COMPARISONS)) {
   if (length(control_idx) < 2L || length(treatment_idx) < 2L) {
     stop("Each comparison arm requires at least two samples: ", comparison_name)
   }
-
-  sample_idx <- c(control_idx, treatment_idx)
-  count_mat <- all_counts[, sample_idx, drop = FALSE]
-  normalized_counts <- experiment_normalized_counts[, sample_idx, drop = FALSE]
-  size_factors <- experiment_size_factors[colnames(count_mat)]
-
-  group_labels <- factor(
-    as.character(experiment_group_labels[sample_idx]),
-    levels = c(control_group, treatment_group)
-  )
-  names(group_labels) <- colnames(count_mat)
 
   annotation_cmp <- annotation
   N <- N_EXPERIMENT
@@ -3224,8 +3077,6 @@ for (comparison_name in names(COMPARISONS)) {
   scan_df <- opt$scan
   selected_k <- as.integer(opt$selected_k)
 
-  # k* is owned by THIS comparison only. It is never pooled across comparisons
-  # and is never replaced by an experiment-wide/global k.
   comparison_optima[[comparison_name]] <- opt
 
   if (!comparison_name %in% names(COMPARISONS)) {
@@ -3248,15 +3099,16 @@ for (comparison_name in names(COMPARISONS)) {
     treatment_group = treatment_group
   )
 
-  class_summary <- summarize_classification(class_df)
-
-  # Preserve the current requested EVS membership rule: the final Leading Edge
-  # is the full union of the two arm-specific top-k sets. Remainder crossings
-  # remain a Pareto cost term and do not override union membership.
+  # The Leading Edge is the union of the two arm-specific top-k* sets; the
+  # Remainder is its complement. Opposite-arm Remainder crossings are a Pareto
+  # cost term and are carried as a flag, not as an exclusion.
   lead_ids <- unique(class_df$feature_id)
   rem_ids <- setdiff(rownames(all_counts), lead_ids)
 
-  lead_table <- class_df %>%
+  control_rank_map <- make_rank_map(group_results[[control_group]]$data)
+  treatment_rank_map <- make_rank_map(group_results[[treatment_group]]$data)
+
+  lead_rows <- class_df %>%
     left_join(annotation_cmp, by = "feature_id") %>%
     mutate(
       evs_membership = "LeadingEdge",
@@ -3271,22 +3123,17 @@ for (comparison_name in names(COMPARISONS)) {
       cutoff_rank,
       control_group,
       treatment_group,
-      base_class,
-      analysis_class,
+      site_class = analysis_class,
       control_rank,
       treatment_rank,
       control_region,
       treatment_region,
-      opposite_region,
       control_top_k,
       treatment_top_k,
       pareto_remainder_crossing_cost
     )
 
-  rem_control_rank <- make_rank_map(group_results[[control_group]]$data)
-  rem_treatment_rank <- make_rank_map(group_results[[treatment_group]]$data)
-
-  remainder_table <- data.frame(
+  remainder_rows <- data.frame(
     comparison = comparison_name,
     feature_id = rem_ids,
     gene_symbol = annotation_cmp$gene_symbol[
@@ -3295,12 +3142,30 @@ for (comparison_name in names(COMPARISONS)) {
     evs_membership = "Remainder",
     selected_k = selected_k,
     cutoff_rank = cutoff_rank,
-    control_rank = as.integer(rem_control_rank[rem_ids]),
-    treatment_rank = as.integer(rem_treatment_rank[rem_ids]),
+    control_group = control_group,
+    treatment_group = treatment_group,
+    site_class = "Remainder",
+    control_rank = as.integer(control_rank_map[rem_ids]),
+    treatment_rank = as.integer(treatment_rank_map[rem_ids]),
     stringsAsFactors = FALSE
+  ) %>%
+    mutate(
+      control_region = rank_to_region(control_rank, c1, c2),
+      treatment_region = rank_to_region(treatment_rank, c1, c2),
+      control_top_k = FALSE,
+      treatment_top_k = FALSE,
+      pareto_remainder_crossing_cost = FALSE
+    )
+
+  membership_table <- bind_rows(
+    lead_rows,
+    remainder_rows[, colnames(lead_rows), drop = FALSE]
   )
 
-  # NB1/NB2 corroboration remains strictly post-selection and cannot change k*.
+  if (nrow(membership_table) != N) {
+    stop("EVS membership table does not cover every PAS in ", comparison_name)
+  }
+
   arm_results <- list()
 
   for (g in c(control_group, treatment_group)) {
@@ -3332,21 +3197,22 @@ for (comparison_name in names(COMPARISONS)) {
       everything()
     )
 
-  region_summary <- bind_rows(lapply(
+  region_medians <- bind_rows(lapply(
     names(arm_results),
     function(g) arm_results[[g]]$region_summary
   )) %>%
-    mutate(
-      comparison = comparison_name,
-      selected_k = selected_k,
-      cutoff_rank = cutoff_rank
-    ) %>%
     select(
-      comparison,
-      selected_k,
-      cutoff_rank,
-      everything()
+      arm,
+      region = corroboration_region,
+      median_nb2_excess,
+      median_nb2_nb1,
+      median_alpha_mu
     )
+
+  # One corroboration row per arm and rank block: block medians together with
+  # the maximum-likelihood NB1/NB2 fits for the same block.
+  nb_table <- likelihood_table %>%
+    left_join(region_medians, by = c("arm", "region"))
 
   selected_scan_row <- scan_df %>%
     filter(k == selected_k) %>%
@@ -3422,42 +3288,32 @@ for (comparison_name in names(COMPARISONS)) {
     out_file = nb_fig
   )
 
+  scan_table <- scan_df %>%
+    select(
+      comparison,
+      k,
+      cutoff_rank,
+      joint_n,
+      permissible_disjoint_n,
+      good_n,
+      remainder_cross_n,
+      union_n,
+      good_norm,
+      remainder_norm,
+      weighted_utility,
+      is_pareto,
+      is_selected_weighted
+    )
+
   table_paths <- c(
-    Cutoff_Summary = file.path(comp_tab_dir, paste0("Table_", comparison_name, "_Cutoff_Summary.csv")),
-    Cutoff_Scan = file.path(comp_tab_dir, paste0("Table_", comparison_name, "_Weighted_Pareto_Scan.csv")),
-    Leading_Edge = file.path(comp_tab_dir, paste0("Table_", comparison_name, "_Leading_Edge_Sites.csv")),
-    Remainder = file.path(comp_tab_dir, paste0("Table_", comparison_name, "_Remainder_Sites.csv")),
-    PC1_NB_Rank = file.path(comp_tab_dir, paste0("Table_", comparison_name, "_PC1_NB_Rank_Data.csv")),
-    NB_Region_Summary = file.path(comp_tab_dir, paste0("Table_", comparison_name, "_NB_Corroboration_Regions.csv")),
-    NB_Likelihood = file.path(comp_tab_dir, paste0("Table_", comparison_name, "_NB1_NB2_Likelihood.csv")),
-    Size_Factors = file.path(comp_tab_dir, paste0("Table_", comparison_name, "_DESeq2_Size_Factors.csv"))
+    EVS_Membership = file.path(comp_tab_dir, paste0("Table_", comparison_name, "_EVS_Membership.csv")),
+    Pareto_Scan = file.path(comp_tab_dir, paste0("Table_", comparison_name, "_Weighted_Pareto_Scan.csv")),
+    NB_Corroboration = file.path(comp_tab_dir, paste0("Table_", comparison_name, "_NB1_NB2_Corroboration.csv"))
   )
 
-  write_csv(cutoff_row, table_paths[["Cutoff_Summary"]])
-  write_csv(scan_df, table_paths[["Cutoff_Scan"]])
-  write_csv(lead_table, table_paths[["Leading_Edge"]])
-  write_csv(remainder_table, table_paths[["Remainder"]])
-
-  rank_table <- bind_rows(
-    group_results[[control_group]]$data %>% mutate(arm = control_group),
-    group_results[[treatment_group]]$data %>% mutate(arm = treatment_group)
-  ) %>%
-    left_join(annotation_cmp, by = "feature_id")
-
-  write_csv(rank_table, table_paths[["PC1_NB_Rank"]])
-  write_csv(region_summary, table_paths[["NB_Region_Summary"]])
-  write_csv(likelihood_table, table_paths[["NB_Likelihood"]])
-
-  write_csv(
-    data.frame(
-      comparison = comparison_name,
-      sample = names(size_factors),
-      group = as.character(experiment_group_labels[names(size_factors)]),
-      size_factor = as.numeric(size_factors),
-      stringsAsFactors = FALSE
-    ),
-    table_paths[["Size_Factors"]]
-  )
+  write_csv(membership_table, table_paths[["EVS_Membership"]])
+  write_csv(scan_table, table_paths[["Pareto_Scan"]])
+  write_csv(nb_table, table_paths[["NB_Corroboration"]])
 
   expected_figs_this <- c(cutoff_fig, nb_fig)
   if (isTRUE(EXPORT_PDF)) {
@@ -3474,9 +3330,7 @@ for (comparison_name in names(COMPARISONS)) {
   expected_table_paths <- c(expected_table_paths, unname(table_paths))
 
   cutoff_rows[[comparison_name]] <- cutoff_row
-  corroboration_rows[[comparison_name]] <- likelihood_table
-  selected_site_rows[[comparison_name]] <- lead_table
-  remainder_site_rows[[comparison_name]] <- remainder_table
+  corroboration_rows[[comparison_name]] <- nb_table
 
   message(
     comparison_name,
@@ -3496,7 +3350,7 @@ for (comparison_name in names(COMPARISONS)) {
 
 cutoff_summary <- bind_rows(cutoff_rows)
 
-# HARD SCOPE CHECKS: one and only one independently optimized k* per comparison.
+# One optimized k* per comparison is required before any summary is written.
 expected_comparisons <- names(COMPARISONS)
 observed_comparisons <- as.character(cutoff_summary$comparison)
 
@@ -3538,76 +3392,33 @@ message(
   )
 )
 
-# Regression guard: compare recomputed k* values with the validated historical
-# result, for whichever comparisons this run and the historical reference
-# have in common. This never enters the optimization and never overwrites
-# selected_k. New comparisons with no historical reference are reported but
-# do not block the run -- a new dataset should compute fresh cutoffs, not
-# fail because no baseline exists yet for it.
-if (isTRUE(ENFORCE_VALIDATED_K_REGRESSION)) {
-  observed_k <- comparison_specific_k
-  shared_cmp <- intersect(names(VALIDATED_REFERENCE_K), names(observed_k))
-  new_cmp <- setdiff(names(observed_k), names(VALIDATED_REFERENCE_K))
+nb_all <- bind_rows(corroboration_rows)
 
-  if (length(new_cmp)) {
-    message(
-      "Comparison(s) with no historical k* reference (not regression-checked): ",
-      paste(new_cmp, collapse = ", ")
-    )
-  }
-
-  if (length(shared_cmp)) {
-    observed_shared <- observed_k[shared_cmp]
-    reference_shared <- VALIDATED_REFERENCE_K[shared_cmp]
-    if (!identical(unname(observed_shared), unname(reference_shared))) {
-      stop(
-        "EMPIRICAL CUTOFF REGRESSION DETECTED. Recomputed k*: ",
-        paste(names(observed_shared), observed_shared, sep = "=", collapse = ", "),
-        ". Validated k*: ",
-        paste(names(reference_shared), reference_shared, sep = "=", collapse = ", "),
-        ". Do not propagate these outputs downstream until the implementation change is explained."
-      )
-    }
-  }
-
-  if (length(shared_cmp)) {
-    message(
-      "Validated cutoff regression check passed for: ",
-      paste(shared_cmp, observed_k[shared_cmp], sep = "=", collapse = ", ")
-    )
-  } else {
-    message("No comparisons had a historical k* reference; regression check skipped entirely.")
-  }
-}
-
-likelihood_all <- bind_rows(corroboration_rows)
-leading_all <- bind_rows(selected_site_rows)
-remainder_all <- bind_rows(remainder_site_rows)
+size_factor_table <- data.frame(
+  sample = names(experiment_size_factors),
+  group = as.character(experiment_group_labels[names(experiment_size_factors)]),
+  size_factor = as.numeric(experiment_size_factors),
+  stringsAsFactors = FALSE
+)
 
 summary_cutoff_path <- file.path(
   SUMMARY_TAB_DIR,
   "Table_Empirical_Cutoffs.csv"
 )
 
-summary_likelihood_path <- file.path(
+summary_nb_path <- file.path(
   SUMMARY_TAB_DIR,
-  "Table_NB1_NB2_Likelihood_All.csv"
+  "Table_NB1_NB2_Corroboration_All.csv"
 )
 
-summary_lead_path <- file.path(
+summary_sf_path <- file.path(
   SUMMARY_TAB_DIR,
-  "Table_Leading_Edge_Sites_All.csv"
-)
-
-summary_rem_path <- file.path(
-  SUMMARY_TAB_DIR,
-  "Table_Remainder_Sites_All.csv"
+  "Table_DESeq2_Size_Factors.csv"
 )
 
 write_csv(cutoff_summary, summary_cutoff_path)
-write_csv(likelihood_all, summary_likelihood_path)
-write_csv(leading_all, summary_lead_path)
-write_csv(remainder_all, summary_rem_path)
+write_csv(nb_all, summary_nb_path)
+write_csv(size_factor_table, summary_sf_path)
 
 summary_fig_path <- file.path(
   SUMMARY_FIG_DIR,
@@ -3635,60 +3446,12 @@ expected_figure_paths <- c(
 expected_table_paths <- c(
   expected_table_paths,
   summary_cutoff_path,
-  summary_likelihood_path,
-  summary_lead_path,
-  summary_rem_path
+  summary_nb_path,
+  summary_sf_path
 )
 
 write_methods_manuscript(cutoff_summary)
 write_figure_legends()
-
-# Manifest before ZIP creation.
-manifest_paths <- unique(c(
-  expected_figure_paths,
-  expected_table_paths,
-  file.path(OUT_ROOT, "Methods_Manuscript.md"),
-  file.path(OUT_ROOT, "Figure_Legends.md")
-))
-
-manifest <- data.frame(
-  relative_path = sub(
-    paste0(
-      "^",
-      gsub(
-        "([][{}()+*^$|\\\\?.])",
-        "\\\\\\1",
-        normalizePath(OUT_ROOT, winslash = "/", mustWork = TRUE)
-      ),
-      "/?"
-    ),
-    "",
-    normalizePath(
-      manifest_paths,
-      winslash = "/",
-      mustWork = TRUE
-    )
-  ),
-  type = ifelse(
-    grepl("\\.(png|pdf)$", manifest_paths, ignore.case = TRUE),
-    "figure",
-    ifelse(
-      grepl("\\.csv$", manifest_paths, ignore.case = TRUE),
-      "table",
-      "methods"
-    )
-  ),
-  size_bytes = file.info(manifest_paths)$size,
-  stringsAsFactors = FALSE
-)
-
-manifest_path <- file.path(
-  OUT_ROOT,
-  "Table_Export_Manifest.csv"
-)
-
-write_csv(manifest, manifest_path)
-expected_table_paths <- c(expected_table_paths, manifest_path)
 
 verify_outputs(c(
   expected_figure_paths,
@@ -3702,7 +3465,6 @@ verify_outputs(c(
 # =============================================================================
 
 fig_zip <- file.path(OUT_ROOT, "Figures_All.zip")
-tab_zip <- file.path(OUT_ROOT, "Tables_All.zip")
 all_zip <- file.path(OUT_ROOT, "Empirical_Cutoff_All_Outputs.zip")
 
 create_zip_from_files(
@@ -3711,23 +3473,16 @@ create_zip_from_files(
 )
 
 create_zip_from_files(
-  tab_zip,
-  expected_table_paths
-)
-
-all_files_for_zip <- c(
-  expected_figure_paths,
-  expected_table_paths,
-  file.path(OUT_ROOT, "Methods_Manuscript.md"),
-  file.path(OUT_ROOT, "Figure_Legends.md")
-)
-
-create_zip_from_files(
   all_zip,
-  all_files_for_zip
+  c(
+    expected_figure_paths,
+    expected_table_paths,
+    file.path(OUT_ROOT, "Methods_Manuscript.md"),
+    file.path(OUT_ROOT, "Figure_Legends.md")
+  )
 )
 
-verify_outputs(c(fig_zip, tab_zip, all_zip))
+verify_outputs(c(fig_zip, all_zip))
 
 # =============================================================================
 # FINAL CONSOLE SUMMARY
@@ -3735,7 +3490,7 @@ verify_outputs(c(fig_zip, tab_zip, all_zip))
 
 message("============================================================")
 message("EMPIRICAL EVS CUTOFF ANALYSIS COMPLETE")
-message("PCA input: DESeq2 median-of-ratios normalized counts entered directly.")
+message("PCA input for ranking: arm-specific log1p(CPM) expression.")
 message("One empirical k* is estimated independently for each comparison.")
 message(
   "Selected k*: ",
@@ -3746,10 +3501,8 @@ message(
     collapse = "; "
   )
 )
-message("Figures per comparison: 2 manuscript figures (+ PDF copies when enabled).")
-message("All per-comparison figures/tables remain in their comparison folders.")
+message("Per comparison: 2 figures and 3 tables.")
 message("Figures ZIP: ", fig_zip)
-message("Tables ZIP: ", tab_zip)
 message("Complete ZIP: ", all_zip)
 message("Build: ", SCRIPT_BUILD)
 message("Methods: ", file.path(OUT_ROOT, "Methods_Manuscript.md"))
