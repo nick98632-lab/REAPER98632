@@ -1,3084 +1,3289 @@
 #!/usr/bin/env Rscript
 
+PIPELINE_BUILD <- "SEQUENCE_REFINED_EMPIRICAL_EVS_2026-08-23"
+
+# =============================================================================
+# SEQUENCE MANUSCRIPT ANALYSIS
+# WTTS-Seq PAS analysis with eigenvector splitting, DESeq2, apeglm,
+# empirical-null calibration, higher criticism, HBFSS, and 3'aTWAS overlap
+# =============================================================================
+#
+# ANALYSIS UNIT
+# Each OrigID is analyzed as an individual polyadenylation-site (PAS) feature.
+# Gene symbols are retained as annotation and are not used to collapse PASs
+# before differential-expression testing.
+#
+# COMPARISONS
+#   RT0 vs ZT6
+#   RT2 vs ZT8
+#   RT4 vs ZT10
+#   RT8 vs ZT14
+#
+# ANALYSIS VIEWS PER COMPARISON
+#   Original (No EVS)
+#   NormEVS Lead
+#   NormEVS Rem
+#   RawEVS Lead
+#   RawEVS Rem
+#
+# EIGENVECTOR SPLITTING
+# NormEVS uses DESeq2 median-of-ratios normalized counts before PCA. RawEVS
+# uses raw counts before PCA. Within each comparison, the EVS selection size k*
+# is the comparison-specific empirical weighted-Pareto optimum derived from the
+# raw-count variance geometry: RT0_ZT6=3532, RT2_ZT8=4617, RT4_ZT10=3983, and
+# RT8_ZT14=5664. The same comparison-specific k* is applied to NormEVS and
+# RawEVS so those tracks differ only in the matrix used for PC1 ranking, not in
+# the number of PASs admitted per condition. Within each condition, prcomp is
+# applied directly to the corresponding feature-by-sample matrix, absolute PC1
+# feature loadings are ranked, and the k* highest-loading PASs are selected. PASs
+# present in both condition-specific top-k* sets are Joint; PASs present in only
+# one set are Disjoint. Joint plus both Disjoint sets form the Leading Edge. All
+# other PASs form the Remainder. Downstream DESeq2 always receives raw counts for
+# the selected PAS subset and estimates its own size factors and dispersions.
+#
+# DIFFERENTIAL EXPRESSION AND EFFECT TESTS
+# DESeq2 uses design ~ condition with trt relative to untrt. The ordinary Wald
+# p-value is adjusted by Benjamini-Hochberg at FDR 10%. The manuscript Standard
+# effect is the ordinary DESeq2 BH-significant result restricted to PASs with
+# |apeglm-shrunken LFC| >= 1, so Standard markers cannot occur inside the stated
+# effect boundary. Strong (decoupled) calls use DESeq2 greaterAbs with
+# lfcThreshold = 1, BH padj < 0.10, and the same |apeglm LFC| >= 1 reporting
+# boundary. Weak-CNH support uses DESeq2 lessAbs with lfcThreshold = 1 and BH
+# padj < 0.20; the final Weak category additionally requires |apeglm LFC| < 1
+# and HBFSS significance. apeglm-shrunken LFC is the reported effect estimate,
+# HBFSS effect term, and x-coordinate in all significance figures.
+#
+# EMPIRICAL NULL, HIGHER CRITICISM, AND HBFSS
+# Finite DESeq2 Wald statistics are calibrated with fdrtool using a normal
+# empirical-null model. HBFSS uses the resulting empirical p-values. Higher
+# criticism is applied to the sorted empirical p-values to obtain HCp. With the
+# manuscript LFC boundary c = 1:
+#
+#   Htau = -log10(HCp) * c
+#   HBFSS = |apeglm LFC| * [-log10(empirical p)]
+#
+# A PAS is HBFSS-significant when HBFSS > Htau. HCp is used to derive Htau and
+# is not imposed as an additional significance gate.
+#
+# VOLCANO FIGURES
+# Volcano x-axis: apeglm-shrunken log2 fold change.
+# Volcano y-axis: -log10(empirical p) from the fdrtool empirical-null model.
+# Standard, Strong, Weak, and HBFSS are plotted as separate method layers using
+# one fixed color/marker key across every significance figure. Weak markers are
+# shown only for final Weak discoveries (lessAbs + HBFSS), never for lessAbs-only
+# PASs. Method overlap is reported numerically and by superimposed method markers;
+# it is not treated as a fifth significance method. Each volcano labels at most
+# the top 20 final significant PASs.
+#
+# 3'aTWAS COMPARISON
+# After all WTTS analyses and manuscript figures are complete, human 3'aTWAS
+# gene symbols are mapped to rat orthologs. TWAS ortholog overlap is evaluated
+# against every final WTTS significance method (Standard, Strong, Weak, HBFSS)
+# in every analysis view. The TWAS exports identify the human TWAS symbol, rat
+# ortholog, significant PASs, method support, and whether the rat gene contains
+# multiple WTTS PAS features consistent with alternative polyadenylation.
+# =============================================================================
+
+required_packages <- c(
+  "DESeq2",
+  "apeglm",
+  "fdrtool",
+  "ggplot2",
+  "ggrepel",
+  "dplyr",
+  "tidyr",
+  "gridExtra",
+  "grid",
+  "scales",
+  "grDevices",
+  "S4Vectors"
+)
+
+missing_packages <- required_packages[
+  !vapply(required_packages, requireNamespace, logical(1), quietly = TRUE)
+]
+
+if (length(missing_packages) > 0L) {
+  stop(
+    "Required R package(s) are not installed: ",
+    paste(missing_packages, collapse = ", "),
+    ". Install them before running this manuscript pipeline."
+  )
+}
+
 suppressPackageStartupMessages({
+  library(DESeq2)
+  library(apeglm)
+  library(fdrtool)
   library(ggplot2)
+  library(ggrepel)
   library(dplyr)
   library(tidyr)
+  library(gridExtra)
   library(grid)
+  library(scales)
+  library(grDevices)
 })
 
 options(stringsAsFactors = FALSE)
 
-SCRIPT_BUILD <- "EMPERICALCUTOFF_FINAL_COMPARISON_SPECIFIC_KSTAR_2026-08-23_v2"
-
-# CRITICAL SCOPE RULE
-# -------------------
-# There is NO single global EVS k* in this analysis. The experiment-wide
-# feature universe, normalization/variance reference, and shared c1/c2 regime
-# model define a common rank geometry only. Each RT/ZT comparison then receives
-# its own independent weighted-Pareto scan and its own selected k*.
-
 # =============================================================================
-# EMPIRICAL EVS CUTOFF: NORMEVS PC1-NB GEOMETRY + WEIGHTED PARETO
-# =============================================================================
-#
-# PURPOSE
-# -------
-# Determine one empirical eigenvector-splitting cutoff k* independently for
-# each comparison:
-#
-#   RT0_ZT6, RT2_ZT8, RT4_ZT10, RT8_ZT14.
-#
-# The cutoff-estimation core preserves the validated historical procedure.
-# PASs are filtered once across the complete RT/ZT matrix. For PC1 ranking, raw
-# counts are converted to CPM and log1p-transformed within each arm before PCA.
-# PCA is centered and not feature-scaled; the loading scores themselves are NOT
-# transformed, and PASs are ranked by raw absolute PC1 loading. DESeq2
-# median-of-ratios normalization is estimated globally across all 40 samples for
-# the pooled within-group NB variance term.
-#
-# CUTOFF CALCULATION
-# ------------------
-# For PAS i in arm g, the PC1 variance contribution is
-#
-#   P_ig = lambda_1g * loading_ig^2.
-#
-# Within each comparison, DESeq2-normalized counts are also used to estimate
-# pooled within-group variance V_pool,i. For each arm,
-#
-#   E_ig = max(V_pool,i - mu_ig, 0)
-#
-# is the excess-over-Poisson variance. PC1 contribution P and excess variance E
-# are normalized to rank-wise probability masses and accumulated along the
-# absolute-PC1-loading rank:
-#
-#   D_g(r) = F_E,g(r) - F_P,g(r).
-#
-# A single shared two-knot continuous linear spline is fitted jointly to the
-# D_g(r) curves from all eight RT/ZT arms. The fitted knots define:
-#
-#   rank < c1          : Remainder regime
-#   c1 <= rank <= c2   : Divergence interval
-#   rank > c2          : Leading-edge regime
-#
-# Candidate top-k values are restricted to 1 <= k <= N-c2. For each k,
-#
-#   G(k) = Joint
-#          + Disjoint with opposite arm in Leading Edge
-#          + Disjoint with opposite arm in Divergence
-#
-#   R(k) = Disjoint with opposite arm in Remainder.
-#
-# The Pareto frontier is formed by maximizing G while minimizing R. On the
-# frontier, G and R are min-max normalized and the equal-weight utility is
-#
-#   U(k) = G_norm(k) - R_norm(k).
-#
-# The comparison-specific empirical cutoff is the Pareto-optimal k that
-# maximizes U(k), with ties resolved by greater G, lower R, then larger k.
-#
-# FINAL EVS MEMBERSHIP
-# --------------------
-# The selected k* is applied independently to both arm-specific absolute-PC1
-# loading rankings. The final Leading Edge is the union of the two top-k* sets;
-# Joint and all Disjoint PASs remain members of the Leading Edge. Remainder is
-# the complement of that union. Opposite-arm Remainder crossings are used only
-# as the Pareto cost R(k); they do not override union membership.
-#
-# NB1/NB2 CORROBORATION
-# ---------------------
-# After k* is locked, each arm's selected top-k* region (RIGHT) is compared with
-# an immediately preceding equal-sized rank block (LEFT). Moment-based
-# corroboration is calculated from raw count moments:
-#
-#   NB2 excess signal = log[1 + max(variance - mean, 0)]
-#   NB2-NB1 contrast  = NB2 excess signal - log(1 + mean)
-#   alpha_hat         = max[(variance - mean)/mean^2, 0]
-#   alpha*mu signal   = log(1 + alpha_hat*mean).
-#
-# Likelihood-based corroboration is calculated from raw counts with expected
-# means adjusted by the comparison-specific DESeq2 size factors. NB1 and NB2
-# models each fit one dispersion parameter by maximum likelihood:
-#
-#   NB1: Var(Y) = mu + alpha*mu
-#   NB2: Var(Y) = mu + alpha*mu^2.
-#
-# For the negative-binomial PMF, NB1 uses size = mu/alpha and NB2 uses
-# size = 1/alpha. The exported likelihood evidence includes log-likelihoods,
-# 2*(logLik_NB2-logLik_NB1) and log10(L_NB2/L_NB1).
-# Positive 2-delta-log-likelihood and positive log10 likelihood ratio favor NB2.
-# These corroboration quantities are calculated only after k* is selected and
-# do not enter the Pareto optimization.
-#
-# OUTPUT ORGANIZATION
-# -------------------
-# Each comparison receives:
-#
-#   <OUT_ROOT>/<comparison>/Figures/
-#   <OUT_ROOT>/<comparison>/Tables/
-#
-# with two manuscript figures and all supporting tables. Root-level Summary/
-# folders contain cross-comparison summaries. Every generated figure is
-# included in Figures_All.zip, every generated CSV table in Tables_All.zip, and
-# the complete output tree in Empirical_Cutoff_All_Outputs.zip.
-#
-# Methods_Manuscript.md is generated from the same constants and equations used
-# by the code so the methods description and implementation remain aligned.
+# SECTION 1 OF 5
+# USER SETTINGS, METADATA, PATHS, AND GENERAL HELPERS
 # =============================================================================
 
-# =============================================================================
-# SETTINGS
-# =============================================================================
+# -----------------------------------------------------------------------------
+# User settings
+# -----------------------------------------------------------------------------
 
-COUNT_FILE <- "/root/REAPER98632/data/WTTS-Seq_2022.2_DE_raw_read_numbers.csv"
-OUT_ROOT   <- "/root/REAPER98632/exports/empirical_cutoff_comparison_specific_kstar_final_20260823_v2"
-
-GROUP_PATTERNS <- c(
-  RT0  = "^R0_",
-  ZT6  = "^ZT6_",
-  RT2  = "^R2_",
-  ZT8  = "^ZT8_",
-  RT4  = "^R4_",
-  ZT10 = "^ZT10_",
-  RT8  = "^R8_",
-  ZT14 = "^ZT14_"
+count_file_candidates <- c(
+  "WTTS-Seq_2022.2_DE_raw_read_numbers.csv",
+  file.path("data", "WTTS-Seq_2022.2_DE_raw_read_numbers.csv"),
+  "/root/REAPER98632/data/WTTS-Seq_2022.2_DE_raw_read_numbers.csv",
+  "WTTS-Seq_2022.2_DE_raw_read_numbers(20260822-183312).csv",
+  "/mnt/data/WTTS-Seq_2022.2_DE_raw_read_numbers(20260822-183312).csv"
 )
 
-COMPARISONS <- list(
-  RT0_ZT6  = c(control = "RT0", treatment = "ZT6"),
-  RT2_ZT8  = c(control = "RT2", treatment = "ZT8"),
-  RT4_ZT10 = c(control = "RT4", treatment = "ZT10"),
-  RT8_ZT14 = c(control = "RT8", treatment = "ZT14")
+twas_file_candidates <- c(
+  "3aTWAS_genes_of_11_brain_disorders.csv",
+  file.path("data", "3aTWAS_genes_of_11_brain_disorders.csv"),
+  "/root/REAPER98632/data/3aTWAS_genes_of_11_brain_disorders.csv",
+  "/mnt/data/3aTWAS_genes_of_11_brain_disorders.csv"
 )
 
-# Equal normalized weights in the weighted Pareto utility.
-BENEFIT_WEIGHT       <- 1.0
-CONTAMINATION_WEIGHT <- 1.0
+TWAS_TARGET_SPECIES <- "rat"
+TWAS_ORTHOLOG_MIN_SUPPORT <- 1L
 
-# Validated regression targets from the pre-regression WTTS cutoff run.
-# These values are NOT used to select k*. They are checked only after k* has
-# been recomputed from the data, so an unintended implementation change fails
-# loudly instead of silently replacing the validated cutoffs.
-VALIDATED_REFERENCE_K <- c(
-  RT0_ZT6  = 3532L,
-  RT2_ZT8  = 4617L,
-  RT4_ZT10 = 3983L,
-  RT8_ZT14 = 5664L
-)
-ENFORCE_VALIDATED_K_REGRESSION <- TRUE
+# DESeq2 Standard and Strong tests use Benjamini-Hochberg FDR 10%.
+# Weak-CNH uses a more permissive BH screen and becomes a final Weak discovery
+# only after independent HBFSS support. HBFSS uses no DESeq2 adjusted-p-value gate.
+BH_FDR_STANDARD <- 0.10
+BH_FDR_STRONG <- 0.10
+BH_FDR_WEAK <- 0.20
 
+lfc_boundary <- 1.0
 
-# Numerical optimization uses a coarse starting grid and then refits the
-# selected knot solution on every rank. This value controls computation only;
-# the final c1/c2 fit is evaluated on the full rank series.
-KNOT_COARSE_GRID_POINTS <- 5000L
-
-# Display-only smoothing. These values do not determine k*.
-DISPLAY_VAR_SPAR <- 0.72
-DISPLAY_D_SPAR   <- 0.72
-DISPLAY_NB_SPAR  <- 0.68
-
-# Figure export.
-PNG_DPI <- 360
-EXPORT_PDF <- TRUE
-
-# Likelihood fitting bounds on log(alpha).
-NB_LOG_ALPHA_LOWER <- -14
-NB_LOG_ALPHA_UPPER <- 8
-
-
-dir.create(OUT_ROOT, recursive = TRUE, showWarnings = FALSE)
-SUMMARY_FIG_DIR <- file.path(OUT_ROOT, "Summary", "Figures")
-SUMMARY_TAB_DIR <- file.path(OUT_ROOT, "Summary", "Tables")
-dir.create(SUMMARY_FIG_DIR, recursive = TRUE, showWarnings = FALSE)
-dir.create(SUMMARY_TAB_DIR, recursive = TRUE, showWarnings = FALSE)
-
-# =============================================================================
-# COLORS / FIGURE THEME
-# =============================================================================
-
-COL <- list(
-  control = "#386CB0",
-  treatment = "#159D91",
-  raw = "#646464",
-  divergence = "#6A3D9A",
-  fit = "#111111",
-  remainder = "#DCE6F2",
-  interval = "#FFF0B3",
-  leading = "#D8F3E7",
-  c1 = "#D73027",
-  c2 = "#1A9850",
-  selected = "#B5179E",
-  candidate_line = "#A7A7A7",
-  pareto = "#5E3C99",
-  nb2 = "#1B9E77",
-  nbgap = "#CC1E8C",
-  alphamu = "#386CB0",
-  left = "#5B8FD1",
-  right = "#43A047",
-  nb1 = "#E69F00",
-  nb2fit = "#0072B2"
+# EVS selection size is comparison-specific and is defined in comparison_table
+# below from the empirically estimated weighted-Pareto optimum (k*). No global
+# fixed top-N cutoff is used in this refined pipeline.
+EMPIRICAL_EVS_CUTOFF_BASIS <- paste(
+  "raw-count variance geometry; comparison-specific weighted-Pareto optimum;",
+  "locked before downstream DE significance testing"
 )
 
-theme_manuscript <- function(base_size = 12) {
-  theme_classic(base_size = base_size) +
+figure_dpi <- 320
+
+base_theme_size <- 10
+
+n_top_labels_volcano <- 20L
+
+# Manuscript export behavior. When TRUE, the script writes only the focused
+# paper-ready figure panels into the manuscript output tree.
+# Tables are deliberately concise: significant sites plus compact method/count
+# summaries, with the unsplit Original dataset represented once.
+EXPORT_ONLY_PAPER_FIGURES <- FALSE
+EXPORT_SUPPORT_FIGURES <- TRUE
+EXPORT_INDIVIDUAL_VIEW_FIGURES <- FALSE
+
+# -----------------------------------------------------------------------------
+# Statistical decision rules
+# -----------------------------------------------------------------------------
+#   Std       = ordinary DESeq2 Wald BH padj < 0.10 AND |apeglm LFC| >= 1
+#   Strong    = DESeq2 greaterAbs(lfcThreshold = 1) BH padj < 0.10
+#               AND |apeglm LFC| >= 1
+#   Weak-CNH  = DESeq2 lessAbs(lfcThreshold = 1) BH padj < 0.20
+#   HBFSS     = |apeglm LFC| * [-log10(empirical p)] > Htau
+#   Weak      = Weak-CNH AND |apeglm LFC| < 1 AND HBFSS
+#   Overlap   = HBFSS AND (Std OR Strong OR Weak-CNH)
+#
+# HCp is the higher-criticism empirical-p threshold used to calculate Htau.
+# It is not applied again as a second HBFSS significance gate.
+#
+# -----------------------------------------------------------------------------
+# Palette
+# -----------------------------------------------------------------------------
+
+plot_palette <- list(
+  background = "#BDBDBD",
+  threshold = "#A65628",
+  hc = "#A65628",
+  hbfss_line = "#6A3D9A",
+  weak = "#4EA3F1",
+  strong = "#E31A1C",
+  standard = "#33A02C",
+  hbfss = "#6A3D9A",
+  overlap = "#54278F",
+  control = "#4D4D4D",
+  treatment = "#1F78B4",
+  histogram = "#969696"
+)
+
+# -----------------------------------------------------------------------------
+# Short names used in file exports
+# -----------------------------------------------------------------------------
+
+dataset_short <- c(
+  raw_dataset = "Raw",
+  leading_edge_dataset = "Lead",
+  remainder_dataset = "Rem"
+)
+
+track_short <- c(
+  normalized_evs = "NormEVS",
+  raw_evs = "RawEVS"
+)
+
+dataset_key_order <- c(
+  "raw_dataset",
+  "leading_edge_dataset",
+  "remainder_dataset"
+)
+
+dataset_key_labels <- c(
+  raw_dataset = "Original dataset",
+  leading_edge_dataset = "Leading-edge dataset",
+  remainder_dataset = "Remainder dataset"
+)
+
+# -----------------------------------------------------------------------------
+# Embedded sample metadata
+# -----------------------------------------------------------------------------
+
+meta_all <- data.frame(
+  id = c(
+    "R0_1", "R0_2", "R0_3", "R0_4", "R0_5",
+    "ZT6_1", "ZT6_2", "ZT6_3", "ZT6_4", "ZT6_5",
+    "R2_1", "R2_2", "R2_3", "R2_4", "R2_5",
+    "ZT8_1", "ZT8_2", "ZT8_3", "ZT8_4", "ZT8_5",
+    "R4_1", "R4_2", "R4_3", "R4_4", "R4_5",
+    "ZT10_1", "ZT10_2", "ZT10_3", "ZT10_4", "ZT10_5",
+    "R8_1", "R8_2", "R8_3", "R8_4", "R8_5",
+    "ZT14_1", "ZT14_2", "ZT14_3", "ZT14_4", "ZT14_5"
+  ),
+  condition = c(
+    "treatment", "treatment", "treatment", "treatment", "treatment",
+    "control", "control", "control", "control", "control",
+    "treatment", "treatment", "treatment", "treatment", "treatment",
+    "control", "control", "control", "control", "control",
+    "treatment", "treatment", "treatment", "treatment", "treatment",
+    "control", "control", "control", "control", "control",
+    "treatment", "treatment", "treatment", "treatment", "treatment",
+    "control", "control", "control", "control", "control"
+  ),
+  stringsAsFactors = FALSE
+)
+
+rownames(meta_all) <- meta_all$id
+
+meta_all$condition <- factor(
+  meta_all$condition,
+  levels = c("control", "treatment")
+)
+
+levels(meta_all$condition) <- c("untrt", "trt")
+
+# -----------------------------------------------------------------------------
+# Four pairwise comparisons
+# -----------------------------------------------------------------------------
+
+comparison_table <- data.frame(
+  comparison_name = c("RT0_ZT6", "RT2_ZT8", "RT4_ZT10", "RT8_ZT14"),
+  group1_prefix   = c("R0", "R2", "R4", "R8"),
+  group2_prefix   = c("ZT6", "ZT8", "ZT10", "ZT14"),
+  empirical_evs_k = c(3532L, 4617L, 3983L, 5664L),
+  stringsAsFactors = FALSE
+)
+
+get_empirical_evs_cutoff <- function(comparison_name) {
+  idx <- match(as.character(comparison_name), comparison_table$comparison_name)
+  if (is.na(idx)) {
+    stop("No empirical EVS cutoff is defined for comparison: ", comparison_name)
+  }
+
+  k <- as.integer(comparison_table$empirical_evs_k[idx])
+  if (length(k) != 1L || is.na(k) || !is.finite(k) || k < 1L) {
+    stop("Invalid empirical EVS cutoff for comparison: ", comparison_name)
+  }
+  k
+}
+
+if (anyDuplicated(comparison_table$comparison_name)) {
+  stop("comparison_table contains duplicated comparison names.")
+}
+if (any(is.na(comparison_table$empirical_evs_k)) ||
+    any(comparison_table$empirical_evs_k < 1L)) {
+  stop("Every comparison must have a positive empirical EVS cutoff.")
+}
+
+# -----------------------------------------------------------------------------
+# Repository and file helpers
+# -----------------------------------------------------------------------------
+
+resolve_existing_file <- function(candidates, label) {
+  hits <- candidates[file.exists(candidates)]
+
+  if (length(hits) == 0L) {
+    stop(
+      "Could not find ", label, ". Tried: ",
+      paste(candidates, collapse = " | ")
+    )
+  }
+
+  normalizePath(hits[1], winslash = "/", mustWork = TRUE)
+}
+
+get_script_path <- function() {
+  args <- commandArgs(trailingOnly = FALSE)
+  file_arg <- grep("^--file=", args, value = TRUE)
+
+  if (length(file_arg) > 0L) {
+    candidate <- sub("^--file=", "", file_arg[1])
+    if (file.exists(candidate)) {
+      return(normalizePath(candidate, winslash = "/", mustWork = TRUE))
+    }
+  }
+
+  NA_character_
+}
+
+find_repo_root <- function() {
+  candidates <- c(
+    getwd(),
+    dirname(getwd()),
+    "/root/REAPER98632"
+  )
+
+  script_path <- get_script_path()
+
+  if (!is.na(script_path)) {
+    candidates <- c(dirname(script_path), candidates)
+  }
+
+  candidates <- unique(candidates[file.exists(candidates) | dir.exists(candidates)])
+
+  for (cand in candidates) {
+    if (dir.exists(file.path(cand, ".git"))) {
+      return(normalizePath(cand, winslash = "/", mustWork = TRUE))
+    }
+  }
+
+  for (cand in candidates) {
+    if (file.exists(file.path(cand, "WTTS-Seq_2022.2_DE_raw_read_numbers.csv")) ||
+        file.exists(file.path(cand, "data", "WTTS-Seq_2022.2_DE_raw_read_numbers.csv"))) {
+      return(normalizePath(cand, winslash = "/", mustWork = TRUE))
+    }
+  }
+
+  normalizePath(getwd(), winslash = "/", mustWork = TRUE)
+}
+
+repo_root <- find_repo_root()
+
+output_dir <- file.path(
+  repo_root,
+  "exports",
+  "sequence_refined_empirical_evs"
+)
+
+if (dir.exists(output_dir)) {
+  unlink(output_dir, recursive = TRUE, force = TRUE)
+}
+
+dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+
+paper_fig_dir <- file.path(output_dir, "Combined_Figures")
+summary_table_dir <- file.path(output_dir, "Summary_Tables")
+dir.create(paper_fig_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(summary_table_dir, recursive = TRUE, showWarnings = FALSE)
+
+paper_registry <- list()
+
+registry_key <- function(comparison_name, track_key) {
+  paste(comparison_name, track_key, sep = "__")
+}
+
+should_write_figure <- function(path) {
+  if (!isTRUE(EXPORT_ONLY_PAPER_FIGURES)) {
+    return(TRUE)
+  }
+
+  target_dir <- normalizePath(
+    paper_fig_dir,
+    winslash = "/",
+    mustWork = FALSE
+  )
+
+  path_dir <- normalizePath(
+    dirname(path),
+    winslash = "/",
+    mustWork = FALSE
+  )
+
+  startsWith(path_dir, target_dir)
+}
+
+
+
+# -----------------------------------------------------------------------------
+# Generic numeric and string helpers
+# -----------------------------------------------------------------------------
+
+assert_required_columns <- function(df, required_cols, object_name = "data frame") {
+  missing_cols <- setdiff(required_cols, names(df))
+
+  if (length(missing_cols) > 0L) {
+    stop(
+      "Missing required columns in ",
+      object_name,
+      ": ",
+      paste(missing_cols, collapse = ", ")
+    )
+  }
+}
+
+safe_neglog10 <- function(x, pseudocount = 1e-12) {
+  -log10(pmax(x, pseudocount))
+}
+
+clip_probabilities <- function(x, eps = 1e-300) {
+  x <- unname(as.numeric(x))
+
+  if (!length(x)) {
+    return(numeric(0))
+  }
+
+  bad <- !is.finite(x) | is.na(x)
+  x[bad] <- NA_real_
+
+  good <- !is.na(x)
+  x[good] <- pmin(pmax(x[good], eps), 1 - 1e-12)
+
+  x
+}
+
+finite_plot_df <- function(df, x_col, y_col) {
+  keep <- is.finite(df[[x_col]]) &
+    !is.na(df[[x_col]]) &
+    is.finite(df[[y_col]]) &
+    !is.na(df[[y_col]])
+
+  df[keep, , drop = FALSE]
+}
+
+compact_title <- function(x, width = 54) {
+  paste(strwrap(as.character(x), width = width), collapse = "\n")
+}
+
+compact_caption <- function(x, width = 118) {
+  paste(strwrap(as.character(x), width = width), collapse = "\n")
+}
+
+save_csv <- function(df, path) {
+  write.csv(df, file = path, row.names = FALSE)
+}
+
+save_grob <- function(g, path, width = 14.0, height = 8.5, dpi = figure_dpi, bg = "white") {
+  if (!should_write_figure(path)) {
+    return(invisible(NULL))
+  }
+
+  ggplot2::ggsave(
+    filename = path,
+    plot = g,
+    width = width,
+    height = height,
+    dpi = dpi,
+    units = "in",
+    bg = bg,
+    limitsize = FALSE
+  )
+}
+
+pretty_dataset_type <- function(dataset_key) {
+  switch(
+    dataset_key,
+    raw_dataset = "Original dataset",
+    leading_edge_dataset = "Leading-edge dataset",
+    remainder_dataset = "Remainder dataset",
+    dataset_key
+  )
+}
+
+pretty_dataset_label <- function(dataset_name) {
+  parts <- strsplit(dataset_name, "_", fixed = TRUE)[[1]]
+
+  if (length(parts) < 4L) {
+    return(dataset_name)
+  }
+
+  comparison_name <- paste(parts[1], parts[2], sep = "_")
+
+  if (length(parts) >= 5L && parts[3] %in% unname(track_short)) {
+    track_label <- parts[3]
+    dataset_key <- paste(parts[4:length(parts)], collapse = "_")
+    return(paste(comparison_name, track_label, pretty_dataset_type(dataset_key), sep = " | "))
+  }
+
+  dataset_key <- paste(parts[3:length(parts)], collapse = "_")
+
+  paste(comparison_name, pretty_dataset_type(dataset_key), sep = " | ")
+}
+
+
+make_design_formula <- function(coldata) {
+  ~ condition
+}
+
+get_condition_coef <- function(dds) {
+  rn <- DESeq2::resultsNames(dds)
+  idx <- grep("^condition_", rn)
+
+  if (length(idx) == 0L) {
+    stop("Could not identify condition coefficient in resultsNames(dds).")
+  }
+
+  rn[idx[1]]
+}
+
+
+
+resolve_top_n_cutoff <- function(sorted_values_desc, top_n) {
+  n_total <- length(sorted_values_desc)
+  top_n <- as.integer(top_n)
+
+  if (n_total == 0L) {
+    stop("resolve_top_n_cutoff() received an empty vector.")
+  }
+
+  if (!is.finite(top_n) || is.na(top_n) || top_n < 1L) {
+    stop("top_n must be a positive integer.")
+  }
+
+  # Use the empirically predetermined comparison-specific k* exactly. Do not
+  # silently shrink k* or replace the rank rule with a loading-value cutoff.
+  if (n_total < top_n) {
+    stop(
+      "EVS requires exactly ", top_n,
+      " PAS features per condition, but only ", n_total,
+      " features are available for ranking."
+    )
+  }
+
+  list(
+    top_n_actual = top_n,
+    cutoff_value = sorted_values_desc[top_n],
+    n_total = n_total
+  )
+}
+
+run_empirical_null_fdrtool <- function(stat_vec, dataset_name) {
+  stat_vec <- as.numeric(stat_vec)
+  stat_vec <- stat_vec[is.finite(stat_vec) & !is.na(stat_vec)]
+  stat_vec <- unname(stat_vec)
+
+  if (length(stat_vec) < 5L) {
+    stop(sprintf("[%s] Fewer than 5 finite Wald statistics were available for fdrtool.", dataset_name))
+  }
+
+  fit <- fdrtool::fdrtool(
+    stat_vec,
+    statistic = "normal",
+    plot = FALSE,
+    verbose = FALSE,
+    cutoff.method = "fndr"
+  )
+  fit$pval <- clip_probabilities(fit$pval)
+  fit
+}
+
+safe_hc_thresh <- function(empirical_p, dataset_name) {
+  sorted_empirical_p <- sort(
+    clip_probabilities(empirical_p),
+    na.last = NA,
+    decreasing = FALSE
+  )
+
+  if (length(sorted_empirical_p) < 5L) {
+    return(NA_real_)
+  }
+
+  out <- suppressWarnings(
+    tryCatch(
+      fdrtool::hc.thresh(as.vector(sorted_empirical_p)),
+      error = function(e) {
+        message(
+          sprintf(
+            "[%s] hc.thresh failed: %s",
+            dataset_name,
+            conditionMessage(e)
+          )
+        )
+        NA_real_
+      }
+    )
+  )
+
+  out <- as.numeric(out[1])
+
+  # Retain the hc.thresh result whenever it is a valid probability. No
+  # additional near-1 exclusion is imposed. HCp = 1 is allowed and yields
+  # Htau = 0 under the stated HBFSS rule.
+  if (!is.finite(out) ||
+      is.na(out) ||
+      out <= 0 ||
+      out > 1) {
+    return(NA_real_)
+  }
+
+  out
+}
+
+# -----------------------------------------------------------------------------
+# Plotting conventions
+# -----------------------------------------------------------------------------
+
+condition_shapes <- c(
+  untrt = 21,
+  trt = 24
+)
+
+condition_fills <- c(
+  untrt = plot_palette$control,
+  trt = plot_palette$treatment
+)
+
+condition_labels <- c(
+  untrt = "Control",
+  trt = "Treatment"
+)
+
+significance_method_levels <- c(
+  "Standard",
+  "Strong",
+  "Weak",
+  "HBFSS"
+)
+
+significance_method_labels <- c(
+  "Standard" = "Std",
+  "Strong" = "Str",
+  "Weak" = "Weak",
+  "HBFSS" = "HBFSS"
+)
+
+significance_method_sizes <- c(
+  "Standard" = 2.85,
+  "Strong" = 3.15,
+  "Weak" = 3.05,
+  "HBFSS" = 2.55
+)
+
+significance_method_colors <- c(
+  "Standard" = plot_palette$standard,
+  "Strong" = plot_palette$strong,
+  "Weak" = plot_palette$weak,
+  "HBFSS" = plot_palette$hbfss
+)
+
+# Filled DESeq2 symbols plus a star for HBFSS keep the shared key visually
+# obvious in every panel, including reduced mobile views and exported legends.
+significance_method_shapes <- c(
+  "Standard" = 18,
+  "Strong" = 15,
+  "Weak" = 17,
+  "HBFSS" = 8
+)
+
+build_significance_plot_long <- function(df) {
+  rows <- list()
+
+  add_method <- function(flag_col, method_name) {
+    keep <- !is.na(df[[flag_col]]) & df[[flag_col]]
+    if (!any(keep)) return(NULL)
+    out <- df[keep, , drop = FALSE]
+    out$Method <- method_name
+    out
+  }
+
+  rows[["Standard"]] <- add_method("standard_flag", "Standard")
+  rows[["Strong"]] <- add_method("strong_cnh_flag", "Strong")
+  rows[["Weak"]] <- add_method("weak_significant_flag", "Weak")
+  rows[["HBFSS"]] <- add_method("hbfss_flag", "HBFSS")
+  rows <- Filter(Negate(is.null), rows)
+
+  if (!length(rows)) {
+    out <- df[0, , drop = FALSE]
+    out$Method <- factor(character(0), levels = significance_method_levels)
+    return(out)
+  }
+
+  out <- dplyr::bind_rows(rows)
+  out$Method <- factor(out$Method, levels = significance_method_levels)
+
+  draw_rank <- c(HBFSS = 1L, Standard = 2L, Strong = 3L, Weak = 4L)
+  out$.draw_rank <- unname(draw_rank[as.character(out$Method)])
+  out <- out[order(out$.draw_rank), , drop = FALSE]
+  out$.draw_rank <- NULL
+  out
+}
+
+plot_expand_xy <- function() {
+  list(
+    scale_x_continuous(expand = expansion(mult = c(0.08, 0.10))),
+    scale_y_continuous(expand = expansion(mult = c(0.05, 0.12)))
+  )
+}
+
+manuscript_theme <- function() {
+  theme_bw(base_size = base_theme_size) +
     theme(
-      plot.title = element_text(face = "bold", size = base_size + 1.4),
-      plot.subtitle = element_text(size = base_size - 0.2, margin = margin(b = 5)),
-      plot.caption = element_text(size = base_size - 1.6, color = "grey25", hjust = 0),
-      axis.title = element_text(face = "bold", size = base_size),
-      axis.text = element_text(color = "#222222", size = base_size - 0.7),
+      plot.title = element_text(
+        face = "bold",
+        size = base_theme_size + 1,
+        hjust = 0.5,
+        lineheight = 1.00,
+        margin = margin(b = 4)
+      ),
+      plot.subtitle = element_text(
+        size = base_theme_size - 1,
+        hjust = 0.5,
+        lineheight = 1.00,
+        margin = margin(b = 5)
+      ),
+      plot.caption = element_text(
+        size = base_theme_size - 3,
+        hjust = 0.5,
+        colour = "grey30",
+        lineheight = 0.98,
+        margin = margin(t = 6)
+      ),
+      axis.title = element_text(face = "bold"),
+      axis.text = element_text(colour = "black"),
+      legend.title = element_text(face = "bold"),
       legend.position = "bottom",
-      legend.title = element_text(face = "bold", size = base_size - 0.4),
-      legend.text = element_text(size = base_size - 0.8),
       legend.box = "vertical",
-      legend.spacing.y = unit(2, "pt"),
-      panel.border = element_rect(color = "#B7B7B7", fill = NA, linewidth = 0.45),
-      panel.grid = element_blank(),
-      strip.text = element_text(face = "bold", size = base_size - 0.2),
+      legend.margin = margin(1, 1, 1, 1),
+      legend.spacing.x = unit(4, "pt"),
+      legend.spacing.y = unit(1, "pt"),
+      legend.text = element_text(size = base_theme_size - 1),
+      panel.grid.minor = element_blank(),
+      panel.grid.major = element_line(linewidth = 0.25, colour = "grey88"),
+      plot.margin = margin(10, 12, 10, 10)
+    )
+}
+
+shared_panel_legend <- function(plot_obj) {
+  g <- ggplotGrob(plot_obj + theme(legend.position = "bottom"))
+  guide_idx <- which(vapply(g$grobs, function(x) x$name, character(1)) == "guide-box")
+
+  if (length(guide_idx) == 0L) {
+    return(NULL)
+  }
+
+  g$grobs[[guide_idx[1]]]
+}
+
+# A panel's real data can legitimately have zero rows for a method (e.g. no
+# Weak-CNH discoveries in a given view). When that happens to be true of the
+# specific panel a legend gets borrowed from, ggplot silently omits that
+# method's marker glyph from the legend key even with drop = FALSE. To
+# guarantee every manuscript legend always shows all four method markers,
+# build the shared legend from a small synthetic dataset that always
+# contains exactly one row per method, rather than reusing a real panel.
+build_full_method_legend <- function() {
+  dummy <- data.frame(
+    x = rep(0, length(significance_method_levels)),
+    y = rep(0, length(significance_method_levels)),
+    Method = factor(significance_method_levels, levels = significance_method_levels)
+  )
+
+  p <- ggplot(dummy, aes(x = x, y = y, color = Method, shape = Method, size = Method)) +
+    geom_point(alpha = 0.98, stroke = 0.90) +
+    scale_color_manual(
+      values = significance_method_colors,
+      breaks = significance_method_levels,
+      labels = unname(significance_method_labels[significance_method_levels]),
+      drop = FALSE,
+      name = "Method",
+      guide = guide_legend(
+        nrow = 1,
+        byrow = TRUE,
+        override.aes = list(
+          shape = unname(significance_method_shapes[significance_method_levels]),
+          color = unname(significance_method_colors[significance_method_levels]),
+          size = rep(3.4, length(significance_method_levels)),
+          alpha = rep(1, length(significance_method_levels)),
+          stroke = rep(0.85, length(significance_method_levels))
+        )
+      )
+    ) +
+    scale_shape_manual(
+      values = significance_method_shapes,
+      breaks = significance_method_levels,
+      drop = FALSE,
+      guide = "none"
+    ) +
+    scale_size_manual(
+      values = significance_method_sizes,
+      breaks = significance_method_levels,
+      guide = "none"
+    ) +
+    manuscript_theme() +
+    theme(legend.position = "bottom")
+
+  shared_panel_legend(p)
+}
+
+
+
+strip_legend <- function(p) {
+  p + theme(legend.position = "none")
+}
+
+assemble_one_legend_panel <- function(plot_list, panel_title, ncol = length(plot_list), width_legend = TRUE) {
+  plot_list <- Filter(Negate(is.null), plot_list)
+
+  if (length(plot_list) == 0L) {
+    return(NULL)
+  }
+
+  legend <- build_full_method_legend()
+  no_legend <- lapply(plot_list, strip_legend)
+
+  row <- do.call(
+    gridExtra::arrangeGrob,
+    c(no_legend, list(ncol = ncol))
+  )
+
+  if (is.null(legend)) {
+    return(
+      gridExtra::arrangeGrob(
+        row,
+        ncol = 1,
+        top = grid::textGrob(
+          panel_title,
+          gp = grid::gpar(fontface = "bold", cex = 1.15)
+        )
+      )
+    )
+  }
+
+  gridExtra::arrangeGrob(
+    row,
+    legend,
+    ncol = 1,
+    heights = c(12, 1.4),
+    top = grid::textGrob(
+      panel_title,
+      gp = grid::gpar(fontface = "bold", cex = 1.15)
+    )
+  )
+}
+
+create_all_figures_zip <- function() {
+  # The manuscript figure archive contains curated PNG panels only. Individual
+  # per-view figures and duplicate PDF renditions remain available in the output
+  # tree when generated, but are excluded from the archive to avoid redundancy.
+  panel_patterns <- c(
+    "/Panels/.*\\.png$",
+    "/Combined_Figures/.*\\.png$",
+    "/TWAS/figures/Figure_TWAS_Gene_Support\\.png$"
+  )
+
+  all_png <- list.files(
+    output_dir,
+    recursive = TRUE,
+    full.names = TRUE,
+    pattern = "\\.png$",
+    ignore.case = TRUE
+  )
+  all_png <- all_png[file.info(all_png)$isdir %in% FALSE]
+
+  normalized <- gsub("\\\\", "/", all_png)
+  keep <- rep(FALSE, length(all_png))
+  for (pat in panel_patterns) keep <- keep | grepl(pat, normalized)
+  figure_files <- all_png[keep]
+
+  # The global TWAS method-count figure is intentionally excluded because the
+  # per-comparison five-view TWAS panels already contain the same count summary.
+  figure_files <- figure_files[
+    !grepl("Figure_TWAS_Method_Counts\\.png$", figure_files)
+  ]
+
+  if (!length(figure_files)) {
+    stop("No curated manuscript PNG panels were found for SEQUENCE_ALL_FIGURES.zip.")
+  }
+
+  zip_path <- file.path(output_dir, "SEQUENCE_ALL_FIGURES.zip")
+  if (file.exists(zip_path)) unlink(zip_path, force = TRUE)
+
+  root_norm <- normalizePath(output_dir, winslash = "/", mustWork = TRUE)
+  file_norm <- normalizePath(figure_files, winslash = "/", mustWork = TRUE)
+  relative_files <- substring(file_norm, nchar(root_norm) + 2L)
+  relative_files <- sort(unique(relative_files))
+
+  old_wd <- getwd()
+  on.exit(setwd(old_wd), add = TRUE)
+  setwd(output_dir)
+  utils::zip(zipfile = basename(zip_path), files = relative_files, flags = "-q")
+
+  if (!file.exists(zip_path)) stop("Figure ZIP creation failed: ", zip_path)
+  normalizePath(zip_path, winslash = "/", mustWork = TRUE)
+}
+
+create_all_tables_zip <- function() {
+  # The manuscript table archive contains the concise tables used to interpret
+  # significance, EVS/PCA evidence, and 3'aTWAS overlap. Per-view working tables
+  # remain in their comparison folders but are not duplicated in the archive.
+  wanted <- character(0)
+
+  add_if_exists <- function(path) {
+    if (file.exists(path)) wanted <<- c(wanted, path)
+  }
+
+  add_if_exists(file.path(summary_table_dir, "Table_DE_Method_Counts.csv"))
+  add_if_exists(file.path(summary_table_dir, "Table_EVS_Empirical_Cutoffs.csv"))
+  add_if_exists(file.path(summary_table_dir, "Table_EVS_Split_Audit.csv"))
+  add_if_exists(file.path(summary_table_dir, "Table_EVS_PCA_Evidence.csv"))
+
+  for (comparison_name in as.character(comparison_table$comparison_name)) {
+    add_if_exists(file.path(
+      output_dir,
+      comparison_name,
+      paste0("Table_", comparison_name, "_Significant_Sites_All_Views.csv")
+    ))
+    add_if_exists(file.path(
+      output_dir,
+      comparison_name,
+      "Table_Method_Counts_All_Views.csv"
+    ))
+  }
+
+  add_if_exists(file.path(output_dir, "TWAS", "tables", "Table_TWAS_Overlap_PAS.csv"))
+  add_if_exists(file.path(output_dir, "TWAS", "tables", "Table_TWAS_Overlap_Genes.csv"))
+  add_if_exists(file.path(output_dir, "TWAS", "tables", "Table_TWAS_Method_Counts.csv"))
+
+  wanted <- sort(unique(wanted))
+  if (!length(wanted)) stop("No manuscript tables were found for SEQUENCE_ALL_TABLES.zip.")
+
+  zip_path <- file.path(output_dir, "SEQUENCE_ALL_TABLES.zip")
+  if (file.exists(zip_path)) unlink(zip_path, force = TRUE)
+
+  root_norm <- normalizePath(output_dir, winslash = "/", mustWork = TRUE)
+  file_norm <- normalizePath(wanted, winslash = "/", mustWork = TRUE)
+  relative_files <- substring(file_norm, nchar(root_norm) + 2L)
+
+  old_wd <- getwd()
+  on.exit(setwd(old_wd), add = TRUE)
+  setwd(output_dir)
+  utils::zip(zipfile = basename(zip_path), files = relative_files, flags = "-q")
+
+  if (!file.exists(zip_path)) stop("Table ZIP creation failed: ", zip_path)
+  normalizePath(zip_path, winslash = "/", mustWork = TRUE)
+}
+
+# =============================================================================
+# SECTION 2 OF 5
+# IMPORT COUNT MATRIX AND ANNOTATION
+# =============================================================================
+
+count_file <- resolve_existing_file(count_file_candidates, "WTTS count file")
+
+message("Using count file: ", count_file)
+message("Repository root: ", repo_root)
+message("Output directory: ", output_dir)
+
+WTTS_Seq <- read.csv(
+  count_file,
+  header = TRUE,
+  stringsAsFactors = FALSE,
+  check.names = FALSE
+)
+
+WTTS_Seq <- as.data.frame(
+  WTTS_Seq,
+  stringsAsFactors = FALSE
+)
+
+WTTS_Seq$OrigID <- as.character(WTTS_Seq$OrigID)
+WTTS_Seq$Symbol <- as.character(WTTS_Seq$Symbol)
+
+assert_required_columns(
+  WTTS_Seq,
+  c("OrigID", "Symbol"),
+  object_name = "WTTS count file"
+)
+
+assert_required_columns(
+  WTTS_Seq,
+  meta_all$id,
+  object_name = "WTTS count file sample columns"
+)
+
+coerce_count_column <- function(x) {
+  suppressWarnings(
+    as.numeric(
+      gsub(
+        ",",
+        "",
+        trimws(as.character(x)),
+        fixed = TRUE
+      )
+    )
+  )
+}
+
+for (sid in meta_all$id) {
+  WTTS_Seq[[sid]] <- coerce_count_column(WTTS_Seq[[sid]])
+}
+
+WTTS_Seq <- WTTS_Seq[
+  !is.na(WTTS_Seq$OrigID) & nzchar(trimws(WTTS_Seq$OrigID)),
+  ,
+  drop = FALSE
+]
+
+sample_na <- rowSums(is.na(WTTS_Seq[, meta_all$id, drop = FALSE])) > 0
+
+if (any(sample_na)) {
+  message("Removing ", sum(sample_na), " rows with missing or nonnumeric sample counts.")
+}
+
+WTTS_Seq <- WTTS_Seq[!sample_na, , drop = FALSE]
+
+WTTS_Seq$feature_id <- make.unique(as.character(WTTS_Seq$OrigID), sep = "_dup")
+rownames(WTTS_Seq) <- WTTS_Seq$feature_id
+
+OrigID_Symbol <- data.frame(
+  feature_id = WTTS_Seq$feature_id,
+  orig_id = WTTS_Seq$OrigID,
+  gene_symbol = WTTS_Seq$Symbol,
+  stringsAsFactors = FALSE
+)
+
+OrigID_Symbol$feature_id <- as.character(OrigID_Symbol$feature_id)
+OrigID_Symbol$orig_id <- as.character(OrigID_Symbol$orig_id)
+OrigID_Symbol$gene_symbol <- as.character(OrigID_Symbol$gene_symbol)
+
+OrigID_Symbol <- OrigID_Symbol %>%
+  dplyr::mutate(
+    gene_symbol = dplyr::if_else(
+      is.na(gene_symbol),
+      "",
+      trimws(gene_symbol)
+    )
+  ) %>%
+  dplyr::arrange(
+    feature_id,
+    dplyr::desc(gene_symbol != ""),
+    gene_symbol
+  ) %>%
+  dplyr::distinct(
+    feature_id,
+    .keep_all = TRUE
+  ) %>%
+  dplyr::mutate(
+    gene_symbol = dplyr::na_if(gene_symbol, "")
+  )
+
+
+
+
+# -----------------------------------------------------------------------------
+# Gene/PAS annotation used by the final 3'aTWAS analysis
+# -----------------------------------------------------------------------------
+
+valid_gene_symbol <- function(x) {
+  x <- trimws(as.character(x))
+  !is.na(x) & nzchar(x) & x != "-" & grepl("[A-Za-z0-9]", x)
+}
+
+gene_key <- function(x) {
+  x <- trimws(as.character(x))
+  x[!valid_gene_symbol(x)] <- NA_character_
+  toupper(x)
+}
+
+collapse_unique <- function(x, sep = "; ") {
+  x <- unique(trimws(as.character(x)))
+  x <- x[!is.na(x) & nzchar(x)]
+  if (!length(x)) return(NA_character_)
+  paste(sort(x), collapse = sep)
+}
+
+safe_min_numeric <- function(x) {
+  x <- suppressWarnings(as.numeric(x))
+  x <- x[is.finite(x)]
+  if (!length(x)) NA_real_ else min(x)
+}
+
+safe_max_numeric <- function(x) {
+  x <- suppressWarnings(as.numeric(x))
+  x <- x[is.finite(x)]
+  if (!length(x)) NA_real_ else max(x)
+}
+
+WTTS_gene_pas_summary <- OrigID_Symbol %>%
+  dplyr::mutate(gene_key = gene_key(gene_symbol)) %>%
+  dplyr::filter(!is.na(gene_key)) %>%
+  dplyr::group_by(gene_key) %>%
+  dplyr::summarise(
+    WTTS_Gene = dplyr::first(gene_symbol[valid_gene_symbol(gene_symbol)]),
+    WTTS_PAS_n = dplyr::n_distinct(orig_id),
+    .groups = "drop"
+  ) %>%
+  dplyr::mutate(APA_multi_PAS = WTTS_PAS_n >= 2L)
+
+# =============================================================================
+# SECTION 3 OF 5
+# EVS CONSTRUCTION AND EVS SUPPORT FIGURES
+# =============================================================================
+
+prepare_comparison_data <- function(comparison_name, group1_prefix, group2_prefix, WTTS_Seq, meta_all) {
+  keep_ids <- grepl(paste0("^", group1_prefix, "_"), meta_all$id) |
+    grepl(paste0("^", group2_prefix, "_"), meta_all$id)
+
+  meta_sub <- meta_all[keep_ids, , drop = FALSE]
+
+  coldata <- meta_sub[, c("condition"), drop = FALSE]
+
+  sample_ids <- rownames(meta_sub)
+
+  missing_samples <- setdiff(sample_ids, colnames(WTTS_Seq))
+
+  if (length(missing_samples) > 0L) {
+    stop(
+      "Missing samples in WTTS file for ",
+      comparison_name,
+      ": ",
+      paste(missing_samples, collapse = ", ")
+    )
+  }
+
+  count_sub <- WTTS_Seq[, sample_ids, drop = FALSE]
+  rownames(count_sub) <- rownames(WTTS_Seq)
+  count_sub <- count_sub[rowSums(as.matrix(count_sub)) > 0, , drop = FALSE]
+
+  stopifnot(all(colnames(count_sub) == rownames(coldata)))
+
+  list(
+    comparison_name = comparison_name,
+    count_matrix = coerce_raw_count_matrix_for_deseq2(
+      count_sub,
+      context = paste0(comparison_name, " raw comparison matrix")
+    ),
+    coldata = coldata
+  )
+}
+
+
+coerce_raw_count_matrix_for_deseq2 <- function(count_mat, context = "count matrix") {
+  original_rownames <- rownames(count_mat)
+  original_colnames <- colnames(count_mat)
+
+  count_mat <- as.matrix(count_mat)
+
+  if (!is.numeric(count_mat)) {
+    suppressWarnings(storage.mode(count_mat) <- "numeric")
+  }
+
+  if (!is.numeric(count_mat)) {
+    stop(context, " must be numeric raw counts before DESeq2.")
+  }
+
+  if (any(!is.finite(count_mat) | is.na(count_mat))) {
+    stop(context, " contains NA or non-finite values after numeric coercion.")
+  }
+
+  if (any(count_mat < 0)) {
+    stop(context, " contains negative values; DESeq2 requires non-negative counts.")
+  }
+
+  rounded <- round(count_mat)
+
+  if (any(abs(count_mat - rounded) > 1e-6)) {
+    warning(context, " contained non-integer values; values were rounded for DESeq2.")
+  }
+
+  if (any(rounded > .Machine$integer.max)) {
+    stop(context, " contains counts larger than R integer storage can represent.")
+  }
+
+  storage.mode(rounded) <- "integer"
+  rownames(rounded) <- original_rownames
+  colnames(rounded) <- original_colnames
+
+  rounded
+}
+
+make_rank_matrix_for_track <- function(count_matrix, coldata, track_key) {
+  track_key <- match.arg(track_key, c("normalized_evs", "raw_evs"))
+
+  if (track_key == "raw_evs") {
+    return(
+      list(
+        rank_matrix = as.data.frame(count_matrix),
+        preprocessing_label = "Raw counts prior to EVS; PCA is performed directly on raw counts"
+      )
+    )
+  }
+
+  dds_init <- DESeq2::DESeqDataSetFromMatrix(
+    countData = coerce_raw_count_matrix_for_deseq2(
+      count_matrix,
+      context = "NormEVS pre-split full comparison matrix"
+    ),
+    colData = coldata,
+    design = make_design_formula(coldata)
+  )
+
+  dds_init <- DESeq2::estimateSizeFactors(dds_init)
+
+  norm_counts <- as.data.frame(
+    DESeq2::counts(dds_init, normalized = TRUE)
+  )
+
+  list(
+    rank_matrix = norm_counts,
+    preprocessing_label = "Median-of-ratios normalized counts prior to EVS; PCA is performed directly on normalized counts"
+  )
+}
+
+compute_pc1_loading_table <- function(value_df, sample_names, top_n, preprocessing_label = "Normalized prior to EVS") {
+  x <- as.matrix(value_df[, sample_names, drop = FALSE])
+  storage.mode(x) <- "numeric"
+
+  if (ncol(x) < 2L) {
+    stop("EVS PCA requires at least two samples in each condition.")
+  }
+
+  # Refined EVS method: run PCA directly on the pre-split matrix for the
+  # condition, extract the PC1 feature eigenvector/loading, take absolute values,
+  # rank descending, and select the comparison-specific empirical k*. No log
+  # transformation is applied before PCA.
+  pca_fit <- stats::prcomp(
+    t(x),
+    center = TRUE,
+    scale. = FALSE,
+    rank. = 2
+  )
+
+  loading_abs <- abs(pca_fit$rotation[, 1])
+
+  loading_tbl <- data.frame(
+    feature_id = names(loading_abs),
+    pc1_loading_abs = unname(loading_abs),
+    stringsAsFactors = FALSE
+  )
+
+  loading_tbl <- loading_tbl[
+    order(loading_tbl$pc1_loading_abs, decreasing = TRUE),
+    ,
+    drop = FALSE
+  ]
+
+  loading_tbl$rank <- seq_len(nrow(loading_tbl))
+
+  cutoff_info <- resolve_top_n_cutoff(
+    loading_tbl$pc1_loading_abs,
+    top_n = top_n
+  )
+
+  loading_tbl$split_class <- ifelse(
+    loading_tbl$rank <= cutoff_info$top_n_actual,
+    "high_loading",
+    "background_loading"
+  )
+
+  list(
+    pca_fit = pca_fit,
+    loading_table = loading_tbl,
+    cutoff = cutoff_info$cutoff_value,
+    top_n_used = cutoff_info$top_n_actual,
+    preprocessing_label = preprocessing_label
+  )
+}
+
+build_eigenvector_split <- function(comparison_name, count_matrix, coldata, track_key) {
+  track_key <- match.arg(track_key, c("normalized_evs", "raw_evs"))
+  empirical_k <- get_empirical_evs_cutoff(comparison_name)
+
+  # The EVS matrix is used only to choose feature IDs. The normalized track
+  # follows the supplied workflow: median-of-ratios normalization of the full
+  # RT/ZT comparison matrix, followed by condition-specific PCA/PC1 eigenvectors.
+  # RawEVS repeats the same PCA/ranking rule without pre-split normalization.
+  # Both tracks use the same comparison-specific empirical k* so preprocessing
+  # is the only difference in the selection rule. Downstream DESeq2 always
+  # receives the corresponding raw-count subset.
+  raw_count_matrix <- coerce_raw_count_matrix_for_deseq2(
+    count_matrix,
+    context = paste0(track_key, " full comparison matrix before EVS")
+  )
+
+  if (nrow(raw_count_matrix) < empirical_k) {
+    stop(
+      comparison_name, " ", track_key,
+      ": empirical EVS k*=", empirical_k,
+      " exceeds the ", nrow(raw_count_matrix),
+      " PASs available after zero-row filtering."
+    )
+  }
+
+  rank_obj <- make_rank_matrix_for_track(
+    count_matrix = raw_count_matrix,
+    coldata = coldata,
+    track_key = track_key
+  )
+
+  rank_matrix <- rank_obj$rank_matrix
+  preprocessing_label <- rank_obj$preprocessing_label
+
+  sample_ids <- colnames(raw_count_matrix)
+  trt_ids <- sample_ids[coldata$condition == "trt"]
+  untrt_ids <- sample_ids[coldata$condition == "untrt"]
+
+  fit_trt <- compute_pc1_loading_table(
+    rank_matrix,
+    trt_ids,
+    top_n = empirical_k,
+    preprocessing_label = preprocessing_label
+  )
+
+  fit_untrt <- compute_pc1_loading_table(
+    rank_matrix,
+    untrt_ids,
+    top_n = empirical_k,
+    preprocessing_label = preprocessing_label
+  )
+
+  trt_high <- as.character(
+    fit_trt$loading_table$feature_id[
+      fit_trt$loading_table$rank <= empirical_k
+    ]
+  )
+
+  untrt_high <- as.character(
+    fit_untrt$loading_table$feature_id[
+      fit_untrt$loading_table$rank <= empirical_k
+    ]
+  )
+
+  if (length(trt_high) != empirical_k || length(untrt_high) != empirical_k) {
+    stop(
+      comparison_name, " ", track_key,
+      ": EVS failed to select exactly empirical k*=", empirical_k,
+      " PAS features per condition."
+    )
+  }
+
+  # Joint/disjoint classification from the two independently ranked PC1 axes.
+  joint_ids <- intersect(trt_high, untrt_high)
+  disjoint_trt_ids <- setdiff(trt_high, untrt_high)
+  disjoint_untrt_ids <- setdiff(untrt_high, trt_high)
+
+  leading_edge_ids <- union(trt_high, untrt_high)
+  remainder_ids <- setdiff(rownames(raw_count_matrix), leading_edge_ids)
+
+  if (length(leading_edge_ids) == 0L) {
+    stop("Leading-edge dataset is empty. Check sample mapping or EVS inputs.")
+  }
+
+  if (length(remainder_ids) == 0L) {
+    stop(
+      comparison_name, " ", track_key,
+      ": remainder dataset is empty after empirical EVS k*=", empirical_k, "."
+    )
+  }
+
+  if (length(intersect(leading_edge_ids, remainder_ids)) != 0L ||
+      !setequal(union(leading_edge_ids, remainder_ids), rownames(raw_count_matrix))) {
+    stop(comparison_name, " ", track_key, ": EVS Lead/Rem partition audit failed.")
+  }
+
+  list(
+    comparison_name = comparison_name,
+    track_key = track_key,
+    empirical_evs_k = empirical_k,
+    cutoff_basis = EMPIRICAL_EVS_CUTOFF_BASIS,
+    preprocessing_label = preprocessing_label,
+    rank_matrix = rank_matrix,
+    fit_trt = fit_trt,
+    fit_untrt = fit_untrt,
+    trt_top_ids = trt_high,
+    untrt_top_ids = untrt_high,
+    joint_ids = joint_ids,
+    disjoint_trt_ids = disjoint_trt_ids,
+    disjoint_untrt_ids = disjoint_untrt_ids,
+    leading_edge_ids = leading_edge_ids,
+    remainder_ids = remainder_ids,
+    downstream_deseq2_input = "raw-count feature subsets for DESeq2",
+    raw_dataset = raw_count_matrix,
+    leading_edge_dataset = raw_count_matrix[leading_edge_ids, , drop = FALSE],
+    remainder_dataset = raw_count_matrix[remainder_ids, , drop = FALSE]
+  )
+}
+
+run_core_analysis <- function(count_mat, coldata, dataset_name, annot_df) {
+  design_formula <- make_design_formula(coldata)
+
+  dds <- DESeq2::DESeqDataSetFromMatrix(
+    countData = coerce_raw_count_matrix_for_deseq2(
+      count_mat,
+      context = paste0(dataset_name, " DESeq2 input after EVS split")
+    ),
+    colData = coldata,
+    design = design_formula
+  )
+
+  dds <- dds[rowSums(DESeq2::counts(dds)) > 0, ]
+
+  dds <- DESeq2::DESeq(
+    dds,
+    betaPrior = FALSE
+  )
+
+  res <- DESeq2::results(
+    dds,
+    contrast = c("condition", "trt", "untrt"),
+    alpha = BH_FDR_STANDARD,
+    pAdjustMethod = "BH"
+  )
+
+  res_strong <- DESeq2::results(
+    dds,
+    contrast = c("condition", "trt", "untrt"),
+    lfcThreshold = lfc_boundary,
+    altHypothesis = "greaterAbs",
+    alpha = BH_FDR_STRONG,
+    pAdjustMethod = "BH"
+  )
+
+  res_weak <- DESeq2::results(
+    dds,
+    contrast = c("condition", "trt", "untrt"),
+    lfcThreshold = lfc_boundary,
+    altHypothesis = "lessAbs",
+    alpha = BH_FDR_WEAK,
+    pAdjustMethod = "BH"
+  )
+
+  res_all_df <- as.data.frame(res)
+  res_all_df$feature_id <- as.character(rownames(res_all_df))
+
+  valid_stat <- is.finite(res_all_df$stat) & !is.na(res_all_df$stat)
+
+  stat_vec <- as.numeric(res_all_df$stat[valid_stat])
+  stat_vec <- stat_vec[is.finite(stat_vec) & !is.na(stat_vec)]
+
+  if (length(stat_vec) < 5L) {
+    stop(
+      sprintf(
+        "[%s] Fewer than 5 finite Wald statistics were available for fdrtool.",
+        dataset_name
+      )
+    )
+  }
+
+  fdr_fit <- run_empirical_null_fdrtool(
+    stat_vec,
+    dataset_name = dataset_name
+  )
+
+  res_df <- res_all_df
+
+  n_valid <- sum(valid_stat)
+
+  if (length(fdr_fit$pval) != n_valid) {
+    stop(sprintf("[%s] fdrtool empirical-p output length mismatch.", dataset_name))
+  }
+
+  # Preserve DESeq2's ordinary Wald pvalue and BH-adjusted padj exactly as
+  # returned by DESeq2. Empirical p-values are stored in a separate column and
+  # are used only for HBFSS/higher-criticism calculations and plotting.
+  res_df$empirical_p <- NA_real_
+  res_df$empirical_p[valid_stat] <- as.numeric(fdr_fit$pval)
+
+  coef_name <- get_condition_coef(dds)
+
+  shr <- DESeq2::lfcShrink(
+    dds,
+    coef = coef_name,
+    type = "apeglm"
+  )
+
+  shr_df <- as.data.frame(shr)
+  shr_df$feature_id <- as.character(rownames(shr_df))
+
+  res_df <- dplyr::left_join(
+    res_df,
+    shr_df[, c("feature_id", "log2FoldChange")],
+    by = "feature_id",
+    suffix = c("", "_shrunk")
+  )
+
+  colnames(res_df)[colnames(res_df) == "log2FoldChange_shrunk"] <- "lfc_shrunk"
+
+  hc_p_threshold_dataset <- safe_hc_thresh(
+    res_df$empirical_p,
+    dataset_name = dataset_name
+  )
+
+  res_df$HBFSS <- abs(res_df$lfc_shrunk) *
+    (-log10(pmax(res_df$empirical_p, 1e-300)))
+
+  if (is.na(hc_p_threshold_dataset) ||
+      !is.finite(hc_p_threshold_dataset) ||
+      hc_p_threshold_dataset <= 0 ||
+      hc_p_threshold_dataset > 1) {
+    hbfss_threshold_dataset <- NA_real_
+    res_df$HBFSS_core_pass <- FALSE
+  } else {
+    hbfss_threshold_dataset <- abs(log10(hc_p_threshold_dataset)) * lfc_boundary
+    res_df$HBFSS_core_pass <- !is.na(res_df$HBFSS) &
+      is.finite(res_df$HBFSS) &
+      res_df$HBFSS > hbfss_threshold_dataset
+  }
+
+  res_df$regulation_direction <- ifelse(
+    is.na(res_df$lfc_shrunk),
+    NA_character_,
+    ifelse(
+      res_df$lfc_shrunk > 0,
+      "upregulated",
+      ifelse(res_df$lfc_shrunk < 0, "downregulated", "no_change")
+    )
+  )
+
+  res_strong_df <- as.data.frame(res_strong)
+  res_strong_df$feature_id <- as.character(rownames(res_strong_df))
+
+  res_weak_df <- as.data.frame(res_weak)
+  res_weak_df$feature_id <- as.character(rownames(res_weak_df))
+
+  res_df <- dplyr::left_join(
+    res_df,
+    res_strong_df[, c("feature_id", "pvalue", "padj")],
+    by = "feature_id",
+    suffix = c("", "_strong")
+  )
+
+  res_df <- dplyr::left_join(
+    res_df,
+    res_weak_df[, c("feature_id", "pvalue", "padj")],
+    by = "feature_id",
+    suffix = c("", "_weak")
+  )
+
+  colnames(res_df)[colnames(res_df) == "pvalue_strong"] <- "pvalue_strong_effect"
+  colnames(res_df)[colnames(res_df) == "padj_strong"] <- "padj_strong_effect"
+  colnames(res_df)[colnames(res_df) == "pvalue_weak"] <- "pvalue_weak_effect"
+  colnames(res_df)[colnames(res_df) == "padj_weak"] <- "padj_weak_effect"
+
+  res_df$resGA_pvalue <- res_df$pvalue_strong_effect
+  res_df$resGA_padj <- res_df$padj_strong_effect
+  res_df$resLA_pvalue <- res_df$pvalue_weak_effect
+  res_df$resLA_padj <- res_df$padj_weak_effect
+
+  # Final decision flags. DESeq2 ordinary/greaterAbs/lessAbs p-values are
+  # kept separate from empirical-null p-values. The manuscript Standard effect
+  # combines the ordinary DESeq2 Wald/BH result with the prespecified effect
+  # reporting boundary applied to the apeglm-shrunken LFC.
+  finite_lfc <- !is.na(res_df$lfc_shrunk) & is.finite(res_df$lfc_shrunk)
+  abs_shrunk_lfc <- abs(res_df$lfc_shrunk)
+
+  res_df$standard_flag <- finite_lfc &
+    abs_shrunk_lfc >= lfc_boundary &
+    !is.na(res_df$padj) &
+    res_df$padj < BH_FDR_STANDARD
+
+  res_df$strong_cnh_flag <- finite_lfc &
+    abs_shrunk_lfc >= lfc_boundary &
+    !is.na(res_df$resGA_padj) &
+    res_df$resGA_padj < BH_FDR_STRONG
+
+  res_df$weak_cnh_flag <- finite_lfc &
+    abs_shrunk_lfc < lfc_boundary &
+    !is.na(res_df$resLA_padj) &
+    res_df$resLA_padj < BH_FDR_WEAK
+
+  res_df$hbfss_flag <- finite_lfc &
+    !is.na(res_df$HBFSS_core_pass) &
+    res_df$HBFSS_core_pass
+
+  # lessAbs alone is not reported as differential expression. Final Weak is the
+  # intersection of sub-boundary lessAbs evidence and HBFSS signal evidence.
+  res_df$weak_significant_flag <- res_df$weak_cnh_flag & res_df$hbfss_flag
+
+  res_df$standard_hbfss_overlap <- res_df$standard_flag & res_df$hbfss_flag
+  res_df$strong_hbfss_overlap <- res_df$strong_cnh_flag & res_df$hbfss_flag
+  res_df$weak_hbfss_overlap <- res_df$weak_cnh_flag & res_df$hbfss_flag
+  res_df$any_overlap <- res_df$hbfss_flag &
+    (res_df$standard_flag | res_df$strong_cnh_flag | res_df$weak_cnh_flag)
+
+  res_df$final_significant_flag <- res_df$standard_flag |
+    res_df$strong_cnh_flag |
+    res_df$weak_significant_flag |
+    res_df$hbfss_flag
+
+  # Standard/Strong are outside the |LFC|=1 reporting boundary, whereas final
+  # Weak is inside it. These sets must therefore be disjoint by construction.
+  if (any(res_df$standard_flag & res_df$weak_significant_flag, na.rm = TRUE)) {
+    stop("Standard and Weak classifications overlapped in ", dataset_name)
+  }
+  if (any(res_df$strong_cnh_flag & res_df$weak_significant_flag, na.rm = TRUE)) {
+    stop("Strong and Weak classifications overlapped in ", dataset_name)
+  }
+  if (any(res_df$weak_significant_flag & !res_df$hbfss_flag, na.rm = TRUE)) {
+    stop("A final Weak PAS lacked HBFSS support in ", dataset_name)
+  }
+
+  # Exact decision-rule checks. These are runtime assertions only; they do not
+  # create validation tables or alter the reported results.
+  expected_standard <- finite_lfc &
+    abs_shrunk_lfc >= lfc_boundary &
+    !is.na(res_df$padj) &
+    res_df$padj < BH_FDR_STANDARD
+
+  expected_strong <- finite_lfc &
+    abs_shrunk_lfc >= lfc_boundary &
+    !is.na(res_df$resGA_padj) &
+    res_df$resGA_padj < BH_FDR_STRONG
+
+  expected_weak_cnh <- finite_lfc &
+    abs_shrunk_lfc < lfc_boundary &
+    !is.na(res_df$resLA_padj) &
+    res_df$resLA_padj < BH_FDR_WEAK
+
+  expected_weak <- expected_weak_cnh & res_df$hbfss_flag
+  expected_overlap <- res_df$hbfss_flag &
+    (expected_standard | expected_strong | expected_weak_cnh)
+
+  stopifnot(identical(res_df$standard_flag, expected_standard))
+  stopifnot(identical(res_df$strong_cnh_flag, expected_strong))
+  stopifnot(identical(res_df$weak_cnh_flag, expected_weak_cnh))
+  stopifnot(identical(res_df$weak_significant_flag, expected_weak))
+  stopifnot(identical(res_df$any_overlap, expected_overlap))
+
+  expected_hbfss <- abs(res_df$lfc_shrunk) *
+    (-log10(pmax(res_df$empirical_p, 1e-300)))
+  both_na <- is.na(expected_hbfss) & is.na(res_df$HBFSS)
+  both_finite <- is.finite(expected_hbfss) & is.finite(res_df$HBFSS)
+  close_enough <- rep(FALSE, length(expected_hbfss))
+  close_enough[both_finite] <- abs(expected_hbfss[both_finite] - res_df$HBFSS[both_finite]) <=
+    1e-12 * pmax(1, abs(expected_hbfss[both_finite]))
+  if (!all(both_na | close_enough)) stop("HBFSS arithmetic validation failed for ", dataset_name)
+
+  if (is.finite(hc_p_threshold_dataset) && !is.na(hc_p_threshold_dataset)) {
+    expected_htau <- -log10(hc_p_threshold_dataset) * lfc_boundary
+    if (!isTRUE(all.equal(hbfss_threshold_dataset, expected_htau, tolerance = 1e-12))) {
+      stop("HBFSS threshold arithmetic validation failed for ", dataset_name)
+    }
+  }
+
+  if (is.finite(hbfss_threshold_dataset) && !is.na(hbfss_threshold_dataset)) {
+    expected_hbfss_flag <- finite_lfc & !is.na(res_df$HBFSS) &
+      is.finite(res_df$HBFSS) & res_df$HBFSS > hbfss_threshold_dataset
+    stopifnot(identical(res_df$hbfss_flag, expected_hbfss_flag))
+  }
+
+  base_mean_vec <- res_df$baseMean[!is.na(res_df$baseMean)]
+
+  norm_counts <- as.data.frame(
+    DESeq2::counts(dds, normalized = TRUE)
+  )
+
+  norm_counts$feature_id <- as.character(rownames(norm_counts))
+
+  mm <- as.data.frame(S4Vectors::mcols(dds))
+  mm$feature_id <- as.character(rownames(mm))
+
+  disp_cols_available <- intersect(
+    c(
+      "feature_id",
+      "dispGeneEst",
+      "dispFit",
+      "dispersion",
+      "dispIter",
+      "dispOutlier"
+    ),
+    colnames(mm)
+  )
+
+  disp_df <- mm[, disp_cols_available, drop = FALSE]
+
+  annot_df$feature_id <- as.character(annot_df$feature_id)
+  if (!"gene_symbol" %in% names(annot_df)) {
+    annot_df$gene_symbol <- NA_character_
+  }
+  annot_df$gene_symbol <- as.character(annot_df$gene_symbol)
+
+  annot_df <- annot_df %>%
+    dplyr::mutate(
+      gene_symbol = dplyr::if_else(
+        is.na(gene_symbol),
+        "",
+        trimws(gene_symbol)
+      )
+    ) %>%
+    dplyr::arrange(
+      feature_id,
+      dplyr::desc(gene_symbol != ""),
+      gene_symbol
+    ) %>%
+    dplyr::distinct(
+      feature_id,
+      .keep_all = TRUE
+    ) %>%
+    dplyr::mutate(
+      gene_symbol = dplyr::na_if(gene_symbol, "")
+    )
+
+  norm_counts <- norm_counts[!duplicated(norm_counts$feature_id), , drop = FALSE]
+  disp_df <- disp_df[!duplicated(disp_df$feature_id), , drop = FALSE]
+
+  final_df <- res_df %>%
+    dplyr::left_join(annot_df, by = "feature_id") %>%
+    dplyr::left_join(norm_counts, by = "feature_id") %>%
+    dplyr::left_join(disp_df, by = "feature_id")
+
+  final_df$neglog10_padj <- safe_neglog10(final_df$padj)
+  final_df$neglog10_empirical_p <- safe_neglog10(final_df$empirical_p)
+
+  final_df$dataset_name <- dataset_name
+  final_df$hc_p_threshold_dataset <- hc_p_threshold_dataset
+  final_df$hbfss_threshold_dataset <- hbfss_threshold_dataset
+
+  preferred_cols <- c(
+    "dataset_name",
+    "feature_id",
+    "orig_id",
+    "gene_symbol",
+    "baseMean",
+    "log2FoldChange",
+    "lfc_shrunk",
+    "regulation_direction",
+    "stat",
+    "pvalue",
+    "padj",
+    "empirical_p",
+    "HBFSS",
+    "hc_p_threshold_dataset",
+    "hbfss_threshold_dataset",
+    "resLA_pvalue",
+    "resLA_padj",
+    "resGA_pvalue",
+    "resGA_padj",
+    "weak_cnh_flag",
+    "strong_cnh_flag",
+    "standard_flag",
+    "hbfss_flag",
+    "weak_significant_flag",
+    "final_significant_flag",
+    "weak_hbfss_overlap",
+    "strong_hbfss_overlap",
+    "standard_hbfss_overlap",
+    "any_overlap"
+  )
+
+  final_df <- final_df[
+    ,
+    c(
+      intersect(preferred_cols, names(final_df)),
+      setdiff(names(final_df), preferred_cols)
+    ),
+    drop = FALSE
+  ]
+
+  list(
+    dds = dds,
+    results = final_df,
+    base_mean_vec = base_mean_vec,
+    hc_p_threshold = hc_p_threshold_dataset,
+    hbfss_threshold = hbfss_threshold_dataset
+  )
+}
+
+build_final_volcano_df <- function(df, y_col = "neglog10_empirical_p") {
+  df <- finite_plot_df(df, "lfc_shrunk", y_col)
+
+  # Volcano labels are gene symbols only. Numeric PAS/feature identifiers are
+  # never substituted into the figure when a gene symbol is absent.
+  df$gene_symbol_plot <- if ("gene_symbol" %in% names(df)) {
+    trimws(as.character(df$gene_symbol))
+  } else {
+    rep(NA_character_, nrow(df))
+  }
+
+  df$has_valid_gene_symbol <- !is.na(df$gene_symbol_plot) &
+    nzchar(df$gene_symbol_plot) &
+    grepl("[A-Za-z]", df$gene_symbol_plot) &
+    !df$gene_symbol_plot %in% c("-", ".", "NA", "N/A")
+
+  df[order(df$neglog10_empirical_p, na.last = TRUE), , drop = FALSE]
+}
+
+select_final_volcano_labels <- function(df, y_col, n_labels = n_top_labels_volcano) {
+  if (!nrow(df)) return(df[0, , drop = FALSE])
+
+  lab_df <- df[
+    df$has_valid_gene_symbol &
+      !is.na(df$final_significant_flag) &
+      df$final_significant_flag,
+    ,
+    drop = FALSE
+  ]
+
+  if (!nrow(lab_df)) return(lab_df[0, , drop = FALSE])
+
+  # Rank final discoveries by the evidence actually used on the HBFSS plotting
+  # coordinates, then by effect magnitude. This does not change significance.
+  emp <- suppressWarnings(as.numeric(lab_df$empirical_p))
+  emp[!is.finite(emp)] <- Inf
+  hscore <- suppressWarnings(as.numeric(lab_df$HBFSS))
+  hscore[!is.finite(hscore)] <- -Inf
+
+  ord <- order(emp, -hscore, -abs(lab_df$lfc_shrunk), na.last = TRUE)
+  lab_df <- lab_df[ord, , drop = FALSE]
+  lab_df <- lab_df[seq_len(min(as.integer(n_labels), nrow(lab_df))), , drop = FALSE]
+
+  pas_id <- if ("orig_id" %in% names(lab_df)) {
+    as.character(lab_df$orig_id)
+  } else {
+    as.character(lab_df$feature_id)
+  }
+  bad_pas <- is.na(pas_id) | !nzchar(trimws(pas_id))
+  pas_id[bad_pas] <- as.character(lab_df$feature_id[bad_pas])
+
+  gene_label <- as.character(lab_df$gene_symbol_plot)
+  duplicate_gene <- duplicated(gene_label) | duplicated(gene_label, fromLast = TRUE)
+  lab_df$plot_label <- ifelse(
+    duplicate_gene,
+    paste0(gene_label, " [", pas_id, "]"),
+    gene_label
+  )
+
+  lab_df
+}
+
+
+make_hbfss_boundary_df <- function(plot_df, hbfss_threshold, y_limit) {
+  if (!is.finite(hbfss_threshold) || is.na(hbfss_threshold) || hbfss_threshold < 0) {
+    return(NULL)
+  }
+
+  x_max <- max(
+    max(abs(plot_df$lfc_shrunk), na.rm = TRUE),
+    lfc_boundary * 1.1
+  )
+
+  x_min <- max(0.05, hbfss_threshold / max(y_limit, 1e-6))
+
+  x_abs <- seq(
+    x_min,
+    x_max,
+    length.out = 600
+  )
+
+  # HBFSS significance is score-threshold driven. HCp is shown separately as a
+  # reference line because it is used to calculate Htau, not as a second gate.
+  y_curve <- hbfss_threshold / x_abs
+
+  keep <- is.finite(y_curve) &
+    y_curve >= 0 &
+    y_curve <= y_limit
+
+  if (!any(keep)) {
+    return(NULL)
+  }
+
+  x_abs <- x_abs[keep]
+  y_curve <- y_curve[keep]
+
+  rbind(
+    data.frame(x = -rev(x_abs), y = rev(y_curve)),
+    data.frame(x = x_abs, y = y_curve)
+  )
+}
+
+plot_final_volcano <- function(df, dataset_name, short_title = NULL, label_genes = TRUE, y_limit_override = NULL, n_labels = n_top_labels_volcano) {
+  plot_df <- build_final_volcano_df(df, y_col = "neglog10_empirical_p")
+  if (!nrow(plot_df)) stop("No finite volcano plotting rows for ", dataset_name)
+
+  method_df <- build_significance_plot_long(plot_df)
+  lab_df <- if (isTRUE(label_genes)) {
+    select_final_volcano_labels(plot_df, y_col = "neglog10_empirical_p", n_labels = n_labels)
+  } else {
+    plot_df[0, , drop = FALSE]
+  }
+
+  hc_raw <- suppressWarnings(as.numeric(df$hc_p_threshold_dataset[1]))
+  htau <- suppressWarnings(as.numeric(df$hbfss_threshold_dataset[1]))
+  hc_y <- if (is.finite(hc_raw) && !is.na(hc_raw) && hc_raw > 0 && hc_raw <= 1) {
+    safe_neglog10(hc_raw)
+  } else NA_real_
+
+  # A shared y_limit_override (computed once across every comparison/view)
+  # keeps all manuscript volcano panels on the same vertical scale, so
+  # significance magnitudes are visually comparable across timepoints
+  # instead of each panel silently rescaling to its own local maximum.
+  y_limit <- if (!is.null(y_limit_override) && is.finite(y_limit_override)) {
+    y_limit_override
+  } else {
+    max(plot_df$neglog10_empirical_p, na.rm = TRUE) * 1.05
+  }
+  boundary_df <- make_hbfss_boundary_df(plot_df, htau, y_limit)
+
+  std_n <- sum(df$standard_flag, na.rm = TRUE)
+  str_n <- sum(df$strong_cnh_flag, na.rm = TRUE)
+  wk_n <- sum(df$weak_significant_flag, na.rm = TRUE)
+  hbfss_n <- sum(df$hbfss_flag, na.rm = TRUE)
+  ovlp_n <- sum(df$any_overlap, na.rm = TRUE)
+
+  count_text <- paste0(
+    "Std=", std_n,
+    "  Str=", str_n,
+    "  Wk=", wk_n,
+    "  HBFSS=", hbfss_n,
+    "  Ovlp=", ovlp_n,
+    if (is.finite(hc_raw) && !is.na(hc_raw)) paste0("  HCp=", signif(hc_raw, 3)) else "",
+    if (is.finite(htau) && !is.na(htau)) paste0("  Hτ=", signif(htau, 3)) else ""
+  )
+
+  plot_title <- if (is.null(short_title)) {
+    compact_title(pretty_dataset_label(dataset_name), width = 42)
+  } else short_title
+
+  p <- ggplot() +
+    geom_point(
+      data = plot_df,
+      aes(x = lfc_shrunk, y = neglog10_empirical_p),
+      color = plot_palette$background,
+      shape = 16,
+      size = 0.48,
+      alpha = 0.22
+    ) +
+    geom_point(
+      data = method_df,
+      aes(
+        x = lfc_shrunk,
+        y = neglog10_empirical_p,
+        color = Method,
+        shape = Method,
+        size = Method
+      ),
+      alpha = 0.98,
+      stroke = 0.90
+    ) +
+    scale_color_manual(
+      values = significance_method_colors,
+      breaks = significance_method_levels,
+      labels = unname(significance_method_labels[significance_method_levels]),
+      drop = FALSE,
+      name = "Method",
+      guide = guide_legend(
+        nrow = 1,
+        byrow = TRUE,
+        override.aes = list(
+          shape = unname(significance_method_shapes[significance_method_levels]),
+          color = unname(significance_method_colors[significance_method_levels]),
+          size = rep(3.4, length(significance_method_levels)),
+          alpha = rep(1, length(significance_method_levels)),
+          stroke = rep(0.85, length(significance_method_levels))
+        )
+      )
+    ) +
+    scale_shape_manual(
+      values = significance_method_shapes,
+      breaks = significance_method_levels,
+      labels = unname(significance_method_labels[significance_method_levels]),
+      drop = FALSE,
+      name = "Method",
+      guide = "none"
+    ) +
+    scale_size_manual(
+      values = significance_method_sizes,
+      breaks = significance_method_levels,
+      guide = "none"
+    ) +
+    geom_vline(
+      xintercept = c(-lfc_boundary, lfc_boundary),
+      linetype = "dashed",
+      linewidth = 0.55,
+      colour = plot_palette$threshold
+    ) +
+    geom_vline(
+      xintercept = 0,
+      linetype = "solid",
+      linewidth = 0.35,
+      colour = "grey55"
+    ) +
+    labs(
+      title = plot_title,
+      x = "apeglm shrunken log2FC",
+      y = expression(-log[10]("Empirical p")),
+      caption = compact_caption(count_text, width = 96)
+    ) +
+    coord_cartesian(clip = "off", ylim = c(0, y_limit)) +
+    manuscript_theme() +
+    plot_expand_xy() +
+    theme(
+      legend.position = "bottom",
+      legend.box = "horizontal",
+      plot.caption = element_text(
+        size = base_theme_size - 2,
+        hjust = 0.5,
+        margin = margin(t = 4)
+      ),
+      plot.caption.position = "plot",
+      plot.margin = margin(10, 12, 10, 10)
+    )
+
+  if (!is.na(hc_y) && is.finite(hc_y)) {
+    p <- p + geom_hline(
+      yintercept = hc_y,
+      linetype = "dotted",
+      linewidth = 0.65,
+      color = plot_palette$hc
+    )
+  }
+
+  if (!is.null(boundary_df)) {
+    p <- p + geom_line(
+      data = boundary_df,
+      aes(x, y),
+      inherit.aes = FALSE,
+      color = plot_palette$hbfss_line,
+      linewidth = 0.80
+    )
+  }
+
+  if (nrow(lab_df) > 0L) {
+    p <- p + ggrepel::geom_text_repel(
+      data = lab_df,
+      aes(x = lfc_shrunk, y = neglog10_empirical_p, label = plot_label),
+      inherit.aes = FALSE,
+      show.legend = FALSE,
+      size = 2.05,
+      color = "black",
+      seed = 1,
+      # A finite max.overlaps lets ggrepel silently drop the labels it
+      # genuinely cannot place without collision, rather than forcing every
+      # requested label onto the page and producing illegible overlapping
+      # text in dense regions (this matters most in the narrow 5-panel
+      # manuscript figures, where each subplot has limited width).
+      max.overlaps = 15,
+      force = 2.2,
+      force_pull = 0.25,
+      box.padding = 0.45,
+      point.padding = 0.18,
+      min.segment.length = 0,
+      segment.alpha = 0.60,
+      segment.size = 0.22
+    )
+  }
+
+  p
+}
+
+run_one_evs_track <- function(comparison_name, track_key, count_matrix, coldata, annot_df) {
+  evs <- build_eigenvector_split(
+    comparison_name = comparison_name,
+    count_matrix = count_matrix,
+    coldata = coldata,
+    track_key = track_key
+  )
+
+  message(
+    comparison_name, " ", unname(track_short[track_key]),
+    ": empirical EVS k*=", evs$empirical_evs_k,
+    " selected independently from each condition PC1 eigenvector; ",
+    "Lead union n=", length(evs$leading_edge_ids),
+    ", Rem n=", length(evs$remainder_ids), "."
+  )
+
+  dataset_list <- list(
+    raw_dataset = evs$raw_dataset,
+    leading_edge_dataset = evs$leading_edge_dataset,
+    remainder_dataset = evs$remainder_dataset
+  )
+
+  paper_registry[[registry_key(comparison_name, track_key)]] <<- list(
+    comparison_name = comparison_name,
+    track_key = track_key,
+    evs = evs,
+    dataset_list = dataset_list,
+    coldata = coldata
+  )
+
+  # Original is independent of the EVS preprocessing path and is analyzed once.
+  analysis_dataset_list <- dataset_list
+  if (identical(track_key, "raw_evs")) analysis_dataset_list$raw_dataset <- NULL
+
+  analysis_results <- list()
+  for (nm in names(analysis_dataset_list)) {
+    dataset_name <- paste(comparison_name, unname(track_short[track_key]), nm, sep = "_")
+    fit <- run_core_analysis(
+      count_mat = analysis_dataset_list[[nm]],
+      coldata = coldata,
+      dataset_name = dataset_name,
+      annot_df = annot_df
+    )
+
+    analysis_results[[nm]] <- list(
+      dds = fit$dds,
+      results = fit$results,
+      dataset_mat = analysis_dataset_list[[nm]]
+    )
+  }
+
+  reg <- paper_registry[[registry_key(comparison_name, track_key)]]
+  reg$analysis_results <- analysis_results
+  paper_registry[[registry_key(comparison_name, track_key)]] <<- reg
+  TRUE
+}
+
+analysis_view_label <- function(track_key, dataset_key) {
+  if (identical(dataset_key, "raw_dataset")) {
+    return("Original (No EVS)")
+  }
+
+  paste0(
+    unname(track_short[track_key]),
+    " ",
+    ifelse(dataset_key == "leading_edge_dataset", "Lead", "Rem")
+  )
+}
+
+get_registered_result <- function(comparison_name, track_key, dataset_key) {
+  obj <- paper_registry[[registry_key(comparison_name, track_key)]]
+
+  if (is.null(obj) || is.null(obj$analysis_results) ||
+      is.null(obj$analysis_results[[dataset_key]])) {
+    return(NULL)
+  }
+
+  obj$analysis_results[[dataset_key]]$results
+}
+
+build_support_label <- function(df) {
+  if (!nrow(df)) {
+    return(character(0))
+  }
+
+  vapply(seq_len(nrow(df)), function(i) {
+    tags <- character(0)
+
+    if (isTRUE(df$standard_flag[i])) tags <- c(tags, "Std")
+    if (isTRUE(df$strong_cnh_flag[i])) tags <- c(tags, "Strong")
+    if (isTRUE(df$weak_significant_flag[i])) tags <- c(tags, "Weak")
+    if (isTRUE(df$hbfss_flag[i])) tags <- c(tags, "HBFSS")
+
+    if (!length(tags)) "" else paste(tags, collapse = "+")
+  }, character(1))
+}
+
+comparison_analysis_views <- function() {
+  data.frame(
+    track_key = c(
+      "normalized_evs",
+      "normalized_evs", "normalized_evs",
+      "raw_evs", "raw_evs"
+    ),
+    dataset_key = c(
+      "raw_dataset",
+      "leading_edge_dataset", "remainder_dataset",
+      "leading_edge_dataset", "remainder_dataset"
+    ),
+    stringsAsFactors = FALSE
+  )
+}
+
+analysis_view_folder_name <- function(track_key, dataset_key) {
+  if (identical(dataset_key, "raw_dataset")) return("Original_No_EVS")
+  paste0(
+    unname(track_short[track_key]),
+    "_",
+    ifelse(dataset_key == "leading_edge_dataset", "Lead", "Rem")
+  )
+}
+
+analysis_view_paths <- function(comparison_name, track_key, dataset_key) {
+  base <- file.path(
+    output_dir,
+    comparison_name,
+    analysis_view_folder_name(track_key, dataset_key)
+  )
+  fig <- file.path(base, "figures")
+  tab <- file.path(base, "tables")
+  dir.create(fig, recursive = TRUE, showWarnings = FALSE)
+  dir.create(tab, recursive = TRUE, showWarnings = FALSE)
+  list(base = base, figures = fig, tables = tab)
+}
+
+export_comparison_manuscript_tables <- function(comparison_name) {
+  views <- comparison_analysis_views()
+  comparison_counts <- list()
+  comparison_sig_rows <- list()
+
+  for (i in seq_len(nrow(views))) {
+    track_key <- views$track_key[i]
+    dataset_key <- views$dataset_key[i]
+    df <- get_registered_result(comparison_name, track_key, dataset_key)
+    if (is.null(df) || !nrow(df)) next
+
+    paths <- analysis_view_paths(comparison_name, track_key, dataset_key)
+    analysis_label <- analysis_view_label(track_key, dataset_key)
+    hc <- suppressWarnings(as.numeric(df$hc_p_threshold_dataset[1]))
+    htau <- suppressWarnings(as.numeric(df$hbfss_threshold_dataset[1]))
+
+    method_counts <- data.frame(
+      Comparison = comparison_name,
+      Analysis = analysis_label,
+      EVS_k_per_condition = if (identical(dataset_key, "raw_dataset")) NA_integer_ else get_empirical_evs_cutoff(comparison_name),
+      PAS_tested = nrow(df),
+      Std = sum(df$standard_flag, na.rm = TRUE),
+      Strong = sum(df$strong_cnh_flag, na.rm = TRUE),
+      Weak = sum(df$weak_significant_flag, na.rm = TRUE),
+      HBFSS = sum(df$hbfss_flag, na.rm = TRUE),
+      Ovlp = sum(df$any_overlap, na.rm = TRUE),
+      stringsAsFactors = FALSE
+    )
+
+    expected_overlap <- sum(
+      df$hbfss_flag & (df$standard_flag | df$strong_cnh_flag | df$weak_cnh_flag),
+      na.rm = TRUE
+    )
+    if (method_counts$Ovlp[1] != expected_overlap) {
+      stop("Overlap-count export mismatch: ", comparison_name, " / ", analysis_label)
+    }
+
+    save_csv(method_counts, file.path(paths$tables, "Table_Method_Counts.csv"))
+    comparison_counts[[length(comparison_counts) + 1L]] <- method_counts
+
+    sig <- df[
+      !is.na(df$final_significant_flag) & df$final_significant_flag,
+      ,
+      drop = FALSE
+    ]
+
+    expected_sig_n <- sum(df$final_significant_flag, na.rm = TRUE)
+    if (nrow(sig) != expected_sig_n) {
+      stop("Significant-PAS export mismatch: ", comparison_name, " / ", analysis_label)
+    }
+
+    if (nrow(sig)) {
+      pas <- if ("orig_id" %in% names(sig)) as.character(sig$orig_id) else as.character(sig$feature_id)
+      bad_pas <- is.na(pas) | !nzchar(trimws(pas))
+      pas[bad_pas] <- as.character(sig$feature_id[bad_pas])
+
+      gene <- if ("gene_symbol" %in% names(sig)) as.character(sig$gene_symbol) else rep(NA_character_, nrow(sig))
+      gene[is.na(gene) | !nzchar(trimws(gene))] <- NA_character_
+
+      sig_out <- data.frame(
+        Comparison = comparison_name,
+        Analysis = analysis_label,
+        EVS_k_per_condition = if (identical(dataset_key, "raw_dataset")) NA_integer_ else get_empirical_evs_cutoff(comparison_name),
+        PAS = pas,
+        Gene = gene,
+        Direction = as.character(sig$regulation_direction),
+        Apeglm_LFC = as.numeric(sig$lfc_shrunk),
+        Std_p = as.numeric(sig$pvalue),
+        Std_BH = as.numeric(sig$padj),
+        Strong_p = as.numeric(sig$resGA_pvalue),
+        Strong_BH = as.numeric(sig$resGA_padj),
+        Weak_p = as.numeric(sig$resLA_pvalue),
+        Weak_BH = as.numeric(sig$resLA_padj),
+        EmpP = as.numeric(sig$empirical_p),
+        HBFSS = as.numeric(sig$HBFSS),
+        HCp = hc,
+        Htau = htau,
+        Std = as.logical(sig$standard_flag),
+        Strong = as.logical(sig$strong_cnh_flag),
+        Weak = as.logical(sig$weak_significant_flag),
+        HBFSS_sig = as.logical(sig$hbfss_flag),
+        Ovlp = as.logical(sig$any_overlap),
+        Support = build_support_label(sig),
+        stringsAsFactors = FALSE
+      )
+
+      sig_out <- sig_out[
+        order(sig_out$EmpP, -sig_out$HBFSS, -abs(sig_out$Apeglm_LFC), na.last = TRUE),
+        ,
+        drop = FALSE
+      ]
+    } else {
+      sig_out <- data.frame()
+    }
+
+    save_csv(sig_out, file.path(paths$tables, "Table_Significant_Sites.csv"))
+    if (nrow(sig_out)) comparison_sig_rows[[length(comparison_sig_rows) + 1L]] <- sig_out
+
+    # Individual view figures are optional. Journal-ready review uses the
+    # comparison-level panels generated after all five analysis views are fit.
+    if (isTRUE(EXPORT_INDIVIDUAL_VIEW_FIGURES)) {
+      dataset_name <- paste(comparison_name, unname(track_short[track_key]), dataset_key, sep = "_")
+      volcano <- plot_final_volcano(
+        df,
+        dataset_name = dataset_name,
+        short_title = paste0(comparison_name, " | ", analysis_label),
+        label_genes = TRUE
+      )
+      save_grob(volcano, file.path(paths$figures, "Volcano.png"), width = 8.2, height = 6.4)
+      save_grob(volcano, file.path(paths$figures, "Volcano.pdf"), width = 8.2, height = 6.4)
+    }
+  }
+
+  comparison_counts <- if (length(comparison_counts)) dplyr::bind_rows(comparison_counts) else data.frame()
+  if (nrow(comparison_counts)) {
+    save_csv(
+      comparison_counts,
+      file.path(output_dir, comparison_name, "Table_Method_Counts_All_Views.csv")
+    )
+  }
+
+  comparison_sig <- if (length(comparison_sig_rows)) {
+    dplyr::bind_rows(comparison_sig_rows)
+  } else {
+    data.frame()
+  }
+  save_csv(
+    comparison_sig,
+    file.path(
+      output_dir,
+      comparison_name,
+      paste0("Table_", comparison_name, "_Significant_Sites_All_Views.csv")
+    )
+  )
+
+  invisible(comparison_counts)
+}
+
+build_overall_manuscript_summary <- function() {
+  rows <- list()
+  views <- comparison_analysis_views()
+
+  for (comparison_name in as.character(comparison_table$comparison_name)) {
+    for (i in seq_len(nrow(views))) {
+      track_key <- views$track_key[i]
+      dataset_key <- views$dataset_key[i]
+      df <- get_registered_result(comparison_name, track_key, dataset_key)
+      if (is.null(df) || !nrow(df)) next
+
+      rows[[length(rows) + 1L]] <- data.frame(
+        Comparison = comparison_name,
+        Analysis = analysis_view_label(track_key, dataset_key),
+        EVS_k_per_condition = if (identical(dataset_key, "raw_dataset")) NA_integer_ else get_empirical_evs_cutoff(comparison_name),
+        PAS_tested = nrow(df),
+        Std = sum(df$standard_flag, na.rm = TRUE),
+        Strong = sum(df$strong_cnh_flag, na.rm = TRUE),
+        Weak = sum(df$weak_significant_flag, na.rm = TRUE),
+        HBFSS = sum(df$hbfss_flag, na.rm = TRUE),
+        Ovlp = sum(df$any_overlap, na.rm = TRUE),
+        stringsAsFactors = FALSE
+      )
+    }
+  }
+
+  if (!length(rows)) data.frame() else dplyr::bind_rows(rows)
+}
+
+write_methods_note <- function() {
+  methods_text <- c(
+    "# Manuscript Methods",
+    "",
+    "## Study unit and comparisons",
+    "The analytical unit was the polyadenylation-site (PAS) feature defined by OrigID in the WTTS-Seq raw-count matrix. PASs were retained as separate observations throughout differential testing and gene symbols were retained as annotation. Four comparisons were analyzed: RT0 versus ZT6, RT2 versus ZT8, RT4 versus ZT10, and RT8 versus ZT14. Within each pairwise comparison, PASs with zero counts across every treatment and control sample were removed before EVS and differential-expression analysis; all remaining nonzero PASs were retained.",
+    "",
+    "## Eigenvector splitting",
+    paste0(
+      "The EVS selection size was comparison-specific rather than fixed globally. ",
+      "The empirically derived weighted-Pareto optima from raw-count variance geometry were ",
+      "RT0_ZT6 k*=3532, RT2_ZT8 k*=4617, RT4_ZT10 k*=3983, and RT8_ZT14 k*=5664. ",
+      "These k* values were treated as locked EVS inputs and were not tuned using downstream differential-expression calls. ",
+      "The same comparison-specific k* was applied to NormEVS and RawEVS so the two EVS tracks differed only in the matrix used for PC1 ranking, not in the number of PASs selected per condition. ",
+      "NormEVS used DESeq2 median-of-ratios normalized counts before PCA, whereas RawEVS used raw counts before PCA. ",
+      "Within each condition, prcomp was applied to the transposed feature-by-sample matrix with centering and without scaling. ",
+      "PASs were ranked by absolute PC1 loading, and the comparison-specific k* highest-loading PASs were selected independently from the RT and ZT condition eigenvectors."
+    ),
+    "PASs present in both condition-specific top-k* sets were classified as Joint; PASs present in only one set were classified as Disjoint for that condition. Joint plus both Disjoint sets formed the Leading Edge, and all other PASs formed the Remainder. EVS defined PAS membership only. Downstream DESeq2 analyses received the corresponding raw-count subset and estimated normalization and dispersion parameters within that analysis view. The five reported views were Original (No EVS), NormEVS Lead, NormEVS Rem, RawEVS Lead, and RawEVS Rem.",
+    "",
+    "## DESeq2 model and log2 fold-change shrinkage",
+    "Each analysis view was modeled independently with DESeq2 using a negative-binomial generalized linear model with design ~ condition and ZT/untrt as the reference. DESeq2 estimated median-of-ratios size factors, gene-wise dispersions, the mean-dispersion relationship, final dispersions, and Wald statistics for the RT/trt coefficient. Log2 fold changes were then shrunken with apeglm. The apeglm-shrunken log2 fold change was the reported effect estimate, the effect term in HBFSS, the direction indicator, and the x-coordinate for all significance figures.",
+    "",
+    "## Standard effect",
+    sprintf("The Standard effect used the ordinary two-sided DESeq2 Wald p-value with Benjamini-Hochberg adjustment at FDR %.2f and the prespecified manuscript effect boundary on the apeglm-shrunken estimate. A PAS was reported as Standard when padj < %.2f and |apeglm LFC| >= %.1f. The ordinary DESeq2 Wald p-value/padj were retained separately from the empirical-null p-value used for HBFSS.", BH_FDR_STANDARD, BH_FDR_STANDARD, lfc_boundary),
+    "",
+    "## Strong (decoupled) composite-null effect",
+    sprintf("Strong (decoupled) effects were tested with DESeq2 results(..., lfcThreshold=%.1f, altHypothesis='greaterAbs'), followed by Benjamini-Hochberg adjustment at FDR %.2f. Reported Strong PASs additionally had |apeglm LFC| >= %.1f so the plotted/reported shrunken effect remained outside the stated effect boundary.", lfc_boundary, BH_FDR_STRONG, lfc_boundary),
+    "",
+    "## Weak composite-null effect",
+    sprintf("Weak-effect support was tested with DESeq2 results(..., lfcThreshold=%.1f, altHypothesis='lessAbs'). Weak-CNH support required Benjamini-Hochberg adjusted p-value < %.2f and |apeglm LFC| < %.1f. A lessAbs rejection alone was not reported as differential expression. A PAS was reported as final Weak only when the same sub-boundary PAS also passed HBFSS.", lfc_boundary, BH_FDR_WEAK, lfc_boundary),
+    "",
+    "## Empirical-null calibration, higher criticism, and HBFSS",
+    "The ordinary DESeq2 Wald statistics were supplied to fdrtool with statistic='normal' to estimate an empirical null distribution and empirical p-values. These empirical p-values were distinct from the ordinary DESeq2 Wald p-values and from the greaterAbs/lessAbs p-values. Higher criticism was applied to the empirical p-values with fdrtool::hc.thresh to obtain the dataset-specific HCp threshold.",
+    sprintf("For each PAS, HBFSS = |apeglm-shrunken LFC| x [-log10(empirical p)]. With c=%.1f, Htau = -log10(HCp) x c. A PAS was HBFSS-significant when HBFSS > Htau. HBFSS significance did not use a DESeq2 adjusted-p-value gate.", lfc_boundary),
+    "",
+    "## Overlap",
+    "Overlap was the number of unique HBFSS-significant PASs that also satisfied at least one DESeq2 criterion (Standard, Strong, or Weak-CNH). Overlap was a comparison quantity, not a separate significance test. Because final Weak required HBFSS, every final Weak PAS contributed to the overlap set.",
+    "",
+    "## PCA comparison after eigenvector splitting",
+    "PCA comparison figures used the same matrices that defined EVS: full-comparison median-of-ratios normalized counts for NormEVS and raw counts for RawEVS. No additional log transformation or post-split re-normalization was applied. Original, Leading Edge, and Remainder were compared within the same preprocessing scale. For each view, the full PCA eigenspectrum was used to calculate the percentage of total variance explained by PC1 and PC2. PC1 eigenvalue retention was calculated as the first eigenvalue of the view divided by the first eigenvalue of the corresponding Original matrix. Original-PC1 loading energy captured by a feature subset was calculated as the sum of squared Original PC1 loadings for that subset divided by the sum of squared Original PC1 loadings for all PASs. Leading Edge and Remainder loading-energy fractions were required to sum to 100%. Treatment-control separation was summarized in the PC1-PC2 plane as centroid distance divided by pooled within-group root-mean-square distance. PCA panels reported PAS count, PC1 explained variance, PC1 eigenvalue retention, Original-PC1 loading-energy fraction, and the separation ratio.",
+    "",
+    "## Volcano figures and tables",
+    sprintf("All significance volcanoes used the HBFSS plotting coordinates: apeglm-shrunken log2 fold change on the x-axis and -log10(empirical-null p) on the y-axis. Standard DESeq2, Strong greaterAbs, and Weak lessAbs significance were determined from their own DESeq2 p-values and BH-adjusted p-values, then their markers were projected onto these common HBFSS coordinates only for visual comparison. The HBFSS boundary y=Htau/|LFC| and HCp reference were drawn on the same axes. The same key was used throughout: Std = green diamond, Strong = red square, Weak = blue triangle, HBFSS = purple star. Multiple method markers were superimposed at the same PAS coordinate. LessAbs-only PASs remained background. Each volcano reported the number of significant PASs for Std, Strong, Weak, HBFSS, and their HBFSS/DESeq2 overlap and labeled at most %d final significant PASs.", n_top_labels_volcano),
+    "Each comparison/view folder contained one significant-PAS table and one method-count table. Significant-PAS tables contained only the union of final Standard, Strong, Weak, and HBFSS discoveries and reported the DESeq2 p-values/BH-adjusted p-values used by the applicable DESeq2 tests together with empirical p, HBFSS, HCp, Htau, apeglm LFC, and explicit method indicators.",
+    "",
+    "## 3'aTWAS ortholog overlap",
+    "Human 3'aTWAS gene symbols were mapped to rat gene symbols by combining database-supported babelgene human-to-rat ortholog mappings (top=FALSE) with direct case-insensitive symbol-equivalent matches present in the WTTS annotation. For every comparison and analysis view, mapped TWAS orthologs were intersected with Standard, Strong, Weak, and HBFSS WTTS discoveries. Concise TWAS tables reported the human TWAS symbol, rat ortholog, total TWAS records, distinct TWAS transcript count, TWAS multi-transcript/APA status, total WTTS PAS count, WTTS multi-PAS/APA status, significant WTTS PAS identifiers, significant multi-PAS status, and the method(s) and analysis view in which significance was observed.",
+    "",
+    "## Output organization",
+    "Original (No EVS), NormEVS Lead, NormEVS Rem, RawEVS Lead, and RawEVS Rem were written to separate folders within each comparison for view-specific tables. Manuscript figures were organized as comparison-level panels so related volcano, PCA/EVS, and 3'aTWAS results could be reviewed side by side without redundant individual images. The curated figure archive SEQUENCE_ALL_FIGURES.zip contained manuscript PNG panels only. The separate archive SEQUENCE_ALL_TABLES.zip contained the locked empirical EVS cutoff table, EVS split audit table, overall differential-expression method-count table, quantitative EVS/PCA evidence table, one all-view significant-PAS table and method-count table for each comparison, and the combined 3'aTWAS PAS-, gene-, and method-summary tables."
+  )
+
+  writeLines(methods_text, file.path(output_dir, "Methods_Manuscript.md"), useBytes = TRUE)
+  invisible(TRUE)
+}
+
+run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata, annot_df) {
+  dir.create(file.path(output_dir, comparison_name), recursive = TRUE, showWarnings = FALSE)
+
+  for (track_key in c("normalized_evs", "raw_evs")) {
+    message("Running ", comparison_name, " ", unname(track_short[track_key]))
+    ok <- run_one_evs_track(
+      comparison_name = comparison_name,
+      track_key = track_key,
+      count_matrix = count_matrix,
+      coldata = coldata,
+      annot_df = annot_df
+    )
+    if (!isTRUE(ok)) stop("Analysis track failed: ", comparison_name, " / ", track_key)
+  }
+
+  export_comparison_manuscript_tables(comparison_name)
+  TRUE
+}
+
+
+# -----------------------------------------------------------------------------
+# Paper-ready multi-comparison volcano panels
+# -----------------------------------------------------------------------------
+
+read_result_table_for_panel <- function(comparison_name, track_key, dataset_key) {
+  df <- get_registered_result(
+    comparison_name = comparison_name,
+    track_key = track_key,
+    dataset_key = dataset_key
+  )
+
+  if (is.null(df)) {
+    warning(
+      "Missing registered result for manuscript panel: ",
+      comparison_name, " / ", track_key, " / ", dataset_key
+    )
+    return(NULL)
+  }
+
+  df
+}
+
+
+compute_global_volcano_y_limit <- function() {
+  views <- comparison_analysis_views()
+  running_max <- NA_real_
+
+  for (comparison_name in as.character(comparison_table$comparison_name)) {
+    for (i in seq_len(nrow(views))) {
+      df <- read_result_table_for_panel(
+        comparison_name = comparison_name,
+        track_key = views$track_key[i],
+        dataset_key = views$dataset_key[i]
+      )
+      if (is.null(df)) next
+
+      plot_df <- tryCatch(
+        build_final_volcano_df(df, y_col = "neglog10_empirical_p"),
+        error = function(e) NULL
+      )
+      if (is.null(plot_df) || !nrow(plot_df)) next
+
+      this_max <- suppressWarnings(max(plot_df$neglog10_empirical_p, na.rm = TRUE))
+      if (is.finite(this_max)) {
+        running_max <- if (is.na(running_max)) this_max else max(running_max, this_max)
+      }
+    }
+  }
+
+  if (is.na(running_max)) return(NULL)
+  running_max * 1.05
+}
+
+save_paper_volcano_panels <- function() {
+  dir.create(paper_fig_dir, recursive = TRUE, showWarnings = FALSE)
+  views <- comparison_analysis_views()
+  short_view <- c(
+    "Original (No EVS)" = "Orig",
+    "NormEVS Lead" = "N-Lead",
+    "NormEVS Rem" = "N-Rem",
+    "RawEVS Lead" = "R-Lead",
+    "RawEVS Rem" = "R-Rem"
+  )
+
+  # Computed once so every comparison/view volcano in the manuscript shares
+  # the same y-axis scale (see plot_final_volcano's y_limit_override).
+  shared_y_limit <- compute_global_volcano_y_limit()
+
+  for (comparison_name in as.character(comparison_table$comparison_name)) {
+    plots <- list()
+    for (i in seq_len(nrow(views))) {
+      track_key <- views$track_key[i]
+      dataset_key <- views$dataset_key[i]
+      df <- read_result_table_for_panel(comparison_name, track_key, dataset_key)
+      if (is.null(df)) next
+      analysis_label <- analysis_view_label(track_key, dataset_key)
+      dataset_name <- paste(comparison_name, unname(track_short[track_key]), dataset_key, sep = "_")
+
+      plots[[length(plots) + 1L]] <- plot_final_volcano(
+        df = df,
+        dataset_name = dataset_name,
+        short_title = unname(short_view[analysis_label]),
+        label_genes = TRUE,
+        y_limit_override = shared_y_limit,
+        n_labels = 10L
+      ) +
+        theme(
+          plot.title = element_text(size = base_theme_size, face = "bold"),
+          axis.title = element_text(size = base_theme_size - 1),
+          axis.text = element_text(size = base_theme_size - 2),
+          plot.caption = element_text(size = base_theme_size - 3)
+        )
+    }
+
+    plots <- Filter(Negate(is.null), plots)
+    if (!length(plots)) next
+
+    panel <- assemble_one_legend_panel(
+      plots,
+      panel_title = paste0(comparison_name, " | significance across five analysis views"),
+      ncol = 5
+    )
+
+    panel_dir <- file.path(output_dir, comparison_name, "Panels")
+    dir.create(panel_dir, recursive = TRUE, showWarnings = FALSE)
+    base <- file.path(panel_dir, paste0("Figure_", comparison_name, "_Volcano_5Views"))
+    save_grob(panel, paste0(base, ".png"), width = 25.0, height = 7.6)
+    save_grob(panel, paste0(base, ".pdf"), width = 25.0, height = 7.6)
+  }
+
+  invisible(TRUE)
+}
+
+pca_variance_stats <- function(value_df, coldata) {
+  x <- as.matrix(value_df)
+  storage.mode(x) <- "numeric"
+
+  common_samples <- intersect(colnames(x), rownames(coldata))
+  x <- x[, common_samples, drop = FALSE]
+  coldata_use <- coldata[common_samples, , drop = FALSE]
+
+  keep <- rowSums(is.finite(x)) == ncol(x) & apply(x, 1, stats::var) > 0
+  x_use <- x[keep, , drop = FALSE]
+
+  if (nrow(x_use) < 2L || ncol(x_use) < 3L) return(NULL)
+
+  # Full PCA is used here so PC1/PC2 explained-variance percentages use the
+  # complete non-zero eigenspectrum rather than only the first two components.
+  fit <- stats::prcomp(
+    t(x_use),
+    center = TRUE,
+    scale. = FALSE
+  )
+
+  eig <- fit$sdev^2
+  total_var <- sum(eig)
+  if (!is.finite(total_var) || total_var <= 0) return(NULL)
+
+  score_df <- data.frame(
+    Sample = rownames(fit$x),
+    PC1 = fit$x[, 1],
+    PC2 = fit$x[, 2],
+    Condition = factor(
+      as.character(coldata_use[rownames(fit$x), "condition"]),
+      levels = c("untrt", "trt")
+    ),
+    stringsAsFactors = FALSE
+  )
+
+  centroids <- stats::aggregate(cbind(PC1, PC2) ~ Condition, data = score_df, FUN = mean)
+  centroid_distance <- NA_real_
+  if (nrow(centroids) == 2L) {
+    centroid_distance <- sqrt(
+      (centroids$PC1[1] - centroids$PC1[2])^2 +
+        (centroids$PC2[1] - centroids$PC2[2])^2
+    )
+  }
+
+  centroid_lookup <- merge(
+    score_df,
+    centroids,
+    by = "Condition",
+    suffixes = c("", "_centroid"),
+    sort = FALSE
+  )
+  within_distance <- sqrt(
+    (centroid_lookup$PC1 - centroid_lookup$PC1_centroid)^2 +
+      (centroid_lookup$PC2 - centroid_lookup$PC2_centroid)^2
+  )
+  within_group_rms <- sqrt(mean(within_distance^2, na.rm = TRUE))
+  separation_ratio <- if (
+    is.finite(centroid_distance) && is.finite(within_group_rms) && within_group_rms > 0
+  ) {
+    centroid_distance / within_group_rms
+  } else {
+    NA_real_
+  }
+
+  list(
+    fit = fit,
+    coldata = coldata_use,
+    score_df = score_df,
+    centroids = centroids,
+    n_features_input = nrow(x),
+    n_features_pca = nrow(x_use),
+    pc1_var = eig[1],
+    pc2_var = if (length(eig) >= 2L) eig[2] else NA_real_,
+    total_var = total_var,
+    pc1_fraction = eig[1] / total_var,
+    pc2_fraction = if (length(eig) >= 2L) eig[2] / total_var else NA_real_,
+    centroid_distance = centroid_distance,
+    within_group_rms = within_group_rms,
+    separation_ratio = separation_ratio
+  )
+}
+
+pc1_loading_energy_pct <- function(original_fit, feature_ids) {
+  if (is.null(original_fit) || is.null(original_fit$rotation) || !ncol(original_fit$rotation)) {
+    return(NA_real_)
+  }
+
+  load <- original_fit$rotation[, 1]
+  denom <- sum(load^2, na.rm = TRUE)
+  if (!is.finite(denom) || denom <= 0) return(NA_real_)
+
+  ids <- intersect(as.character(feature_ids), names(load))
+  100 * sum(load[ids]^2, na.rm = TRUE) / denom
+}
+
+pca_track_matrix <- function(registry_obj, dataset_key) {
+  if (is.null(registry_obj) || is.null(registry_obj$evs)) return(NULL)
+  evs <- registry_obj$evs
+  mat <- as.data.frame(evs$rank_matrix)
+
+  if (identical(dataset_key, "raw_dataset")) return(mat)
+  if (identical(dataset_key, "leading_edge_dataset")) {
+    return(mat[evs$leading_edge_ids, , drop = FALSE])
+  }
+  if (identical(dataset_key, "remainder_dataset")) {
+    return(mat[evs$remainder_ids, , drop = FALSE])
+  }
+  stop("Unknown PCA dataset key: ", dataset_key)
+}
+
+compute_pca_support_plot <- function(value_df, coldata, short_title,
+                                     original_stats = NULL) {
+  stats_obj <- pca_variance_stats(value_df, coldata)
+  if (is.null(stats_obj)) return(NULL)
+
+  pca_df <- stats_obj$score_df
+  centroid_df <- stats_obj$centroids
+
+  retained <- if (
+    !is.null(original_stats) &&
+      is.finite(original_stats$pc1_var) &&
+      original_stats$pc1_var > 0
+  ) {
+    100 * stats_obj$pc1_var / original_stats$pc1_var
+  } else {
+    100
+  }
+
+  energy <- if (!is.null(original_stats)) {
+    pc1_loading_energy_pct(original_stats$fit, rownames(value_df))
+  } else {
+    100
+  }
+
+  # Segments from each sample to its condition centroid visualize within-group
+  # dispersion; centroid crosses summarize treatment/control separation.
+  segment_df <- merge(
+    pca_df,
+    centroid_df,
+    by = "Condition",
+    suffixes = c("", "_centroid"),
+    sort = FALSE
+  )
+
+  cap <- paste0(
+    "n=", stats_obj$n_features_input,
+    " | PC1=", round(100 * stats_obj$pc1_fraction, 1), "%",
+    " | λ1=", round(retained, 1), "% Orig",
+    " | E1=", round(energy, 1), "%",
+    " | Sep=", ifelse(is.finite(stats_obj$separation_ratio),
+                       format(round(stats_obj$separation_ratio, 2), trim = TRUE), "NA")
+  )
+
+  ggplot(
+    pca_df,
+    aes(PC1, PC2, label = Sample, shape = Condition, fill = Condition)
+  ) +
+    geom_hline(yintercept = 0, linewidth = 0.25, linetype = "dashed", colour = "grey78") +
+    geom_vline(xintercept = 0, linewidth = 0.25, linetype = "dashed", colour = "grey78") +
+    geom_segment(
+      data = segment_df,
+      aes(
+        x = PC1,
+        y = PC2,
+        xend = PC1_centroid,
+        yend = PC2_centroid,
+        color = Condition
+      ),
+      inherit.aes = FALSE,
+      linewidth = 0.32,
+      alpha = 0.42,
+      show.legend = FALSE
+    ) +
+    geom_point(size = 2.9, colour = "white", stroke = 0.55) +
+    geom_point(
+      data = centroid_df,
+      aes(PC1, PC2, color = Condition),
+      inherit.aes = FALSE,
+      shape = 4,
+      stroke = 1.15,
+      size = 3.5,
+      show.legend = FALSE
+    ) +
+    ggrepel::geom_text_repel(
+      size = 1.65,
+      max.overlaps = 10,
+      force = 0.9,
+      box.padding = 0.16,
+      point.padding = 0.08,
+      min.segment.length = 0,
+      segment.alpha = 0.45,
+      segment.size = 0.16
+    ) +
+    scale_shape_manual(values = condition_shapes, labels = condition_labels, name = "Condition") +
+    scale_fill_manual(values = condition_fills, labels = condition_labels, name = "Condition") +
+    scale_color_manual(values = condition_fills, guide = "none") +
+    labs(
+      title = short_title,
+      x = "PC1",
+      y = "PC2",
+      caption = cap
+    ) +
+    coord_cartesian(clip = "off") +
+    manuscript_theme() +
+    theme(
+      legend.position = "bottom",
+      plot.caption = element_text(size = base_theme_size - 3, hjust = 0.5),
       plot.margin = margin(8, 10, 8, 10)
     )
 }
 
-save_figure <- function(plot_obj, png_path, width = 15, height = 11) {
-  dir.create(dirname(png_path), recursive = TRUE, showWarnings = FALSE)
+build_evs_split_audit_table <- function() {
+  rows <- list()
 
-  ggplot2::ggsave(
-    filename = png_path,
-    plot = plot_obj,
-    width = width,
-    height = height,
-    units = "in",
-    dpi = PNG_DPI,
-    bg = "white",
-    limitsize = FALSE
-  )
+  for (comparison_name in as.character(comparison_table$comparison_name)) {
+    for (track_key in c("normalized_evs", "raw_evs")) {
+      obj <- paper_registry[[registry_key(comparison_name, track_key)]]
+      if (is.null(obj) || is.null(obj$evs)) next
 
-  if (isTRUE(EXPORT_PDF)) {
-    pdf_path <- sub("\\.png$", ".pdf", png_path, ignore.case = TRUE)
-    ggplot2::ggsave(
-      filename = pdf_path,
-      plot = plot_obj,
-      width = width,
-      height = height,
-      units = "in",
-      bg = "white",
-      device = "pdf",
-      limitsize = FALSE
-    )
-  }
+      evs <- obj$evs
+      total_n <- nrow(evs$raw_dataset)
+      lead_n <- length(evs$leading_edge_ids)
+      rem_n <- length(evs$remainder_ids)
 
-  invisible(png_path)
-}
+      if (length(evs$trt_top_ids) != evs$empirical_evs_k ||
+          length(evs$untrt_top_ids) != evs$empirical_evs_k ||
+          lead_n + rem_n != total_n) {
+        stop(comparison_name, " ", unname(track_short[track_key]),
+             ": empirical EVS split audit failed.")
+      }
 
-save_grid_2x2 <- function(plots, png_path, width = 16, height = 12.5) {
-  if (length(plots) != 4L) stop("save_grid_2x2 requires exactly four plots.")
-
-  draw_once <- function(device_fun) {
-    device_fun()
-    grid::grid.newpage()
-    grid::pushViewport(
-      grid::viewport(
-        layout = grid::grid.layout(
-          nrow = 2L,
-          ncol = 2L,
-          widths = unit(c(1, 1), "null"),
-          heights = unit(c(1, 1), "null")
-        )
-      )
-    )
-    for (i in seq_along(plots)) {
-      r <- if (i <= 2L) 1L else 2L
-      c <- if (i %% 2L == 1L) 1L else 2L
-      print(
-        plots[[i]],
-        vp = grid::viewport(layout.pos.row = r, layout.pos.col = c)
+      rows[[length(rows) + 1L]] <- data.frame(
+        Comparison = comparison_name,
+        Track = unname(track_short[track_key]),
+        Empirical_EVS_k_per_condition = evs$empirical_evs_k,
+        TRT_selected_n = length(evs$trt_top_ids),
+        UNTRT_selected_n = length(evs$untrt_top_ids),
+        Joint_n = length(evs$joint_ids),
+        TRT_disjoint_n = length(evs$disjoint_trt_ids),
+        UNTRT_disjoint_n = length(evs$disjoint_untrt_ids),
+        Leading_edge_union_n = lead_n,
+        Remainder_n = rem_n,
+        Total_nonzero_PAS_n = total_n,
+        Leading_edge_pct = 100 * lead_n / total_n,
+        Remainder_pct = 100 * rem_n / total_n,
+        TRT_PC1_loading_cutoff = as.numeric(evs$fit_trt$cutoff),
+        UNTRT_PC1_loading_cutoff = as.numeric(evs$fit_untrt$cutoff),
+        Cutoff_basis = evs$cutoff_basis,
+        stringsAsFactors = FALSE
       )
     }
-    grDevices::dev.off()
   }
 
-  dir.create(dirname(png_path), recursive = TRUE, showWarnings = FALSE)
+  if (!length(rows)) data.frame() else dplyr::bind_rows(rows)
+}
 
-  draw_once(function() {
-    grDevices::png(
-      filename = png_path,
-      width = width,
-      height = height,
-      units = "in",
-      res = PNG_DPI,
-      bg = "white"
+
+build_evs_pca_evidence_table <- function(comparison_name) {
+  rows <- list()
+
+  for (track_key in c("normalized_evs", "raw_evs")) {
+    obj <- paper_registry[[registry_key(comparison_name, track_key)]]
+    if (is.null(obj) || is.null(obj$evs)) next
+
+    original_mat <- pca_track_matrix(obj, "raw_dataset")
+    original_stats <- pca_variance_stats(original_mat, obj$coldata)
+    if (is.null(original_stats)) next
+
+    track_rows <- list()
+
+    for (dataset_key in c("raw_dataset", "leading_edge_dataset", "remainder_dataset")) {
+      mat <- pca_track_matrix(obj, dataset_key)
+      st <- pca_variance_stats(mat, obj$coldata)
+      if (is.null(st)) next
+
+      energy <- pc1_loading_energy_pct(original_stats$fit, rownames(mat))
+      dataset_label <- c(
+        raw_dataset = "Orig",
+        leading_edge_dataset = "Lead",
+        remainder_dataset = "Rem"
+      )[[dataset_key]]
+
+      track_rows[[dataset_key]] <- data.frame(
+        Comparison = comparison_name,
+        Track = unname(track_short[track_key]),
+        Dataset = dataset_label,
+        Empirical_EVS_k_per_condition = obj$evs$empirical_evs_k,
+        Leading_edge_union_n = length(obj$evs$leading_edge_ids),
+        Remainder_n = length(obj$evs$remainder_ids),
+        TRT_PC1_loading_cutoff = as.numeric(obj$evs$fit_trt$cutoff),
+        UNTRT_PC1_loading_cutoff = as.numeric(obj$evs$fit_untrt$cutoff),
+        PAS_n = nrow(mat),
+        PCA_PAS_n = st$n_features_pca,
+        PC1_explained_pct = 100 * st$pc1_fraction,
+        PC2_explained_pct = 100 * st$pc2_fraction,
+        PC1_eigenvalue = st$pc1_var,
+        PC1_eigenvalue_retained_pct = 100 * st$pc1_var / original_stats$pc1_var,
+        Original_PC1_loading_energy_pct = energy,
+        Centroid_distance_PC1_PC2 = st$centroid_distance,
+        Within_group_RMS_PC1_PC2 = st$within_group_rms,
+        Separation_ratio = st$separation_ratio,
+        stringsAsFactors = FALSE
+      )
+    }
+
+    track_tbl <- dplyr::bind_rows(track_rows)
+
+    # Lead and Rem form a partition of the Original feature set. Their shares of
+    # Original PC1 squared-loading energy must therefore sum to 100% apart from
+    # floating-point tolerance. This assertion catches membership or ID errors.
+    lr <- track_tbl[track_tbl$Dataset %in% c("Lead", "Rem"), , drop = FALSE]
+    if (nrow(lr) == 2L && all(is.finite(lr$Original_PC1_loading_energy_pct))) {
+      energy_sum <- sum(lr$Original_PC1_loading_energy_pct)
+      if (abs(energy_sum - 100) > 1e-6) {
+        stop(
+          comparison_name, " ", unname(track_short[track_key]),
+          ": Lead + Rem Original-PC1 loading energy did not sum to 100%."
+        )
+      }
+    }
+
+    rows[[length(rows) + 1L]] <- track_tbl
+  }
+
+  if (!length(rows)) data.frame() else dplyr::bind_rows(rows)
+}
+
+plot_evs_pca_evidence <- function(comparison_name) {
+  tbl <- build_evs_pca_evidence_table(comparison_name)
+  if (!nrow(tbl)) return(NULL)
+
+  tbl$Dataset <- factor(tbl$Dataset, levels = c("Orig", "Lead", "Rem"))
+
+  # Three directly interpretable quantities are shown together: PC1 explained
+  # variance, PC1 eigenvalue retained relative to Orig, and the fraction of the
+  # Original PC1 squared-loading energy contained in each feature subset.
+  long <- tbl %>%
+    dplyr::select(
+      Comparison, Track, Dataset,
+      PC1_explained_pct,
+      PC1_eigenvalue_retained_pct,
+      Original_PC1_loading_energy_pct
+    ) %>%
+    tidyr::pivot_longer(
+      cols = c(
+        PC1_explained_pct,
+        PC1_eigenvalue_retained_pct,
+        Original_PC1_loading_energy_pct
+      ),
+      names_to = "Metric",
+      values_to = "Percent"
+    ) %>%
+    dplyr::mutate(
+      Metric = factor(
+        Metric,
+        levels = c(
+          "PC1_explained_pct",
+          "PC1_eigenvalue_retained_pct",
+          "Original_PC1_loading_energy_pct"
+        ),
+        labels = c("PC1 explained", "λ1 vs Orig", "Orig PC1 energy")
+      )
+    )
+
+  ggplot(long, aes(Dataset, Percent, group = Metric, shape = Metric)) +
+    geom_hline(yintercept = 100, linewidth = 0.3, linetype = "dashed", colour = "grey70") +
+    geom_line(aes(linetype = Metric), linewidth = 0.55, position = position_dodge(width = 0.08)) +
+    geom_point(size = 2.6, position = position_dodge(width = 0.08)) +
+    geom_text(
+      aes(label = paste0(round(Percent, 1), "%")),
+      position = position_dodge(width = 0.08),
+      vjust = -0.7,
+      size = 2.5,
+      check_overlap = TRUE
+    ) +
+    facet_wrap(~ Track, nrow = 1) +
+    scale_y_continuous(expand = expansion(mult = c(0.05, 0.20))) +
+    labs(
+      title = paste0(comparison_name, " | quantitative EVS/PC1 evidence"),
+      x = NULL,
+      y = "Percent",
+      shape = NULL,
+      linetype = NULL
+    ) +
+    manuscript_theme() +
+    theme(legend.position = "bottom")
+}
+
+plot_empirical_hbfss_support <- function(df, short_title) {
+  req <- c("empirical_p", "HBFSS", "hc_p_threshold_dataset", "hbfss_threshold_dataset")
+  if (length(setdiff(req, names(df))) > 0L) return(NULL)
+
+  plot_df <- df[
+    is.finite(df$empirical_p) & !is.na(df$empirical_p) &
+      is.finite(df$HBFSS) & !is.na(df$HBFSS),
+    ,
+    drop = FALSE
+  ]
+  if (!nrow(plot_df)) return(NULL)
+
+  plot_df$empirical_p <- pmax(plot_df$empirical_p, 1e-300)
+  method_df <- build_significance_plot_long(plot_df)
+
+  hc_raw <- suppressWarnings(as.numeric(plot_df$hc_p_threshold_dataset[1]))
+  htau <- suppressWarnings(as.numeric(plot_df$hbfss_threshold_dataset[1]))
+
+  p <- ggplot() +
+    geom_point(
+      data = plot_df,
+      aes(empirical_p, HBFSS),
+      color = plot_palette$background,
+      size = 0.45,
+      alpha = 0.20
+    ) +
+    geom_point(
+      data = method_df,
+      aes(empirical_p, HBFSS, color = Method, shape = Method),
+      size = 2.25,
+      alpha = 0.98,
+      stroke = 0.80
+    ) +
+    scale_color_manual(
+      values = significance_method_colors,
+      breaks = significance_method_levels,
+      labels = unname(significance_method_labels[significance_method_levels]),
+      drop = FALSE,
+      name = "Method",
+      guide = guide_legend(override.aes = list(size = 3.0, stroke = 0.95))
+    ) +
+    scale_shape_manual(
+      values = significance_method_shapes,
+      breaks = significance_method_levels,
+      labels = unname(significance_method_labels[significance_method_levels]),
+      drop = FALSE,
+      name = "Method"
+    ) +
+    scale_x_log10(labels = scales::label_scientific()) +
+    labs(
+      title = short_title,
+      x = "Empirical p",
+      y = "HBFSS",
+      caption = paste0(
+        if (is.finite(hc_raw) && !is.na(hc_raw)) paste0("HCp=", signif(hc_raw, 3)) else "HCp=NA",
+        "  ",
+        if (is.finite(htau) && !is.na(htau)) paste0("Hτ=", signif(htau, 3)) else "Hτ=NA"
+      )
+    ) +
+    manuscript_theme() +
+    theme(legend.position = "bottom")
+
+  if (is.finite(hc_raw) && !is.na(hc_raw) && hc_raw > 0 && hc_raw <= 1) {
+    p <- p + geom_vline(xintercept = hc_raw, color = plot_palette$hc, linewidth = 0.55, linetype = "dotted")
+  }
+  if (is.finite(htau) && !is.na(htau)) {
+    p <- p + geom_hline(yintercept = htau, color = plot_palette$hbfss_line, linewidth = 0.55, linetype = "dashed")
+  }
+  p
+}
+
+save_paper_pca_panels <- function() {
+  if (!isTRUE(EXPORT_SUPPORT_FIGURES)) return(invisible(FALSE))
+
+  all_evidence <- list()
+
+  for (comparison_name in as.character(comparison_table$comparison_name)) {
+    plots <- list()
+
+    for (track_key in c("normalized_evs", "raw_evs")) {
+      obj <- paper_registry[[registry_key(comparison_name, track_key)]]
+      if (is.null(obj) || is.null(obj$evs)) next
+
+      original_mat <- pca_track_matrix(obj, "raw_dataset")
+      original_stats <- pca_variance_stats(original_mat, obj$coldata)
+      if (is.null(original_stats)) next
+
+      track_abbr <- if (track_key == "normalized_evs") "Norm" else "Raw"
+
+      for (dataset_key in c("raw_dataset", "leading_edge_dataset", "remainder_dataset")) {
+        mat <- pca_track_matrix(obj, dataset_key)
+        ds_abbr <- c(
+          raw_dataset = "Orig",
+          leading_edge_dataset = "Lead",
+          remainder_dataset = "Rem"
+        )[[dataset_key]]
+
+        plots[[length(plots) + 1L]] <- compute_pca_support_plot(
+          value_df = mat,
+          coldata = obj$coldata,
+          short_title = paste0(track_abbr, "-", ds_abbr),
+          original_stats = original_stats
+        )
+      }
+    }
+
+    plots <- Filter(Negate(is.null), plots)
+    panel_dir <- file.path(output_dir, comparison_name, "Panels")
+    dir.create(panel_dir, recursive = TRUE, showWarnings = FALSE)
+
+    if (length(plots)) {
+      panel <- assemble_one_legend_panel(
+        plots,
+        panel_title = paste0(comparison_name, " | PCA structure before and after EVS"),
+        ncol = 3
+      )
+      base <- file.path(panel_dir, paste0("Figure_", comparison_name, "_PCA_EVS_2x3"))
+      save_grob(panel, paste0(base, ".png"), width = 16.5, height = 10.8)
+      save_grob(panel, paste0(base, ".pdf"), width = 16.5, height = 10.8)
+    }
+
+    evidence_tbl <- build_evs_pca_evidence_table(comparison_name)
+    if (nrow(evidence_tbl)) {
+      all_evidence[[comparison_name]] <- evidence_tbl
+      save_csv(
+        evidence_tbl,
+        file.path(output_dir, comparison_name, paste0("Table_", comparison_name, "_EVS_PCA_Evidence.csv"))
+      )
+    }
+
+    pevidence <- plot_evs_pca_evidence(comparison_name)
+    if (!is.null(pevidence)) {
+      base <- file.path(panel_dir, paste0("Figure_", comparison_name, "_EVS_PC1_Evidence"))
+      save_grob(pevidence, paste0(base, ".png"), width = 11.0, height = 5.2)
+      save_grob(pevidence, paste0(base, ".pdf"), width = 11.0, height = 5.2)
+    }
+  }
+
+  evidence_all <- if (length(all_evidence)) dplyr::bind_rows(all_evidence) else data.frame()
+  if (nrow(evidence_all)) {
+    save_csv(evidence_all, file.path(summary_table_dir, "Table_EVS_PCA_Evidence.csv"))
+  }
+
+  invisible(evidence_all)
+}
+
+save_paper_empirical_hbfss_panels <- function() {
+  if (!isTRUE(EXPORT_SUPPORT_FIGURES)) {
+    return(invisible(FALSE))
+  }
+
+  comparison_order <- as.character(comparison_table$comparison_name)
+
+  for (dataset_key in dataset_key_order) {
+    plots <- list()
+
+    if (identical(dataset_key, "raw_dataset")) {
+      track_order_use <- "normalized_evs"
+      panel_title <- "HBFSS calibration | Orig"
+      output_suffix <- "Raw_AllComparisons"
+      panel_height <- 5.8
+    } else {
+      track_order_use <- c("normalized_evs", "raw_evs")
+      panel_title <- paste0("HBFSS calibration | ", unname(dataset_short[dataset_key]), " (Norm vs Raw)")
+      output_suffix <- paste0(unname(dataset_short[dataset_key]), "_AllComparisons_NormEVS_vs_RawEVS")
+      panel_height <- 11.0
+    }
+
+    for (track_key in track_order_use) {
+      for (comparison_name in comparison_order) {
+        df <- read_result_table_for_panel(
+          comparison_name = comparison_name,
+          track_key = track_key,
+          dataset_key = dataset_key
+        )
+
+        if (is.null(df)) {
+          next
+        }
+
+        short_title <- if (identical(dataset_key, "raw_dataset")) {
+          comparison_name
+        } else {
+          paste0(comparison_name, "\n", unname(track_short[track_key]))
+        }
+
+        plots[[length(plots) + 1L]] <- plot_empirical_hbfss_support(
+          df = df,
+          short_title = short_title
+        )
+      }
+    }
+
+    plots <- Filter(Negate(is.null), plots)
+
+    if (length(plots) == 0L) {
+      next
+    }
+
+    panel <- assemble_one_legend_panel(
+      plots,
+      panel_title = panel_title,
+      ncol = length(comparison_order)
+    )
+
+    save_grob(
+      panel,
+      file.path(
+        paper_fig_dir,
+        paste0("Figure_Manuscript_Empirical_HBFSS_", output_suffix, ".png")
+      ),
+      width = 18.0,
+      height = panel_height
+    )
+  }
+
+  invisible(TRUE)
+}
+
+build_discovery_long_table <- function(summary_df) {
+  if (!is.data.frame(summary_df) || nrow(summary_df) == 0L) return(data.frame())
+
+  rows <- lapply(seq_len(nrow(summary_df)), function(i) {
+    sm <- summary_df[i, , drop = FALSE]
+    data.frame(
+      Comparison = sm$Comparison,
+      Analysis = sm$Analysis,
+      Method = factor(
+        c("Standard", "Strong", "Weak", "HBFSS"),
+        levels = significance_method_levels
+      ),
+      Count = as.numeric(c(sm$Std, sm$Strong, sm$Weak, sm$HBFSS)),
+      Ovlp = as.numeric(sm$Ovlp),
+      stringsAsFactors = FALSE
     )
   })
 
-  if (isTRUE(EXPORT_PDF)) {
-    pdf_path <- sub("\\.png$", ".pdf", png_path, ignore.case = TRUE)
-    draw_once(function() {
-      grDevices::pdf(
-        file = pdf_path,
-        width = width,
-        height = height,
-        onefile = TRUE,
-        useDingbats = FALSE
-      )
-    })
-  }
-
-  invisible(png_path)
-}
-
-rank_cutoff_from_k <- function(N, k) {
-  if (!is.finite(k) || k < 1L || k > N) return(NA_integer_)
-  as.integer(N - k + 1L)
-}
-
-# =============================================================================
-# INPUT / NORMALIZATION
-# =============================================================================
-
-read_count_data <- function(path, group_patterns) {
-  if (!file.exists(path)) stop("Count file does not exist: ", path)
-
-  raw_df <- read.csv(
-    path,
-    check.names = FALSE,
-    stringsAsFactors = FALSE
-  )
-
-  if (nrow(raw_df) < 1L || ncol(raw_df) < 2L) {
-    stop("Count file is empty or malformed.")
-  }
-
-  sample_idx <- sort(unique(unlist(lapply(
-    group_patterns,
-    function(pattern) grep(pattern, colnames(raw_df))
-  ))))
-
-  if (!length(sample_idx)) stop("No sample columns matched GROUP_PATTERNS.")
-  if (1L %in% sample_idx) stop("Column 1 must contain feature IDs, not samples.")
-
-  feature_id <- trimws(as.character(raw_df[[1L]]))
-  blank <- is.na(feature_id) | feature_id == ""
-  if (any(blank)) feature_id[blank] <- paste0("__feature_row_", which(blank))
-  feature_id <- make.unique(feature_id, sep = "__dup_")
-
-  non_sample_idx <- setdiff(seq_len(ncol(raw_df)), sample_idx)
-  symbol_candidates <- non_sample_idx[
-    tolower(colnames(raw_df)[non_sample_idx]) %in%
-      c("symbol", "gene_symbol", "genesymbol", "gene")
-  ]
-
-  if (length(symbol_candidates)) {
-    gene_symbol <- as.character(raw_df[[symbol_candidates[1L]]])
-  } else if (length(non_sample_idx) >= 2L) {
-    gene_symbol <- as.character(raw_df[[non_sample_idx[2L]]])
-  } else {
-    gene_symbol <- rep(NA_character_, nrow(raw_df))
-  }
-
-  count_df <- raw_df[, sample_idx, drop = FALSE]
-  count_mat <- do.call(cbind, lapply(
-    count_df,
-    function(x) suppressWarnings(as.numeric(trimws(as.character(x))))
-  ))
-
-  colnames(count_mat) <- colnames(count_df)
-  rownames(count_mat) <- feature_id
-  storage.mode(count_mat) <- "numeric"
-
-  count_mat[!is.finite(count_mat)] <- 0
-  count_mat <- pmax(count_mat, 0)
-
-  annotation <- data.frame(
-    feature_id = feature_id,
-    gene_symbol = gene_symbol,
-    stringsAsFactors = FALSE
-  )
-
-  list(
-    counts = count_mat,
-    annotation = annotation
-  )
-}
-
-assign_groups <- function(sample_names, group_patterns) {
-  assigned <- rep(NA_character_, length(sample_names))
-
-  for (group_name in names(group_patterns)) {
-    idx <- grep(group_patterns[[group_name]], sample_names)
-    if (length(idx) > 0L && any(!is.na(assigned[idx]))) {
-      stop("At least one sample matched more than one group pattern.")
-    }
-    assigned[idx] <- group_name
-  }
-
-  if (any(is.na(assigned))) {
-    stop("Unassigned samples: ", paste(sample_names[is.na(assigned)], collapse = ", "))
-  }
-
-  out <- factor(assigned, levels = names(group_patterns))
-  names(out) <- sample_names
-  out
-}
-
-normalize_cpm_log1p <- function(count_mat_arm) {
-  lib_size <- colSums(count_mat_arm, na.rm = TRUE)
-  lib_size[!is.finite(lib_size) | lib_size <= 0] <- 1
-
-  cpm <- sweep(
-    count_mat_arm,
-    2L,
-    lib_size / 1e6,
-    "/"
-  )
-
-  log1p(cpm)
-}
-
-normalize_deseq2_comparison <- function(count_mat, group_labels) {
-  if (!requireNamespace("DESeq2", quietly = TRUE)) {
-    stop("DESeq2 is required for normalized-before-EVS cutoff calibration.")
-  }
-
-  col_data <- data.frame(
-    group = factor(group_labels),
-    row.names = colnames(count_mat)
-  )
-
-  dds <- DESeq2::DESeqDataSetFromMatrix(
-    countData = round(count_mat),
-    colData = col_data,
-    design = ~ group
-  )
-
-  dds <- tryCatch(
-    DESeq2::estimateSizeFactors(dds),
-    error = function(e) {
-      message("Default DESeq2 size factors failed; using type='poscounts'.")
-      DESeq2::estimateSizeFactors(dds, type = "poscounts")
-    }
-  )
-
-  list(
-    normalized_counts = DESeq2::counts(dds, normalized = TRUE),
-    size_factors = DESeq2::sizeFactors(dds)
-  )
+  dplyr::bind_rows(rows)
 }
 
 
-compute_pooled_within_group_variance <- function(
-    normalized_counts,
-    group_labels) {
-
-  groups <- levels(factor(group_labels))
-
-  sse <- rep(0, nrow(normalized_counts))
-  residual_df <- 0L
-
-  for (g in groups) {
-    idx <- which(group_labels == g)
-
-    if (length(idx) < 2L) next
-
-    xg <- normalized_counts[, idx, drop = FALSE]
-    mu_g <- rowMeans(xg)
-
-    resid_g <- sweep(
-      xg,
-      1L,
-      mu_g,
-      "-"
-    )
-
-    sse <- sse + rowSums(resid_g^2)
-    residual_df <- residual_df + length(idx) - 1L
-  }
-
-  if (residual_df < 2L) {
-    stop("Pooled residual degrees of freedom < 2.")
-  }
-
-  V <- sse / residual_df
-  V[!is.finite(V)] <- 0
-  V <- pmax(V, 0)
-
-  names(V) <- rownames(normalized_counts)
-
-  list(
-    variance = V,
-    residual_df = residual_df
-  )
-}
-
-compute_pc1_rank <- function(rank_matrix_arm) {
-  pca <- stats::prcomp(
-    t(rank_matrix_arm),
-    center = TRUE,
-    scale. = FALSE,
-    rank. = 1
-  )
-
-  loading <- pca$rotation[, 1L]
-  loading[!is.finite(loading)] <- 0
-
-  abs_loading <- abs(loading)
-
-  rank_order <- order(
-    abs_loading,
-    decreasing = FALSE
-  )
-
-  lambda1 <- pca$sdev[1L]^2
-
-  P <- lambda1 * loading^2
-
-  list(
-    loading = loading,
-    abs_loading = abs_loading,
-    rank_order = rank_order,
-    lambda1 = lambda1,
-    pc1_variance_contribution = P
-  )
-}
-
-compute_raw_variance_geometry <- function(
-    raw_counts_arm,
-    rank_order) {
-
-  raw_var <- apply(
-    raw_counts_arm,
-    1L,
-    stats::var,
-    na.rm = TRUE
-  )
-
-  raw_var[!is.finite(raw_var)] <- 0
-  raw_var <- pmax(raw_var, 0)
-
-  raw_var_ranked <- raw_var[rank_order]
-
-  rank <- seq_along(rank_order)
-  log_var <- log1p(raw_var_ranked)
-
-  # Display-only smoothing. This curve is descriptive and is not used to
-  # determine c1, c2, or k*.
-  display_spline <- stats::smooth.spline(
-    x = rank,
-    y = log_var,
-    spar = DISPLAY_VAR_SPAR
-  )
-
-  display_y <- as.numeric(
-    stats::predict(
-      display_spline,
-      x = rank,
-      deriv = 0
-    )$y
-  )
-
-  data.frame(
-    rank = rank,
-    raw_empirical_variance = raw_var_ranked,
-    log1p_raw_empirical_variance = log_var,
-    display_log1p_raw_empirical_variance = display_y,
-    stringsAsFactors = FALSE
-  )
-}
-
-smooth_divergence_for_display <- function(
-    rank,
-    D,
-    spar = DISPLAY_D_SPAR) {
-
-  fit <- stats::smooth.spline(
-    x = rank,
-    y = D,
-    spar = spar
-  )
-
-  y <- as.numeric(
-    stats::predict(
-      fit,
-      x = rank,
-      deriv = 0
-    )$y
-  )
-
-  endpoint_line <- seq(
-    y[1L],
-    y[length(y)],
-    length.out = length(y)
-  )
-
-  y - endpoint_line
-}
-
-
-compute_group_analysis <- function(
-    group_name,
-    raw_counts_arm,
-    normalized_counts_arm,
-    pooled_variance) {
-
-  # RESTORED CORRECT RANKING CORE:
-  # Library-size normalize raw counts to CPM, apply log1p to the EXPRESSION
-  # matrix, then run PCA. The PC1 loading values themselves are NOT logged or
-  # otherwise transformed; PASs are ranked by the raw absolute PC1 loading.
-  rank_matrix <- normalize_cpm_log1p(raw_counts_arm)
-
-  pc1 <- compute_pc1_rank(rank_matrix)
-  rank_order <- pc1$rank_order
-
-  geometry <- compute_raw_variance_geometry(
-    raw_counts_arm = raw_counts_arm,
-    rank_order = rank_order
-  )
-
-  mu_norm <- rowMeans(normalized_counts_arm, na.rm = TRUE)
-  mu_norm[!is.finite(mu_norm)] <- 0
-  mu_norm <- pmax(mu_norm, 0)
-
-  P_ranked <- pc1$pc1_variance_contribution[rank_order]
-  mu_ranked <- mu_norm[rank_order]
-  V_pool_ranked <- pooled_variance[rank_order]
-
-  E_ranked <- pmax(V_pool_ranked - mu_ranked, 0)
-
-  P_total <- sum(P_ranked)
-  E_total <- sum(E_ranked)
-
-  if (!is.finite(P_total) || P_total <= 0) {
-    stop("PC1 variance mass undefined for group ", group_name)
-  }
-
-  if (!is.finite(E_total) || E_total <= 0) {
-    stop("NB excess-variance mass undefined for group ", group_name)
-  }
-
-  p_mass <- P_ranked / P_total
-  q_mass <- E_ranked / E_total
-
-  F_P <- cumsum(p_mass)
-  F_E <- cumsum(q_mass)
-  D <- F_E - F_P
-  rank <- seq_along(rank_order)
-
-  display_D <- smooth_divergence_for_display(
-    rank = rank,
-    D = D
-  )
-
-  df <- geometry %>%
-    mutate(
-      group = group_name,
-      feature_id = rownames(raw_counts_arm)[rank_order],
-      pc1_loading = pc1$loading[rank_order],
-      abs_pc1_loading = pc1$abs_loading[rank_order],
-      pc1_eigenvalue = pc1$lambda1,
-      pc1_variance_contribution = P_ranked,
-      pc1_variance_mass = p_mass,
-      normalized_group_mean = mu_ranked,
-      pooled_normalized_variance = V_pool_ranked,
-      nb_excess_variance = E_ranked,
-      nb_excess_variance_mass = q_mass,
-      cumulative_pc1_mass = F_P,
-      cumulative_nb_mass = F_E,
-      cumulative_divergence = D,
-      display_D = display_D
-    )
-
-  list(
-    data = df,
-    rank_order = rank_order
-  )
-}
-
-
-piecewise_basis <- function(x, c1, c2) {
-  cbind(
-    intercept = 1,
-    x = x,
-    hinge1 = pmax(x - c1, 0),
-    hinge2 = pmax(x - c2, 0)
-  )
-}
-
-piecewise_sse <- function(
-    par,
-    x,
-    D_mat,
-    min_gap) {
-
-  c1 <- par[1L]
-  c2 <- par[2L]
-
-  if (
-    !is.finite(c1) ||
-    !is.finite(c2) ||
-    c1 <= 0 ||
-    c2 >= 1 ||
-    c2 - c1 <= min_gap
-  ) {
-    return(1e100)
-  }
-
-  X <- piecewise_basis(
-    x = x,
-    c1 = c1,
-    c2 = c2
-  )
-
-  coef <- tryCatch(
-    qr.coef(
-      qr(X),
-      D_mat
-    ),
-    error = function(e) NULL
-  )
-
-  if (is.null(coef) || any(!is.finite(coef))) {
-    return(1e100)
-  }
-
-  resid <- D_mat - X %*% coef
-
-  sum(resid^2)
-}
-
-fit_shared_knots <- function(group_results) {
-  groups <- names(group_results)
-
-  N_values <- vapply(
-    group_results,
-    function(z) nrow(z$data),
-    integer(1)
-  )
-
-  if (length(unique(N_values)) != 1L) {
-    stop("All groups must contain the same number of ranked features.")
-  }
-
-  N <- N_values[1L]
-
-  x_full <- (seq_len(N) - 1) / (N - 1)
-
-  D_full <- do.call(
-    cbind,
-    lapply(
-      group_results,
-      function(z) z$data$cumulative_divergence
-    )
-  )
-
-  colnames(D_full) <- groups
-
-  opt_n <- min(KNOT_COARSE_GRID_POINTS, N)
-
-  opt_idx <- unique(
-    as.integer(
-      round(
-        seq(
-          1,
-          N,
-          length.out = opt_n
-        )
-      )
-    )
-  )
-
-  x_opt <- x_full[opt_idx]
-  D_opt <- D_full[opt_idx, , drop = FALSE]
-
-  min_gap <- max(
-    4 / (N - 1),
-    .Machine$double.eps^0.25
-  )
-
-  starts <- list(
-    c(0.03, 0.97),
-    c(0.08, 0.92),
-    c(0.15, 0.85),
-    c(0.25, 0.75),
-    c(0.35, 0.65)
-  )
-
-  coarse <- lapply(
-    starts,
-    function(start) {
-      stats::optim(
-        par = start,
-        fn = piecewise_sse,
-        x = x_opt,
-        D_mat = D_opt,
-        min_gap = min_gap,
-        method = "Nelder-Mead",
-        control = list(
-          maxit = 700,
-          reltol = 1e-11
-        )
-      )
-    }
-  )
-
-  values <- vapply(
-    coarse,
-    function(z) z$value,
-    numeric(1)
-  )
-
-  best <- coarse[[which.min(values)]]
-
-  refined <- stats::optim(
-    par = best$par,
-    fn = piecewise_sse,
-    x = x_full,
-    D_mat = D_full,
-    min_gap = min_gap,
-    method = "Nelder-Mead",
-    control = list(
-      maxit = 1000,
-      reltol = 1e-12
-    )
-  )
-
-  if (!is.finite(refined$value)) {
-    stop("Shared-knot optimization failed.")
-  }
-
-  c1_rank <- as.integer(
-    round(
-      1 + refined$par[1L] * (N - 1)
-    )
-  )
-
-  c2_rank <- as.integer(
-    round(
-      1 + refined$par[2L] * (N - 1)
-    )
-  )
-
-  c1_rank <- max(
-    2L,
-    min(N - 2L, c1_rank)
-  )
-
-  c2_rank <- max(
-    c1_rank + 1L,
-    min(N - 1L, c2_rank)
-  )
-
-  c1_x <- (c1_rank - 1) / (N - 1)
-  c2_x <- (c2_rank - 1) / (N - 1)
-
-  X <- piecewise_basis(
-    x_full,
-    c1_x,
-    c2_x
-  )
-
-  coef <- qr.coef(
-    qr(X),
-    D_full
-  )
-
-  fitted <- X %*% coef
-
-  list(
-    c1 = c1_rank,
-    c2 = c2_rank,
-    x = x_full,
-    fitted = fitted,
-    SSE = sum((D_full - fitted)^2),
-    groups = groups
-  )
-}
-
-make_rank_map <- function(df) {
-  stats::setNames(
-    df$rank,
-    df$feature_id
-  )
-}
-
-rank_to_region <- function(rank, c1, c2) {
-  ifelse(
-    rank < c1,
-    "Remainder",
-    ifelse(
-      rank <= c2,
-      "Divergence",
-      "LeadingEdge"
-    )
-  )
-}
-
-cumulative_activation <- function(depth, K) {
-  depth <- as.integer(depth)
-
-  keep <- (
-    is.finite(depth) &
-    depth >= 1L &
-    depth <= K
-  )
-
-  if (!any(keep)) {
-    return(rep(0L, K))
-  }
-
-  cumsum(
-    tabulate(
-      depth[keep],
-      nbins = K
-    )
-  )
-}
-
-active_interval_count <- function(starts, ends, K) {
-  # Count intervals active for start <= k < end.
-  # end may equal K+1.
-  if (length(starts) == 0L) {
-    return(rep(0L, K))
-  }
-
-  starts <- as.integer(starts)
-  ends <- as.integer(ends)
-
-  valid <- (
-    is.finite(starts) &
-    is.finite(ends) &
-    starts >= 1L &
-    starts <= K &
-    ends > starts
-  )
-
-  starts <- starts[valid]
-  ends <- pmin(
-    ends[valid],
-    K + 1L
-  )
-
-  if (length(starts) == 0L) {
-    return(rep(0L, K))
-  }
-
-  diff_vec <- integer(K + 1L)
-
-  start_tab <- tabulate(
-    starts,
-    nbins = K + 1L
-  )
-
-  end_tab <- tabulate(
-    ends,
-    nbins = K + 1L
-  )
-
-  diff_vec <- (
-    diff_vec +
-    start_tab -
-    end_tab
-  )
-
-  cumsum(diff_vec)[seq_len(K)]
-}
-
-scan_pair_cutoffs <- function(
-    control_df,
-    treatment_df,
-    c1,
-    c2,
-    comparison_name,
-    control_group,
-    treatment_group) {
-
-  if (nrow(control_df) != nrow(treatment_df)) {
-    stop(
-      "Control and treatment rankings have different feature counts."
-    )
-  }
-
-  if (!setequal(
-    control_df$feature_id,
-    treatment_df$feature_id
-  )) {
-    stop(
-      "Control and treatment rankings do not contain the same feature IDs."
-    )
-  }
-
-  N <- nrow(control_df)
-
-  # Own-arm selection must originate strictly beyond c2.
-  K <- as.integer(N - c2)
-
-  if (K < 1L) {
-    stop(
-      "No candidate top-k depth exists beyond c2."
-    )
-  }
-
-  rank_control <- make_rank_map(
-    control_df
-  )
-
-  rank_treatment <- make_rank_map(
-    treatment_df
-  )
-
-  ids <- control_df$feature_id
-
-  rC <- as.integer(
-    unname(
-      rank_control[ids]
-    )
-  )
-
-  rT <- as.integer(
-    unname(
-      rank_treatment[ids]
-    )
-  )
-
-  if (
-    any(!is.finite(rC)) ||
-    any(!is.finite(rT))
-  ) {
-    stop(
-      "Non-finite rank encountered in ",
-      comparison_name
-    )
-  }
-
-  # Entry depth:
-  # rank N enters at k=1
-  # rank 1 enters at k=N
-  dC <- N - rC + 1L
-  dT <- N - rT + 1L
-
-  k <- seq_len(K)
-
-  # -----------------------------------------------------------------------
-  # JOINT
-  # -----------------------------------------------------------------------
-  # Joint membership activates once BOTH top-k selections contain the site.
-  joint_depth <- pmax(
-    dC,
-    dT
-  )
-
-  joint_n <- cumulative_activation(
-    joint_depth,
-    K
-  )
-
-  # -----------------------------------------------------------------------
-  # DISJOINT, OPPOSITE ARM ALSO IN LEADING EDGE
-  # -----------------------------------------------------------------------
-  # Control-only while treatment has not yet admitted the site.
-  idx_le_C <- which(
-    dC < dT &
-    dC <= K &
-    dT <= K
-  )
-
-  disjoint_control_opposite_le_n <- active_interval_count(
-    starts = dC[idx_le_C],
-    ends = dT[idx_le_C],
-    K = K
-  )
-
-  # Treatment-only while control has not yet admitted the site.
-  idx_le_T <- which(
-    dT < dC &
-    dT <= K &
-    dC <= K
-  )
-
-  disjoint_treatment_opposite_le_n <- active_interval_count(
-    starts = dT[idx_le_T],
-    ends = dC[idx_le_T],
-    K = K
-  )
-
-  # -----------------------------------------------------------------------
-  # DISJOINT, OPPOSITE ARM IN DIVERGENCE INTERVAL
-  # -----------------------------------------------------------------------
-  # These sites are intentionally PERMISSIBLE.
-  #
-  # The selecting arm is in its own top-k subset and therefore >c2.
-  # The opposite arm lies between c1 and c2 and never enters a top-k list
-  # because candidate k is capped at N-c2.
-  idx_div_C <- which(
-    dC <= K &
-    rT >= c1 &
-    rT <= c2
-  )
-
-  disjoint_control_opposite_divergence_n <-
-    cumulative_activation(
-      dC[idx_div_C],
-      K
-    )
-
-  idx_div_T <- which(
-    dT <= K &
-    rC >= c1 &
-    rC <= c2
-  )
-
-  disjoint_treatment_opposite_divergence_n <-
-    cumulative_activation(
-      dT[idx_div_T],
-      K
-    )
-
-  # -----------------------------------------------------------------------
-  # HARD CROSS-REGIME CONTAMINATION: OPPOSITE ARM IN REMAINDER
-  # -----------------------------------------------------------------------
-  # Only r_opposite < c1 is penalized.
-  idx_rem_C <- which(
-    dC <= K &
-    rT < c1
-  )
-
-  remainder_cross_control_n <- cumulative_activation(
-    dC[idx_rem_C],
-    K
-  )
-
-  idx_rem_T <- which(
-    dT <= K &
-    rC < c1
-  )
-
-  remainder_cross_treatment_n <- cumulative_activation(
-    dT[idx_rem_T],
-    K
-  )
-
-  # -----------------------------------------------------------------------
-  # AGGREGATES
-  # -----------------------------------------------------------------------
-
-  disjoint_opposite_le_n <- (
-    disjoint_control_opposite_le_n +
-    disjoint_treatment_opposite_le_n
-  )
-
-  disjoint_opposite_divergence_n <- (
-    disjoint_control_opposite_divergence_n +
-    disjoint_treatment_opposite_divergence_n
-  )
-
-  permissible_disjoint_control_n <- (
-    disjoint_control_opposite_le_n +
-    disjoint_control_opposite_divergence_n
-  )
-
-  permissible_disjoint_treatment_n <- (
-    disjoint_treatment_opposite_le_n +
-    disjoint_treatment_opposite_divergence_n
-  )
-
-  permissible_disjoint_n <- (
-    permissible_disjoint_control_n +
-    permissible_disjoint_treatment_n
-  )
-
-  # Benefit:
-  # Joint + all permissible disjoint sites.
-  good_n <- (
-    joint_n +
-    permissible_disjoint_n
-  )
-
-  # Cost:
-  # only true crossing into opposite-arm remainder.
-  remainder_cross_n <- (
-    remainder_cross_control_n +
-    remainder_cross_treatment_n
-  )
-
-  union_n <- (
-    good_n +
-    remainder_cross_n
-  )
-
-  # Independent union-size check.
-  union_depth <- pmin(
-    dC,
-    dT
-  )
-
-  union_check <- cumulative_activation(
-    union_depth,
-    K
-  )
-
-  if (!all(
-    union_n == union_check
-  )) {
-    stop(
-      "Internal union-count mismatch in ",
-      comparison_name
-    )
-  }
-
-  data.frame(
-    comparison = comparison_name,
-    control_group = control_group,
-    treatment_group = treatment_group,
-
-    k = k,
-    cutoff_rank = N - k + 1L,
-
-    joint_n = joint_n,
-
-    disjoint_control_opposite_le_n =
-      disjoint_control_opposite_le_n,
-
-    disjoint_treatment_opposite_le_n =
-      disjoint_treatment_opposite_le_n,
-
-    disjoint_opposite_le_n =
-      disjoint_opposite_le_n,
-
-    disjoint_control_opposite_divergence_n =
-      disjoint_control_opposite_divergence_n,
-
-    disjoint_treatment_opposite_divergence_n =
-      disjoint_treatment_opposite_divergence_n,
-
-    disjoint_opposite_divergence_n =
-      disjoint_opposite_divergence_n,
-
-    permissible_disjoint_control_n =
-      permissible_disjoint_control_n,
-
-    permissible_disjoint_treatment_n =
-      permissible_disjoint_treatment_n,
-
-    permissible_disjoint_n =
-      permissible_disjoint_n,
-
-    good_n = good_n,
-
-    remainder_cross_control_n =
-      remainder_cross_control_n,
-
-    remainder_cross_treatment_n =
-      remainder_cross_treatment_n,
-
-    remainder_cross_n =
-      remainder_cross_n,
-
-    union_n = union_n,
-
-    retained_fraction = ifelse(
-      union_n > 0,
-      good_n / union_n,
-      NA_real_
-    ),
-
-    remainder_cross_fraction = ifelse(
-      union_n > 0,
-      remainder_cross_n / union_n,
-      NA_real_
-    ),
-
-    divergence_disjoint_fraction = ifelse(
-      union_n > 0,
-      disjoint_opposite_divergence_n / union_n,
-      NA_real_
-    ),
-
-    jaccard_top_k = ifelse(
-      union_n > 0,
-      joint_n / union_n,
-      NA_real_
-    ),
-
-    stringsAsFactors = FALSE
-  )
-}
-
-mark_pareto_frontier <- function(
-    scan_df,
-    good_col = "good_n",
-    cost_col = "remainder_cross_n") {
-
-  if (nrow(scan_df) < 1L) {
-    stop(
-      "Empty cutoff scan."
-    )
-  }
-
-  tmp <- scan_df %>%
-    transmute(
-      row_id = row_number(),
-      k = k,
-      good = .data[[good_col]],
-      cost = .data[[cost_col]]
-    ) %>%
-    arrange(
-      cost,
-      desc(good),
-      desc(k)
-    ) %>%
-    group_by(cost) %>%
-    slice(1L) %>%
-    ungroup() %>%
-    arrange(
-      cost,
-      desc(good)
-    )
-
-  running_best_before <- c(
-    -Inf,
-    head(
-      cummax(tmp$good),
-      -1L
-    )
-  )
-
-  tmp$is_frontier_coord <- (
-    tmp$good >
-    running_best_before
-  )
-
-  frontier <- tmp %>%
-    filter(
-      is_frontier_coord
-    ) %>%
-    arrange(
-      cost,
-      good,
-      k
-    )
-
-  key_all <- paste(
-    scan_df[[cost_col]],
-    scan_df[[good_col]],
-    sep = "::"
-  )
-
-  key_frontier <- paste(
-    frontier$cost,
-    frontier$good,
-    sep = "::"
-  )
-
-  out <- scan_df
-  out$is_pareto <- (
-    key_all %in%
-    key_frontier
-  )
-
-  list(
-    scan = out,
-    frontier = frontier
-  )
-}
-
-select_weighted_pareto_optimum <- function(
-    scan_df,
-    good_col = "good_n",
-    cost_col = "remainder_cross_n",
-    benefit_weight = BENEFIT_WEIGHT,
-    contamination_weight = CONTAMINATION_WEIGHT) {
-
-  if (
-    !is.finite(benefit_weight) ||
-    !is.finite(contamination_weight) ||
-    benefit_weight < 0 ||
-    contamination_weight < 0 ||
-    (benefit_weight + contamination_weight) <= 0
-  ) {
-    stop("Pareto weights must be finite, non-negative, and not both zero.")
-  }
-
-  marked <- mark_pareto_frontier(
-    scan_df,
-    good_col = good_col,
-    cost_col = cost_col
-  )
-
-  frontier <- marked$frontier %>%
-    arrange(
-      cost,
-      good,
-      k
-    )
-
-  if (nrow(frontier) < 1L) {
-    stop("No Pareto-optimal cutoff points were identified.")
-  }
-
-  good_range <- range(
-    frontier$good,
-    na.rm = TRUE
-  )
-
-  cost_range <- range(
-    frontier$cost,
-    na.rm = TRUE
-  )
-
-  normalize_good <- function(x) {
-    if (diff(good_range) == 0) {
-      rep(1, length(x))
-    } else {
-      (x - good_range[1L]) / diff(good_range)
-    }
-  }
-
-  normalize_cost <- function(x) {
-    if (diff(cost_range) == 0) {
-      rep(0, length(x))
-    } else {
-      (x - cost_range[1L]) / diff(cost_range)
-    }
-  }
-
-  frontier$good_norm <- normalize_good(
-    frontier$good
-  )
-
-  frontier$remainder_norm <- normalize_cost(
-    frontier$cost
-  )
-
-  frontier$weighted_utility <- (
-    benefit_weight * frontier$good_norm -
-    contamination_weight * frontier$remainder_norm
-  )
-
-  best_utility <- max(
-    frontier$weighted_utility,
-    na.rm = TRUE
-  )
-
-  chosen <- frontier %>%
-    filter(
-      abs(
-        weighted_utility - best_utility
-      ) < 1e-12
-    ) %>%
-    arrange(
-      desc(good),
-      cost,
-      desc(k)
-    ) %>%
-    slice(1L)
-
-  selected_k <- as.integer(
-    chosen$k[1L]
-  )
-
-  out <- marked$scan
-
-  # Use the same frontier-derived normalization for every candidate row so the
-  # exported table can show the utility landscape. Selection itself is still
-  # restricted to the Pareto frontier.
-  out$good_norm <- normalize_good(
-    out[[good_col]]
-  )
-
-  out$remainder_norm <- normalize_cost(
-    out[[cost_col]]
-  )
-
-  out$weighted_utility <- (
-    benefit_weight * out$good_norm -
-    contamination_weight * out$remainder_norm
-  )
-
-  out$is_selected_weighted <- (
-    out$k == selected_k
-  )
-
-  zero_idx <- which(
-    out[[cost_col]] == 0
-  )
-
-  zero_max_k <- if (
-    length(zero_idx) > 0L
-  ) {
-    max(
-      out$k[zero_idx]
-    )
-  } else {
-    NA_integer_
-  }
-
-  list(
-    scan = out,
-    frontier = frontier,
-    selected_k = selected_k,
-    selected_good = chosen$good[1L],
-    selected_cost = chosen$cost[1L],
-    selected_good_norm = chosen$good_norm[1L],
-    selected_remainder_norm = chosen$remainder_norm[1L],
-    selected_utility = chosen$weighted_utility[1L],
-    benefit_weight = benefit_weight,
-    contamination_weight = contamination_weight,
-    selection_method = "weighted_pareto_utility",
-    max_zero_remainder_crossing_k = zero_max_k
-  )
-}
-
-classify_pair_at_k <- function(
-    control_df,
-    treatment_df,
-    k,
-    c1,
-    c2,
-    comparison_name,
-    control_group,
-    treatment_group) {
-
-  if (
-    nrow(control_df) !=
-    nrow(treatment_df)
-  ) {
-    stop(
-      "Control and treatment rankings have different feature counts."
-    )
-  }
-
-  if (!setequal(
-    control_df$feature_id,
-    treatment_df$feature_id
-  )) {
-    stop(
-      "Control and treatment rankings do not contain the same feature IDs."
-    )
-  }
-
-  N <- nrow(control_df)
-  Kmax <- N - c2
-
-  if (
-    k < 1L ||
-    k > Kmax
-  ) {
-    stop(
-      "k must satisfy 1 <= k <= N-c2. Received k=",
-      k,
-      "; N-c2=",
-      Kmax,
-      "."
-    )
-  }
-
-  control_top <- tail(
-    control_df$feature_id,
-    k
-  )
-
-  treatment_top <- tail(
-    treatment_df$feature_id,
-    k
-  )
-
-  union_ids <- union(
-    control_top,
-    treatment_top
-  )
-
-  rank_control <- make_rank_map(
-    control_df
-  )
-
-  rank_treatment <- make_rank_map(
-    treatment_df
-  )
-
-  rC <- as.integer(
-    unname(
-      rank_control[union_ids]
-    )
-  )
-
-  rT <- as.integer(
-    unname(
-      rank_treatment[union_ids]
-    )
-  )
-
-  in_control <- (
-    union_ids %in%
-    control_top
-  )
-
-  in_treatment <- (
-    union_ids %in%
-    treatment_top
-  )
-
-  joint <- (
-    in_control &
-    in_treatment
-  )
-
-  control_only <- (
-    in_control &
-    !in_treatment
-  )
-
-  treatment_only <- (
-    in_treatment &
-    !in_control
-  )
-
-  control_region <- rank_to_region(
-    rC,
-    c1,
-    c2
-  )
-
-  treatment_region <- rank_to_region(
-    rT,
-    c1,
-    c2
-  )
-
-  base_class <- ifelse(
-    joint,
-    "Joint",
-    ifelse(
-      control_only,
-      paste0(
-        "Disjoint_",
-        control_group
-      ),
-      paste0(
-        "Disjoint_",
-        treatment_group
-      )
-    )
-  )
-
-  opposite_region <- rep(
-    NA_character_,
-    length(union_ids)
-  )
-
-  opposite_region[
-    control_only
-  ] <- treatment_region[
-    control_only
-  ]
-
-  opposite_region[
-    treatment_only
-  ] <- control_region[
-    treatment_only
-  ]
-
-  disjoint_opposite_leading_edge <- (
-    (control_only & rT > c2) |
-    (treatment_only & rC > c2)
-  )
-
-  disjoint_opposite_divergence <- (
-    (
-      control_only &
-      rT >= c1 &
-      rT <= c2
-    ) |
-    (
-      treatment_only &
-      rC >= c1 &
-      rC <= c2
-    )
-  )
-
-  cross_into_remainder <- (
-    (
-      control_only &
-      rT < c1
-    ) |
-    (
-      treatment_only &
-      rC < c1
-    )
-  )
-
-  # EVS membership is the union of the two arm-specific top-k sets.
-  # Opposite-arm Remainder crossings are a Pareto cost term only; they remain
-  # in the final Leading Edge if selected by either arm.
-  retained_for_analysis <- rep(TRUE, length(union_ids))
-
-  analysis_class <- rep(
-    NA_character_,
-    length(union_ids)
-  )
-
-  analysis_class[
-    joint
-  ] <- "Joint"
-
-  analysis_class[
-    control_only &
-    rT > c2
-  ] <- paste0(
-    "Disjoint_",
-    control_group,
-    "_OppositeLeadingEdge"
-  )
-
-  analysis_class[
-    treatment_only &
-    rC > c2
-  ] <- paste0(
-    "Disjoint_",
-    treatment_group,
-    "_OppositeLeadingEdge"
-  )
-
-  analysis_class[
-    control_only &
-    rT >= c1 &
-    rT <= c2
-  ] <- paste0(
-    "Disjoint_",
-    control_group,
-    "_OppositeDivergence"
-  )
-
-  analysis_class[
-    treatment_only &
-    rC >= c1 &
-    rC <= c2
-  ] <- paste0(
-    "Disjoint_",
-    treatment_group,
-    "_OppositeDivergence"
-  )
-
-  analysis_class[
-    control_only &
-    rT < c1
-  ] <- paste0(
-    "Disjoint_",
-    control_group,
-    "_OppositeRemainder_Cost"
-  )
-
-  analysis_class[
-    treatment_only &
-    rC < c1
-  ] <- paste0(
-    "Disjoint_",
-    treatment_group,
-    "_OppositeRemainder_Cost"
-  )
-
-  out <- data.frame(
-    comparison = comparison_name,
-    feature_id = union_ids,
-
-    selected_k = as.integer(k),
-
-    cutoff_rank = rank_cutoff_from_k(
-      N,
-      k
-    ),
-
-    control_group = control_group,
-    treatment_group = treatment_group,
-
-    base_class = base_class,
-    analysis_class = analysis_class,
-
-    control_rank = rC,
-    treatment_rank = rT,
-
-    control_region = control_region,
-    treatment_region = treatment_region,
-
-    opposite_region = opposite_region,
-
-    control_top_k = in_control,
-    treatment_top_k = in_treatment,
-
-    disjoint_opposite_leading_edge =
-      disjoint_opposite_leading_edge,
-
-    disjoint_opposite_divergence =
-      disjoint_opposite_divergence,
-
-    cross_into_remainder =
-      cross_into_remainder,
-
-    retained_for_analysis =
-      retained_for_analysis,
-
-    stringsAsFactors = FALSE
-  )
-
-  if (
-    any(
-      is.na(
-        out$analysis_class
-      )
-    )
-  ) {
-    stop(
-      "Unclassified union site encountered in ",
-      comparison_name
-    )
-  }
-
-  out
-}
-
-summarize_classification <- function(
-    class_df) {
-
-  if (
-    nrow(class_df) < 1L
-  ) {
-    stop(
-      "Cannot summarize empty classification."
-    )
-  }
-
-  joint_n <- sum(
-    class_df$base_class ==
-    "Joint"
-  )
-
-  control_only <- (
-    class_df$control_top_k &
-    !class_df$treatment_top_k
-  )
-
-  treatment_only <- (
-    class_df$treatment_top_k &
-    !class_df$control_top_k
-  )
-
-  disjoint_control_opposite_le_n <- sum(
-    control_only &
-    class_df$disjoint_opposite_leading_edge
-  )
-
-  disjoint_treatment_opposite_le_n <- sum(
-    treatment_only &
-    class_df$disjoint_opposite_leading_edge
-  )
-
-  disjoint_control_opposite_divergence_n <- sum(
-    control_only &
-    class_df$disjoint_opposite_divergence
-  )
-
-  disjoint_treatment_opposite_divergence_n <- sum(
-    treatment_only &
-    class_df$disjoint_opposite_divergence
-  )
-
-  disjoint_opposite_le_n <- (
-    disjoint_control_opposite_le_n +
-    disjoint_treatment_opposite_le_n
-  )
-
-  disjoint_opposite_divergence_n <- (
-    disjoint_control_opposite_divergence_n +
-    disjoint_treatment_opposite_divergence_n
-  )
-
-  permissible_disjoint_control_n <- (
-    disjoint_control_opposite_le_n +
-    disjoint_control_opposite_divergence_n
-  )
-
-  permissible_disjoint_treatment_n <- (
-    disjoint_treatment_opposite_le_n +
-    disjoint_treatment_opposite_divergence_n
-  )
-
-  permissible_disjoint_n <- (
-    permissible_disjoint_control_n +
-    permissible_disjoint_treatment_n
-  )
-
-  good_n <- (
-    joint_n +
-    permissible_disjoint_n
-  )
-
-  remainder_cross_n <- sum(
-    class_df$cross_into_remainder
-  )
-
-  union_n <- nrow(
-    class_df
-  )
-
-  if (
-    good_n +
-    remainder_cross_n !=
-    union_n
-  ) {
-    stop(
-      "Classification counts do not sum to union size."
-    )
-  }
-
-  data.frame(
-    k = unique(
-      class_df$selected_k
-    )[1L],
-
-    cutoff_rank = unique(
-      class_df$cutoff_rank
-    )[1L],
-
-    joint_n = joint_n,
-
-    disjoint_control_opposite_le_n =
-      disjoint_control_opposite_le_n,
-
-    disjoint_treatment_opposite_le_n =
-      disjoint_treatment_opposite_le_n,
-
-    disjoint_opposite_le_n =
-      disjoint_opposite_le_n,
-
-    disjoint_control_opposite_divergence_n =
-      disjoint_control_opposite_divergence_n,
-
-    disjoint_treatment_opposite_divergence_n =
-      disjoint_treatment_opposite_divergence_n,
-
-    disjoint_opposite_divergence_n =
-      disjoint_opposite_divergence_n,
-
-    permissible_disjoint_control_n =
-      permissible_disjoint_control_n,
-
-    permissible_disjoint_treatment_n =
-      permissible_disjoint_treatment_n,
-
-    permissible_disjoint_n =
-      permissible_disjoint_n,
-
-    good_n = good_n,
-
-    remainder_cross_n =
-      remainder_cross_n,
-
-    union_n = union_n,
-
-    retained_fraction = (
-      good_n /
-      union_n
-    ),
-
-    remainder_cross_fraction = (
-      remainder_cross_n /
-      union_n
-    ),
-
-    stringsAsFactors = FALSE
-  )
-}
-
-
-# =============================================================================
-# NB1 / NB2 CORROBORATION
-# =============================================================================
-
-compute_ranked_nb_metrics <- function(
-    raw_counts_arm,
-    normalized_counts_arm,
-    ranked_feature_ids) {
-
-  raw_x <- raw_counts_arm[ranked_feature_ids, , drop = FALSE]
-  norm_x <- normalized_counts_arm[ranked_feature_ids, , drop = FALSE]
-
-  raw_mu <- rowMeans(raw_x, na.rm = TRUE)
-  raw_var <- apply(raw_x, 1L, stats::var, na.rm = TRUE)
-  norm_mu <- rowMeans(norm_x, na.rm = TRUE)
-  norm_var <- apply(norm_x, 1L, stats::var, na.rm = TRUE)
-
-  raw_mu[!is.finite(raw_mu)] <- 0
-  raw_var[!is.finite(raw_var)] <- 0
-  norm_mu[!is.finite(norm_mu)] <- 0
-  norm_var[!is.finite(norm_var)] <- 0
-
-  raw_mu <- pmax(raw_mu, 0)
-  raw_var <- pmax(raw_var, 0)
-  norm_mu <- pmax(norm_mu, 0)
-  norm_var <- pmax(norm_var, 0)
-
-  # NB corroboration follows the raw-count moment formulation.
-  excess <- pmax(raw_var - raw_mu, 0)
-
-  alpha_hat <- rep(0, length(raw_mu))
-  pos <- raw_mu > 0
-  alpha_hat[pos] <- pmax(excess[pos] / (raw_mu[pos]^2), 0)
-
-  data.frame(
-    rank = seq_along(ranked_feature_ids),
-    feature_id = ranked_feature_ids,
-    raw_mean = raw_mu,
-    raw_variance = raw_var,
-    normalized_mean = norm_mu,
-    normalized_variance = norm_var,
-    nb2_excess_signal = log1p(excess),
-    nb2_nb1_contrast = log1p(excess) - log1p(raw_mu),
-    alpha_hat = alpha_hat,
-    alpha_mu_signal = log1p(alpha_hat * raw_mu),
-    stringsAsFactors = FALSE
-  )
-}
-
-assign_matched_regions <- function(rank_df, k) {
-  N <- nrow(rank_df)
-  cutoff_rank <- rank_cutoff_from_k(N, k)
-
-  right_start <- cutoff_rank
-  right_end <- N
-  left_end <- right_start - 1L
-  left_start <- left_end - k + 1L
-
-  if (left_start < 1L) {
-    stop(
-      "Matched LEFT block is unavailable for k=", k,
-      "; N=", N, ". Reduce k or revise the comparison domain."
-    )
-  }
-
-  rank_df$corroboration_region <- "Other"
-  rank_df$corroboration_region[
-    rank_df$rank >= left_start & rank_df$rank <= left_end
-  ] <- "LEFT"
-  rank_df$corroboration_region[
-    rank_df$rank >= right_start & rank_df$rank <= right_end
-  ] <- "RIGHT"
-
-  attr(rank_df, "left_start") <- left_start
-  attr(rank_df, "left_end") <- left_end
-  attr(rank_df, "right_start") <- right_start
-  attr(rank_df, "right_end") <- right_end
-
-  rank_df
-}
-
-smooth_metric_for_display <- function(rank, value, spar = DISPLAY_NB_SPAR) {
-  ok <- is.finite(rank) & is.finite(value)
-  out <- rep(NA_real_, length(value))
-  if (sum(ok) < 8L) return(out)
-
-  fit <- tryCatch(
-    stats::smooth.spline(rank[ok], value[ok], spar = spar),
-    error = function(e) NULL
-  )
-
-  if (is.null(fit)) return(out)
-  out[ok] <- as.numeric(stats::predict(fit, x = rank[ok], deriv = 0)$y)
-  out
-}
-
-fit_nb_dispersion_model <- function(y, mu, model = c("NB1", "NB2")) {
-  model <- match.arg(model)
-
-  y <- as.numeric(y)
-  mu <- as.numeric(mu)
-
-  ok <- is.finite(y) & is.finite(mu) & y >= 0 & mu > 0
-  y <- y[ok]
-  mu <- pmax(mu[ok], 1e-10)
-
-  if (length(y) < 10L) {
-    return(list(
-      model = model,
-      alpha = NA_real_,
-      logLik = NA_real_,
-      n_obs = length(y)
-    ))
-  }
-
-  neg_loglik <- function(log_alpha) {
-    alpha <- exp(log_alpha)
-
-    size <- if (model == "NB2") {
-      rep(1 / alpha, length(mu))
-    } else {
-      mu / alpha
-    }
-
-    size <- pmax(size, 1e-10)
-
-    ll <- suppressWarnings(
-      stats::dnbinom(
-        x = round(y),
-        mu = mu,
-        size = size,
-        log = TRUE
-      )
-    )
-
-    if (any(!is.finite(ll))) return(1e100)
-    -sum(ll)
-  }
-
-  opt <- stats::optimize(
-    f = neg_loglik,
-    interval = c(NB_LOG_ALPHA_LOWER, NB_LOG_ALPHA_UPPER)
-  )
-
-  list(
-    model = model,
-    alpha = exp(opt$minimum),
-    logLik = -opt$objective,
-    n_obs = length(y)
-  )
-}
-
-fit_nb1_nb2_region <- function(
-    raw_counts_arm,
-    normalized_counts_arm,
-    size_factors,
-    feature_ids,
-    arm_label,
-    region_label) {
-
-  raw_sub <- raw_counts_arm[feature_ids, , drop = FALSE]
-  norm_sub <- normalized_counts_arm[feature_ids, , drop = FALSE]
-
-  feature_mu_norm <- rowMeans(norm_sub, na.rm = TRUE)
-  feature_mu_norm[!is.finite(feature_mu_norm)] <- 0
-  feature_mu_norm <- pmax(feature_mu_norm, 1e-10)
-
-  sf <- as.numeric(size_factors[colnames(raw_sub)])
-  if (any(!is.finite(sf)) || any(sf <= 0)) {
-    stop("Invalid DESeq2 size factor in likelihood calculation.")
-  }
-
-  mu_mat <- outer(feature_mu_norm, sf, "*")
-  dimnames(mu_mat) <- dimnames(raw_sub)
-
-  y <- as.vector(raw_sub)
-  mu <- as.vector(mu_mat)
-
-  nb1 <- fit_nb_dispersion_model(y, mu, "NB1")
-  nb2 <- fit_nb_dispersion_model(y, mu, "NB2")
-
-  delta_ll <- nb2$logLik - nb1$logLik
-  two_delta_ll <- 2 * delta_ll
-  log10_lr <- delta_ll / log(10)
-
-  data.frame(
-    arm = arm_label,
-    region = region_label,
-    n_features = length(feature_ids),
-    n_observations = nb1$n_obs,
-    alpha_NB1 = nb1$alpha,
-    alpha_NB2 = nb2$alpha,
-    logLik_NB1 = nb1$logLik,
-    logLik_NB2 = nb2$logLik,
-    two_delta_logLik_NB2_minus_NB1 = two_delta_ll,
-    log10_likelihood_ratio_NB2_to_NB1 = log10_lr,
-    preferred_model = ifelse(
-      is.finite(delta_ll) & delta_ll > 0,
-      "NB2",
-      ifelse(is.finite(delta_ll) & delta_ll < 0, "NB1", "Tie")
-    ),
-    stringsAsFactors = FALSE
-  )
-}
-
-build_corroboration_for_arm <- function(
-    arm_label,
-    raw_counts_arm,
-    normalized_counts_arm,
-    size_factors,
-    rank_df,
-    k) {
-
-  nb_df <- compute_ranked_nb_metrics(
-    raw_counts_arm = raw_counts_arm,
-    normalized_counts_arm = normalized_counts_arm,
-    ranked_feature_ids = rank_df$feature_id
-  )
-
-  nb_df$abs_pc1_loading <- rank_df$abs_pc1_loading
-  nb_df <- assign_matched_regions(nb_df, k)
-
-  for (metric in c(
-    "nb2_excess_signal",
-    "nb2_nb1_contrast",
-    "alpha_mu_signal"
-  )) {
-    nb_df[[paste0(metric, "_smooth")]] <- smooth_metric_for_display(
-      nb_df$rank,
-      nb_df[[metric]]
-    )
-  }
-
-  region_summary <- nb_df %>%
-    filter(corroboration_region %in% c("LEFT", "RIGHT")) %>%
-    group_by(corroboration_region) %>%
-    summarise(
-      n = n(),
-      median_nb2_excess = median(nb2_excess_signal, na.rm = TRUE),
-      median_nb2_nb1 = median(nb2_nb1_contrast, na.rm = TRUE),
-      median_alpha_mu = median(alpha_mu_signal, na.rm = TRUE),
-      .groups = "drop"
-    ) %>%
-    mutate(arm = arm_label)
-
-  lrt_rows <- list()
-
-  for (region_name in c("LEFT", "RIGHT")) {
-    ids <- nb_df$feature_id[
-      nb_df$corroboration_region == region_name
-    ]
-
-    lrt_rows[[region_name]] <- fit_nb1_nb2_region(
-      raw_counts_arm = raw_counts_arm,
-      normalized_counts_arm = normalized_counts_arm,
-      size_factors = size_factors,
-      feature_ids = ids,
-      arm_label = arm_label,
-      region_label = region_name
-    )
-  }
-
-  list(
-    rank_data = nb_df,
-    region_summary = region_summary,
-    likelihood = bind_rows(lrt_rows)
-  )
-}
-
-# =============================================================================
-# FIGURE BUILDERS
-# =============================================================================
-
-add_rank_regions <- function(p, c1, c2, N) {
-  p +
-    annotate(
-      "rect",
-      xmin = 1, xmax = c1,
-      ymin = -Inf, ymax = Inf,
-      fill = COL$remainder, alpha = 0.42
-    ) +
-    annotate(
-      "rect",
-      xmin = c1, xmax = c2,
-      ymin = -Inf, ymax = Inf,
-      fill = COL$interval, alpha = 0.38
-    ) +
-    annotate(
-      "rect",
-      xmin = c2, xmax = N,
-      ymin = -Inf, ymax = Inf,
-      fill = COL$leading, alpha = 0.40
-    )
-}
-
-make_boundary_lines <- function(c1, c2, cutoff_rank, k) {
-  data.frame(
-    rank = c(c1, c2, cutoff_rank),
-    key = c("c1", "c2", paste0("Selected k* = ", k)),
-    stringsAsFactors = FALSE
-  )
-}
-
-make_pareto_panel <- function(scan_df, selected_k, comparison_name) {
-  selected <- scan_df %>%
-    filter(k == selected_k) %>%
-    slice(1L)
-
-  frontier <- scan_df %>%
-    filter(is_pareto) %>%
-    arrange(remainder_cross_n, good_n, k) %>%
-    distinct(remainder_cross_n, good_n, .keep_all = TRUE)
-
-  ggplot() +
-    geom_path(
-      data = scan_df,
-      aes(remainder_cross_n, good_n, group = 1),
-      color = COL$candidate_line,
-      linewidth = 0.45,
-      alpha = 0.55
-    ) +
-    geom_point(
-      data = scan_df,
-      aes(remainder_cross_n, good_n),
-      color = COL$candidate_line,
-      size = 1.0,
-      alpha = 0.45
-    ) +
-    geom_path(
-      data = frontier,
-      aes(
-        remainder_cross_n,
-        good_n,
-        color = "Pareto frontier",
-        group = 1
-      ),
-      linewidth = 1.25
-    ) +
-    geom_point(
-      data = selected,
-      aes(
-        remainder_cross_n,
-        good_n,
-        color = "Weighted optimum"
-      ),
-      shape = 23,
-      fill = COL$selected,
-      size = 4.7,
-      stroke = 1.1
-    ) +
-    annotate(
-      "label",
-      x = selected$remainder_cross_n,
-      y = selected$good_n,
-      label = paste0(
-        "k* = ", selected_k,
-        "\nG = ", selected$good_n,
-        "\nR = ", selected$remainder_cross_n,
-        "\nU = ", formatC(selected$weighted_utility, digits = 4, format = "f")
-      ),
-      hjust = -0.05,
-      vjust = 1.1,
-      size = 3.1,
-      label.size = 0.25,
-      fill = "white"
-    ) +
-    scale_color_manual(
-      name = NULL,
-      values = c(
-        "Pareto frontier" = COL$pareto,
-        "Weighted optimum" = COL$selected
-      )
-    ) +
-    labs(
-      title = paste0("D. ", comparison_name, ": weighted Pareto cutoff"),
-      subtitle = "Equal normalized weights: U(k) = Gnorm(k) - Rnorm(k)",
-      x = "Opposite-arm Remainder crossings, R(k)  [cost]",
-      y = "Joint + permissible Disjoint, G(k)  [benefit]",
-      caption = "The selected k* maximizes weighted utility on the Pareto frontier; opposite-arm Divergence crossings are permissible."
-    ) +
-    theme_manuscript() +
-    guides(color = guide_legend(nrow = 1, byrow = TRUE))
-}
-
-make_cutoff_framework_figure <- function(
-    comparison_name,
-    control_group,
-    treatment_group,
-    group_results,
-    knot_fit,
-    scan_df,
-    selected_k,
-    c1,
-    c2,
-    out_file) {
-
-  control <- group_results[[control_group]]$data
-  treatment <- group_results[[treatment_group]]$data
-  N <- nrow(control)
-  cutoff_rank <- rank_cutoff_from_k(N, selected_k)
-
-  long <- bind_rows(
-    control %>% mutate(arm = control_group),
-    treatment %>% mutate(arm = treatment_group)
-  )
-
-  boundary_df <- make_boundary_lines(c1, c2, cutoff_rank, selected_k)
-
-  boundary_colors <- c(
-    "c1" = COL$c1,
-    "c2" = COL$c2,
-    stats::setNames(COL$selected, paste0("Selected k* = ", selected_k))
-  )
-  boundary_types <- c(
-    "c1" = "dashed",
-    "c2" = "longdash",
-    stats::setNames("dotdash", paste0("Selected k* = ", selected_k))
-  )
-
-  arm_colors <- c(
-    stats::setNames(COL$control, control_group),
-    stats::setNames(COL$treatment, treatment_group)
-  )
-
-  pA <- add_rank_regions(ggplot(), c1, c2, N) +
-    geom_vline(
-      data = boundary_df,
-      aes(xintercept = rank, color = key, linetype = key),
-      linewidth = 0.8
-    ) +
-    geom_line(
-      data = long,
-      aes(rank, abs_pc1_loading, color = arm),
-      linewidth = 0.9
-    ) +
-    scale_color_manual(
-      name = NULL,
-      values = c(arm_colors, boundary_colors)
-    ) +
-    scale_linetype_manual(
-      name = NULL,
-      values = boundary_types,
-      na.translate = FALSE
-    ) +
-    labs(
-      title = paste0("A. ", comparison_name, ": absolute PC1 loading rank"),
-      subtitle = "log1p(CPM) expression entered into PCA; untransformed absolute PC1 loadings ranked",
-      x = "PC1 rank: low |loading| to high |loading|",
-      y = "|PC1 loading|",
-      caption = "c1 = Remainder/Divergence boundary; c2 = Divergence/Leading-edge boundary; k* = weighted-Pareto top-k cutoff."
-    ) +
-    theme_manuscript() +
-    theme(legend.position = "none") +
-    guides(
-      color = guide_legend(nrow = 2, byrow = TRUE),
-      linetype = guide_legend(nrow = 1)
-    )
-
-  pB <- add_rank_regions(ggplot(), c1, c2, N) +
-    geom_vline(
-      data = boundary_df,
-      aes(xintercept = rank, color = key, linetype = key),
-      linewidth = 0.8
-    ) +
-    geom_line(
-      data = long,
-      aes(rank, display_log1p_raw_empirical_variance, color = arm),
-      linewidth = 0.9
-    ) +
-    scale_color_manual(
-      name = NULL,
-      values = c(arm_colors, boundary_colors)
-    ) +
-    scale_linetype_manual(
-      name = NULL,
-      values = boundary_types,
-      na.translate = FALSE
-    ) +
-    labs(
-      title = paste0("B. ", comparison_name, ": raw-count variance geometry"),
-      subtitle = "Raw-count sample variance shown on a log(1+x) display scale along the same PC1 rank",
-      x = "PC1 rank",
-      y = "Smoothed log(1 + raw-count variance)",
-      caption = "Region shading follows c1 and c2; the selected k* is shown as the top-k boundary on the ranked axis."
-    ) +
-    theme_manuscript() +
-    theme(legend.position = "none") +
-    guides(
-      color = guide_legend(nrow = 2, byrow = TRUE),
-      linetype = guide_legend(nrow = 1)
-    )
-
-  fit_mat <- knot_fit$fitted
-  pair_fit_idx <- match(c(control_group, treatment_group), knot_fit$groups)
-  if (anyNA(pair_fit_idx)) {
-    stop("Pair arms were not found in the shared eight-arm knot fit.")
-  }
-  fit_long <- bind_rows(lapply(pair_fit_idx, function(j) {
-    data.frame(
-      rank = seq_len(N),
-      arm = knot_fit$groups[j],
-      fitted_D = fit_mat[, j],
-      stringsAsFactors = FALSE
-    )
-  }))
-
-  div_long <- long %>%
-    select(rank, arm, cumulative_divergence)
-
-  pC <- add_rank_regions(ggplot(), c1, c2, N) +
-    geom_vline(
-      data = boundary_df,
-      aes(xintercept = rank, color = key, linetype = key),
-      linewidth = 0.8
-    ) +
-    geom_hline(
-      yintercept = 0,
-      color = "grey55",
-      linetype = "dotted",
-      linewidth = 0.35
-    ) +
-    geom_line(
-      data = div_long,
-      aes(rank, cumulative_divergence, color = arm),
-      linewidth = 0.65,
-      alpha = 0.5
-    ) +
-    geom_line(
-      data = fit_long,
-      aes(rank, fitted_D, color = arm),
-      linewidth = 1.15
-    ) +
-    scale_color_manual(
-      name = NULL,
-      values = c(arm_colors, boundary_colors)
-    ) +
-    scale_linetype_manual(
-      name = NULL,
-      values = boundary_types,
-      na.translate = FALSE
-    ) +
-    labs(
-      title = paste0("C. ", comparison_name, ": PC1-NB cumulative divergence"),
-      subtitle = "One two-knot fit shared across all eight RT/ZT arms; pair shown here",
-      x = "PC1 rank",
-      y = "D(r) = F_E(r) - F_P(r)",
-      caption = "F_E is cumulative excess-over-Poisson variance mass; F_P is cumulative PC1 variance-contribution mass."
-    ) +
-    theme_manuscript() +
-    guides(
-      color = guide_legend(nrow = 2, byrow = TRUE),
-      linetype = guide_legend(nrow = 1)
-    )
-
-  pD <- make_pareto_panel(
-    scan_df = scan_df,
-    selected_k = selected_k,
-    comparison_name = comparison_name
-  )
-
-  save_grid_2x2(
-    list(pA, pB, pC, pD),
-    out_file,
-    width = 16,
-    height = 12.5
-  )
-}
-
-make_nb_corroboration_figure <- function(
-    comparison_name,
-    control_group,
-    treatment_group,
-    selected_k,
-    arm_results,
-    out_file) {
-
-  rank_data <- bind_rows(lapply(names(arm_results), function(a) {
-    arm_results[[a]]$rank_data %>% mutate(arm = a)
-  }))
-
-  region_summary <- bind_rows(lapply(
-    names(arm_results),
-    function(a) arm_results[[a]]$region_summary
-  ))
-
-  likelihood <- bind_rows(lapply(
-    names(arm_results),
-    function(a) arm_results[[a]]$likelihood
-  ))
-
-  N <- max(rank_data$rank)
-  cutoff_rank <- rank_cutoff_from_k(N, selected_k)
-  left_start <- cutoff_rank - selected_k
-  left_end <- cutoff_rank - 1L
-
-  metric_long <- bind_rows(
-    rank_data %>%
-      transmute(
-        rank, arm,
-        metric = "NB2 excess",
-        value = nb2_excess_signal_smooth
-      ),
-    rank_data %>%
-      transmute(
-        rank, arm,
-        metric = "NB2-NB1",
-        value = nb2_nb1_contrast_smooth
-      ),
-    rank_data %>%
-      transmute(
-        rank, arm,
-        metric = "alpha*mu",
-        value = alpha_mu_signal_smooth
-      )
-  )
-
-  metric_colors <- c(
-    "NB2 excess" = COL$nb2,
-    "NB2-NB1" = COL$nbgap,
-    "alpha*mu" = COL$alphamu
-  )
-
-  pA <- ggplot(metric_long, aes(rank, value, color = metric)) +
-    annotate(
-      "rect",
-      xmin = left_start, xmax = left_end,
-      ymin = -Inf, ymax = Inf,
-      fill = COL$left, alpha = 0.12
-    ) +
-    annotate(
-      "rect",
-      xmin = cutoff_rank, xmax = N,
-      ymin = -Inf, ymax = Inf,
-      fill = COL$right, alpha = 0.12
-    ) +
-    geom_vline(
-      xintercept = cutoff_rank,
-      color = COL$selected,
-      linetype = "dotdash",
-      linewidth = 0.9
-    ) +
-    geom_line(linewidth = 0.85) +
-    facet_wrap(~ arm, ncol = 1, scales = "free_y") +
-    scale_color_manual(
-      name = "Corroboration metric",
-      values = metric_colors
-    ) +
-    labs(
-      title = paste0("A. ", comparison_name, ": NB1/NB2 corroboration along EVS rank"),
-      subtitle = paste0(
-        "RIGHT = selected top-k* (k*=", selected_k,
-        "); LEFT = immediately preceding matched block"
-      ),
-      x = "Absolute-PC1-loading rank",
-      y = "Smoothed corroboration signal"
-    ) +
-    theme_manuscript() +
-    guides(color = guide_legend(nrow = 1, byrow = TRUE))
-
-  # Mean-variance relationship with region/model fits.
-  mv <- rank_data %>%
-    filter(corroboration_region %in% c("LEFT", "RIGHT")) %>%
-    select(
-      arm,
-      corroboration_region,
-      raw_mean,
-      raw_variance
-    ) %>%
-    rename(region = corroboration_region)
-
-  # Deterministic thinning for readability only; model fits use all features.
-  mv_plot <- mv %>%
-    group_by(arm, region) %>%
-    arrange(raw_mean) %>%
-    mutate(plot_keep = row_number() %% max(1L, ceiling(n() / 1200L)) == 0L) %>%
-    filter(plot_keep) %>%
-    ungroup()
-
-  curve_rows <- list()
-  idx <- 1L
-
-  for (i in seq_len(nrow(likelihood))) {
-    rr <- likelihood[i, , drop = FALSE]
-    arm_i <- rr$arm
-    region_i <- rr$region
-
-    mu_vals <- mv$raw_mean[
-      mv$arm == arm_i & mv$region == region_i
-    ]
-    mu_vals <- mu_vals[is.finite(mu_vals) & mu_vals > 0]
-    if (!length(mu_vals)) next
-
-    grid_mu <- exp(seq(
-      log(max(min(mu_vals), 1e-6)),
-      log(max(mu_vals)),
-      length.out = 180L
-    ))
-
-    curve_rows[[idx]] <- data.frame(
-      arm = arm_i,
-      region = region_i,
-      raw_mean = grid_mu,
-      predicted_variance = grid_mu + rr$alpha_NB1 * grid_mu,
-      model = "NB1",
-      stringsAsFactors = FALSE
-    )
-    idx <- idx + 1L
-
-    curve_rows[[idx]] <- data.frame(
-      arm = arm_i,
-      region = region_i,
-      raw_mean = grid_mu,
-      predicted_variance = grid_mu + rr$alpha_NB2 * grid_mu^2,
-      model = "NB2",
-      stringsAsFactors = FALSE
-    )
-    idx <- idx + 1L
-  }
-
-  curve_df <- bind_rows(curve_rows)
-
-  mv_plot <- mv_plot %>%
-    mutate(
-      display_log1p_mean = log1p(raw_mean),
-      display_log1p_variance = log1p(raw_variance)
-    )
-
-  curve_df <- curve_df %>%
-    mutate(
-      display_log1p_mean = log1p(raw_mean),
-      display_log1p_variance = log1p(predicted_variance)
-    )
-
-  pB <- ggplot(
-    mv_plot,
-    aes(display_log1p_mean, display_log1p_variance)
-  ) +
-    geom_point(
-      size = 0.8,
-      alpha = 0.20,
-      color = "grey35"
-    ) +
-    geom_line(
-      data = curve_df,
-      aes(
-        display_log1p_mean,
-        display_log1p_variance,
-        color = model
-      ),
-      linewidth = 1.0
-    ) +
-    facet_grid(arm ~ region, scales = "free") +
-    scale_color_manual(
-      name = "Fitted variance model",
-      values = c("NB1" = COL$nb1, "NB2" = COL$nb2fit)
-    ) +
-    labs(
-      title = paste0("B. ", comparison_name, ": observed mean-variance relationship"),
-      subtitle = "Points are PAS-level raw-count moments; lines use maximum-likelihood NB1/NB2 dispersion estimates",
-      x = "log(1 + raw-count mean)",
-      y = "log(1 + raw-count variance)"
-    ) +
-    theme_manuscript() +
-    guides(color = guide_legend(nrow = 1, byrow = TRUE))
-
-  summary_long <- region_summary %>%
-    pivot_longer(
-      cols = c(
-        median_nb2_excess,
-        median_nb2_nb1,
-        median_alpha_mu
-      ),
-      names_to = "metric",
-      values_to = "median_value"
-    ) %>%
-    mutate(
-      metric = recode(
-        metric,
-        median_nb2_excess = "NB2 excess",
-        median_nb2_nb1 = "NB2-NB1",
-        median_alpha_mu = "alpha*mu"
-      ),
-      region = factor(
-        corroboration_region,
-        levels = c("LEFT", "RIGHT")
-      )
-    )
-
-  pC <- ggplot(
-    summary_long,
-    aes(
-      x = median_value,
-      y = metric,
-      color = region
-    )
-  ) +
-    geom_point(size = 3.3) +
-    facet_wrap(~ arm, ncol = 1, scales = "free_x") +
-    scale_color_manual(
-      name = "Matched rank block",
-      values = c("LEFT" = COL$left, "RIGHT" = COL$right)
-    ) +
-    labs(
-      title = paste0("C. ", comparison_name, ": matched LEFT versus RIGHT medians"),
-      subtitle = "The Pareto-selected cutoff is fixed before these summaries are calculated",
-      x = "Median corroboration signal",
-      y = NULL
-    ) +
-    theme_manuscript() +
-    guides(color = guide_legend(nrow = 1, byrow = TRUE))
-
-  likelihood$arm_region <- paste(likelihood$arm, likelihood$region, sep = " / ")
-  likelihood$arm_region <- factor(
-    likelihood$arm_region,
-    levels = rev(likelihood$arm_region)
-  )
-
-  pD <- ggplot(
-    likelihood,
-    aes(
-      x = two_delta_logLik_NB2_minus_NB1,
-      y = arm_region,
-      fill = preferred_model
-    )
-  ) +
-    geom_vline(
-      xintercept = 0,
-      linetype = "dashed",
-      color = "grey45",
-      linewidth = 0.55
-    ) +
-    geom_col(width = 0.68) +
-    geom_text(
-      aes(
-        label = paste0(
-          "log10 LR = ",
-          formatC(
-            log10_likelihood_ratio_NB2_to_NB1,
-            format = "f",
-            digits = 2
-          )
-        )
-      ),
-      hjust = ifelse(
-        likelihood$two_delta_logLik_NB2_minus_NB1 >= 0,
-        -0.05,
-        1.05
-      ),
-      size = 3.0
-    ) +
-    scale_x_continuous(expand = expansion(mult = c(0.08, 0.24))) +
-    scale_fill_manual(
-      name = "Higher likelihood",
-      values = c(
-        "NB1" = COL$nb1,
-        "NB2" = COL$nb2fit,
-        "Tie" = "grey60"
-      )
-    ) +
-    labs(
-      title = paste0("D. ", comparison_name, ": NB2 versus NB1 likelihood evidence"),
-      subtitle = "Positive 2ΔlogL and positive log10(L_NB2/L_NB1) favor NB2",
-      x = "2 × (logLik_NB2 - logLik_NB1)",
-      y = NULL
-    ) +
-    theme_manuscript() +
-    guides(fill = guide_legend(nrow = 1, byrow = TRUE))
-
-  save_grid_2x2(
-    list(pA, pB, pC, pD),
-    out_file,
-    width = 16,
-    height = 12.5
-  )
-}
-
-make_summary_figure <- function(cutoff_summary, out_file) {
-  df <- cutoff_summary %>%
-    mutate(
-      comparison = factor(comparison, levels = comparison),
-      label = paste0(
-        "k*=", selected_k,
-        "\nG=", good_n,
-        ", R=", remainder_cross_n
-      )
-    )
+save_discovery_count_panel <- function(summary_df) {
+  if (!isTRUE(EXPORT_SUPPORT_FIGURES)) return(invisible(FALSE))
+  long_df <- build_discovery_long_table(summary_df)
+  if (!nrow(long_df)) return(invisible(FALSE))
+
+  long_df$Method <- factor(long_df$Method, levels = significance_method_levels)
 
   p <- ggplot(
-    df,
-    aes(comparison, selected_k)
+    long_df,
+    aes(Comparison, Count, color = Method, shape = Method)
   ) +
-    geom_col(
-      fill = COL$selected,
-      width = 0.65
+    geom_point(
+      position = position_dodge(width = 0.58),
+      size = 3.2,
+      alpha = 0.98,
+      stroke = 0.90
     ) +
     geom_text(
-      aes(label = label),
-      vjust = -0.35,
-      size = 3.5,
-      fontface = "bold"
+      aes(label = Count),
+      position = position_dodge(width = 0.58),
+      vjust = -0.65,
+      size = 2.7,
+      color = "black",
+      show.legend = FALSE
+    ) +
+    facet_wrap(~ Analysis, scales = "free_y", nrow = 1) +
+    scale_y_continuous(expand = expansion(mult = c(0.04, 0.16))) +
+    scale_color_manual(
+      values = significance_method_colors,
+      breaks = significance_method_levels,
+      labels = unname(significance_method_labels[significance_method_levels]),
+      drop = FALSE,
+      name = "Method",
+      guide = guide_legend(override.aes = list(size = 3.0, stroke = 0.95))
+    ) +
+    scale_shape_manual(
+      values = significance_method_shapes,
+      breaks = significance_method_levels,
+      labels = unname(significance_method_labels[significance_method_levels]),
+      drop = FALSE,
+      name = "Method"
     ) +
     labs(
-      title = "Comparison-specific empirical EVS cutoffs",
-      subtitle = "Normalized-before-EVS PC1-NB geometry followed by equal-weight Pareto optimization",
+      title = "Significant PAS counts by method",
       x = NULL,
-      y = "Selected top-k* per arm"
+      y = "Significant PASs",
+      caption = "Ovlp is reported separately; method totals are not mutually exclusive."
     ) +
-    theme_manuscript(base_size = 12.5) +
-    theme(legend.position = "none") +
-    expand_limits(
-      y = max(df$selected_k, na.rm = TRUE) * 1.15
+    manuscript_theme() +
+    theme(
+      legend.position = "bottom",
+      axis.text.x = element_text(angle = 35, hjust = 1),
+      strip.text = element_text(face = "bold")
     )
 
-  save_figure(
-    p,
-    out_file,
-    width = 11.5,
-    height = 7.2
-  )
+  save_grob(p, file.path(paper_fig_dir, "Figure_Manuscript_Discovery_Counts.png"), width = 21.0, height = 6.5)
+  save_grob(p, file.path(paper_fig_dir, "Figure_Manuscript_Discovery_Counts.pdf"), width = 21.0, height = 6.5)
+  invisible(TRUE)
 }
 
-# =============================================================================
-# METHODS / EXPORTS
-# =============================================================================
-
-write_methods_manuscript <- function(cutoff_summary) {
-  cutoff_text <- paste(
-    paste0(
-      cutoff_summary$comparison,
-      " k*=",
-      cutoff_summary$selected_k
-    ),
-    collapse = ", "
-  )
-
-  lines <- c(
-    "# Empirical eigenvector-splitting cutoff methods",
-    "",
-    "## Comparison-specific preprocessing and PC1 ranking",
-    "",
-    paste0(
-      "Empirical EVS cutoffs were estimated independently for RT0_ZT6, RT2_ZT8, RT4_ZT10, and RT8_ZT14; no single global EVS k* was estimated or applied across comparisons. ",
-      "PASs with zero counts across the complete 40-sample RT/ZT matrix were removed once before cutoff estimation. ",
-      "For PC1 ranking, raw counts were library-size normalized to counts per million (CPM) within each arm and log1p-transformed before PCA. ",
-      "PCA was performed independently within each arm with centering and without feature scaling. The PC1 loading values themselves were not transformed; PASs were ordered from lowest to highest raw absolute PC1 loading."
-    ),
-    "",
-    "## PC1-NB variance-mass divergence",
-    "",
-    paste0(
-      "For PAS i in arm g, PC1 variance contribution was P_ig = lambda_1g * loading_ig^2, where lambda_1g is the PC1 eigenvalue. ",
-      "DESeq2 median-of-ratios size factors were estimated once across all 40 samples, and pooled within-group variance was calculated from those normalized counts across all eight RT/ZT arms. ",
-      "For each arm, excess-over-Poisson variance was E_ig = max(V_pool,i - mu_ig, 0). ",
-      "P and E were normalized separately to rank-wise probability masses and accumulated along the absolute-PC1-loading rank. ",
-      "Cumulative divergence was D_g(r) = F_E,g(r) - F_P,g(r)."
-    ),
-    "",
-    "## Comparison-specific variance regimes",
-    "",
-    paste0(
-      "A single shared two-knot continuous linear spline was fitted jointly to the cumulative-divergence curves from all eight RT/ZT arms. ",
-      "The shared fitted knots defined c1 and c2 for every comparison. Ranks below c1 were classified as the Remainder regime, ranks from c1 through c2 as the Divergence interval, and ranks above c2 as the Leading-edge regime."
-    ),
-    "",
-    "## Weighted Pareto cutoff",
-    "",
-    paste0(
-      "For each RT/ZT pair, candidate top-k values were restricted to 1 <= k <= N-c2 using the globally shared c2 so each selecting arm contributed PASs from its own Leading-edge regime. ",
-      "For each k, the benefit G(k) was the number of Joint PASs plus Disjoint PASs whose opposite-arm rank lay in either the Leading-edge regime or Divergence interval. ",
-      "The cost R(k) was the number of Disjoint PASs whose opposite-arm rank lay in the Remainder regime. ",
-      "Pareto-optimal candidates were those for which no other candidate simultaneously increased G and decreased R. ",
-      "Within the Pareto frontier, G and R were min-max normalized and equal weights were used: U(k) = G_norm(k) - R_norm(k). ",
-      "The empirical cutoff k* maximized U(k); ties were resolved by greater G, then lower R, then larger k."
-    ),
-    "",
-    "## EVS membership",
-    "",
-    paste0(
-      "After k* was selected, the k* highest absolute-PC1-loading PASs were selected independently in the two arms. ",
-      "The Leading Edge was the union of the two top-k* sets, including Joint and all Disjoint PASs, and the Remainder was the complement. ",
-      "Opposite-arm Remainder crossings contributed to the Pareto cost but did not override union membership."
-    ),
-    "",
-    "## NB1/NB2 corroboration",
-    "",
-    paste0(
-      "After k* was fixed, each arm's selected top-k* block was designated RIGHT and compared with the immediately preceding equal-sized rank block, designated LEFT. ",
-      "From raw counts, PAS-level sample mean and variance were used to calculate NB2 excess signal = log[1+max(variance-mean,0)], ",
-      "NB2-NB1 contrast = NB2 excess signal - log(1+mean), and alpha*mu signal = log(1+alpha_hat*mean), ",
-      "where alpha_hat = max[(variance-mean)/mean^2,0]."
-    ),
-    "",
-    paste0(
-      "Likelihood-based NB1/NB2 corroboration used the raw counts and comparison-specific DESeq2 size factors. ",
-      "Expected raw-count means were obtained by multiplying each PAS's arm-specific normalized mean by the sample size factor. ",
-      "NB1 and NB2 models each fitted one dispersion parameter alpha by maximum likelihood. ",
-      "NB1 used Var(Y)=mu+alpha*mu and negative-binomial size=mu/alpha; NB2 used Var(Y)=mu+alpha*mu^2 and size=1/alpha. ",
-      "Model support was summarized by the fitted log-likelihoods, 2*(logLik_NB2-logLik_NB1), and log10(L_NB2/L_NB1). ",
-      "The NB corroboration analysis was performed only after cutoff selection and did not contribute to k*."
-    ),
-    "",
-    "## Selected empirical cutoffs",
-    "",
-    cutoff_text
-  )
-
-  writeLines(
-    lines,
-    file.path(OUT_ROOT, "Methods_Manuscript.md")
-  )
-}
-
-write_figure_legends <- function() {
-  lines <- c(
-    "# Figure legends",
-    "",
-    "## Figure 1. Comparison-specific normalized-EVS cutoff framework",
-    "For each RT/ZT comparison, Panel A shows PASs ordered from low to high raw absolute PC1 loading after PCA was applied to arm-specific log1p(CPM) expression; the loading values themselves are not transformed. Panel B shows the corresponding raw-count variance geometry on the same PC1-ranked axis; this smoothed display curve is descriptive. Panel C shows the cumulative divergence D(r)=F_E(r)-F_P(r) between normalized excess-over-Poisson variance mass and PC1 variance-contribution mass, with the single c1 and c2 regime boundaries shared across all eight arms. Panel D shows the complete weighted-Pareto candidate set, the Pareto frontier, and the selected comparison-specific k*. Benefit G(k) retains Joint PASs and permissible Disjoint PASs; cost R(k) counts Disjoint PASs whose opposite-arm rank lies in the Remainder regime. The selected k* maximizes U(k)=G_norm(k)-R_norm(k) on the Pareto frontier.",
-    "",
-    "## Figure 2. NB1/NB2 and likelihood corroboration",
-    "For each RT/ZT comparison, the independently selected weighted-Pareto k* is fixed before corroboration. Panel A shows the NB2 excess, NB2-NB1, and alpha*mu signals along the absolute-PC1-loading rank for the matched LEFT block and selected RIGHT block. Panel B shows PAS-level raw-count mean-variance observations with maximum-likelihood NB1 and NB2 variance-model curves. Panel C compares the matched LEFT and RIGHT median corroboration signals. Panel D shows 2*(logLik_NB2-logLik_NB1) and labels log10(L_NB2/L_NB1) for each arm and rank block; positive values favor NB2. These corroboration quantities do not enter the Pareto optimization or change k*.",
-    "",
-    "## Summary figure. Comparison-specific empirical EVS cutoffs",
-    "The summary figure displays the independently selected top-k* value for RT0_ZT6, RT2_ZT8, RT4_ZT10, and RT8_ZT14 together with the retained-benefit G(k*) and Remainder-crossing cost R(k*) at each selected weighted-Pareto optimum. No global k* is substituted for these four comparison-specific optima."
-  )
-
-  writeLines(
-    lines,
-    file.path(OUT_ROOT, "Figure_Legends.md")
-  )
-}
-
-write_csv <- function(x, path) {
-  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
-  write.csv(x, path, row.names = FALSE, na = "")
-  invisible(path)
-}
-
-create_zip_from_files <- function(zip_path, files) {
-  files <- unique(files[file.exists(files)])
-  files <- files[normalizePath(files) != normalizePath(zip_path, mustWork = FALSE)]
-
-  if (!length(files)) stop("No files available for zip: ", zip_path)
-
-  root_norm <- normalizePath(OUT_ROOT, winslash = "/", mustWork = TRUE)
-  file_norm <- normalizePath(files, winslash = "/", mustWork = TRUE)
-  rel <- sub(
-    paste0("^", gsub("([][{}()+*^$|\\\\?.])", "\\\\\\1", root_norm), "/?"),
-    "",
-    file_norm
-  )
-
-  if (file.exists(zip_path)) unlink(zip_path)
-
-  old_wd <- getwd()
-  on.exit(setwd(old_wd), add = TRUE)
-  setwd(OUT_ROOT)
-
-  if (requireNamespace("zip", quietly = TRUE)) {
-    zip::zipr(
-      zipfile = zip_path,
-      files = rel
-    )
-  } else {
-    utils::zip(
-      zipfile = zip_path,
-      files = rel,
-      flags = "-r9X"
-    )
+save_paper_support_figures <- function(summary_df) {
+  if (!isTRUE(EXPORT_SUPPORT_FIGURES)) {
+    return(invisible(FALSE))
   }
 
-  setwd(old_wd)
+  support_steps <- list(
+    PCA = function() save_paper_pca_panels(),
+    Empirical_HBFSS = function() save_paper_empirical_hbfss_panels(),
+    Counts = function() save_discovery_count_panel(summary_df)
+  )
 
-  if (!file.exists(zip_path) || file.info(zip_path)$size <= 0) {
-    stop("Zip creation failed: ", zip_path)
-  }
-
-  invisible(zip_path)
-}
-
-verify_outputs <- function(expected_paths) {
-  missing <- expected_paths[
-    !file.exists(expected_paths) |
-      is.na(file.info(expected_paths)$size) |
-      file.info(expected_paths)$size <= 0
-  ]
-
-  if (length(missing)) {
-    stop(
-      "Expected output files are missing or empty:\n",
-      paste(missing, collapse = "\n")
+  for (nm in names(support_steps)) {
+    tryCatch(
+      support_steps[[nm]](),
+      error = function(e) {
+        warning("Support figure generation failed at ", nm, ": ", conditionMessage(e))
+      }
     )
   }
 
@@ -3086,663 +3291,655 @@ verify_outputs <- function(expected_paths) {
 }
 
 
-
 # =============================================================================
-# RUN ANALYSIS
-# =============================================================================
-
-input <- read_count_data(
-  COUNT_FILE,
-  GROUP_PATTERNS
-)
-
-all_counts <- input$counts
-annotation <- input$annotation
-
-# EXPERIMENT-WIDE FEATURE UNIVERSE (NOT A GLOBAL k*):
-# zero filtering occurs once across all 40 RT/ZT samples, not separately inside
-# each comparison. This keeps N and every arm-specific rank axis identical.
-experiment_keep <- rowSums(all_counts) > 0
-all_counts <- all_counts[experiment_keep, , drop = FALSE]
-annotation <- annotation[
-  match(rownames(all_counts), annotation$feature_id),
-  ,
-  drop = FALSE
-]
-
-N_EXPERIMENT <- nrow(all_counts)
-if (N_EXPERIMENT < 20L) stop("Too few PASs after global nonzero filtering.")
-
-experiment_group_labels <- assign_groups(
-  colnames(all_counts),
-  GROUP_PATTERNS
-)
-
-# EXPERIMENT-WIDE NORMALIZATION/VARIANCE REFERENCE (NOT A GLOBAL k*):
-# size factors are estimated once across all 40 samples; pooled within-group
-# variance is then estimated across all eight arms.
-experiment_deseq <- normalize_deseq2_comparison(
-  count_mat = all_counts,
-  group_labels = experiment_group_labels
-)
-
-experiment_normalized_counts <- experiment_deseq$normalized_counts
-experiment_size_factors <- experiment_deseq$size_factors
-
-experiment_pooled <- compute_pooled_within_group_variance(
-  normalized_counts = experiment_normalized_counts,
-  group_labels = experiment_group_labels
-)
-
-# ARM-SPECIFIC PC1 RANKINGS:
-# each arm uses log1p(CPM) expression for PCA; the absolute PC1 loadings are
-# ranked directly without transforming the loading scores themselves.
-experiment_group_results <- vector("list", length(levels(experiment_group_labels)))
-names(experiment_group_results) <- levels(experiment_group_labels)
-
-for (g in levels(experiment_group_labels)) {
-  idx <- which(experiment_group_labels == g)
-  if (length(idx) < 2L) stop("Not enough samples in group ", g)
-
-  experiment_group_results[[g]] <- compute_group_analysis(
-    group_name = g,
-    raw_counts_arm = all_counts[, idx, drop = FALSE],
-    normalized_counts_arm = experiment_normalized_counts[, idx, drop = FALSE],
-    pooled_variance = experiment_pooled$variance
-  )
-}
-
-# SHARED EIGHT-ARM REGIME MODEL (BOUNDARIES ONLY; k* REMAINS COMPARISON-SPECIFIC):
-# one c1/c2 fit is estimated jointly across all eight arms and is then held
-# fixed while each of the four RT/ZT pairs receives its own Pareto-optimal k*.
-shared_regime_fit <- fit_shared_knots(experiment_group_results)
-SHARED_C1 <- shared_regime_fit$c1
-SHARED_C2 <- shared_regime_fit$c2
-SHARED_MAX_CANDIDATE_K <- as.integer(N_EXPERIMENT - SHARED_C2)
-
-message("Experiment-wide feature count N = ", N_EXPERIMENT)
-message("Shared eight-arm c1 = ", SHARED_C1)
-message("Shared eight-arm c2 = ", SHARED_C2)
-message("Shared regime-derived candidate ceiling k <= ", SHARED_MAX_CANDIDATE_K)
-
-cutoff_rows <- list()
-comparison_optima <- list()
-corroboration_rows <- list()
-selected_site_rows <- list()
-remainder_site_rows <- list()
-expected_figure_paths <- character(0)
-expected_table_paths <- character(0)
-
-for (comparison_name in names(COMPARISONS)) {
-  message("============================================================")
-  message("Analyzing comparison: ", comparison_name)
-
-  mapping <- COMPARISONS[[comparison_name]]
-  control_group <- unname(mapping[["control"]])
-  treatment_group <- unname(mapping[["treatment"]])
-
-  control_idx <- which(experiment_group_labels == control_group)
-  treatment_idx <- which(experiment_group_labels == treatment_group)
-
-  if (length(control_idx) < 2L || length(treatment_idx) < 2L) {
-    stop("Each comparison arm requires at least two samples: ", comparison_name)
-  }
-
-  sample_idx <- c(control_idx, treatment_idx)
-  count_mat <- all_counts[, sample_idx, drop = FALSE]
-  normalized_counts <- experiment_normalized_counts[, sample_idx, drop = FALSE]
-  size_factors <- experiment_size_factors[colnames(count_mat)]
-
-  group_labels <- factor(
-    as.character(experiment_group_labels[sample_idx]),
-    levels = c(control_group, treatment_group)
-  )
-  names(group_labels) <- colnames(count_mat)
-
-  annotation_cmp <- annotation
-  N <- N_EXPERIMENT
-  pooled <- experiment_pooled
-  group_results <- experiment_group_results
-  knot_fit <- shared_regime_fit
-  c1 <- SHARED_C1
-  c2 <- SHARED_C2
-
-  raw_scan <- scan_pair_cutoffs(
-    control_df = group_results[[control_group]]$data,
-    treatment_df = group_results[[treatment_group]]$data,
-    c1 = c1,
-    c2 = c2,
-    comparison_name = comparison_name,
-    control_group = control_group,
-    treatment_group = treatment_group
-  )
-
-  opt <- select_weighted_pareto_optimum(
-    raw_scan,
-    good_col = "good_n",
-    cost_col = "remainder_cross_n",
-    benefit_weight = BENEFIT_WEIGHT,
-    contamination_weight = CONTAMINATION_WEIGHT
-  )
-
-  scan_df <- opt$scan
-  selected_k <- as.integer(opt$selected_k)
-
-  # k* is owned by THIS comparison only. It is never pooled across comparisons
-  # and is never replaced by an experiment-wide/global k.
-  comparison_optima[[comparison_name]] <- opt
-
-  if (!comparison_name %in% names(COMPARISONS)) {
-    stop("Unexpected comparison while storing k*: ", comparison_name)
-  }
-  if (length(selected_k) != 1L || !is.finite(selected_k) || selected_k < 1L) {
-    stop("Invalid comparison-specific k* for ", comparison_name)
-  }
-
-  cutoff_rank <- rank_cutoff_from_k(N, selected_k)
-
-  class_df <- classify_pair_at_k(
-    control_df = group_results[[control_group]]$data,
-    treatment_df = group_results[[treatment_group]]$data,
-    k = selected_k,
-    c1 = c1,
-    c2 = c2,
-    comparison_name = comparison_name,
-    control_group = control_group,
-    treatment_group = treatment_group
-  )
-
-  class_summary <- summarize_classification(class_df)
-
-  # Preserve the current requested EVS membership rule: the final Leading Edge
-  # is the full union of the two arm-specific top-k sets. Remainder crossings
-  # remain a Pareto cost term and do not override union membership.
-  lead_ids <- unique(class_df$feature_id)
-  rem_ids <- setdiff(rownames(all_counts), lead_ids)
-
-  lead_table <- class_df %>%
-    left_join(annotation_cmp, by = "feature_id") %>%
-    mutate(
-      evs_membership = "LeadingEdge",
-      pareto_remainder_crossing_cost = cross_into_remainder
-    ) %>%
-    select(
-      comparison,
-      feature_id,
-      gene_symbol,
-      evs_membership,
-      selected_k,
-      cutoff_rank,
-      control_group,
-      treatment_group,
-      base_class,
-      analysis_class,
-      control_rank,
-      treatment_rank,
-      control_region,
-      treatment_region,
-      opposite_region,
-      control_top_k,
-      treatment_top_k,
-      pareto_remainder_crossing_cost
-    )
-
-  rem_control_rank <- make_rank_map(group_results[[control_group]]$data)
-  rem_treatment_rank <- make_rank_map(group_results[[treatment_group]]$data)
-
-  remainder_table <- data.frame(
-    comparison = comparison_name,
-    feature_id = rem_ids,
-    gene_symbol = annotation_cmp$gene_symbol[
-      match(rem_ids, annotation_cmp$feature_id)
-    ],
-    evs_membership = "Remainder",
-    selected_k = selected_k,
-    cutoff_rank = cutoff_rank,
-    control_rank = as.integer(rem_control_rank[rem_ids]),
-    treatment_rank = as.integer(rem_treatment_rank[rem_ids]),
-    stringsAsFactors = FALSE
-  )
-
-  # NB1/NB2 corroboration remains strictly post-selection and cannot change k*.
-  arm_results <- list()
-
-  for (g in c(control_group, treatment_group)) {
-    idx_global <- which(experiment_group_labels == g)
-
-    arm_results[[g]] <- build_corroboration_for_arm(
-      arm_label = g,
-      raw_counts_arm = all_counts[, idx_global, drop = FALSE],
-      normalized_counts_arm = experiment_normalized_counts[, idx_global, drop = FALSE],
-      size_factors = experiment_size_factors[colnames(all_counts)[idx_global]],
-      rank_df = group_results[[g]]$data,
-      k = selected_k
-    )
-  }
-
-  likelihood_table <- bind_rows(lapply(
-    names(arm_results),
-    function(g) arm_results[[g]]$likelihood
-  )) %>%
-    mutate(
-      comparison = comparison_name,
-      selected_k = selected_k,
-      cutoff_rank = cutoff_rank
-    ) %>%
-    select(
-      comparison,
-      selected_k,
-      cutoff_rank,
-      everything()
-    )
-
-  region_summary <- bind_rows(lapply(
-    names(arm_results),
-    function(g) arm_results[[g]]$region_summary
-  )) %>%
-    mutate(
-      comparison = comparison_name,
-      selected_k = selected_k,
-      cutoff_rank = cutoff_rank
-    ) %>%
-    select(
-      comparison,
-      selected_k,
-      cutoff_rank,
-      everything()
-    )
-
-  selected_scan_row <- scan_df %>%
-    filter(k == selected_k) %>%
-    slice(1L)
-
-  cutoff_row <- data.frame(
-    comparison = comparison_name,
-    cutoff_scope = "comparison_specific_weighted_pareto",
-    regime_boundary_scope = "shared_across_eight_arms",
-    N = N,
-    control_group = control_group,
-    treatment_group = treatment_group,
-    c1 = c1,
-    c2 = c2,
-    max_candidate_k = N - c2,
-    selected_k = selected_k,
-    cutoff_rank = cutoff_rank,
-    benefit_weight = BENEFIT_WEIGHT,
-    contamination_weight = CONTAMINATION_WEIGHT,
-    weighted_utility = selected_scan_row$weighted_utility,
-    good_n = selected_scan_row$good_n,
-    remainder_cross_n = selected_scan_row$remainder_cross_n,
-    joint_n = selected_scan_row$joint_n,
-    permissible_disjoint_n = selected_scan_row$permissible_disjoint_n,
-    divergence_disjoint_n = selected_scan_row$disjoint_opposite_divergence_n,
-    leading_edge_union_n = length(lead_ids),
-    remainder_n = length(rem_ids),
-    pc1_energy_control_lead_fraction =
-      sum(tail(group_results[[control_group]]$data$pc1_variance_contribution, selected_k)) /
-      sum(group_results[[control_group]]$data$pc1_variance_contribution),
-    pc1_energy_treatment_lead_fraction =
-      sum(tail(group_results[[treatment_group]]$data$pc1_variance_contribution, selected_k)) /
-      sum(group_results[[treatment_group]]$data$pc1_variance_contribution),
-    pooled_within_group_residual_df = pooled$residual_df,
-    knot_fit_SSE = knot_fit$SSE,
-    stringsAsFactors = FALSE
-  )
-
-  comp_fig_dir <- file.path(OUT_ROOT, comparison_name, "Figures")
-  comp_tab_dir <- file.path(OUT_ROOT, comparison_name, "Tables")
-  dir.create(comp_fig_dir, recursive = TRUE, showWarnings = FALSE)
-  dir.create(comp_tab_dir, recursive = TRUE, showWarnings = FALSE)
-
-  cutoff_fig <- file.path(
-    comp_fig_dir,
-    paste0("Figure_", comparison_name, "_Cutoff_Framework.png")
-  )
-
-  nb_fig <- file.path(
-    comp_fig_dir,
-    paste0("Figure_", comparison_name, "_NB_Corroboration.png")
-  )
-
-  make_cutoff_framework_figure(
-    comparison_name = comparison_name,
-    control_group = control_group,
-    treatment_group = treatment_group,
-    group_results = group_results,
-    knot_fit = knot_fit,
-    scan_df = scan_df,
-    selected_k = selected_k,
-    c1 = c1,
-    c2 = c2,
-    out_file = cutoff_fig
-  )
-
-  make_nb_corroboration_figure(
-    comparison_name = comparison_name,
-    control_group = control_group,
-    treatment_group = treatment_group,
-    selected_k = selected_k,
-    arm_results = arm_results,
-    out_file = nb_fig
-  )
-
-  table_paths <- c(
-    Cutoff_Summary = file.path(comp_tab_dir, paste0("Table_", comparison_name, "_Cutoff_Summary.csv")),
-    Cutoff_Scan = file.path(comp_tab_dir, paste0("Table_", comparison_name, "_Weighted_Pareto_Scan.csv")),
-    Leading_Edge = file.path(comp_tab_dir, paste0("Table_", comparison_name, "_Leading_Edge_Sites.csv")),
-    Remainder = file.path(comp_tab_dir, paste0("Table_", comparison_name, "_Remainder_Sites.csv")),
-    PC1_NB_Rank = file.path(comp_tab_dir, paste0("Table_", comparison_name, "_PC1_NB_Rank_Data.csv")),
-    NB_Region_Summary = file.path(comp_tab_dir, paste0("Table_", comparison_name, "_NB_Corroboration_Regions.csv")),
-    NB_Likelihood = file.path(comp_tab_dir, paste0("Table_", comparison_name, "_NB1_NB2_Likelihood.csv")),
-    Size_Factors = file.path(comp_tab_dir, paste0("Table_", comparison_name, "_DESeq2_Size_Factors.csv"))
-  )
-
-  write_csv(cutoff_row, table_paths[["Cutoff_Summary"]])
-  write_csv(scan_df, table_paths[["Cutoff_Scan"]])
-  write_csv(lead_table, table_paths[["Leading_Edge"]])
-  write_csv(remainder_table, table_paths[["Remainder"]])
-
-  rank_table <- bind_rows(
-    group_results[[control_group]]$data %>% mutate(arm = control_group),
-    group_results[[treatment_group]]$data %>% mutate(arm = treatment_group)
-  ) %>%
-    left_join(annotation_cmp, by = "feature_id")
-
-  write_csv(rank_table, table_paths[["PC1_NB_Rank"]])
-  write_csv(region_summary, table_paths[["NB_Region_Summary"]])
-  write_csv(likelihood_table, table_paths[["NB_Likelihood"]])
-
-  write_csv(
-    data.frame(
-      comparison = comparison_name,
-      sample = names(size_factors),
-      group = as.character(experiment_group_labels[names(size_factors)]),
-      size_factor = as.numeric(size_factors),
-      stringsAsFactors = FALSE
-    ),
-    table_paths[["Size_Factors"]]
-  )
-
-  expected_figs_this <- c(cutoff_fig, nb_fig)
-  if (isTRUE(EXPORT_PDF)) {
-    expected_figs_this <- c(
-      expected_figs_this,
-      sub("\\.png$", ".pdf", cutoff_fig),
-      sub("\\.png$", ".pdf", nb_fig)
-    )
-  }
-
-  verify_outputs(c(expected_figs_this, unname(table_paths)))
-
-  expected_figure_paths <- c(expected_figure_paths, expected_figs_this)
-  expected_table_paths <- c(expected_table_paths, unname(table_paths))
-
-  cutoff_rows[[comparison_name]] <- cutoff_row
-  corroboration_rows[[comparison_name]] <- likelihood_table
-  selected_site_rows[[comparison_name]] <- lead_table
-  remainder_site_rows[[comparison_name]] <- remainder_table
-
-  message(
-    comparison_name,
-    ": comparison-specific k*=", selected_k,
-    " | shared c1=", c1,
-    " | shared c2=", c2,
-    " | Lead union=", length(lead_ids),
-    " | Remainder=", length(rem_ids),
-    " | G=", selected_scan_row$good_n,
-    " | R=", selected_scan_row$remainder_cross_n
-  )
-}
-
-# =============================================================================
-# CROSS-COMPARISON SUMMARY OUTPUTS
+# FINAL 3'aTWAS ORTHOLOG COMPARISON
 # =============================================================================
 
-cutoff_summary <- bind_rows(cutoff_rows)
-
-# HARD SCOPE CHECKS: one and only one independently optimized k* per comparison.
-expected_comparisons <- names(COMPARISONS)
-observed_comparisons <- as.character(cutoff_summary$comparison)
-
-if (nrow(cutoff_summary) != length(expected_comparisons)) {
-  stop(
-    "Expected ", length(expected_comparisons),
-    " comparison-specific cutoff rows but found ", nrow(cutoff_summary), "."
-  )
-}
-
-if (anyDuplicated(observed_comparisons)) {
-  stop("Duplicate comparison rows detected in cutoff_summary.")
-}
-
-if (!setequal(observed_comparisons, expected_comparisons)) {
-  stop(
-    "Comparison-specific cutoff set mismatch. Expected: ",
-    paste(expected_comparisons, collapse = ", "),
-    "; observed: ", paste(observed_comparisons, collapse = ", ")
-  )
-}
-
-if (!setequal(names(comparison_optima), expected_comparisons)) {
-  stop("Not every comparison has its own stored weighted-Pareto optimum.")
-}
-
-comparison_specific_k <- stats::setNames(
-  as.integer(cutoff_summary$selected_k),
-  cutoff_summary$comparison
-)[expected_comparisons]
-
-message(
-  "Independent comparison-specific empirical k*: ",
-  paste(
-    names(comparison_specific_k),
-    comparison_specific_k,
-    sep = "=",
-    collapse = "; "
-  )
-)
-
-# Regression guard: compare recomputed k* values with the validated historical
-# result. This never enters the optimization and never overwrites selected_k.
-if (isTRUE(ENFORCE_VALIDATED_K_REGRESSION)) {
-  observed_k <- comparison_specific_k
-  missing_cmp <- setdiff(names(VALIDATED_REFERENCE_K), names(observed_k))
-  if (length(missing_cmp)) {
-    stop(
-      "Regression check could not find comparisons: ",
-      paste(missing_cmp, collapse = ", ")
-    )
+ensure_babelgene <- function() {
+  if (requireNamespace("babelgene", quietly = TRUE)) {
+    return(TRUE)
   }
 
-  observed_k <- observed_k[names(VALIDATED_REFERENCE_K)]
-  if (!identical(unname(observed_k), unname(VALIDATED_REFERENCE_K))) {
-    stop(
-      "EMPIRICAL CUTOFF REGRESSION DETECTED. Recomputed k*: ",
-      paste(names(observed_k), observed_k, sep = "=", collapse = ", "),
-      ". Validated k*: ",
-      paste(names(VALIDATED_REFERENCE_K), VALIDATED_REFERENCE_K, sep = "=", collapse = ", "),
-      ". Do not propagate these outputs downstream until the implementation change is explained."
-    )
-  }
-
-  message(
-    "Validated cutoff regression check passed: ",
-    paste(names(observed_k), observed_k, sep = "=", collapse = ", ")
-  )
-}
-
-likelihood_all <- bind_rows(corroboration_rows)
-leading_all <- bind_rows(selected_site_rows)
-remainder_all <- bind_rows(remainder_site_rows)
-
-summary_cutoff_path <- file.path(
-  SUMMARY_TAB_DIR,
-  "Table_Empirical_Cutoffs.csv"
-)
-
-summary_likelihood_path <- file.path(
-  SUMMARY_TAB_DIR,
-  "Table_NB1_NB2_Likelihood_All.csv"
-)
-
-summary_lead_path <- file.path(
-  SUMMARY_TAB_DIR,
-  "Table_Leading_Edge_Sites_All.csv"
-)
-
-summary_rem_path <- file.path(
-  SUMMARY_TAB_DIR,
-  "Table_Remainder_Sites_All.csv"
-)
-
-write_csv(cutoff_summary, summary_cutoff_path)
-write_csv(likelihood_all, summary_likelihood_path)
-write_csv(leading_all, summary_lead_path)
-write_csv(remainder_all, summary_rem_path)
-
-summary_fig_path <- file.path(
-  SUMMARY_FIG_DIR,
-  "Figure_Empirical_Cutoff_Summary.png"
-)
-
-make_summary_figure(
-  cutoff_summary,
-  summary_fig_path
-)
-
-expected_summary_figs <- summary_fig_path
-if (isTRUE(EXPORT_PDF)) {
-  expected_summary_figs <- c(
-    expected_summary_figs,
-    sub("\\.png$", ".pdf", summary_fig_path)
-  )
-}
-
-expected_figure_paths <- c(
-  expected_figure_paths,
-  expected_summary_figs
-)
-
-expected_table_paths <- c(
-  expected_table_paths,
-  summary_cutoff_path,
-  summary_likelihood_path,
-  summary_lead_path,
-  summary_rem_path
-)
-
-write_methods_manuscript(cutoff_summary)
-write_figure_legends()
-
-# Manifest before ZIP creation.
-manifest_paths <- unique(c(
-  expected_figure_paths,
-  expected_table_paths,
-  file.path(OUT_ROOT, "Methods_Manuscript.md"),
-  file.path(OUT_ROOT, "Figure_Legends.md")
-))
-
-manifest <- data.frame(
-  relative_path = sub(
-    paste0(
-      "^",
-      gsub(
-        "([][{}()+*^$|\\\\?.])",
-        "\\\\\\1",
-        normalizePath(OUT_ROOT, winslash = "/", mustWork = TRUE)
+  message("Installing CRAN package 'babelgene' for database-supported human-to-rat ortholog mapping...")
+  suppressWarnings(
+    try(
+      utils::install.packages(
+        "babelgene",
+        repos = "https://cloud.r-project.org",
+        quiet = TRUE
       ),
-      "/?"
-    ),
-    "",
-    normalizePath(
-      manifest_paths,
-      winslash = "/",
-      mustWork = TRUE
+      silent = TRUE
     )
-  ),
-  type = ifelse(
-    grepl("\\.(png|pdf)$", manifest_paths, ignore.case = TRUE),
-    "figure",
-    ifelse(
-      grepl("\\.csv$", manifest_paths, ignore.case = TRUE),
-      "table",
-      "methods"
-    )
-  ),
-  size_bytes = file.info(manifest_paths)$size,
-  stringsAsFactors = FALSE
-)
-
-manifest_path <- file.path(
-  OUT_ROOT,
-  "Table_Export_Manifest.csv"
-)
-
-write_csv(manifest, manifest_path)
-expected_table_paths <- c(expected_table_paths, manifest_path)
-
-verify_outputs(c(
-  expected_figure_paths,
-  expected_table_paths,
-  file.path(OUT_ROOT, "Methods_Manuscript.md"),
-  file.path(OUT_ROOT, "Figure_Legends.md")
-))
-
-# =============================================================================
-# ZIP ARCHIVES
-# =============================================================================
-
-fig_zip <- file.path(OUT_ROOT, "Figures_All.zip")
-tab_zip <- file.path(OUT_ROOT, "Tables_All.zip")
-all_zip <- file.path(OUT_ROOT, "Empirical_Cutoff_All_Outputs.zip")
-
-create_zip_from_files(
-  fig_zip,
-  expected_figure_paths
-)
-
-create_zip_from_files(
-  tab_zip,
-  expected_table_paths
-)
-
-all_files_for_zip <- c(
-  expected_figure_paths,
-  expected_table_paths,
-  file.path(OUT_ROOT, "Methods_Manuscript.md"),
-  file.path(OUT_ROOT, "Figure_Legends.md")
-)
-
-create_zip_from_files(
-  all_zip,
-  all_files_for_zip
-)
-
-verify_outputs(c(fig_zip, tab_zip, all_zip))
-
-# =============================================================================
-# FINAL CONSOLE SUMMARY
-# =============================================================================
-
-message("============================================================")
-message("EMPIRICAL EVS CUTOFF ANALYSIS COMPLETE")
-message("PCA input: DESeq2 median-of-ratios normalized counts entered directly.")
-message("One empirical k* is estimated independently for each comparison.")
-message(
-  "Selected k*: ",
-  paste(
-    cutoff_summary$comparison,
-    cutoff_summary$selected_k,
-    sep = "=",
-    collapse = "; "
   )
+
+  if (!requireNamespace("babelgene", quietly = TRUE)) {
+    warning(
+      "babelgene could not be installed. TWAS overlap will still run using direct case-insensitive human/rat symbol matches, but database-supported non-identical ortholog symbols cannot be added in this run."
+    )
+    return(FALSE)
+  }
+
+  TRUE
+}
+
+read_twas_study <- function(path) {
+  twas <- utils::read.csv(
+    path,
+    skip = 1,
+    header = TRUE,
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+
+  assert_required_columns(
+    twas,
+    c("Disease", "PANEL", "Transcript ID", "Gene symbol", "3'aTWAS.Z", "3'aTWAS.P"),
+    object_name = "3'aTWAS file"
+  )
+
+  twas %>%
+    dplyr::transmute(
+      Disease = trimws(as.character(Disease)),
+      Panel = trimws(as.character(PANEL)),
+      TWAS_Transcript = trimws(as.character(`Transcript ID`)),
+      Human_TWAS_Gene = trimws(as.character(`Gene symbol`)),
+      TWAS_Z = suppressWarnings(as.numeric(`3'aTWAS.Z`)),
+      TWAS_P = suppressWarnings(as.numeric(`3'aTWAS.P`)),
+      COLOC_PP4 = if ("COLOC.PP4" %in% names(twas)) suppressWarnings(as.numeric(COLOC.PP4)) else NA_real_
+    ) %>%
+    dplyr::filter(valid_gene_symbol(Human_TWAS_Gene))
+}
+
+build_twas_ortholog_map <- function(twas) {
+  human_genes <- sort(unique(twas$Human_TWAS_Gene))
+
+  # Direct symbol equivalence is retained for genes whose human symbol differs
+  # from the rat WTTS symbol only by capitalization. This preserves obvious
+  # one-to-one symbol matches and is combined with database-supported orthology.
+  rat_symbols <- sort(unique(OrigID_Symbol$gene_symbol[valid_gene_symbol(OrigID_Symbol$gene_symbol)]))
+  rat_lookup <- data.frame(
+    gene_key = gene_key(rat_symbols),
+    Rat_Ortholog = rat_symbols,
+    stringsAsFactors = FALSE
+  ) %>% dplyr::filter(!is.na(gene_key)) %>% dplyr::distinct(gene_key, .keep_all = TRUE)
+
+  direct <- data.frame(
+    Human_TWAS_Gene = human_genes,
+    gene_key = gene_key(human_genes),
+    stringsAsFactors = FALSE
+  ) %>%
+    dplyr::inner_join(rat_lookup, by = "gene_key") %>%
+    dplyr::transmute(
+      Human_TWAS_Gene,
+      Rat_Ortholog,
+      Ortholog_support_n = NA_integer_,
+      Ortholog_support = "case-insensitive symbol match",
+      Mapping_source = "symbol"
+    )
+
+  babel <- data.frame()
+  if (ensure_babelgene()) {
+    orth <- tryCatch(
+      babelgene::orthologs(
+        genes = human_genes,
+        species = TWAS_TARGET_SPECIES,
+        human = TRUE,
+        min_support = TWAS_ORTHOLOG_MIN_SUPPORT,
+        top = FALSE
+      ),
+      error = function(e) {
+        warning("babelgene ortholog mapping failed; continuing with direct symbol matches: ", conditionMessage(e))
+        NULL
+      }
+    )
+
+    if (!is.null(orth) && nrow(orth)) {
+      orth <- as.data.frame(orth, stringsAsFactors = FALSE)
+      assert_required_columns(
+        orth,
+        c("human_symbol", "symbol", "support_n"),
+        object_name = "babelgene ortholog output"
+      )
+
+      babel <- data.frame(
+        Human_TWAS_Gene = as.character(orth$human_symbol),
+        Rat_Ortholog = as.character(orth$symbol),
+        Ortholog_support_n = suppressWarnings(as.integer(orth$support_n)),
+        Ortholog_support = if ("support" %in% names(orth)) as.character(orth$support) else NA_character_,
+        Mapping_source = "babelgene",
+        stringsAsFactors = FALSE
+      ) %>%
+        dplyr::filter(
+          Human_TWAS_Gene %in% human_genes,
+          valid_gene_symbol(Rat_Ortholog)
+        )
+    }
+  }
+
+  dplyr::bind_rows(babel, direct) %>%
+    dplyr::mutate(gene_key = gene_key(Rat_Ortholog)) %>%
+    dplyr::filter(!is.na(gene_key)) %>%
+    dplyr::arrange(Human_TWAS_Gene, dplyr::desc(Ortholog_support_n), Mapping_source) %>%
+    dplyr::distinct(Human_TWAS_Gene, Rat_Ortholog, .keep_all = TRUE)
+}
+
+build_twas_rat_metadata <- function(twas, mapping) {
+  mapped <- twas %>%
+    dplyr::left_join(mapping, by = "Human_TWAS_Gene") %>%
+    dplyr::filter(!is.na(gene_key))
+
+  mapped %>%
+    dplyr::group_by(gene_key) %>%
+    dplyr::summarise(
+      Rat_Ortholog = dplyr::first(Rat_Ortholog[valid_gene_symbol(Rat_Ortholog)]),
+      Human_TWAS_Genes = collapse_unique(Human_TWAS_Gene),
+      TWAS_Diseases = collapse_unique(Disease),
+      TWAS_n = dplyr::n(),
+      TWAS_Panel_n = dplyr::n_distinct(Panel),
+      TWAS_Transcript_n = dplyr::n_distinct(TWAS_Transcript),
+      TWAS_APA = dplyr::n_distinct(TWAS_Transcript) >= 2L,
+      TWAS_min_P = safe_min_numeric(TWAS_P),
+      TWAS_max_abs_Z = safe_max_numeric(abs(TWAS_Z)),
+      TWAS_max_COLOC_PP4 = safe_max_numeric(COLOC_PP4),
+      Ortholog_support_n = safe_max_numeric(Ortholog_support_n),
+      Ortholog_mapping_source = collapse_unique(Mapping_source),
+      .groups = "drop"
+    ) %>%
+    dplyr::left_join(WTTS_gene_pas_summary, by = "gene_key")
+}
+
+collect_twas_analysis_results <- function() {
+  views <- comparison_analysis_views()
+  rows <- list()
+
+  for (comparison_name in as.character(comparison_table$comparison_name)) {
+    for (i in seq_len(nrow(views))) {
+      track_key <- views$track_key[i]
+      dataset_key <- views$dataset_key[i]
+      df <- get_registered_result(comparison_name, track_key, dataset_key)
+      if (is.null(df) || !nrow(df)) next
+
+      pas <- if ("orig_id" %in% names(df)) as.character(df$orig_id) else as.character(df$feature_id)
+      bad_pas <- is.na(pas) | !nzchar(trimws(pas))
+      pas[bad_pas] <- as.character(df$feature_id[bad_pas])
+
+      rows[[length(rows) + 1L]] <- data.frame(
+        Comparison = comparison_name,
+        Analysis = analysis_view_label(track_key, dataset_key),
+        feature_id = as.character(df$feature_id),
+        PAS = pas,
+        WTTS_Gene = as.character(df$gene_symbol),
+        gene_key = gene_key(df$gene_symbol),
+        Apeglm_LFC = suppressWarnings(as.numeric(df$lfc_shrunk)),
+        Std_p = suppressWarnings(as.numeric(df$pvalue)),
+        Std_BH = suppressWarnings(as.numeric(df$padj)),
+        Strong_p = suppressWarnings(as.numeric(df$resGA_pvalue)),
+        Strong_BH = suppressWarnings(as.numeric(df$resGA_padj)),
+        Weak_p = suppressWarnings(as.numeric(df$resLA_pvalue)),
+        Weak_BH = suppressWarnings(as.numeric(df$resLA_padj)),
+        EmpP = suppressWarnings(as.numeric(df$empirical_p)),
+        HBFSS_score = suppressWarnings(as.numeric(df$HBFSS)),
+        HCp = suppressWarnings(as.numeric(df$hc_p_threshold_dataset)),
+        Htau = suppressWarnings(as.numeric(df$hbfss_threshold_dataset)),
+        Std = !is.na(df$standard_flag) & df$standard_flag,
+        Strong = !is.na(df$strong_cnh_flag) & df$strong_cnh_flag,
+        Weak = !is.na(df$weak_significant_flag) & df$weak_significant_flag,
+        HBFSS = !is.na(df$hbfss_flag) & df$hbfss_flag,
+        Ovlp = !is.na(df$any_overlap) & df$any_overlap,
+        stringsAsFactors = FALSE
+      )
+    }
+  }
+
+  if (!length(rows)) return(data.frame())
+  dplyr::bind_rows(rows) %>% dplyr::filter(!is.na(gene_key))
+}
+
+build_twas_overlap_pas_table <- function(all_results, twas_rat_meta) {
+  if (!nrow(all_results) || !nrow(twas_rat_meta)) return(data.frame())
+
+  all_results %>%
+    dplyr::filter(Std | Strong | Weak | HBFSS) %>%
+    dplyr::inner_join(twas_rat_meta, by = "gene_key") %>%
+    dplyr::mutate(
+      Support = vapply(seq_len(dplyr::n()), function(i) {
+        tags <- c(
+          if (Std[i]) "Std" else NULL,
+          if (Strong[i]) "Str" else NULL,
+          if (Weak[i]) "Weak" else NULL,
+          if (HBFSS[i]) "HBFSS" else NULL
+        )
+        paste(tags, collapse = "+")
+      }, character(1)),
+      Analysis = factor(Analysis, levels = c(
+        "Original (No EVS)",
+        "NormEVS Lead", "NormEVS Rem",
+        "RawEVS Lead", "RawEVS Rem"
+      ))
+    ) %>%
+    dplyr::transmute(
+      Comparison,
+      Analysis = as.character(Analysis),
+      Human_TWAS = Human_TWAS_Genes,
+      Rat_Ortholog,
+      TWAS_n,
+      TWAS_Transcript_n,
+      TWAS_APA,
+      WTTS_PAS_n,
+      WTTS_APA = APA_multi_PAS,
+      WTTS_DE_PAS = PAS,
+      Apeglm_LFC,
+      Std, Strong, Weak, HBFSS, Ovlp,
+      Support,
+      Std_BH,
+      Strong_BH,
+      Weak_BH,
+      EmpP,
+      HBFSS_score
+    ) %>%
+    dplyr::arrange(
+      Comparison,
+      factor(Analysis, levels = c(
+        "Original (No EVS)",
+        "NormEVS Lead", "NormEVS Rem",
+        "RawEVS Lead", "RawEVS Rem"
+      )),
+      Rat_Ortholog,
+      WTTS_DE_PAS
+    )
+}
+
+build_twas_overlap_gene_table <- function(pas_table) {
+  if (!nrow(pas_table)) return(data.frame())
+
+  pas_table %>%
+    dplyr::mutate(
+      Std_flag = Std,
+      Strong_flag = Strong,
+      Weak_flag = Weak,
+      HBFSS_flag = HBFSS,
+      Ovlp_flag = Ovlp
+    ) %>%
+    dplyr::group_by(
+      Comparison,
+      Analysis,
+      Human_TWAS,
+      Rat_Ortholog,
+      TWAS_n,
+      TWAS_Transcript_n,
+      TWAS_APA,
+      WTTS_PAS_n,
+      WTTS_APA
+    ) %>%
+    dplyr::summarise(
+      Std = any(Std_flag, na.rm = TRUE),
+      Strong = any(Strong_flag, na.rm = TRUE),
+      Weak = any(Weak_flag, na.rm = TRUE),
+      HBFSS = any(HBFSS_flag, na.rm = TRUE),
+      Ovlp = any(Ovlp_flag, na.rm = TRUE),
+      Std_PAS_n = dplyr::n_distinct(WTTS_DE_PAS[Std_flag]),
+      Strong_PAS_n = dplyr::n_distinct(WTTS_DE_PAS[Strong_flag]),
+      Weak_PAS_n = dplyr::n_distinct(WTTS_DE_PAS[Weak_flag]),
+      HBFSS_PAS_n = dplyr::n_distinct(WTTS_DE_PAS[HBFSS_flag]),
+      WTTS_DE_PAS_n = dplyr::n_distinct(WTTS_DE_PAS),
+      WTTS_DE_APA = dplyr::n_distinct(WTTS_DE_PAS) >= 2L,
+      WTTS_DE_PAS_IDs = collapse_unique(WTTS_DE_PAS),
+      Methods = paste(
+        c(
+          if (any(Std_flag, na.rm = TRUE)) "Std" else NULL,
+          if (any(Strong_flag, na.rm = TRUE)) "Str" else NULL,
+          if (any(Weak_flag, na.rm = TRUE)) "Weak" else NULL,
+          if (any(HBFSS_flag, na.rm = TRUE)) "HBFSS" else NULL
+        ),
+        collapse = "+"
+      ),
+      .groups = "drop"
+    ) %>%
+    dplyr::arrange(
+      Comparison,
+      factor(Analysis, levels = c(
+        "Original (No EVS)",
+        "NormEVS Lead", "NormEVS Rem",
+        "RawEVS Lead", "RawEVS Rem"
+      )),
+      Rat_Ortholog
+    )
+}
+
+build_twas_overlap_summary <- function(gene_table) {
+  if (!nrow(gene_table)) return(data.frame())
+
+  gene_table %>%
+    dplyr::group_by(Comparison, Analysis) %>%
+    dplyr::summarise(
+      Std = sum(Std, na.rm = TRUE),
+      Strong = sum(Strong, na.rm = TRUE),
+      Weak = sum(Weak, na.rm = TRUE),
+      HBFSS = sum(HBFSS, na.rm = TRUE),
+      Ovlp = sum(Ovlp, na.rm = TRUE),
+      TWAS_APA = sum(TWAS_APA, na.rm = TRUE),
+      WTTS_APA = sum(WTTS_APA, na.rm = TRUE),
+      WTTS_DE_APA = sum(WTTS_DE_APA, na.rm = TRUE),
+      .groups = "drop"
+    )
+}
+
+plot_twas_gene_support <- function(gene_table, figure_dir) {
+  if (!nrow(gene_table)) return(invisible(NULL))
+
+  analysis_map <- c(
+    "Original (No EVS)"="Orig",
+    "NormEVS Lead"="N-Lead",
+    "NormEVS Rem"="N-Rem",
+    "RawEVS Lead"="R-Lead",
+    "RawEVS Rem"="R-Rem"
+  )
+  analysis_levels <- unname(analysis_map)
+
+  method_rows <- list()
+  for (method in c("Std", "Strong", "Weak", "HBFSS")) {
+    keep <- !is.na(gene_table[[method]]) & gene_table[[method]]
+    if (!any(keep)) next
+    tmp <- gene_table[keep, , drop = FALSE]
+    tmp$Method <- c(Std="Standard", Strong="Strong", Weak="Weak", HBFSS="HBFSS")[[method]]
+    method_rows[[method]] <- tmp
+  }
+  if (!length(method_rows)) return(invisible(NULL))
+
+  long <- dplyr::bind_rows(method_rows) %>%
+    dplyr::mutate(
+      Analysis = factor(unname(analysis_map[Analysis]), levels = analysis_levels),
+      Method = factor(Method, levels = significance_method_levels),
+      Gene_label = ifelse(
+        toupper(Rat_Ortholog) == toupper(Human_TWAS),
+        Rat_Ortholog,
+        paste0(Rat_Ortholog, " [", Human_TWAS, "]")
+      )
+    )
+
+  long$Gene_label <- factor(long$Gene_label, levels = rev(sort(unique(long$Gene_label))))
+
+  p <- ggplot(long, aes(Analysis, Gene_label, color = Method, shape = Method)) +
+    geom_point(position = position_dodge(width = 0.42), size = 2.7, alpha = 0.98, stroke = 0.85) +
+    facet_wrap(~ Comparison, ncol = 2, scales = "free_y") +
+    scale_color_manual(
+      values = significance_method_colors,
+      breaks = significance_method_levels,
+      labels = unname(significance_method_labels[significance_method_levels]),
+      drop = FALSE,
+      name = "Method",
+      guide = guide_legend(override.aes = list(size = 3.2, stroke = 0.95))
+    ) +
+    scale_shape_manual(
+      values = significance_method_shapes,
+      breaks = significance_method_levels,
+      labels = unname(significance_method_labels[significance_method_levels]),
+      drop = FALSE,
+      name = "Method"
+    ) +
+    labs(
+      title = "3'aTWAS ortholog genes identified in WTTS-Seq",
+      x = NULL,
+      y = "Rat ortholog [human TWAS]"
+    ) +
+    manuscript_theme() +
+    theme(
+      axis.text.x = element_text(angle = 25, hjust = 1),
+      axis.text.y = element_text(size = 6.8),
+      legend.position = "bottom",
+      plot.margin = margin(10, 18, 10, 18)
+    )
+
+  max_genes <- max(table(long$Comparison))
+  height <- min(24, max(8.0, 5.0 + 0.17 * max_genes))
+  save_grob(p, file.path(figure_dir, "Figure_TWAS_Gene_Support.png"), width = 15.5, height = height)
+  save_grob(p, file.path(figure_dir, "Figure_TWAS_Gene_Support.pdf"), width = 15.5, height = height)
+  invisible(p)
+}
+
+plot_twas_view_counts <- function(summary_row, title) {
+  if (!nrow(summary_row)) return(NULL)
+  df <- data.frame(
+    Method = factor(c("Standard", "Strong", "Weak", "HBFSS"), levels = significance_method_levels),
+    n = c(summary_row$Std[1], summary_row$Strong[1], summary_row$Weak[1], summary_row$HBFSS[1]),
+    stringsAsFactors = FALSE
+  )
+
+  ggplot(df, aes(Method, n, color = Method, shape = Method)) +
+    geom_point(size = 3.2, stroke = 0.90) +
+    geom_text(aes(label = n), vjust = -0.8, size = 3.0, show.legend = FALSE) +
+    scale_color_manual(values = significance_method_colors, breaks = significance_method_levels,
+                       labels = unname(significance_method_labels[significance_method_levels]), name = "Method") +
+    scale_shape_manual(values = significance_method_shapes, breaks = significance_method_levels,
+                       labels = unname(significance_method_labels[significance_method_levels]), name = "Method") +
+    scale_x_discrete(labels = unname(significance_method_labels[significance_method_levels])) +
+    scale_y_continuous(expand = expansion(mult = c(0.04, 0.18))) +
+    labs(
+      title = compact_title(title, width = 42),
+      subtitle = paste0("Ovlp=", summary_row$Ovlp[1],
+                        "  TWAS-APA=", summary_row$TWAS_APA[1],
+                        "  WTTS-DE-APA=", summary_row$WTTS_DE_APA[1]),
+      x = NULL,
+      y = "TWAS genes"
+    ) +
+    manuscript_theme() +
+    theme(legend.position = "none", plot.margin = margin(10, 14, 10, 14))
+}
+
+export_twas_by_view <- function(pas_table, gene_table, summary_table) {
+  views <- comparison_analysis_views()
+
+  for (comparison_name in as.character(comparison_table$comparison_name)) {
+    for (i in seq_len(nrow(views))) {
+      track_key <- views$track_key[i]
+      dataset_key <- views$dataset_key[i]
+      analysis_label <- analysis_view_label(track_key, dataset_key)
+      paths <- analysis_view_paths(comparison_name, track_key, dataset_key)
+
+      pas_sub <- if (nrow(pas_table)) {
+        pas_table[
+          pas_table$Comparison == comparison_name & pas_table$Analysis == analysis_label,
+          ,
+          drop = FALSE
+        ]
+      } else pas_table
+
+      gene_sub <- if (nrow(gene_table)) {
+        gene_table[
+          gene_table$Comparison == comparison_name & gene_table$Analysis == analysis_label,
+          ,
+          drop = FALSE
+        ]
+      } else gene_table
+
+      summary_sub <- summary_table[
+        summary_table$Comparison == comparison_name & summary_table$Analysis == analysis_label,
+        ,
+        drop = FALSE
+      ]
+
+      save_csv(pas_sub, file.path(paths$tables, "Table_TWAS_PAS.csv"))
+      save_csv(gene_sub, file.path(paths$tables, "Table_TWAS_Genes.csv"))
+
+      if (isTRUE(EXPORT_INDIVIDUAL_VIEW_FIGURES)) {
+        p <- plot_twas_view_counts(
+          summary_sub,
+          paste0(comparison_name, " | ", analysis_label, " | 3'aTWAS")
+        )
+        if (!is.null(p)) {
+          save_grob(p, file.path(paths$figures, "TWAS_Overlap.png"), width = 7.2, height = 5.4)
+          save_grob(p, file.path(paths$figures, "TWAS_Overlap.pdf"), width = 7.2, height = 5.4)
+        }
+      }
+    }
+  }
+
+  invisible(TRUE)
+}
+
+save_twas_comparison_panels <- function(summary_table) {
+  for (comparison_name in as.character(comparison_table$comparison_name)) {
+    sub <- summary_table[summary_table$Comparison == comparison_name, , drop = FALSE]
+    if (!nrow(sub)) next
+
+    views <- c("Original (No EVS)", "NormEVS Lead", "NormEVS Rem", "RawEVS Lead", "RawEVS Rem")
+    plots <- lapply(views, function(v) {
+      one <- sub[sub$Analysis == v, , drop = FALSE]
+      if (!nrow(one)) return(NULL)
+      short <- c(
+        "Original (No EVS)"="Orig",
+        "NormEVS Lead"="N-Lead",
+        "NormEVS Rem"="N-Rem",
+        "RawEVS Lead"="R-Lead",
+        "RawEVS Rem"="R-Rem"
+      )[[v]]
+      plot_twas_view_counts(one, short)
+    })
+    plots <- Filter(Negate(is.null), plots)
+    if (!length(plots)) next
+
+    panel <- assemble_one_legend_panel(
+      lapply(plots, function(p) p + theme(legend.position = "bottom")),
+      panel_title = paste0(comparison_name, " | 3'aTWAS overlap across five views"),
+      ncol = 5
+    )
+    panel_dir <- file.path(output_dir, comparison_name, "Panels")
+    dir.create(panel_dir, recursive = TRUE, showWarnings = FALSE)
+    base <- file.path(panel_dir, paste0("Figure_", comparison_name, "_TWAS_5Views"))
+    save_grob(panel, paste0(base, ".png"), width = 20.0, height = 6.0)
+    save_grob(panel, paste0(base, ".pdf"), width = 20.0, height = 6.0)
+  }
+  invisible(TRUE)
+}
+
+run_twas_overlap_analysis <- function() {
+  twas_file <- resolve_existing_file(twas_file_candidates, "3'aTWAS file")
+  message("Running final 3'aTWAS ortholog overlap: ", twas_file)
+
+  twas <- read_twas_study(twas_file)
+  mapping <- build_twas_ortholog_map(twas)
+  rat_meta <- build_twas_rat_metadata(twas, mapping)
+  all_results <- collect_twas_analysis_results()
+
+  pas_table <- build_twas_overlap_pas_table(all_results, rat_meta)
+  gene_table <- build_twas_overlap_gene_table(pas_table)
+  summary_table <- build_twas_overlap_summary(gene_table)
+
+  twas_dir <- file.path(output_dir, "TWAS")
+  twas_fig_dir <- file.path(twas_dir, "figures")
+  twas_tab_dir <- file.path(twas_dir, "tables")
+  dir.create(twas_fig_dir, recursive = TRUE, showWarnings = FALSE)
+  dir.create(twas_tab_dir, recursive = TRUE, showWarnings = FALSE)
+
+  save_csv(pas_table, file.path(twas_tab_dir, "Table_TWAS_Overlap_PAS.csv"))
+  save_csv(gene_table, file.path(twas_tab_dir, "Table_TWAS_Overlap_Genes.csv"))
+  save_csv(summary_table, file.path(twas_tab_dir, "Table_TWAS_Method_Counts.csv"))
+
+  plot_twas_gene_support(gene_table, twas_fig_dir)
+  export_twas_by_view(pas_table, gene_table, summary_table)
+  save_twas_comparison_panels(summary_table)
+
+  invisible(list(mapping = mapping, pas = pas_table, genes = gene_table, summary = summary_table))
+}
+
+comparison_inputs <- lapply(seq_len(nrow(comparison_table)), function(i) {
+  prepare_comparison_data(
+    comparison_name = comparison_table$comparison_name[i],
+    group1_prefix = comparison_table$group1_prefix[i],
+    group2_prefix = comparison_table$group2_prefix[i],
+    WTTS_Seq = WTTS_Seq,
+    meta_all = meta_all
+  )
+})
+names(comparison_inputs) <- comparison_table$comparison_name
+
+failed_comparisons <- list()
+
+for (cmp in names(comparison_inputs)) {
+  message("\n=====================================================")
+  message("Running comparison: ", cmp)
+  message("=====================================================")
+
+  input_obj <- comparison_inputs[[cmp]]
+  out <- tryCatch(
+    run_full_comparison_pipeline(
+      comparison_name = input_obj$comparison_name,
+      count_matrix = input_obj$count_matrix,
+      coldata = input_obj$coldata,
+      annot_df = OrigID_Symbol
+    ),
+    error = function(e) {
+      failed_comparisons[[cmp]] <<- data.frame(
+        comparison_name = cmp,
+        error_message = conditionMessage(e),
+        stringsAsFactors = FALSE
+      )
+      NULL
+    }
+  )
+
+  if (is.null(out) && is.null(failed_comparisons[[cmp]])) {
+    failed_comparisons[[cmp]] <- data.frame(
+      comparison_name = cmp,
+      error_message = "Comparison did not complete.",
+      stringsAsFactors = FALSE
+    )
+  }
+}
+
+if (length(failed_comparisons) > 0L) {
+  failed_df <- dplyr::bind_rows(failed_comparisons)
+  writeLines(
+    apply(failed_df, 1, function(x) paste(x, collapse = " | ")),
+    file.path(output_dir, "Failed_Comparisons.txt")
+  )
+  stop("One or more comparisons failed. See Failed_Comparisons.txt.")
+}
+
+overall_summary <- build_overall_manuscript_summary()
+if (nrow(overall_summary) > 0L) {
+  save_csv(overall_summary, file.path(summary_table_dir, "Table_DE_Method_Counts.csv"))
+}
+
+empirical_cutoff_export <- comparison_table[, c(
+  "comparison_name", "group1_prefix", "group2_prefix", "empirical_evs_k"
+), drop = FALSE]
+names(empirical_cutoff_export) <- c(
+  "Comparison", "RT_prefix", "ZT_prefix", "Empirical_EVS_k_per_condition"
 )
-message("Figures per comparison: 2 manuscript figures (+ PDF copies when enabled).")
-message("All per-comparison figures/tables remain in their comparison folders.")
-message("Figures ZIP: ", fig_zip)
-message("Tables ZIP: ", tab_zip)
-message("Complete ZIP: ", all_zip)
-message("Build: ", SCRIPT_BUILD)
-message("Methods: ", file.path(OUT_ROOT, "Methods_Manuscript.md"))
-message("Figure legends: ", file.path(OUT_ROOT, "Figure_Legends.md"))
-message("============================================================")
+empirical_cutoff_export$Basis <- EMPIRICAL_EVS_CUTOFF_BASIS
+empirical_cutoff_export$Applied_to <- "NormEVS and RawEVS"
+save_csv(
+  empirical_cutoff_export,
+  file.path(summary_table_dir, "Table_EVS_Empirical_Cutoffs.csv")
+)
+
+evs_split_audit <- build_evs_split_audit_table()
+if (nrow(evs_split_audit) > 0L) {
+  save_csv(
+    evs_split_audit,
+    file.path(summary_table_dir, "Table_EVS_Split_Audit.csv")
+  )
+}
+
+write_methods_note()
+save_paper_volcano_panels()
+save_paper_support_figures(overall_summary)
+
+# Final analytical stage: 3'aTWAS ortholog overlap with every reported WTTS method.
+twas_results <- run_twas_overlap_analysis()
+
+figure_zip <- create_all_figures_zip()
+table_zip <- create_all_tables_zip()
+
+cat("\n=====================================================\n")
+cat("Pipeline complete.\n")
+cat("Build: ", PIPELINE_BUILD, "\n", sep = "")
+cat("Repository root:\n", repo_root, "\n", sep = "")
+cat("Output directory:\n", output_dir, "\n", sep = "")
+cat("3'aTWAS overlap: complete\n")
+cat("Figure ZIP:\n", figure_zip, "\n", sep = "")
+cat("Table ZIP:\n", table_zip, "\n", sep = "")
+cat("=====================================================\n\n")
+
+if (nrow(overall_summary) > 0L) print(overall_summary)
