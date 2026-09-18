@@ -517,7 +517,7 @@ classification_counts <- function(x) {
 }
 
 # =============================================================================
-# FIGURES — CLEAN / BAR-BASED
+# FIGURES — MINIMAL MANUSCRIPT SET
 # =============================================================================
 
 theme_pub <- function() {
@@ -551,141 +551,143 @@ plot_regime <- function(method, arms, knot, file) {
   )
 
   p <- ggplot() +
-    annotate("rect",xmin=1,xmax=knot$c1,ymin=-Inf,ymax=Inf,
-             fill=COL$remainder,alpha=.35) +
-    annotate("rect",xmin=knot$c1,xmax=knot$c2,ymin=-Inf,ymax=Inf,
-             fill=COL$divergence,alpha=.35) +
-    annotate("rect",xmin=knot$c2,xmax=knot$N,ymin=-Inf,ymax=Inf,
-             fill=COL$leading,alpha=.35) +
+    annotate(
+      "rect", xmin=1, xmax=knot$c1, ymin=-Inf, ymax=Inf,
+      fill=COL$remainder, alpha=.35
+    ) +
+    annotate(
+      "rect", xmin=knot$c1, xmax=knot$c2, ymin=-Inf, ymax=Inf,
+      fill=COL$divergence, alpha=.35
+    ) +
+    annotate(
+      "rect", xmin=knot$c2, xmax=knot$N, ymin=-Inf, ymax=Inf,
+      fill=COL$leading, alpha=.35
+    ) +
     geom_hline(yintercept=0,color="grey70",linetype="dotted") +
-    geom_line(data=med,aes(rank,D),color=COL$observed,linewidth=1.1) +
-    geom_line(data=fit,aes(rank,D),color=COL$fit,linewidth=1.1) +
-    geom_vline(xintercept=knot$c1,color=COL$c1,linetype="dashed",linewidth=.8) +
-    geom_vline(xintercept=knot$c2,color=COL$c2,linetype="longdash",linewidth=.8) +
-    annotate("label",x=knot$c1,y=Inf,label=paste0("c1 = ",knot$c1),
-             hjust=1.05,vjust=1.2,size=3,fill="white",label.size=.15) +
-    annotate("label",x=knot$c2,y=Inf,label=paste0("c2 = ",knot$c2),
-             hjust=-.05,vjust=1.2,size=3,fill="white",label.size=.15) +
+    geom_line(data=med,aes(rank,D),color=COL$observed,linewidth=1.15) +
+    geom_line(data=fit,aes(rank,D),color=COL$fit,linewidth=1.15) +
+    geom_vline(
+      xintercept=knot$c1,
+      color=COL$c1,linetype="dashed",linewidth=.8
+    ) +
+    geom_vline(
+      xintercept=knot$c2,
+      color=COL$c2,linetype="longdash",linewidth=.8
+    ) +
+    annotate(
+      "label",x=knot$c1,y=Inf,
+      label=paste0("c1 = ",knot$c1),
+      hjust=1.05,vjust=1.2,size=3,
+      fill="white",label.size=.15
+    ) +
+    annotate(
+      "label",x=knot$c2,y=Inf,
+      label=paste0("c2 = ",knot$c2),
+      hjust=-.05,vjust=1.2,size=3,
+      fill="white",label.size=.15
+    ) +
     labs(
       title=paste0(method, ": shared divergence geometry"),
-      subtitle="Median observed D(r) + shared two-knot fit; no arm-level spaghetti",
-      x="PC1 rank",y="D(r)"
+      subtitle="Median observed D(r) and shared two-knot fit across all eight arms",
+      x="PC1 rank",
+      y="D(r) = F_E(r) - F_P(r)"
     ) +
     theme_pub()
 
   save_plot(p,file,11.5,6.3)
 }
 
-plot_method_cutoff_bar <- function(method, scans, kstar, file) {
-  dat <- bind_rows(lapply(names(scans), \(nm) {
-    z <- scans[[nm]][scans[[nm]]$k==kstar,,drop=FALSE]
-    data.frame(
-      comparison=nm,
-      Joint=z$joint_n,
-      `Permissible disjoint`=z$union_n-z$joint_n-z$remainder_cross_n,
-      `Excluded remainder`=z$remainder_cross_n,
-      check.names=FALSE
-    )
-  })) %>%
-    pivot_longer(-comparison,names_to="category",values_to="n")
+plot_pareto <- function(method, comparison, scan, frontier, kstar, file) {
+  selected <- scan[scan$k==kstar,,drop=FALSE]
 
-  p <- ggplot(dat,aes(comparison,n,fill=category)) +
-    geom_col(width=.68) +
+  # Full candidate path is faint; Pareto frontier is the emphasized curve.
+  p <- ggplot() +
+    geom_path(
+      data=scan,
+      aes(weighted_penalty, weighted_benefit),
+      color="grey82",
+      linewidth=.55
+    ) +
+    geom_path(
+      data=frontier,
+      aes(weighted_penalty, weighted_benefit),
+      color=COL$observed,
+      linewidth=1.35
+    ) +
+    geom_point(
+      data=selected,
+      aes(weighted_penalty, weighted_benefit),
+      shape=23,
+      size=5,
+      fill=COL$selected,
+      color=COL$selected
+    ) +
+    annotate(
+      "label",
+      x=selected$weighted_penalty,
+      y=selected$weighted_benefit,
+      label=paste0(
+        "k* = ",kstar,
+        "\nJoint = ",round(selected$joint_n),
+        "\nRemainder crossings = ",round(selected$remainder_cross_n),
+        "\nWeighted penalty = ",formatC(selected$weighted_penalty,digits=2,format="f")
+      ),
+      hjust=-.05,
+      vjust=1.05,
+      size=3.1,
+      fill="white",
+      label.size=.15
+    ) +
     labs(
-      title=paste0(method, ": composition at shared k* = ",kstar),
-      subtitle="One stacked bar per RT/ZT dataset",
-      x=NULL,y="PAS count",fill=NULL
+      title=paste0(method," — ",comparison,": weighted Pareto cutoff"),
+      subtitle="Purple: Pareto frontier; diamond: selected geometric knee",
+      x="Distance-weighted Remainder disagreement",
+      y="Weighted retained-site benefit"
     ) +
-    theme_pub() +
-    theme(legend.position="top")
+    theme_pub()
 
-  save_plot(p,file,11.5,6.7)
-}
-
-plot_dataset_bar <- function(method, comparison, cls, kstar, file) {
-  dat <- classification_counts(cls)
-
-  p <- ggplot(dat,aes(category,n)) +
-    geom_col(width=.62) +
-    geom_text(aes(label=n),vjust=-.35,fontface="bold",size=3.7) +
-    labs(
-      title=paste0(method, " — ",comparison),
-      subtitle=paste0("Site composition at the shared method cutoff k* = ",kstar),
-      x=NULL,y="PAS count"
-    ) +
-    theme_pub() +
-    theme(
-      axis.text.x=element_text(angle=18,hjust=1),
-      legend.position="none"
-    ) +
-    expand_limits(y=max(dat$n,1)*1.12)
-
-  save_plot(p,file,10.5,6.5)
-}
-
-plot_dataset_score_bar <- function(method, comparison, scan, kstar, file) {
-  z <- scan[scan$k==kstar,,drop=FALSE]
-
-  dat <- data.frame(
-    metric=c(
-      "Weighted benefit",
-      "Weighted penalty",
-      "Joint sites",
-      "Remainder crossings"
-    ),
-    value=c(
-      z$weighted_benefit,
-      z$weighted_penalty,
-      z$joint_n,
-      z$remainder_cross_n
-    )
-  )
-
-  p <- ggplot(dat,aes(metric,value)) +
-    geom_col(width=.62) +
-    geom_text(aes(label=round(value,2)),vjust=-.35,fontface="bold",size=3.5) +
-    labs(
-      title=paste0(method, " — ",comparison, ": cutoff diagnostics"),
-      subtitle=paste0("Values evaluated at shared k* = ",kstar),
-      x=NULL,y="Score / count"
-    ) +
-    theme_pub() +
-    theme(axis.text.x=element_text(angle=18,hjust=1)) +
-    expand_limits(y=max(dat$value,1)*1.12)
-
-  save_plot(p,file,10.5,6.5)
+  save_plot(p,file,10.5,7)
 }
 
 plot_method_comparison <- function(summary,file) {
+  summary <- summary %>%
+    mutate(
+      method=factor(
+        method,
+        levels=c("CPM_EVS","DESeq2_EVS"),
+        labels=c("CPM-EVS","DESeq2-EVS")
+      ),
+      comparison=factor(comparison,levels=names(COMPARISONS))
+    )
+
   p <- ggplot(
     summary,
-    aes(comparison, selected_k, fill=method)
+    aes(comparison,selected_k,fill=method)
   ) +
     geom_col(
-      position=position_dodge(width=.72),
+      position=position_dodge(width=.74),
       width=.64
     ) +
     geom_text(
       aes(label=selected_k),
-      position=position_dodge(width=.72),
+      position=position_dodge(width=.74),
       vjust=-.4,
       fontface="bold",
-      size=3.5
+      size=3.4
     ) +
     labs(
-      title="Independent EVS cutoffs by dataset and normalization method",
-      subtitle="Four CPM-EVS cutoffs and four DESeq2-EVS cutoffs",
+      title="Empirical EVS cutoffs by dataset and normalization method",
+      subtitle="Each RT/ZT dataset has an independent Pareto-knee cutoff under CPM-EVS and DESeq2-EVS",
       x=NULL,
       y="Selected k*",
       fill=NULL
     ) +
     theme_pub() +
     theme(legend.position="top") +
-    expand_limits(y=max(summary$selected_k)*1.14)
+    expand_limits(y=max(summary$selected_k,na.rm=TRUE)*1.14)
 
   save_plot(p,file,11.5,6.5)
 }
-
 
 # =============================================================================
 # RUN
@@ -781,6 +783,18 @@ for (method in METHODS) {
       row.names=FALSE
     )
 
+    plot_pareto(
+      method=method,
+      comparison=nm,
+      scan=scan,
+      frontier=frontier,
+      kstar=kstar,
+      file=file.path(
+        fdir,
+        paste0("Figure_",method,"_",nm,"_Pareto_Cutoff.png")
+      )
+    )
+
     cls <- classify_at_k(
       kstar,
       nm,
@@ -797,16 +811,6 @@ for (method in METHODS) {
       cls,
       file.path(tdir,paste0("Table_",method,"_",nm,"_Sites.csv")),
       row.names=FALSE
-    )
-
-    plot_dataset_bar(
-      method,nm,cls,kstar,
-      file.path(fdir,paste0("Figure_",method,"_",nm,"_Composition_Bar.png"))
-    )
-
-    plot_dataset_score_bar(
-      method,nm,scan,kstar,
-      file.path(fdir,paste0("Figure_",method,"_",nm,"_Diagnostics_Bar.png"))
     )
 
     sel <- scan[scan$k==kstar,,drop=FALSE]
@@ -836,49 +840,6 @@ for (method in METHODS) {
     pair_summary_df,
     file.path(tdir,paste0("Table_",method,"_Dataset_Cutoffs.csv")),
     row.names=FALSE
-  )
-
-  # Method-level bar graph showing the four independent dataset cutoffs.
-  p_cut <- ggplot(pair_summary_df,aes(comparison,selected_k)) +
-    geom_col(width=.62) +
-    geom_text(aes(label=selected_k),vjust=-.4,fontface="bold",size=4) +
-    labs(
-      title=paste0(method, ": independent empirical cutoff by dataset"),
-      subtitle="Each RT/ZT dataset has its own weighted-Pareto knee k*",
-      x=NULL,
-      y="Selected k*"
-    ) +
-    theme_pub() +
-    expand_limits(y=max(pair_summary_df$selected_k)*1.12)
-
-  save_plot(
-    p_cut,
-    file.path(fdir,paste0("Figure_",method,"_Dataset_Cutoffs_Bar.png")),
-    10.5,6.5
-  )
-
-  # Method-level stacked bar graph using each dataset's own k*.
-  comp_dat <- bind_rows(lapply(names(cls_method), \(nm) {
-    classification_counts(cls_method[[nm]]) %>%
-      mutate(comparison=nm)
-  }))
-
-  p_comp <- ggplot(comp_dat,aes(comparison,n,fill=category)) +
-    geom_col(width=.68) +
-    labs(
-      title=paste0(method, ": composition at each dataset-specific cutoff"),
-      subtitle="Each RT/ZT dataset is evaluated at its own k*",
-      x=NULL,
-      y="PAS count",
-      fill=NULL
-    ) +
-    theme_pub() +
-    theme(legend.position="top")
-
-  save_plot(
-    p_comp,
-    file.path(fdir,paste0("Figure_",method,"_All_Datasets_Composition_Bar.png")),
-    11.5,6.7
   )
 
   summary_list[[method]] <- pair_summary_df
@@ -929,7 +890,7 @@ write.csv(
 
 plot_method_comparison(
   summary,
-  file.path(OUT_ROOT,"Figure_CPM_vs_DESeq2_EVS_Dataset_Cutoffs_Bar.png")
+  file.path(OUT_ROOT,"Figure_CPM_vs_DESeq2_EVS_Cutoff_Comparison_Bar.png")
 )
 
 
@@ -1097,7 +1058,7 @@ message("------------------------------------------------------------")
 message("============================================================")
 message("COMPLETE")
 message("Output: ",OUT_ROOT)
-message("Primary figures are bar-based dataset-specific cutoff/composition figures;")
+message("Primary figures are shared divergence plots, dataset-specific Pareto curves, and one cutoff comparison bar graph;")
 message("shared divergence geometry is retained only where a curve is required.")
 message("Figures ZIP: ", FIGURE_ZIP)
 message("Tables ZIP: ", TABLE_ZIP)
