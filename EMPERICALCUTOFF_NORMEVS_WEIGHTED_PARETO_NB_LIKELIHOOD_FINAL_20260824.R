@@ -27,8 +27,9 @@ options(stringsAsFactors = FALSE)
 #                 -> log1p(normalized counts)
 #                 -> arm-specific PCA -> PC1 ranking
 #
-# The two methods are calibrated independently. A cutoff estimated under one
-# representation is never imposed on the other.
+# The two methods are calibrated independently. Each method receives one
+# experiment-wide shared c1/c2 regime fit across all eight arms, followed by
+# four comparison-specific weighted-Pareto k* values.
 #
 # Comparisons:
 #   RT0_ZT6, RT2_ZT8, RT4_ZT10, RT8_ZT14
@@ -39,14 +40,14 @@ options(stringsAsFactors = FALSE)
 #
 # A. FEATURE FILTERING
 # --------------------
-# Filtering is comparison-specific. A PAS is retained if its total raw count
-# across the samples in that RT/ZT comparison is > 0.
+# One experiment-wide feature universe is used. A PAS is retained if its total
+# raw count across all experimental samples is > 0.
 #
 # B. DESEQ2 NORMALIZATION
 # -----------------------
-# DESeq2 median-of-ratios size factors are estimated independently within each
-# comparison. These normalized counts are used in NormEVS and in the
-# size-factor-aware variance geometry for both methods.
+# DESeq2 median-of-ratios size factors are estimated once across the complete
+# experiment. These normalized counts are used for NormEVS and for the pooled
+# within-group variance reference used by both EVS methods.
 #
 # C. EVS RANKING
 # --------------
@@ -70,30 +71,25 @@ options(stringsAsFactors = FALSE)
 #
 #     P_ig = lambda_1g * loading_ig^2
 #
-# D. SIZE-FACTOR-AWARE EXCESS VARIANCE
-# ------------------------------------
-# Let:
+# D. POOLED WITHIN-GROUP NORMALIZED VARIANCE
+# -------------------------------------------
+# The globally DESeq2-normalized counts are used to calculate one pooled
+# within-group empirical variance for each PAS across all eight arms:
 #
-#     Y_ij = raw count
-#     s_j  = DESeq2 size factor
-#     X_ij = Y_ij / s_j
+#                    sum_g sum_{j in g}(x_ij - xbar_ig)^2
+#     V_pool,i =     -------------------------------------
+#                              sum_g(n_g - 1)
 #
-# If raw counts are Poisson with E[Y_ij] = s_j * mu_i, then:
+# where x_ij is the DESeq2-normalized count. For each arm g:
 #
-#     Var(X_ij) = mu_i / s_j
+#     mu_ig = mean_j(x_ij | g)
 #
-# Therefore the expected Poisson variance on the normalized-count scale is
-# approximated within arm g as:
+# and the original PC1-NB excess-variance statistic is:
 #
-#     V_Pois,ig = mu_ig * mean_j(1 / s_j)
+#     E_ig = max(V_pool,i - mu_ig, 0)
 #
-# The pooled within-group normalized empirical variance V_pool,i is calculated
-# across the two groups in the comparison. For arm g:
-#
-#     E_ig = max(V_pool,i - V_Pois,ig, 0)
-#
-# This E term is used only for variance-mass geometry. PCA rankings differ
-# between RawEVS and NormEVS.
+# This shared variance reference is held fixed while RawEVS and NormEVS use
+# different PC1 rankings.
 #
 # E. PC1-VARIANCE MASS DIVERGENCE
 # -------------------------------
@@ -107,8 +103,8 @@ options(stringsAsFactors = FALSE)
 #
 #     D_g(r) = F_E,g(r) - F_P,g(r)
 #
-# Within each comparison and each EVS method, a shared two-knot continuous
-# linear spline is fitted jointly to the two arm-specific D_g(r) curves.
+# Within each EVS method, a shared two-knot continuous linear spline is fitted
+# jointly to all eight arm-specific D_g(r) curves.
 #
 # Regimes:
 #
@@ -144,9 +140,10 @@ options(stringsAsFactors = FALSE)
 #
 # G. FINAL EVS MEMBERSHIP
 # -----------------------
-# The final Leading Edge is the union of the two arm-specific top-k* sets.
-# Opposite-arm Remainder crossings remain in the union; they are recorded as a
-# Pareto cost rather than post-hoc deleted.
+# At the selected k*, Joint PASs are retained. Disjoint PASs are retained only
+# when their opposite-arm rank lies in the Leading Edge or Divergence interval.
+# Disjoint PASs whose opposite-arm rank lies in the Remainder are excluded and
+# exported separately as Remainder-crossing sites.
 #
 # H. POST-SELECTION NB1/NB2 CORROBORATION
 # ---------------------------------------
@@ -185,7 +182,7 @@ options(stringsAsFactors = FALSE)
 
 COUNT_FILE <- "/root/REAPER98632/data/WTTS-Seq_2022.2_DE_raw_read_numbers.csv"
 
-OUT_ROOT <- "/root/REAPER98632/exports/dual_raw_norm_evs_empirical_cutoff_final"
+OUT_ROOT <- "/root/REAPER98632/exports/dual_raw_norm_evs_global_regime_final"
 
 GROUP_PATTERNS <- c(
   RT0  = "^R0_",
@@ -581,9 +578,15 @@ compute_group_analysis <- function(
     group_name,
     raw_counts_arm,
     normalized_counts_arm,
-    size_factors_arm,
     pooled_variance) {
 
+  # EVS ranking differs by method; the variance-mass reference is shared.
+  #
+  # RawEVS:
+  #   log1p(raw counts) -> PCA
+  #
+  # NormEVS:
+  #   DESeq2 median-of-ratios normalized counts -> log1p -> PCA
   rank_matrix <- build_rank_matrix(
     method = method,
     raw_counts_arm = raw_counts_arm,
@@ -602,19 +605,13 @@ compute_group_analysis <- function(
   mu_norm[!is.finite(mu_norm)] <- 0
   mu_norm <- pmax(mu_norm, 0)
 
-  sf <- as.numeric(size_factors_arm)
-  if (any(!is.finite(sf)) || any(sf <= 0)) {
-    stop("Invalid DESeq2 size factor in ", group_name)
-  }
-
-  poisson_scale_factor <- mean(1 / sf)
-
   P_ranked <- pc1$pc1_variance_contribution[rank_order]
   mu_ranked <- mu_norm[rank_order]
   V_pool_ranked <- pooled_variance[rank_order]
 
-  poisson_variance_ranked <- mu_ranked * poisson_scale_factor
-  E_ranked <- pmax(V_pool_ranked - poisson_variance_ranked, 0)
+  # Original PC1-NB geometry:
+  # pooled normalized within-group variance minus normalized arm mean.
+  E_ranked <- pmax(V_pool_ranked - mu_ranked, 0)
 
   P_total <- sum(P_ranked)
   E_total <- sum(E_ranked)
@@ -624,7 +621,7 @@ compute_group_analysis <- function(
   }
 
   if (!is.finite(E_total) || E_total <= 0) {
-    stop("Excess-variance mass undefined for ", method, " / ", group_name)
+    stop("NB excess-variance mass undefined for ", method, " / ", group_name)
   }
 
   p_mass <- P_ranked / P_total
@@ -633,9 +630,13 @@ compute_group_analysis <- function(
   F_P <- cumsum(p_mass)
   F_E <- cumsum(q_mass)
   D <- F_E - F_P
+
   rank <- seq_along(rank_order)
 
-  display_D <- smooth_divergence_for_display(rank, D)
+  display_D <- smooth_divergence_for_display(
+    rank = rank,
+    D = D
+  )
 
   df <- geometry %>%
     mutate(
@@ -649,7 +650,6 @@ compute_group_analysis <- function(
       pc1_variance_mass = p_mass,
       normalized_group_mean = mu_ranked,
       pooled_normalized_variance = V_pool_ranked,
-      poisson_reference_variance = poisson_variance_ranked,
       nb_excess_variance = E_ranked,
       nb_excess_variance_mass = q_mass,
       cumulative_pc1_mass = F_P,
@@ -660,10 +660,10 @@ compute_group_analysis <- function(
 
   list(
     data = df,
-    rank_order = rank_order,
-    poisson_scale_factor = poisson_scale_factor
+    rank_order = rank_order
   )
 }
+
 
 # =============================================================================
 # SHARED TWO-KNOT FIT
@@ -1203,10 +1203,16 @@ classify_pair_at_k <- function(
     "Disjoint_", treatment_group, "_OppositeDivergence"
   )
   analysis_class[control_only & rT < c1] <- paste0(
-    "Disjoint_", control_group, "_OppositeRemainder_Cost"
+    "Excluded_", control_group, "_OppositeRemainder"
   )
   analysis_class[treatment_only & rC < c1] <- paste0(
-    "Disjoint_", treatment_group, "_OppositeRemainder_Cost"
+    "Excluded_", treatment_group, "_OppositeRemainder"
+  )
+
+  retained_for_analysis <- (
+    joint |
+    disjoint_opposite_leading_edge |
+    disjoint_opposite_divergence
   )
 
   out <- data.frame(
@@ -1229,7 +1235,7 @@ classify_pair_at_k <- function(
     disjoint_opposite_leading_edge = disjoint_opposite_leading_edge,
     disjoint_opposite_divergence = disjoint_opposite_divergence,
     cross_into_remainder = cross_into_remainder,
-    retained_for_analysis = TRUE,
+    retained_for_analysis = retained_for_analysis,
     stringsAsFactors = FALSE
   )
 
@@ -1749,220 +1755,490 @@ make_cutoff_framework_figure <- function(
   N <- nrow(control)
   cutoff_rank <- rank_cutoff_from_k(N, selected_k)
 
-  long <- bind_rows(
-    control %>% mutate(arm = control_group),
-    treatment %>% mutate(arm = treatment_group)
+  boundary_df <- data.frame(
+    rank = c(c1, c2, cutoff_rank),
+    boundary = factor(
+      c("c1", "c2", "Selected cutoff"),
+      levels = c("c1", "c2", "Selected cutoff")
+    )
   )
 
-  boundary_df <- make_boundary_lines(c1, c2, cutoff_rank, selected_k)
-
-  boundary_colors <- c(
+  boundary_cols <- c(
     "c1" = COL$c1,
     "c2" = COL$c2,
-    stats::setNames(COL$selected, paste0("Selected k* = ", selected_k))
+    "Selected cutoff" = COL$selected
   )
 
-  boundary_types <- c(
+  boundary_lty <- c(
     "c1" = "dashed",
     "c2" = "longdash",
-    stats::setNames("dotdash", paste0("Selected k* = ", selected_k))
+    "Selected cutoff" = "dotdash"
   )
 
-  arm_colors <- c(
-    stats::setNames(COL$control, control_group),
-    stats::setNames(COL$treatment, treatment_group)
-  )
-
-  pca_subtitle <- if (method == "RawEVS") {
-    "PCA input = log1p(raw counts); no library-size normalization before EVS"
-  } else {
-    "PCA input = log1p(DESeq2 median-of-ratios normalized counts)"
+  add_regions_clean <- function(p) {
+    p +
+      annotate(
+        "rect", xmin = 1, xmax = c1,
+        ymin = -Inf, ymax = Inf,
+        fill = COL$remainder, alpha = 0.32
+      ) +
+      annotate(
+        "rect", xmin = c1, xmax = c2,
+        ymin = -Inf, ymax = Inf,
+        fill = COL$interval, alpha = 0.32
+      ) +
+      annotate(
+        "rect", xmin = c2, xmax = N,
+        ymin = -Inf, ymax = Inf,
+        fill = COL$leading, alpha = 0.32
+      ) +
+      geom_vline(
+        data = boundary_df,
+        aes(xintercept = rank, color = boundary, linetype = boundary),
+        linewidth = 0.75,
+        show.legend = FALSE
+      )
   }
 
-  pA <- add_rank_regions(ggplot(), c1, c2, N) +
-    geom_vline(
-      data = boundary_df,
-      aes(xintercept = rank, color = key, linetype = key),
-      linewidth = 0.8
+  pca_subtitle <- if (method == "RawEVS") {
+    "PCA: log1p(raw counts)"
+  } else {
+    "PCA: log1p(DESeq2 median-of-ratios normalized counts)"
+  }
+
+  pA <- add_regions_clean(
+    ggplot() +
+      geom_line(
+        data = control,
+        aes(rank, abs_pc1_loading),
+        color = COL$control,
+        linewidth = 0.90
+      ) +
+      geom_line(
+        data = treatment,
+        aes(rank, abs_pc1_loading),
+        color = COL$treatment,
+        linewidth = 0.90
+      )
+  ) +
+    scale_color_manual(values = boundary_cols) +
+    scale_linetype_manual(values = boundary_lty) +
+    annotate(
+      "text", x = N * 0.04, y = Inf,
+      label = control_group, color = COL$control,
+      hjust = 0, vjust = 1.6, fontface = "bold", size = 3.2
     ) +
-    geom_line(
-      data = long,
-      aes(rank, abs_pc1_loading, color = arm),
-      linewidth = 0.9
-    ) +
-    scale_color_manual(name = NULL, values = c(arm_colors, boundary_colors)) +
-    scale_linetype_manual(
-      name = NULL,
-      values = boundary_types,
-      na.translate = FALSE
+    annotate(
+      "text", x = N * 0.16, y = Inf,
+      label = treatment_group, color = COL$treatment,
+      hjust = 0, vjust = 1.6, fontface = "bold", size = 3.2
     ) +
     labs(
-      title = paste0("A. ", method, " / ", comparison_name, ": absolute PC1 loading"),
+      title = paste0("A  PC1 loading geometry"),
       subtitle = pca_subtitle,
-      x = "PC1 rank: low |loading| to high |loading|",
+      x = NULL,
       y = "|PC1 loading|"
     ) +
-    theme_manuscript() +
-    guides(
-      color = guide_legend(nrow = 2, byrow = TRUE),
-      linetype = guide_legend(nrow = 1)
-    )
-
-  pB <- add_rank_regions(ggplot(), c1, c2, N) +
-    geom_vline(
-      data = boundary_df,
-      aes(xintercept = rank, color = key, linetype = key),
-      linewidth = 0.8
-    ) +
-    geom_line(
-      data = long,
-      aes(rank, display_log1p_raw_empirical_variance, color = arm),
-      linewidth = 0.9
-    ) +
-    scale_color_manual(name = NULL, values = c(arm_colors, boundary_colors)) +
-    scale_linetype_manual(
-      name = NULL,
-      values = boundary_types,
-      na.translate = FALSE
-    ) +
-    labs(
-      title = paste0("B. ", method, " / ", comparison_name, ": raw-count variance geometry"),
-      subtitle = "Raw-count variance displayed along the method-specific PC1 rank",
-      x = "PC1 rank",
-      y = "Smoothed log(1 + raw-count variance)"
-    ) +
-    theme_manuscript() +
-    guides(
-      color = guide_legend(nrow = 2, byrow = TRUE),
-      linetype = guide_legend(nrow = 1)
+    theme_manuscript(base_size = 11.5) +
+    theme(
+      legend.position = "none",
+      plot.title = element_text(size = 13, face = "bold"),
+      plot.subtitle = element_text(color = "grey30")
     )
 
   fit_mat <- knot_fit$fitted
+  fit_control <- data.frame(rank = seq_len(N), fit = fit_mat[, match(control_group, knot_fit$groups)])
+  fit_treatment <- data.frame(rank = seq_len(N), fit = fit_mat[, match(treatment_group, knot_fit$groups)])
+
+  pB <- add_regions_clean(
+    ggplot() +
+      geom_hline(yintercept = 0, color = "grey65", linetype = "dotted", linewidth = 0.4) +
+      geom_line(
+        data = control,
+        aes(rank, cumulative_divergence),
+        color = COL$control,
+        linewidth = 0.55,
+        alpha = 0.45
+      ) +
+      geom_line(
+        data = treatment,
+        aes(rank, cumulative_divergence),
+        color = COL$treatment,
+        linewidth = 0.55,
+        alpha = 0.45
+      ) +
+      geom_line(
+        data = fit_control,
+        aes(rank, fit),
+        color = COL$control,
+        linewidth = 1.25
+      ) +
+      geom_line(
+        data = fit_treatment,
+        aes(rank, fit),
+        color = COL$treatment,
+        linewidth = 1.25
+      )
+  ) +
+    scale_color_manual(values = boundary_cols) +
+    scale_linetype_manual(values = boundary_lty) +
+    annotate(
+      "label",
+      x = c1, y = Inf,
+      label = paste0("c1 = ", c1),
+      vjust = 1.3, hjust = 1.05,
+      size = 3.0, fill = "white", label.size = 0.15
+    ) +
+    annotate(
+      "label",
+      x = c2, y = Inf,
+      label = paste0("c2 = ", c2),
+      vjust = 1.3, hjust = -0.05,
+      size = 3.0, fill = "white", label.size = 0.15
+    ) +
+    annotate(
+      "text",
+      x = (c1 + c2) / 2, y = -Inf,
+      label = "DIVERGENCE",
+      vjust = -0.7, fontface = "bold", size = 3.1
+    ) +
+    labs(
+      title = "B  Shared PC1–NB divergence regime",
+      subtitle = "c1/c2 are estimated once from all eight arm-specific divergence curves for this EVS method",
+      x = NULL,
+      y = "D(r) = F_E(r) - F_P(r)"
+    ) +
+    theme_manuscript(base_size = 11.5) +
+    theme(
+      legend.position = "none",
+      plot.title = element_text(size = 13, face = "bold"),
+      plot.subtitle = element_text(color = "grey30")
+    )
+
+  selected <- scan_df %>% filter(k == selected_k) %>% slice(1L)
+  frontier <- scan_df %>%
+    filter(is_pareto) %>%
+    arrange(remainder_cross_n, good_n, k) %>%
+    distinct(remainder_cross_n, good_n, .keep_all = TRUE)
+
+  pC <- ggplot() +
+    geom_path(
+      data = scan_df,
+      aes(remainder_cross_n, good_n, group = 1),
+      color = "grey78",
+      linewidth = 0.55
+    ) +
+    geom_point(
+      data = scan_df,
+      aes(remainder_cross_n, good_n),
+      color = "grey70",
+      size = 0.85,
+      alpha = 0.55
+    ) +
+    geom_path(
+      data = frontier,
+      aes(remainder_cross_n, good_n, group = 1),
+      color = COL$pareto,
+      linewidth = 1.35
+    ) +
+    geom_point(
+      data = selected,
+      aes(remainder_cross_n, good_n),
+      shape = 23,
+      fill = COL$selected,
+      color = COL$selected,
+      size = 4.8,
+      stroke = 1.0
+    ) +
+    annotate(
+      "label",
+      x = selected$remainder_cross_n,
+      y = selected$good_n,
+      label = paste0(
+        "k* = ", selected_k,
+        "\nrank ≥ ", cutoff_rank,
+        "\nG = ", selected$good_n,
+        "   R = ", selected$remainder_cross_n,
+        "\nU = ", formatC(selected$weighted_utility, digits = 3, format = "f")
+      ),
+      hjust = -0.05,
+      vjust = 1.05,
+      size = 3.15,
+      fill = "white",
+      label.size = 0.2
+    ) +
+    labs(
+      title = "C  Pair-specific weighted Pareto cutoff",
+      subtitle = "Divergence is permissible; only opposite-arm Remainder crossings are penalized",
+      x = "Opposite-arm Remainder crossings  R(k)",
+      y = "Joint + permissible Disjoint sites  G(k)",
+      caption = paste0(
+        method, " / ", comparison_name,
+        "   |   shared c1=", c1,
+        ", c2=", c2,
+        "   |   candidate k: 1–", N - c2
+      )
+    ) +
+    theme_manuscript(base_size = 11.5) +
+    theme(
+      legend.position = "none",
+      plot.title = element_text(size = 13, face = "bold"),
+      plot.subtitle = element_text(color = "grey30")
+    )
+
+  # Three clean stacked panels: geometry -> regime -> cutoff.
+  dir.create(dirname(out_file), recursive = TRUE, showWarnings = FALSE)
+
+  draw_three <- function(device_fun) {
+    device_fun()
+    grid::grid.newpage()
+    grid::pushViewport(
+      grid::viewport(
+        layout = grid::grid.layout(
+          nrow = 3L,
+          ncol = 1L,
+          heights = unit(c(1.0, 1.08, 1.18), "null")
+        )
+      )
+    )
+    print(pA, vp = grid::viewport(layout.pos.row = 1, layout.pos.col = 1))
+    print(pB, vp = grid::viewport(layout.pos.row = 2, layout.pos.col = 1))
+    print(pC, vp = grid::viewport(layout.pos.row = 3, layout.pos.col = 1))
+    grDevices::dev.off()
+  }
+
+  draw_three(function() {
+    grDevices::png(
+      filename = out_file,
+      width = 14.5,
+      height = 13.2,
+      units = "in",
+      res = PNG_DPI,
+      bg = "white"
+    )
+  })
+
+  if (isTRUE(EXPORT_PDF)) {
+    pdf_path <- sub("\\.png$", ".pdf", out_file, ignore.case = TRUE)
+    draw_three(function() {
+      grDevices::pdf(
+        file = pdf_path,
+        width = 14.5,
+        height = 13.2,
+        onefile = TRUE,
+        useDingbats = FALSE
+      )
+    })
+  }
+
+  invisible(out_file)
+}
+
+make_overall_method_figure <- function(
+    method,
+    group_results,
+    knot_fit,
+    out_file) {
+
+  N <- nrow(group_results[[1L]]$data)
+  c1 <- knot_fit$c1
+  c2 <- knot_fit$c2
+
+  all_div <- bind_rows(lapply(names(group_results), function(g) {
+    group_results[[g]]$data %>%
+      transmute(rank, arm = g, D = cumulative_divergence)
+  }))
 
   fit_long <- bind_rows(lapply(seq_along(knot_fit$groups), function(j) {
     data.frame(
       rank = seq_len(N),
       arm = knot_fit$groups[j],
-      fitted_D = fit_mat[, j],
+      fit = knot_fit$fitted[, j],
       stringsAsFactors = FALSE
     )
   }))
 
-  div_long <- long %>%
-    select(rank, arm, cumulative_divergence)
+  median_D <- all_div %>%
+    group_by(rank) %>%
+    summarise(D = median(D, na.rm = TRUE), .groups = "drop")
 
-  pC <- add_rank_regions(ggplot(), c1, c2, N) +
-    geom_vline(
-      data = boundary_df,
-      aes(xintercept = rank, color = key, linetype = key),
-      linewidth = 0.8
+  median_fit <- fit_long %>%
+    group_by(rank) %>%
+    summarise(fit = median(fit, na.rm = TRUE), .groups = "drop")
+
+  p <- ggplot() +
+    annotate(
+      "rect", xmin = 1, xmax = c1,
+      ymin = -Inf, ymax = Inf,
+      fill = COL$remainder, alpha = 0.32
     ) +
-    geom_hline(
-      yintercept = 0,
+    annotate(
+      "rect", xmin = c1, xmax = c2,
+      ymin = -Inf, ymax = Inf,
+      fill = COL$interval, alpha = 0.34
+    ) +
+    annotate(
+      "rect", xmin = c2, xmax = N,
+      ymin = -Inf, ymax = Inf,
+      fill = COL$leading, alpha = 0.32
+    ) +
+    geom_hline(yintercept = 0, color = "grey65", linetype = "dotted", linewidth = 0.4) +
+    geom_line(
+      data = all_div,
+      aes(rank, D, group = arm),
       color = "grey55",
-      linetype = "dotted",
-      linewidth = 0.35
+      linewidth = 0.45,
+      alpha = 0.35
     ) +
     geom_line(
-      data = div_long,
-      aes(rank, cumulative_divergence, color = arm),
-      linewidth = 0.65,
-      alpha = 0.5
+      data = median_D,
+      aes(rank, D),
+      color = COL$divergence,
+      linewidth = 1.05
     ) +
     geom_line(
-      data = fit_long,
-      aes(rank, fitted_D, color = arm),
-      linewidth = 1.15
+      data = median_fit,
+      aes(rank, fit),
+      color = COL$fit,
+      linewidth = 1.35
     ) +
-    scale_color_manual(name = NULL, values = c(arm_colors, boundary_colors)) +
-    scale_linetype_manual(
-      name = NULL,
-      values = boundary_types,
-      na.translate = FALSE
+    geom_vline(xintercept = c1, color = COL$c1, linetype = "dashed", linewidth = 0.85) +
+    geom_vline(xintercept = c2, color = COL$c2, linetype = "longdash", linewidth = 0.85) +
+    annotate(
+      "label", x = c1, y = Inf, label = paste0("c1 = ", c1),
+      hjust = 1.05, vjust = 1.2, size = 3.2, fill = "white", label.size = 0.15
+    ) +
+    annotate(
+      "label", x = c2, y = Inf, label = paste0("c2 = ", c2),
+      hjust = -0.05, vjust = 1.2, size = 3.2, fill = "white", label.size = 0.15
+    ) +
+    annotate(
+      "text", x = (1 + c1) / 2, y = -Inf,
+      label = "REMAINDER", vjust = -0.7, fontface = "bold", size = 3.1
+    ) +
+    annotate(
+      "text", x = (c1 + c2) / 2, y = -Inf,
+      label = "DIVERGENCE", vjust = -0.7, fontface = "bold", size = 3.1
+    ) +
+    annotate(
+      "text", x = (c2 + N) / 2, y = -Inf,
+      label = "LEADING EDGE", vjust = -0.7, fontface = "bold", size = 3.1
     ) +
     labs(
-      title = paste0("C. ", method, " / ", comparison_name, ": PC1-variance divergence"),
-      subtitle = "Two-knot fit shared by the two arms within this comparison",
-      x = "PC1 rank",
-      y = "D(r) = F_E(r) - F_P(r)"
+      title = paste0(method, ": experiment-wide PC1–NB regime geometry"),
+      subtitle = "Eight arm-specific cumulative-divergence curves; median observed curve and shared two-knot fit emphasized",
+      x = "Absolute-PC1-loading rank",
+      y = "D(r) = F_E(r) - F_P(r)",
+      caption = "The shared c1/c2 regime boundaries are fixed before pair-specific weighted-Pareto k* optimization."
     ) +
-    theme_manuscript() +
-    guides(
-      color = guide_legend(nrow = 2, byrow = TRUE),
-      linetype = guide_legend(nrow = 1)
-    )
+    theme_manuscript(base_size = 12.5) +
+    theme(legend.position = "none")
 
-  pD <- make_pareto_panel(
-    scan_df = scan_df,
-    selected_k = selected_k,
-    comparison_name = comparison_name,
-    method = method
-  )
-
-  save_grid_2x2(
-    list(pA, pB, pC, pD),
-    out_file,
-    width = 16,
-    height = 12.5
-  )
+  save_figure(p, out_file, width = 13.2, height = 7.8)
 }
 
+
 make_method_comparison_figure <- function(summary_df, out_file) {
-  df <- summary_df %>%
+  wide <- summary_df %>%
+    select(comparison, evs_method, selected_k) %>%
+    tidyr::pivot_wider(
+      names_from = evs_method,
+      values_from = selected_k
+    ) %>%
     mutate(
-      evs_method = factor(evs_method, levels = c("RawEVS", "NormEVS")),
       comparison = factor(comparison, levels = names(COMPARISONS))
     )
 
-  p <- ggplot(
-    df,
-    aes(
-      x = comparison,
-      y = selected_k,
-      fill = evs_method
+  long <- summary_df %>%
+    mutate(
+      comparison = factor(comparison, levels = names(COMPARISONS)),
+      evs_method = factor(evs_method, levels = c("RawEVS", "NormEVS"))
     )
-  ) +
-    geom_col(
-      position = position_dodge(width = 0.75),
-      width = 0.68
+
+  p <- ggplot() +
+    geom_segment(
+      data = wide,
+      aes(
+        x = comparison,
+        xend = comparison,
+        y = RawEVS,
+        yend = NormEVS
+      ),
+      color = "grey72",
+      linewidth = 1.0
+    ) +
+    geom_point(
+      data = long,
+      aes(
+        x = comparison,
+        y = selected_k,
+        shape = evs_method,
+        fill = evs_method
+      ),
+      size = 5.2,
+      color = "white",
+      stroke = 0.8
     ) +
     geom_text(
+      data = long,
       aes(
+        x = comparison,
+        y = selected_k,
         label = paste0(
-          "k*=", selected_k,
-          "\n", sprintf("%.1f%% LE", 100 * k_over_leading_edge)
-        )
+          selected_k,
+          "\n(",
+          sprintf("%.0f%%", 100 * k_over_leading_edge),
+          " of LE)"
+        ),
+        group = evs_method
       ),
-      position = position_dodge(width = 0.75),
-      vjust = -0.35,
-      size = 3.0,
+      position = position_nudge(x = 0.17),
+      hjust = 0,
+      size = 3.2,
       fontface = "bold"
     ) +
     scale_fill_manual(
-      name = "EVS method",
+      name = NULL,
       values = c(
         "RawEVS" = COL$raw_evs,
         "NormEVS" = COL$norm_evs
       )
     ) +
+    scale_shape_manual(
+      name = NULL,
+      values = c("RawEVS" = 21, "NormEVS" = 22)
+    ) +
     labs(
-      title = "RawEVS versus NormEVS empirical cutoffs",
-      subtitle = "Each method is independently calibrated within each RT/ZT comparison",
+      title = "Empirical EVS cutoffs before and after median-of-ratios normalization",
+      subtitle = "Each method uses its own experiment-wide c1/c2 regime geometry and pair-specific weighted-Pareto k*",
       x = NULL,
       y = "Selected top-k* per arm",
-      caption = "Labels show selected k* and the fraction of the fitted Leading-edge candidate domain selected."
+      caption = "Parentheses report k* as a percentage of the method-specific Leading-edge candidate domain (N-c2)."
     ) +
     theme_manuscript(base_size = 12.5) +
-    expand_limits(y = max(df$selected_k, na.rm = TRUE) * 1.18)
+    theme(
+      legend.position = "top",
+      axis.text.x = element_text(face = "bold")
+    ) +
+    expand_limits(y = max(long$selected_k, na.rm = TRUE) * 1.16)
 
-  save_figure(p, out_file, width = 12.5, height = 7.5)
+  save_figure(p, out_file, width = 12.8, height = 7.3)
 }
+
 
 # =============================================================================
 # METHODS / EXPORTS
 # =============================================================================
 
 write_methods_manuscript <- function(summary_df) {
+  raw_shared <- summary_df %>%
+    filter(evs_method == "RawEVS") %>%
+    slice(1L)
+
+  norm_shared <- summary_df %>%
+    filter(evs_method == "NormEVS") %>%
+    slice(1L)
+
   raw_text <- summary_df %>%
     filter(evs_method == "RawEVS") %>%
     transmute(x = paste0(comparison, " k*=", selected_k)) %>%
@@ -1978,108 +2254,96 @@ write_methods_manuscript <- function(summary_df) {
   lines <- c(
     "# Dual RawEVS and NormEVS empirical cutoff methods",
     "",
-    "## Comparison-specific preprocessing",
+    "## Experiment-wide preprocessing",
     "",
     paste0(
-      "Empirical EVS cutoffs were estimated independently for RT0_ZT6, RT2_ZT8, RT4_ZT10, and RT8_ZT14 under two EVS representations. ",
-      "Within each comparison, PASs with zero counts across all samples were removed. ",
-      "DESeq2 median-of-ratios size factors were estimated independently within the comparison."
+      "A common PAS universe was used for all analyses. PASs with zero counts across the complete experiment were removed once before EVS. ",
+      "DESeq2 median-of-ratios size factors were estimated globally across all samples. ",
+      "The resulting normalized count matrix was also used to calculate a pooled within-group empirical variance across all eight experimental arms."
     ),
     "",
-    "## RawEVS",
+    "## RawEVS and NormEVS PC1 ranking",
     "",
     paste0(
-      "For RawEVS, arm-specific PCA was performed on log1p-transformed raw counts. ",
-      "No library-size normalization was applied before PCA. ",
-      "This transformation reduced extreme count-scale leverage while retaining the unnormalized raw-count representation."
+      "RawEVS and NormEVS differed only in the matrix supplied to arm-specific PCA. ",
+      "RawEVS used log1p-transformed raw counts. NormEVS used log1p-transformed DESeq2 median-of-ratios normalized counts. ",
+      "PCA was performed independently within each of the eight experimental arms with centering and without feature scaling. ",
+      "PASs were ordered from lowest to highest absolute PC1 loading."
     ),
     "",
-    "## NormEVS",
+    "## PC1-NB variance-mass divergence",
     "",
     paste0(
-      "For NormEVS, raw counts were first normalized using the DESeq2 median-of-ratios size factors estimated within the comparison. ",
-      "The normalized counts were then transformed as log(1+x) before arm-specific PCA."
+      "For PAS i in arm g, PC1 variance contribution was P_ig=lambda_1g*loading_ig^2. ",
+      "For the variance reference, the globally normalized counts were used to calculate pooled within-group empirical variance V_pool,i. ",
+      "For each arm, excess-over-Poisson variance was defined as E_ig=max(V_pool,i-mu_ig,0), where mu_ig is the arm-specific mean normalized count. ",
+      "P and E were normalized separately to rank-wise probability masses and accumulated along each method-specific absolute-PC1-loading rank. ",
+      "Cumulative divergence was D_g(r)=F_E,g(r)-F_P,g(r)."
     ),
     "",
-    "## PC1 ranking",
+    "## Experiment-wide regime boundaries",
     "",
     paste0(
-      "For both methods, PCA was centered and not feature-scaled. ",
-      "PASs were ordered from lowest to highest absolute PC1 loading. ",
-      "For PAS i in arm g, PC1 variance contribution was P_ig = lambda_1g * loading_ig^2."
+      "For each EVS method separately, a shared two-knot continuous linear spline was fitted jointly to all eight arm-specific D_g(r) curves. ",
+      "This produced one experiment-wide c1/c2 regime system for RawEVS and one for NormEVS. ",
+      "Ranks below c1 were classified as Remainder, ranks c1 through c2 as Divergence, and ranks above c2 as Leading Edge. ",
+      "These shared regime boundaries were fixed before any RT/ZT pair-specific cutoff optimization."
     ),
     "",
-    "## Size-factor-aware excess variance",
+    "## Pair-specific weighted-Pareto cutoff",
     "",
     paste0(
-      "Variance-mass geometry was calculated on the DESeq2-normalized count scale. ",
-      "Let Y_ij denote the raw count, s_j the DESeq2 size factor, and X_ij=Y_ij/s_j. ",
-      "Under a Poisson reference with E[Y_ij]=s_j*mu_i, Var(X_ij)=mu_i/s_j. ",
-      "Accordingly, the arm-specific Poisson reference variance was approximated as V_Pois,ig=mu_ig*mean_j(1/s_j). ",
-      "A pooled within-group normalized empirical variance V_pool,i was calculated across the two groups in each comparison, and excess variance was E_ig=max(V_pool,i-V_Pois,ig,0)."
+      "Within each RT/ZT pair, candidate top-k values were restricted to 1<=k<=N-c2 so that selected PASs originated from the selecting arm's Leading Edge. ",
+      "For each k, Joint PASs and Disjoint PASs whose opposite-arm rank remained in either the Leading Edge or Divergence interval contributed to benefit G(k). ",
+      "Disjoint PASs whose opposite-arm rank fell below c1 into the Remainder contributed to contamination R(k). ",
+      "The Pareto frontier maximized G while minimizing R. ",
+      "On the frontier, G and R were min-max normalized and equal weights were used: U(k)=G_norm(k)-R_norm(k). ",
+      "The pair-specific empirical cutoff k* maximized U(k), with ties resolved by greater G, lower R, then larger k."
     ),
     "",
-    "## PC1-variance divergence and regimes",
+    "## Final EVS membership",
     "",
     paste0(
-      "Within each EVS method and comparison, PC1 contribution and excess variance were normalized separately to rank-wise probability masses. ",
-      "Their cumulative distributions were F_P,g(r) and F_E,g(r), and cumulative divergence was D_g(r)=F_E,g(r)-F_P,g(r). ",
-      "A shared two-knot continuous linear spline was fitted jointly to the two arm-specific D_g(r) curves. ",
-      "The fitted knots defined c1 and c2, with rank<c1 classified as Remainder, c1<=rank<=c2 as Divergence, and rank>c2 as Leading Edge."
+      "At the selected k*, PASs were retained when they were Joint or when a Disjoint PAS remained in the opposite-arm Leading Edge or Divergence interval. ",
+      "Disjoint PASs whose opposite-arm rank crossed into the Remainder were excluded from the retained Leading Edge and exported separately as Remainder-crossing sites."
     ),
     "",
-    "## Weighted Pareto cutoff",
+    "## Shared regimes and selected cutoffs",
     "",
     paste0(
-      "Candidate top-k values were restricted to 1<=k<=N-c2. ",
-      "For each k, benefit G(k) was the number of Joint PASs plus Disjoint PASs whose opposite-arm rank lay in the Leading Edge or Divergence interval. ",
-      "Cost R(k) was the number of Disjoint PASs whose opposite-arm rank lay in the Remainder. ",
-      "Pareto-optimal candidates maximized G while minimizing R. ",
-      "Within the Pareto frontier, G and R were min-max normalized and equal weights were used: U(k)=G_norm(k)-R_norm(k). ",
-      "The comparison-specific empirical cutoff k* maximized U(k), with ties resolved by greater G, lower R, then larger k."
+      "RawEVS shared c1=", raw_shared$c1,
+      ", c2=", raw_shared$c2,
+      ". Pair-specific cutoffs: ", raw_text, "."
     ),
-    "",
-    "## Final membership",
     "",
     paste0(
-      "After k* was selected independently for each method and comparison, the k* highest absolute-PC1-loading PASs were selected independently in the two arms. ",
-      "The final Leading Edge was the union of these two top-k* sets. ",
-      "Opposite-arm Remainder crossings contributed to the Pareto cost but did not override union membership."
-    ),
-    "",
-    "## NB1/NB2 corroboration",
-    "",
-    paste0(
-      "After k* was fixed, raw-count NB1/NB2 corroboration was calculated and did not contribute to cutoff selection. ",
-      "When an immediately preceding equal-sized LEFT rank block was available, it was compared with the selected RIGHT block. ",
-      "Conditional on size-factor-adjusted plug-in means, NB1 and NB2 each fitted one dispersion parameter by maximum likelihood. ",
-      "NB1 used Var(Y)=mu+alpha*mu and size=mu/alpha; NB2 used Var(Y)=mu+alpha*mu^2 and size=1/alpha. ",
-      "Model support was summarized by log-likelihoods, 2*(logLik_NB2-logLik_NB1), and log10(L_NB2/L_NB1)."
-    ),
-    "",
-    "## Selected cutoffs",
-    "",
-    paste0("RawEVS: ", raw_text),
-    "",
-    paste0("NormEVS: ", norm_text)
+      "NormEVS shared c1=", norm_shared$c1,
+      ", c2=", norm_shared$c2,
+      ". Pair-specific cutoffs: ", norm_text, "."
+    )
   )
 
   writeLines(lines, file.path(OUT_ROOT, "Methods_Manuscript.md"))
 }
 
+
 write_figure_legends <- function() {
   lines <- c(
     "# Figure legends",
     "",
-    "## Method-specific cutoff framework",
-    "For each EVS method and RT/ZT comparison, Panel A shows absolute PC1 loading along the method-specific rank. RawEVS uses log1p(raw counts) for PCA; NormEVS uses log1p(DESeq2 median-of-ratios normalized counts). Panel B shows raw-count variance along the same method-specific rank. Panel C shows cumulative divergence D(r)=F_E(r)-F_P(r) and the fitted two-knot regime boundaries. Panel D shows all candidate cutoff coordinates, the Pareto frontier, and the selected weighted-Pareto k*. The fitted c1 and c2 boundaries and selected k* are estimated independently for each method and comparison.",
+    "## Experiment-wide regime geometry",
+    "For each EVS method, all eight arm-specific cumulative PC1-NB divergence curves are shown in grey, with the median observed curve and median fitted shared two-knot model emphasized. The fitted c1 and c2 boundaries define experiment-wide Remainder, Divergence, and Leading-edge regimes that are fixed before pair-specific cutoff optimization.",
     "",
-    "## RawEVS versus NormEVS summary",
-    "The cross-method summary compares the independently calibrated RawEVS and NormEVS top-k* values for each RT/ZT comparison. Labels report k* and k*/(N-c2), the fraction of the fitted Leading-edge candidate domain selected by the Pareto optimum."
+    "## Comparison-specific cutoff framework",
+    "Panel A shows the control and treatment absolute-PC1-loading geometries. Panel B shows their cumulative PC1-NB divergence curves and the method-specific experiment-wide c1/c2 boundaries. Panel C shows the complete pair-specific weighted-Pareto candidate set, Pareto frontier, and selected k*. Opposite-arm Divergence is permissible; only opposite-arm Remainder crossings contribute to contamination and are excluded from the retained Leading Edge.",
+    "",
+    "## RawEVS versus NormEVS cutoff summary",
+    "The summary figure compares the independently selected pair-specific k* values under RawEVS and NormEVS. Each method uses its own experiment-wide shared c1/c2 regime geometry. Labels also report the selected fraction of the method-specific Leading-edge candidate domain."
   )
 
   writeLines(lines, file.path(OUT_ROOT, "Figure_Legends.md"))
 }
+
 
 write_csv <- function(x, path) {
   dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
@@ -2146,6 +2410,73 @@ input <- read_count_data(COUNT_FILE, GROUP_PATTERNS)
 all_counts <- input$counts
 annotation <- input$annotation
 
+# One experiment-wide feature universe, matching the original stable design.
+keep_global <- rowSums(all_counts) > 0
+count_mat <- all_counts[keep_global, , drop = FALSE]
+
+annotation_global <- annotation[
+  match(rownames(count_mat), annotation$feature_id),
+  ,
+  drop = FALSE
+]
+
+if (nrow(count_mat) < 20L) {
+  stop("Too few PASs remain after experiment-wide zero filtering.")
+}
+
+group_labels <- rep(NA_character_, ncol(count_mat))
+names(group_labels) <- colnames(count_mat)
+
+for (g in names(GROUP_PATTERNS)) {
+  idx <- grep(GROUP_PATTERNS[[g]], colnames(count_mat))
+
+  if (length(idx) < 2L) {
+    stop("Each experimental arm requires at least two samples: ", g)
+  }
+
+  if (any(!is.na(group_labels[idx]))) {
+    stop("At least one sample matched more than one GROUP_PATTERNS entry.")
+  }
+
+  group_labels[idx] <- g
+}
+
+if (any(is.na(group_labels))) {
+  stop(
+    "Unassigned sample columns: ",
+    paste(names(group_labels)[is.na(group_labels)], collapse = ", ")
+  )
+}
+
+group_labels <- factor(
+  group_labels,
+  levels = names(GROUP_PATTERNS)
+)
+
+N <- nrow(count_mat)
+
+message("============================================================")
+message("GLOBAL DATASET")
+message("Features: ", N)
+message("Samples: ", ncol(count_mat))
+message("Arms: ", paste(levels(group_labels), collapse = ", "))
+
+# Global DESeq2 normalization and pooled within-group variance across all 8 arms.
+deseq <- normalize_deseq2_comparison(
+  count_mat = count_mat,
+  group_labels = group_labels
+)
+
+normalized_counts <- deseq$normalized_counts
+size_factors <- deseq$size_factors
+
+pooled <- compute_pooled_within_group_variance(
+  normalized_counts = normalized_counts,
+  group_labels = group_labels
+)
+
+message("Global pooled within-group residual df: ", pooled$residual_df)
+
 summary_rows <- list()
 likelihood_rows <- list()
 leading_rows <- list()
@@ -2156,82 +2487,78 @@ all_scan_rows <- list()
 expected_figure_paths <- character(0)
 expected_table_paths <- character(0)
 
-for (comparison_name in names(COMPARISONS)) {
+for (method in EVS_METHODS) {
 
   message("============================================================")
-  message("Analyzing comparison: ", comparison_name)
+  message("EVS METHOD: ", method)
 
-  mapping <- COMPARISONS[[comparison_name]]
-  control_group <- unname(mapping[["control"]])
-  treatment_group <- unname(mapping[["treatment"]])
+  # Build all eight arm-specific rankings first.
+  group_results <- vector("list", length(levels(group_labels)))
+  names(group_results) <- levels(group_labels)
 
-  control_idx <- grep(GROUP_PATTERNS[[control_group]], colnames(all_counts))
-  treatment_idx <- grep(GROUP_PATTERNS[[treatment_group]], colnames(all_counts))
+  for (g in levels(group_labels)) {
+    idx <- which(group_labels == g)
 
-  if (length(control_idx) < 2L || length(treatment_idx) < 2L) {
-    stop("Each comparison arm requires at least two samples: ", comparison_name)
+    group_results[[g]] <- compute_group_analysis(
+      method = method,
+      group_name = g,
+      raw_counts_arm = count_mat[, idx, drop = FALSE],
+      normalized_counts_arm = normalized_counts[, idx, drop = FALSE],
+      pooled_variance = pooled$variance
+    )
   }
 
-  sample_idx <- c(control_idx, treatment_idx)
-  count_mat <- all_counts[, sample_idx, drop = FALSE]
+  # One experiment-wide shared c1/c2 fit across all 8 arms for this method.
+  knot_fit <- fit_shared_knots(group_results)
+  c1 <- knot_fit$c1
+  c2 <- knot_fit$c2
+  lead_domain <- N - c2
 
-  keep <- rowSums(count_mat) > 0
-  count_mat <- count_mat[keep, , drop = FALSE]
+  if (lead_domain < 1L) {
+    stop("No Leading-edge candidate domain for ", method)
+  }
 
-  annotation_cmp <- annotation[
-    match(rownames(count_mat), annotation$feature_id),
-    ,
-    drop = FALSE
-  ]
-
-  N <- nrow(count_mat)
-  if (N < 20L) stop("Too few PASs after filtering: ", comparison_name)
-
-  group_labels <- factor(
-    c(
-      rep(control_group, length(control_idx)),
-      rep(treatment_group, length(treatment_idx))
-    ),
-    levels = c(control_group, treatment_group)
+  message(
+    method,
+    " shared c1=", c1,
+    " | shared c2=", c2,
+    " | Divergence width=", c2 - c1 + 1L,
+    " | Leading-edge candidate size=", lead_domain
   )
 
-  names(group_labels) <- colnames(count_mat)
+  method_root <- file.path(OUT_ROOT, method)
+  dir.create(method_root, recursive = TRUE, showWarnings = FALSE)
 
-  deseq <- normalize_deseq2_comparison(
-    count_mat = count_mat,
-    group_labels = group_labels
+  overall_fig <- file.path(
+    method_root,
+    "Figure_Overall_Experiment_Wide_Regime_Geometry.png"
   )
 
-  normalized_counts <- deseq$normalized_counts
-  size_factors <- deseq$size_factors
-
-  pooled <- compute_pooled_within_group_variance(
-    normalized_counts = normalized_counts,
-    group_labels = group_labels
+  make_overall_method_figure(
+    method = method,
+    group_results = group_results,
+    knot_fit = knot_fit,
+    out_file = overall_fig
   )
 
-  for (method in EVS_METHODS) {
+  expected_overall <- overall_fig
+  if (isTRUE(EXPORT_PDF)) {
+    expected_overall <- c(
+      expected_overall,
+      sub("\\.png$", ".pdf", overall_fig)
+    )
+  }
 
-    message("  Method: ", method)
+  expected_figure_paths <- c(expected_figure_paths, expected_overall)
 
-    group_results <- list()
+  # Pair-specific Pareto optimization using the fixed experiment-wide regimes.
+  for (comparison_name in names(COMPARISONS)) {
 
-    for (g in c(control_group, treatment_group)) {
-      idx <- which(group_labels == g)
+    mapping <- COMPARISONS[[comparison_name]]
+    control_group <- unname(mapping[["control"]])
+    treatment_group <- unname(mapping[["treatment"]])
 
-      group_results[[g]] <- compute_group_analysis(
-        method = method,
-        group_name = g,
-        raw_counts_arm = count_mat[, idx, drop = FALSE],
-        normalized_counts_arm = normalized_counts[, idx, drop = FALSE],
-        size_factors_arm = size_factors[colnames(count_mat)[idx]],
-        pooled_variance = pooled$variance
-      )
-    }
-
-    knot_fit <- fit_shared_knots(group_results)
-    c1 <- knot_fit$c1
-    c2 <- knot_fit$c2
+    message("  Pair: ", comparison_name)
 
     raw_scan <- scan_pair_cutoffs(
       control_df = group_results[[control_group]]$data,
@@ -2270,14 +2597,50 @@ for (comparison_name in names(COMPARISONS)) {
 
     class_summary <- summarize_classification(class_df)
 
-    lead_ids <- unique(class_df$feature_id)
+    # Restore original membership rule:
+    # Remainder-crossing Disjoint sites are excluded.
+    retained_class_df <- class_df %>%
+      filter(retained_for_analysis)
+
+    excluded_class_df <- class_df %>%
+      filter(cross_into_remainder)
+
+    lead_ids <- unique(retained_class_df$feature_id)
     rem_ids <- setdiff(rownames(count_mat), lead_ids)
 
-    lead_table <- class_df %>%
-      left_join(annotation_cmp, by = "feature_id") %>%
+    lead_table <- retained_class_df %>%
+      left_join(annotation_global, by = "feature_id") %>%
       mutate(
         evs_membership = "LeadingEdge",
-        pareto_remainder_crossing_cost = cross_into_remainder
+        pareto_remainder_crossing_cost = FALSE
+      ) %>%
+      select(
+        evs_method,
+        comparison,
+        feature_id,
+        gene_symbol,
+        evs_membership,
+        selected_k,
+        cutoff_rank,
+        control_group,
+        treatment_group,
+        base_class,
+        analysis_class,
+        control_rank,
+        treatment_rank,
+        control_region,
+        treatment_region,
+        opposite_region,
+        control_top_k,
+        treatment_top_k,
+        pareto_remainder_crossing_cost
+      )
+
+    cost_table <- excluded_class_df %>%
+      left_join(annotation_global, by = "feature_id") %>%
+      mutate(
+        evs_membership = "Excluded_RemainderCrossing",
+        pareto_remainder_crossing_cost = TRUE
       ) %>%
       select(
         evs_method,
@@ -2308,10 +2671,14 @@ for (comparison_name in names(COMPARISONS)) {
       evs_method = method,
       comparison = comparison_name,
       feature_id = rem_ids,
-      gene_symbol = annotation_cmp$gene_symbol[
-        match(rem_ids, annotation_cmp$feature_id)
+      gene_symbol = annotation_global$gene_symbol[
+        match(rem_ids, annotation_global$feature_id)
       ],
-      evs_membership = "Remainder",
+      evs_membership = ifelse(
+        rem_ids %in% excluded_class_df$feature_id,
+        "Excluded_RemainderCrossing",
+        "Remainder"
+      ),
       selected_k = selected_k,
       cutoff_rank = cutoff_rank,
       control_rank = as.integer(rem_control_rank[rem_ids]),
@@ -2319,9 +2686,7 @@ for (comparison_name in names(COMPARISONS)) {
       stringsAsFactors = FALSE
     )
 
-    cost_table <- lead_table %>%
-      filter(pareto_remainder_crossing_cost)
-
+    # Post-selection NB corroboration.
     arm_results <- list()
 
     for (g in c(control_group, treatment_group)) {
@@ -2377,8 +2742,6 @@ for (comparison_name in names(COMPARISONS)) {
       filter(k == selected_k) %>%
       slice(1L)
 
-    lead_domain <- N - c2
-
     cutoff_row <- data.frame(
       evs_method = method,
       comparison = comparison_name,
@@ -2402,8 +2765,9 @@ for (comparison_name in names(COMPARISONS)) {
       joint_n = selected_scan_row$joint_n,
       permissible_disjoint_n = selected_scan_row$permissible_disjoint_n,
       divergence_disjoint_n = selected_scan_row$disjoint_opposite_divergence_n,
-      leading_edge_union_n = length(lead_ids),
-      remainder_n = length(rem_ids),
+      retained_leading_edge_n = length(lead_ids),
+      excluded_remainder_crossing_n = nrow(excluded_class_df),
+      remainder_total_n = length(rem_ids),
       pc1_energy_control_selected_fraction =
         sum(tail(
           group_results[[control_group]]$data$pc1_variance_contribution,
@@ -2418,10 +2782,6 @@ for (comparison_name in names(COMPARISONS)) {
         sum(group_results[[treatment_group]]$data$pc1_variance_contribution),
       pooled_within_group_residual_df = pooled$residual_df,
       knot_fit_SSE = knot_fit$SSE,
-      control_poisson_scale_factor =
-        group_results[[control_group]]$poisson_scale_factor,
-      treatment_poisson_scale_factor =
-        group_results[[treatment_group]]$poisson_scale_factor,
       matched_left_control_available =
         arm_results[[control_group]]$matched_left_available,
       matched_left_treatment_available =
@@ -2429,10 +2789,8 @@ for (comparison_name in names(COMPARISONS)) {
       stringsAsFactors = FALSE
     )
 
-    method_root <- file.path(OUT_ROOT, method)
     comp_fig_dir <- file.path(method_root, comparison_name, "Figures")
     comp_tab_dir <- file.path(method_root, comparison_name, "Tables")
-
     dir.create(comp_fig_dir, recursive = TRUE, showWarnings = FALSE)
     dir.create(comp_tab_dir, recursive = TRUE, showWarnings = FALSE)
 
@@ -2474,11 +2832,11 @@ for (comparison_name in names(COMPARISONS)) {
       ),
       Pareto_Cost = file.path(
         comp_tab_dir,
-        paste0("Table_", method, "_", comparison_name, "_Pareto_Remainder_Crossing_Cost_Sites.csv")
+        paste0("Table_", method, "_", comparison_name, "_Excluded_Remainder_Crossing_Sites.csv")
       ),
       PC1_NB_Rank = file.path(
         comp_tab_dir,
-        paste0("Table_", method, "_", comparison_name, "_PC1_Variance_Rank_Data.csv")
+        paste0("Table_", method, "_", comparison_name, "_PC1_NB_Rank_Data.csv")
       ),
       NB_Region_Summary = file.path(
         comp_tab_dir,
@@ -2490,7 +2848,7 @@ for (comparison_name in names(COMPARISONS)) {
       ),
       Size_Factors = file.path(
         comp_tab_dir,
-        paste0("Table_", method, "_", comparison_name, "_DESeq2_Size_Factors.csv")
+        paste0("Table_", method, "_", comparison_name, "_Global_DESeq2_Size_Factors.csv")
       )
     )
 
@@ -2504,7 +2862,7 @@ for (comparison_name in names(COMPARISONS)) {
       group_results[[control_group]]$data %>% mutate(arm = control_group),
       group_results[[treatment_group]]$data %>% mutate(arm = treatment_group)
     ) %>%
-      left_join(annotation_cmp, by = "feature_id")
+      left_join(annotation_global, by = "feature_id")
 
     write_csv(rank_table, table_paths[["PC1_NB_Rank"]])
     write_csv(region_summary, table_paths[["NB_Region_Summary"]])
@@ -2512,7 +2870,6 @@ for (comparison_name in names(COMPARISONS)) {
 
     write_csv(
       data.frame(
-        comparison = comparison_name,
         sample = names(size_factors),
         group = as.character(group_labels[names(size_factors)]),
         size_factor = as.numeric(size_factors),
@@ -2545,14 +2902,13 @@ for (comparison_name in names(COMPARISONS)) {
     all_scan_rows[[key]] <- scan_df
 
     message(
-      "    k*=", selected_k,
-      " | c1=", c1,
-      " | c2=", c2,
-      " | k*/N=", signif(selected_k / N, 4),
-      " | k*/LE=", signif(selected_k / lead_domain, 4),
-      " | union=", length(lead_ids),
+      "    ", comparison_name,
+      ": k*=", selected_k,
+      " | retained=", length(lead_ids),
+      " | excluded crossings=", nrow(excluded_class_df),
       " | G=", selected_scan_row$good_n,
-      " | R=", selected_scan_row$remainder_cross_n
+      " | R=", selected_scan_row$remainder_cross_n,
+      " | U=", signif(selected_scan_row$weighted_utility, 4)
     )
   }
 }
@@ -2590,7 +2946,7 @@ summary_rem_path <- file.path(
 
 summary_cost_path <- file.path(
   SUMMARY_TAB_DIR,
-  "Table_Dual_EVS_Pareto_Remainder_Crossing_Cost_Sites_All.csv"
+  "Table_Dual_EVS_Excluded_Remainder_Crossing_Sites_All.csv"
 )
 
 summary_scan_path <- file.path(
