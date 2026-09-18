@@ -1,36 +1,4 @@
 #!/usr/bin/env Rscript
-# =============================================================================
-# EVS_Manuscript_Figures.R
-# Publication-quality figure layer for the CPM-EVS vs DESeq2-EVS pipeline.
-#
-# USAGE
-# -----
-# In CPM_vs_DESeq2_EVS_MANUSCRIPT_FINAL.R, delete the block running from
-#   "# FOUR COMPOSITE MANUSCRIPT FIGURES"
-# down to and including the writeLines() call that creates Figure_Legends.md,
-# then insert in its place:
-#
-#   source("EVS_Manuscript_Figures.R")
-#   evs_render_all(
-#     method_objects = method_objects,
-#     summary_df     = summary_df,
-#     overlap_df     = overlap_df,
-#     comparisons    = COMPARISONS,
-#     fig_dir        = FIG_DIR,
-#     out_root       = OUT_ROOT
-#   )
-#
-# The old figure helpers (theme_pub, save_composite, make_*_panel) may be
-# deleted; nothing here depends on them. The analysis code is untouched.
-#
-# Check rendering without the count matrix:
-#   Rscript EVS_Manuscript_Figures.R --selftest
-#
-# DEPENDENCIES: ggplot2 (>= 3.4), dplyr, tidyr, grid, scales, grDevices.
-# scales and gtable ship with ggplot2, so nothing new needs installing.
-# patchwork is used for panel alignment IF it happens to be installed; without
-# it the module falls back to a gtable aligner and still runs.
-# =============================================================================
 
 suppressPackageStartupMessages({
   library(ggplot2)
@@ -38,6 +6,568 @@ suppressPackageStartupMessages({
   library(tidyr)
   library(grid)
 })
+
+options(stringsAsFactors = FALSE)
+
+# =============================================================================
+# CPM-EVS vs DESeq2-EVS — FINAL MANUSCRIPT VERSION
+# =============================================================================
+#
+# DESIGN
+# ------
+# 1) One experiment-wide PAS universe.
+# 2) Two EVS preprocessing methods:
+#      CPM-EVS    = log1p(CPM) -> arm-specific PCA
+#      DESeq2-EVS = log1p(DESeq2-normalized counts) -> arm-specific PCA
+# 3) For each method, all 8 arm-specific D_g(r) curves are fit jointly to
+#    estimate one shared c1/c2 regime system.
+# 4) Each RT/ZT comparison gets its own independent cutoff k*.
+# 5) Cutoff scoring is continuous:
+#      - Joint sites receive full benefit.
+#      - Disjoint opposite-arm Leading-Edge sites receive graded LE support.
+#      - Disjoint opposite-arm Divergence sites receive graded divergence support.
+#      - Disjoint opposite-arm Remainder sites receive a distance-weighted penalty.
+# 6) k* is the geometric knee of the comparison-specific weighted Pareto frontier.
+# 7) Remainder-crossing sites are NOT silently discarded from the top-k union.
+#    They are flagged as penalized/low-confidence. A separate high-confidence
+#    subset contains Joint + opposite-LE + opposite-Divergence sites.
+# 8) Exactly four composite manuscript figures are generated, at final
+#    print size, by the publication figure layer defined below.
+#
+# =============================================================================
+
+COUNT_FILE <- "/root/REAPER98632/data/WTTS-Seq_2022.2_DE_raw_read_numbers.csv"
+OUT_ROOT  <- "/root/REAPER98632/exports/cpm_vs_deseq2_evs_manuscript_final"
+
+GROUP_PATTERNS <- c(
+  RT0="^R0_", ZT6="^ZT6_", RT2="^R2_", ZT8="^ZT8_",
+  RT4="^R4_", ZT10="^ZT10_", RT8="^R8_", ZT14="^ZT14_"
+)
+
+COMPARISONS <- list(
+  RT0_ZT6=c(control="RT0", treatment="ZT6"),
+  RT2_ZT8=c(control="RT2", treatment="ZT8"),
+  RT4_ZT10=c(control="RT4", treatment="ZT10"),
+  RT8_ZT14=c(control="RT8", treatment="ZT14")
+)
+
+METHODS <- c("CPM_EVS", "DESeq2_EVS")
+
+dir.create(OUT_ROOT, recursive=TRUE, showWarnings=FALSE)
+FIG_DIR <- file.path(OUT_ROOT, "Figures")
+TAB_DIR <- file.path(OUT_ROOT, "Tables")
+dir.create(FIG_DIR, recursive=TRUE, showWarnings=FALSE)
+dir.create(TAB_DIR, recursive=TRUE, showWarnings=FALSE)
+
+# =============================================================================
+# INPUT / NORMALIZATION
+# =============================================================================
+
+read_counts <- function(path) {
+  if (!file.exists(path)) stop("Count file not found: ", path)
+
+  x <- read.csv(path, check.names=FALSE, stringsAsFactors=FALSE)
+  idx <- sort(unique(unlist(lapply(GROUP_PATTERNS, \(p) grep(p, names(x))))))
+
+  if (!length(idx)) stop("No sample columns matched GROUP_PATTERNS.")
+
+  ids <- trimws(as.character(x[[1]]))
+  blank <- is.na(ids) | ids==""
+  ids[blank] <- paste0("feature_", which(blank))
+  ids <- make.unique(ids, sep="__dup_")
+
+  m <- do.call(cbind, lapply(x[,idx,drop=FALSE], \(z)
+    suppressWarnings(as.numeric(as.character(z)))
+  ))
+
+  rownames(m) <- ids
+  colnames(m) <- names(x)[idx]
+  storage.mode(m) <- "numeric"
+  m[!is.finite(m)] <- 0
+  m <- pmax(m, 0)
+
+  # One experiment-wide PAS universe.
+  m <- m[rowSums(m) > 0, , drop=FALSE]
+
+  if (nrow(m) < 20L) stop("Too few nonzero PASs.")
+  m
+}
+
+assign_groups <- function(samples) {
+  g <- rep(NA_character_, length(samples))
+  names(g) <- samples
+
+  for (nm in names(GROUP_PATTERNS)) {
+    idx <- grep(GROUP_PATTERNS[[nm]], samples)
+    if (any(!is.na(g[idx]))) stop("A sample matched >1 group.")
+    g[idx] <- nm
+  }
+
+  if (anyNA(g)) {
+    stop("Unassigned samples: ", paste(names(g)[is.na(g)], collapse=", "))
+  }
+
+  factor(g, levels=names(GROUP_PATTERNS))
+}
+
+deseq2_normalize <- function(counts, groups) {
+  if (!requireNamespace("DESeq2", quietly=TRUE)) stop("DESeq2 is required.")
+
+  dds <- DESeq2::DESeqDataSetFromMatrix(
+    countData=round(counts),
+    colData=data.frame(group=groups, row.names=colnames(counts)),
+    design=~group
+  )
+
+  dds <- tryCatch(
+    DESeq2::estimateSizeFactors(dds),
+    error=\(e) DESeq2::estimateSizeFactors(dds, type="poscounts")
+  )
+
+  list(
+    counts=DESeq2::counts(dds, normalized=TRUE),
+    size_factors=DESeq2::sizeFactors(dds)
+  )
+}
+
+cpm_log1p <- function(x) {
+  lib <- colSums(x)
+  lib[!is.finite(lib) | lib<=0] <- 1
+  log1p(sweep(x, 2, lib/1e6, "/"))
+}
+
+pooled_within_group_var <- function(norm, groups) {
+  sse <- rep(0, nrow(norm))
+  df <- 0L
+
+  for (g in levels(groups)) {
+    z <- norm[,groups==g,drop=FALSE]
+    mu <- rowMeans(z)
+    sse <- sse + rowSums((z-mu)^2)
+    df <- df + ncol(z)-1L
+  }
+
+  if (df < 2L) stop("Insufficient pooled residual degrees of freedom.")
+  pmax(sse/df, 0)
+}
+
+# =============================================================================
+# PC1 RANKING + CUMULATIVE DIVERGENCE
+# =============================================================================
+
+pc1_rank <- function(x) {
+  p <- prcomp(t(x), center=TRUE, scale.=FALSE, rank.=1)
+
+  loading <- p$rotation[,1]
+  loading[!is.finite(loading)] <- 0
+
+  list(
+    order=order(abs(loading), decreasing=FALSE),
+    loading=loading,
+    contribution=(p$sdev[1]^2)*loading^2
+  )
+}
+
+build_arm <- function(method, arm, raw, norm, pooled_var) {
+  rank_matrix <- switch(
+    method,
+    CPM_EVS=cpm_log1p(raw),
+    DESeq2_EVS=log1p(norm),
+    stop("Unknown method: ", method)
+  )
+
+  pc <- pc1_rank(rank_matrix)
+  ord <- pc$order
+
+  P <- pc$contribution[ord]
+  mu <- rowMeans(norm)[ord]
+  V <- pooled_var[ord]
+  E <- pmax(V-mu, 0)
+
+  if (sum(P)<=0 || sum(E)<=0) {
+    stop("Undefined PC1/NB mass for ", method, " / ", arm)
+  }
+
+  p <- P/sum(P)
+  q <- E/sum(E)
+
+  data.frame(
+    method=method,
+    arm=arm,
+    rank=seq_along(ord),
+    feature_id=rownames(raw)[ord],
+    abs_pc1_loading=abs(pc$loading[ord]),
+    pc1_contribution=P,
+    pc1_mass=p,
+    excess_variance=E,
+    excess_mass=q,
+    F_P=cumsum(p),
+    F_E=cumsum(q),
+    D=cumsum(q)-cumsum(p),
+    stringsAsFactors=FALSE
+  )
+}
+
+# =============================================================================
+# SHARED c1/c2 FIT
+# =============================================================================
+
+piecewise_basis <- function(x,c1,c2) {
+  cbind(1, x, pmax(x-c1,0), pmax(x-c2,0))
+}
+
+fit_shared_knots <- function(arms) {
+  N <- nrow(arms[[1]])
+  if (length(unique(vapply(arms,nrow,integer(1)))) != 1L) {
+    stop("All arms must use the same PAS universe.")
+  }
+
+  x_full <- (seq_len(N)-1)/(N-1)
+  D_full <- do.call(cbind,lapply(arms,\(z) z$D))
+  colnames(D_full) <- names(arms)
+
+  # Efficient optimization on a coarse grid; full fit performed once afterward.
+  opt_n <- min(4000L,N)
+  idx <- unique(as.integer(round(seq(1,N,length.out=opt_n))))
+  x <- x_full[idx]
+  D <- D_full[idx,,drop=FALSE]
+
+  min_gap <- max(4/(N-1),1e-4)
+
+  objective <- function(par) {
+    c1 <- par[1]
+    c2 <- par[2]
+
+    if (!is.finite(c1) || !is.finite(c2) ||
+        c1<=0 || c2>=1 || c2-c1<=min_gap) return(1e100)
+
+    X <- piecewise_basis(x,c1,c2)
+    b <- tryCatch(qr.coef(qr(X),D),error=\(e) NULL)
+
+    if (is.null(b) || any(!is.finite(b))) return(1e100)
+    sum((D-X%*%b)^2)
+  }
+
+  starts <- list(c(.05,.95),c(.12,.88),c(.22,.78),c(.32,.68))
+
+  fits <- lapply(starts,\(st)
+    optim(
+      st,objective,
+      method="Nelder-Mead",
+      control=list(maxit=500,reltol=1e-10)
+    )
+  )
+
+  best <- fits[[which.min(vapply(fits,`[[`,numeric(1),"value"))]]
+
+  c1 <- as.integer(round(1+best$par[1]*(N-1)))
+  c2 <- as.integer(round(1+best$par[2]*(N-1)))
+
+  c1 <- max(2L,min(N-2L,c1))
+  c2 <- max(c1+1L,min(N-1L,c2))
+
+  X_full <- piecewise_basis(
+    x_full,
+    (c1-1)/(N-1),
+    (c2-1)/(N-1)
+  )
+
+  coef <- qr.coef(qr(X_full),D_full)
+  fitted <- X_full%*%coef
+
+  list(
+    c1=c1,
+    c2=c2,
+    N=N,
+    groups=names(arms),
+    fitted=fitted,
+    SSE=sum((D_full-fitted)^2)
+  )
+}
+
+# =============================================================================
+# FAST CONTINUOUS TOP-k SCORING
+# =============================================================================
+
+rank_map <- function(df) setNames(df$rank,df$feature_id)
+
+div_support <- function(r,c1,c2) {
+  pmin(pmax((r-c1)/(c2-c1),0),1)
+}
+
+lead_support <- function(r,c2,N) {
+  pmin(pmax((r-c2)/(N-c2),0),1)
+}
+
+rem_depth <- function(r,c1) {
+  pmin(pmax((c1-r)/(c1-1),0),1)
+}
+
+rank_gap <- function(a,b,N) {
+  abs(a-b)/(N-1)
+}
+
+add_events <- function(pos,weight,L) {
+  out <- numeric(L)
+  ok <- is.finite(pos) & is.finite(weight) & pos>=1 & pos<=L
+
+  if (!any(ok)) return(out)
+
+  z <- rowsum(
+    weight[ok],
+    group=as.integer(pos[ok]),
+    reorder=FALSE
+  )
+
+  out[as.integer(rownames(z))] <- z[,1]
+  out
+}
+
+activate_from <- function(depth,weight,K) {
+  cumsum(add_events(depth,weight,K))
+}
+
+active_interval <- function(start,end,weight,K) {
+  # Active for start <= k < end.
+  delta <- numeric(K+1L)
+
+  ok <- is.finite(start) & is.finite(end) & is.finite(weight) &
+        start>=1 & start<=K & end>start
+
+  if (!any(ok)) return(numeric(K))
+
+  s <- as.integer(start[ok])
+  e <- pmin(as.integer(end[ok]),K+1L)
+  w <- weight[ok]
+
+  delta <- delta + add_events(s,w,K+1L)
+  delta <- delta - add_events(e,w,K+1L)
+
+  cumsum(delta)[seq_len(K)]
+}
+
+scan_pair_fast <- function(control_df,treatment_df,c1,c2) {
+  N <- nrow(control_df)
+  K <- N-c2
+
+  if (K<1L) stop("No candidate k exists beyond c2.")
+
+  rC_map <- rank_map(control_df)
+  rT_map <- rank_map(treatment_df)
+
+  ids <- control_df$feature_id
+  rC <- as.integer(rC_map[ids])
+  rT <- as.integer(rT_map[ids])
+
+  dC <- N-rC+1L
+  dT <- N-rT+1L
+
+  # Joint sites: full unit benefit after both arms include the PAS.
+  joint_depth <- pmax(dC,dT)
+  joint_n <- activate_from(joint_depth,rep(1,N),K)
+
+  # Control-only interval.
+  idxC <- which(dC<dT & dC<=K)
+  startC <- dC[idxC]
+  endC <- pmin(dT[idxC],K+1L)
+  oppC <- rT[idxC]
+  selC <- rC[idxC]
+
+  supportC <- ifelse(
+    oppC>c2,
+    lead_support(oppC,c2,N),
+    ifelse(oppC>=c1,div_support(oppC,c1,c2),0)
+  )
+
+  penaltyC <- ifelse(
+    oppC<c1,
+    rem_depth(oppC,c1)^2 * rank_gap(selC,oppC,N),
+    0
+  )
+
+  disC_n       <- active_interval(startC,endC,rep(1,length(idxC)),K)
+  disC_support <- active_interval(startC,endC,supportC,K)
+  disC_penalty <- active_interval(startC,endC,penaltyC,K)
+  disC_rem     <- active_interval(startC,endC,as.numeric(oppC<c1),K)
+  disC_div     <- active_interval(startC,endC,as.numeric(oppC>=c1 & oppC<=c2),K)
+  disC_le      <- active_interval(startC,endC,as.numeric(oppC>c2),K)
+
+  # Treatment-only interval.
+  idxT <- which(dT<dC & dT<=K)
+  startT <- dT[idxT]
+  endT <- pmin(dC[idxT],K+1L)
+  oppT <- rC[idxT]
+  selT <- rT[idxT]
+
+  supportT <- ifelse(
+    oppT>c2,
+    lead_support(oppT,c2,N),
+    ifelse(oppT>=c1,div_support(oppT,c1,c2),0)
+  )
+
+  penaltyT <- ifelse(
+    oppT<c1,
+    rem_depth(oppT,c1)^2 * rank_gap(selT,oppT,N),
+    0
+  )
+
+  disT_n       <- active_interval(startT,endT,rep(1,length(idxT)),K)
+  disT_support <- active_interval(startT,endT,supportT,K)
+  disT_penalty <- active_interval(startT,endT,penaltyT,K)
+  disT_rem     <- active_interval(startT,endT,as.numeric(oppT<c1),K)
+  disT_div     <- active_interval(startT,endT,as.numeric(oppT>=c1 & oppT<=c2),K)
+  disT_le      <- active_interval(startT,endT,as.numeric(oppT>c2),K)
+
+  disjoint_n <- disC_n+disT_n
+
+  data.frame(
+    k=seq_len(K),
+    joint_n=joint_n,
+    disjoint_n=disjoint_n,
+    opposite_le_n=disC_le+disT_le,
+    opposite_divergence_n=disC_div+disT_div,
+    remainder_cross_n=disC_rem+disT_rem,
+    union_n=2*seq_len(K)-joint_n,
+    weighted_benefit=joint_n+disC_support+disT_support,
+    weighted_penalty=disC_penalty+disT_penalty,
+    stringsAsFactors=FALSE
+  )
+}
+
+# =============================================================================
+# PARETO FRONTIER + GEOMETRIC KNEE
+# =============================================================================
+
+norm01 <- function(x) {
+  r <- range(x,na.rm=TRUE)
+  if (!is.finite(diff(r)) || diff(r)==0) return(rep(0,length(x)))
+  (x-r[1])/diff(r)
+}
+
+pareto_frontier <- function(df) {
+  x <- df %>%
+    arrange(weighted_penalty,desc(weighted_benefit),desc(k))
+
+  keep <- logical(nrow(x))
+  best <- -Inf
+
+  for (i in seq_len(nrow(x))) {
+    if (x$weighted_benefit[i] > best) {
+      keep[i] <- TRUE
+      best <- x$weighted_benefit[i]
+    }
+  }
+
+  x[keep,,drop=FALSE] %>% arrange(weighted_penalty)
+}
+
+pareto_knee <- function(frontier) {
+  if (nrow(frontier)==1L) return(frontier$k[1])
+
+  x <- norm01(frontier$weighted_penalty)
+  y <- norm01(frontier$weighted_benefit)
+
+  x1 <- x[1]
+  y1 <- y[1]
+  x2 <- x[length(x)]
+  y2 <- y[length(y)]
+
+  den <- sqrt((y2-y1)^2+(x2-x1)^2)
+
+  if (!is.finite(den) || den==0) {
+    return(frontier$k[which.max(y-x)])
+  }
+
+  distance <- abs(
+    (y2-y1)*x - (x2-x1)*y + x2*y1 - y2*x1
+  )/den
+
+  frontier$k[which.max(distance)]
+}
+
+# =============================================================================
+# CLASSIFICATION AT k*
+# =============================================================================
+
+classify_at_k <- function(k,comparison,control_df,treatment_df,c1,c2) {
+  N <- nrow(control_df)
+
+  rC <- rank_map(control_df)
+  rT <- rank_map(treatment_df)
+
+  topC <- tail(control_df$feature_id,k)
+  topT <- tail(treatment_df$feature_id,k)
+  ids <- union(topC,topT)
+
+  a <- as.integer(rC[ids])
+  b <- as.integer(rT[ids])
+
+  inC <- ids%in%topC
+  inT <- ids%in%topT
+  joint <- inC & inT
+  disC <- inC & !inT
+  disT <- inT & !inC
+
+  opp <- ifelse(disC,b,ifelse(disT,a,NA_integer_))
+  selected_rank <- ifelse(disC,a,ifelse(disT,b,NA_integer_))
+
+  opp_region <- ifelse(
+    joint,"Joint",
+    ifelse(
+      opp>c2,"Opposite Leading Edge",
+      ifelse(opp>=c1,"Opposite Divergence","Opposite Remainder")
+    )
+  )
+
+  penalty <- ifelse(
+    joint,0,
+    ifelse(
+      opp<c1,
+      rem_depth(opp,c1)^2 * rank_gap(selected_rank,opp,N),
+      0
+    )
+  )
+
+  support <- ifelse(
+    joint,1,
+    ifelse(
+      opp>c2,
+      lead_support(opp,c2,N),
+      ifelse(opp>=c1,div_support(opp,c1,c2),0)
+    )
+  )
+
+  data.frame(
+    comparison=comparison,
+    feature_id=ids,
+    selected_k=k,
+    control_rank=a,
+    treatment_rank=b,
+    class=ifelse(joint,"Joint",ifelse(disC,"Control only","Treatment only")),
+    opposite_region=opp_region,
+    support_score=support,
+    remainder_penalty=penalty,
+    selected_topk_union=TRUE,
+    high_confidence=joint | opp_region%in%c(
+      "Opposite Leading Edge","Opposite Divergence"
+    ),
+    penalized_remainder_crossing=opp_region=="Opposite Remainder",
+    stringsAsFactors=FALSE
+  )
+}
+
+# =============================================================================
+# FIGURE SYSTEM (publication layer)
+# =============================================================================
+#
+# Figures are authored at 180 mm final width with 7 pt body text at 100%
+# reproduction, in a colourblind-safe palette, and exported as vector PDF plus
+# 600 dpi PNG. Figure_Legends.md is generated from the fitted objects so the
+# numbers in the legends cannot drift from the numbers in the figures.
+#
+# Optional: patchwork is used for panel alignment if installed. Without it a
+# gtable aligner is used instead and everything still runs.
+# =============================================================================
 
 # =============================================================================
 # 1. DESIGN SYSTEM
@@ -928,87 +1458,405 @@ evs_render_all <- function(method_objects, summary_df, overlap_df,
 }
 
 # =============================================================================
-# 8. SELF-TEST (synthetic data; verifies rendering without the count matrix)
+# RUN ANALYSIS
 # =============================================================================
 
-evs_selftest <- function(dir = file.path(getwd(), "evs_figure_selftest")) {
-  set.seed(11)
-  dir.create(dir, recursive = TRUE, showWarnings = FALSE)
-  N <- 32104L
-  comps <- list(RT0_ZT6 = 1, RT2_ZT8 = 2, RT4_ZT10 = 3, RT8_ZT14 = 4)
-  knots <- list(CPM_EVS = c(10451L, 23509L), DESeq2_EVS = c(9120L, 21860L))
+message("Reading count matrix...")
+counts <- read_counts(COUNT_FILE)
+groups <- assign_groups(colnames(counts))
 
-  mk_method <- function(m) {
-    c1 <- knots[[m]][1]; c2 <- knots[[m]][2]
-    x  <- (seq_len(N) - 1) / (N - 1)
-    x1 <- (c1 - 1) / (N - 1); x2 <- (c2 - 1) / (N - 1)
-    base <- -0.05 + 1.20 * x - 0.55 * pmax(x - x1, 0) - 2.25 * pmax(x - x2, 0)
-    base <- base - base[N]
-    arms <- lapply(1:8, function(g) {
-      d <- base + rnorm(N, 0, 0.004) + 0.02 * sin(x * 9 + g)
-      data.frame(rank = seq_len(N), D = d - d[N])
-    })
-    names(arms) <- paste0("arm", 1:8)
-    fitted <- matrix(rep(base, 8), ncol = 8)
-    knot <- list(c1 = c1, c2 = c2, N = N, fitted = fitted, SSE = NA_real_)
+message(
+  "Features: ",nrow(counts),
+  " | samples: ",ncol(counts),
+  " | arms: ",length(levels(groups))
+)
 
-    K <- N - c2
-    scans <- list(); fronts <- list(); pairs <- list()
-    for (nm in names(comps)) {
-      k   <- seq_len(K)
-      pen <- cummax(1300 * (k / K)^1.35)
-      ben <- cummax(5900 * (k / K)^0.92)
-      s <- data.frame(k = k, weighted_penalty = pen, weighted_benefit = ben,
-                      joint_n = round(k * 0.20), opposite_le_n = round(k * 0.22),
-                      opposite_divergence_n = round(k * 0.80),
-                      remainder_cross_n = round(k * 0.58),
-                      union_n = 2 * k - round(k * 0.20))
-      xx <- (pen - min(pen)) / diff(range(pen))
-      yy <- (ben - min(ben)) / diff(range(ben))
-      dd <- abs((yy[K] - yy[1]) * xx - (xx[K] - xx[1]) * yy +
-                  xx[K] * yy[1] - yy[K] * xx[1]) /
-        sqrt((yy[K] - yy[1])^2 + (xx[K] - xx[1])^2)
-      scans[[nm]]  <- s
-      fronts[[nm]] <- s
-      pairs[[nm]]  <- list(kstar = k[which.max(dd)])
-    }
-    list(arms = arms, knot = knot, scans = scans, frontiers = fronts, pairs = pairs)
+message("Global DESeq2 normalization...")
+norm_obj <- deseq2_normalize(counts,groups)
+norm <- norm_obj$counts
+
+message("Pooled normalized within-group variance...")
+pooled_var <- pooled_within_group_var(norm,groups)
+
+method_objects <- list()
+summary_rows <- list()
+site_rows <- list()
+scan_rows <- list()
+frontier_rows <- list()
+
+for (method in METHODS) {
+
+  message("============================================================")
+  message("METHOD: ",method)
+
+  arms <- list()
+
+  for (g in levels(groups)) {
+    idx <- which(groups==g)
+
+    arms[[g]] <- build_arm(
+      method=method,
+      arm=g,
+      raw=counts[,idx,drop=FALSE],
+      norm=norm[,idx,drop=FALSE],
+      pooled_var=pooled_var
+    )
   }
 
-  mo <- list(CPM_EVS = mk_method("CPM_EVS"), DESeq2_EVS = mk_method("DESeq2_EVS"))
+  knot <- fit_shared_knots(arms)
+  K <- knot$N-knot$c2
 
-  summary_df <- bind_rows(lapply(names(mo), function(m) {
-    bind_rows(lapply(names(comps), function(nm) {
-      ks <- mo[[m]]$pairs[[nm]]$kstar
-      s  <- mo[[m]]$scans[[nm]][ks, ]
-      data.frame(method = m, comparison = nm, N = N,
-                 c1 = mo[[m]]$knot$c1, c2 = mo[[m]]$knot$c2,
-                 selected_k = ks,
-                 k_over_leading_edge = ks / (N - mo[[m]]$knot$c2),
-                 joint_n = s$joint_n, opposite_le_n = s$opposite_le_n,
-                 opposite_divergence_n = s$opposite_divergence_n,
-                 remainder_cross_n = s$remainder_cross_n)
-    }))
-  }))
+  message(
+    "Shared c1=",knot$c1,
+    " | c2=",knot$c2,
+    " | candidate k=1..",K
+  )
 
-  overlap_df <- bind_rows(lapply(names(comps), function(nm) {
-    a  <- summary_df$joint_n[summary_df$method == "CPM_EVS" &
-                               summary_df$comparison == nm] * 4
-    b  <- summary_df$joint_n[summary_df$method == "DESeq2_EVS" &
-                               summary_df$comparison == nm] * 4
-    ov <- round(min(a, b) * 0.68)
-    data.frame(comparison = nm, CPM_high_confidence = a,
-               DESeq2_high_confidence = b, overlap_high_confidence = ov,
-               union_high_confidence = a + b - ov,
-               jaccard_high_confidence = ov / (a + b - ov))
-  }))
+  scans <- list()
+  frontiers <- list()
+  pair_results <- list()
 
-  evs_render_all(mo, summary_df, overlap_df, comps, dir, dir)
-  message("Self-test output: ", dir)
-  invisible(dir)
+  for (nm in names(COMPARISONS)) {
+    mp <- COMPARISONS[[nm]]
+
+    scan <- scan_pair_fast(
+      arms[[mp[["control"]]]],
+      arms[[mp[["treatment"]]]],
+      knot$c1,
+      knot$c2
+    )
+
+    frontier <- pareto_frontier(scan)
+    kstar <- pareto_knee(frontier)
+
+    selected <- scan[scan$k==kstar,,drop=FALSE]
+
+    cls <- classify_at_k(
+      k=kstar,
+      comparison=nm,
+      control_df=arms[[mp[["control"]]]],
+      treatment_df=arms[[mp[["treatment"]]]],
+      c1=knot$c1,
+      c2=knot$c2
+    )
+
+    cls$method <- method
+
+    high_conf_n <- sum(cls$high_confidence)
+    rem_n <- sum(cls$penalized_remainder_crossing)
+
+    row <- data.frame(
+      method=method,
+      comparison=nm,
+      N=knot$N,
+      c1=knot$c1,
+      c2=knot$c2,
+      remainder_size=knot$c1-1L,
+      divergence_size=knot$c2-knot$c1+1L,
+      leading_edge_candidate_size=K,
+      selected_k=kstar,
+      cutoff_rank=knot$N-kstar+1L,
+      k_over_N=kstar/knot$N,
+      k_over_leading_edge=kstar/K,
+      weighted_benefit=selected$weighted_benefit,
+      weighted_penalty=selected$weighted_penalty,
+      joint_n=selected$joint_n,
+      opposite_le_n=selected$opposite_le_n,
+      opposite_divergence_n=selected$opposite_divergence_n,
+      remainder_cross_n=selected$remainder_cross_n,
+      selected_union_n=selected$union_n,
+      high_confidence_n=high_conf_n,
+      penalized_remainder_n=rem_n,
+      knot_SSE=knot$SSE,
+      stringsAsFactors=FALSE
+    )
+
+    scans[[nm]] <- scan
+    frontiers[[nm]] <- frontier
+    pair_results[[nm]] <- list(
+      kstar=kstar,
+      sites=cls,
+      summary=row
+    )
+
+    key <- paste(method,nm,sep="__")
+
+    summary_rows[[key]] <- row
+    site_rows[[key]] <- cls
+    scan_rows[[key]] <- mutate(
+      scan,method=method,comparison=nm
+    )
+    frontier_rows[[key]] <- mutate(
+      frontier,method=method,comparison=nm
+    )
+
+    message(
+      "  ",nm,
+      " | k*=",kstar,
+      " | G_w=",round(selected$weighted_benefit,2),
+      " | R_w=",round(selected$weighted_penalty,3),
+      " | Joint=",selected$joint_n,
+      " | Rem-cross=",selected$remainder_cross_n
+    )
+  }
+
+  method_objects[[method]] <- list(
+    arms=arms,
+    knot=knot,
+    scans=scans,
+    frontiers=frontiers,
+    pairs=pair_results
+  )
 }
 
-if (!interactive() &&
-    any(grepl("--selftest", commandArgs(trailingOnly = TRUE), fixed = TRUE))) {
-  evs_selftest()
+summary_df <- bind_rows(summary_rows)
+sites_df <- bind_rows(site_rows)
+scans_df <- bind_rows(scan_rows)
+frontiers_df <- bind_rows(frontier_rows)
+
+# =============================================================================
+# SUMMARY / OVERLAP TABLES
+# =============================================================================
+
+overlap_df <- bind_rows(lapply(names(COMPARISONS),\(nm) {
+
+  cpm <- sites_df %>%
+    filter(
+      method=="CPM_EVS",
+      comparison==nm,
+      high_confidence
+    ) %>%
+    pull(feature_id) %>%
+    unique()
+
+  des <- sites_df %>%
+    filter(
+      method=="DESeq2_EVS",
+      comparison==nm,
+      high_confidence
+    ) %>%
+    pull(feature_id) %>%
+    unique()
+
+  u <- union(cpm,des)
+
+  data.frame(
+    comparison=nm,
+    CPM_high_confidence=length(cpm),
+    DESeq2_high_confidence=length(des),
+    overlap_high_confidence=length(intersect(cpm,des)),
+    union_high_confidence=length(u),
+    jaccard_high_confidence=ifelse(
+      length(u)>0,
+      length(intersect(cpm,des))/length(u),
+      NA_real_
+    ),
+    stringsAsFactors=FALSE
+  )
+}))
+
+write.csv(
+  summary_df,
+  file.path(TAB_DIR,"Table_1_EVS_Cutoff_Summary.csv"),
+  row.names=FALSE
+)
+
+write.csv(
+  overlap_df,
+  file.path(TAB_DIR,"Table_2_CPM_vs_DESeq2_HighConfidence_Overlap.csv"),
+  row.names=FALSE
+)
+
+write.csv(
+  sites_df,
+  file.path(TAB_DIR,"Table_3_All_Selected_TopK_Union_Sites.csv"),
+  row.names=FALSE
+)
+
+write.csv(
+  sites_df %>% filter(high_confidence),
+  file.path(TAB_DIR,"Table_4_HighConfidence_EVS_Sites.csv"),
+  row.names=FALSE
+)
+
+write.csv(
+  sites_df %>% filter(penalized_remainder_crossing),
+  file.path(TAB_DIR,"Table_5_Penalized_Remainder_Crossing_Sites.csv"),
+  row.names=FALSE
+)
+
+write.csv(
+  scans_df,
+  file.path(TAB_DIR,"Table_S1_All_Cutoff_Scans.csv"),
+  row.names=FALSE
+)
+
+write.csv(
+  frontiers_df,
+  file.path(TAB_DIR,"Table_S2_All_Pareto_Frontiers.csv"),
+  row.names=FALSE
+)
+
+# =============================================================================
+# MANUSCRIPT FIGURES
+# =============================================================================
+
+# Clear figures from earlier runs. The manifest and zip steps below glob every
+# PNG/PDF in FIG_DIR, so stale files from a previous naming scheme would
+# otherwise be packaged alongside the current ones.
+old_figure_files <- list.files(
+  FIG_DIR,
+  pattern="\\.(png|pdf|tif|tiff)$",
+  full.names=TRUE,
+  ignore.case=TRUE
+)
+
+if (length(old_figure_files)) unlink(old_figure_files)
+
+# Cache the fitted objects so figures can be re-rendered later without re-running
+# the whole pipeline:
+#   z <- readRDS(file.path(OUT_ROOT,"analysis_objects.rds"))
+#   evs_render_all(z$method_objects, z$summary_df, z$overlap_df,
+#                  COMPARISONS, FIG_DIR, OUT_ROOT)
+saveRDS(
+  list(
+    method_objects=method_objects,
+    summary_df=summary_df,
+    overlap_df=overlap_df,
+    sites_df=sites_df
+  ),
+  file.path(OUT_ROOT,"analysis_objects.rds")
+)
+
+evs_render_all(
+  method_objects = method_objects,
+  summary_df     = summary_df,
+  overlap_df     = overlap_df,
+  comparisons    = COMPARISONS,
+  fig_dir        = FIG_DIR,
+  out_root       = OUT_ROOT
+)
+
+# =============================================================================
+# MANUSCRIPT METHODS
+# (Figure legends are generated by evs_write_legends(), above.)
+# =============================================================================
+
+methods_lines <- c(
+  "# Methods",
+  "",
+  "Two EVS preprocessing strategies were evaluated using a common experiment-wide PAS universe. CPM-EVS used log1p-transformed counts per million, whereas DESeq2-EVS used log1p-transformed DESeq2 median-of-ratios normalized counts. PCA was performed independently within each experimental arm, and PASs were ranked from lowest to highest absolute PC1 loading.",
+  "",
+  "For each PAS, PC1 variance contribution was P_i=lambda_1*v_i1^2. A pooled within-group variance was calculated from globally DESeq2-normalized counts across the eight experimental arms, and arm-specific excess variance was E_ig=max(V_pool,i-mu_ig,0). PC1 contribution and excess variance were converted to rank-wise probability masses and cumulative distributions. Cumulative divergence was D_g(r)=F_E,g(r)-F_P,g(r).",
+  "",
+  "For each EVS method separately, the eight arm-specific D_g(r) curves were jointly fit using a continuous two-knot piecewise-linear model. The shared c1 and c2 values minimized the summed squared residual error across all arms. Rank<c1 defined the Remainder, c1<=rank<=c2 the Divergence interval, and rank>c2 the Leading Edge.",
+  "",
+  "Each RT/ZT comparison was then optimized independently over 1<=k<=N-c2. Joint top-k PASs received full benefit. For disjoint PASs, opposite-arm Leading-Edge support increased with (r-c2)/(N-c2), and opposite-arm Divergence support increased with (r-c1)/(c2-c1). Opposite-arm Remainder crossings were penalized by [(c1-r_opp)/(c1-1)]^2 * |r_C-r_T|/(N-1).",
+  "",
+  "For every candidate k, weighted retained-site benefit and weighted Remainder disagreement were calculated. Nondominated candidates defined the Pareto frontier, and the empirical k* was selected as the geometric knee of that frontier. Remainder-crossing PASs were retained in the exported top-k union with an explicit penalty flag; a separate high-confidence subset contained Joint, opposite-Leading-Edge, and opposite-Divergence PASs."
+)
+
+writeLines(
+  methods_lines,
+  file.path(OUT_ROOT,"Methods_Manuscript.md")
+)
+
+# =============================================================================
+# MANIFESTS + ZIP FILES
+# =============================================================================
+
+figure_files <- list.files(
+  FIG_DIR,
+  pattern="\\.(png|pdf)$",
+  full.names=TRUE
+)
+
+table_files <- list.files(
+  TAB_DIR,
+  pattern="\\.csv$",
+  full.names=TRUE
+)
+
+fig_manifest <- data.frame(
+  file=basename(figure_files),
+  type=ifelse(grepl("\\.pdf$",figure_files,ignore.case=TRUE),"PDF","PNG"),
+  stringsAsFactors=FALSE
+)
+
+tab_manifest <- data.frame(
+  file=basename(table_files),
+  stringsAsFactors=FALSE
+)
+
+write.csv(
+  fig_manifest,
+  file.path(OUT_ROOT,"Manifest_Manuscript_Figures.csv"),
+  row.names=FALSE
+)
+
+write.csv(
+  tab_manifest,
+  file.path(OUT_ROOT,"Manifest_Manuscript_Tables.csv"),
+  row.names=FALSE
+)
+
+zip_folder <- function(zipfile,files,root) {
+  files <- files[file.exists(files)]
+  if (!length(files)) return(FALSE)
+
+  if (file.exists(zipfile)) unlink(zipfile)
+
+  old <- getwd()
+  on.exit(setwd(old),add=TRUE)
+  setwd(root)
+
+  utils::zip(
+    zipfile=zipfile,
+    files=basename(files)
+  )
+
+  file.exists(zipfile)
 }
+
+FIG_ZIP <- file.path(OUT_ROOT,"Manuscript_Ready_Figures.zip")
+TAB_ZIP <- file.path(OUT_ROOT,"Manuscript_Ready_Tables.zip")
+ALL_ZIP <- file.path(OUT_ROOT,"CPM_vs_DESeq2_EVS_Complete_Outputs.zip")
+
+# Figure zip.
+old <- getwd()
+setwd(FIG_DIR)
+if (file.exists(FIG_ZIP)) unlink(FIG_ZIP)
+utils::zip(FIG_ZIP,files=basename(figure_files))
+setwd(old)
+
+# Table zip.
+old <- getwd()
+setwd(TAB_DIR)
+if (file.exists(TAB_ZIP)) unlink(TAB_ZIP)
+utils::zip(TAB_ZIP,files=basename(table_files))
+setwd(old)
+
+# Complete package zip from OUT_ROOT using recursive relative paths.
+all_package_files <- c(
+  list.files("Figures",recursive=TRUE,full.names=TRUE),
+  list.files("Tables",recursive=TRUE,full.names=TRUE),
+  "Methods_Manuscript.md",
+  "Figure_Legends.md",
+  "Manifest_Manuscript_Figures.csv",
+  "Manifest_Manuscript_Tables.csv"
+)
+
+old <- getwd()
+setwd(OUT_ROOT)
+if (file.exists(ALL_ZIP)) unlink(ALL_ZIP)
+utils::zip(ALL_ZIP,files=all_package_files)
+setwd(old)
+
+message("============================================================")
+message("ANALYSIS COMPLETE")
+message("Output root: ",OUT_ROOT)
+message("Figures ZIP: ",FIG_ZIP)
+message("Tables ZIP: ",TAB_ZIP)
+message("Complete ZIP: ",ALL_ZIP)
+message("============================================================")
+print(summary_df)
