@@ -22,12 +22,16 @@ options(stringsAsFactors = FALSE)
 # 3) For each method, all 8 arm-specific D_g(r) curves are fit jointly to
 #    estimate one shared c1/c2 regime system.
 # 4) Each RT/ZT comparison gets its own independent cutoff k*.
-# 5) Cutoff scoring is continuous:
-#      - Joint sites receive full benefit.
-#      - Disjoint opposite-arm Leading-Edge sites receive graded LE support.
-#      - Disjoint opposite-arm Divergence sites receive graded divergence support.
-#      - Disjoint opposite-arm Remainder sites receive a distance-weighted penalty.
-# 6) k* is the Pareto-frontier point with MAXIMUM perpendicular deviation from the endpoint chord.
+# 5) Cutoff scoring is count-based and identical across preprocessing methods:
+#      - Joint sites receive full unit benefit.
+#      - Disjoint sites are permissible when the opposite-arm rank is in the
+#        Leading Edge or Divergence interval; each receives full unit benefit.
+#      - Only disjoint sites crossing into the opposite-arm Remainder count as
+#        contamination.
+# 6) On the comparison-specific Pareto frontier, G(k) and R(k) are min-max
+#    normalized to [0,1]. The two normalized frontier endpoints define a chord.
+#    k* is the Pareto-optimal candidate with MAXIMUM perpendicular distance
+#    from that endpoint chord (maximum endpoint deviation).
 # 7) Remainder-crossing sites are NOT silently discarded from the top-k union.
 #    They are flagged as penalized/low-confidence. A separate high-confidence
 #    subset contains Joint + opposite-LE + opposite-Divergence sites.
@@ -286,39 +290,16 @@ fit_shared_knots <- function(arms) {
 }
 
 # =============================================================================
-# FAST CONTINUOUS TOP-k SCORING
+# FAST COUNT-BASED TOP-k SCORING
 # =============================================================================
 
 rank_map <- function(df) setNames(df$rank,df$feature_id)
 
-div_support <- function(r,c1,c2) {
-  pmin(pmax((r-c1)/(c2-c1),0),1)
-}
-
-lead_support <- function(r,c2,N) {
-  pmin(pmax((r-c2)/(N-c2),0),1)
-}
-
-rem_depth <- function(r,c1) {
-  pmin(pmax((c1-r)/(c1-1),0),1)
-}
-
-rank_gap <- function(a,b,N) {
-  abs(a-b)/(N-1)
-}
-
 add_events <- function(pos,weight,L) {
   out <- numeric(L)
   ok <- is.finite(pos) & is.finite(weight) & pos>=1 & pos<=L
-
   if (!any(ok)) return(out)
-
-  z <- rowsum(
-    weight[ok],
-    group=as.integer(pos[ok]),
-    reorder=FALSE
-  )
-
+  z <- rowsum(weight[ok], group=as.integer(pos[ok]), reorder=FALSE)
   out[as.integer(rownames(z))] <- z[,1]
   out
 }
@@ -330,39 +311,31 @@ activate_from <- function(depth,weight,K) {
 active_interval <- function(start,end,weight,K) {
   # Active for start <= k < end.
   delta <- numeric(K+1L)
-
   ok <- is.finite(start) & is.finite(end) & is.finite(weight) &
         start>=1 & start<=K & end>start
-
   if (!any(ok)) return(numeric(K))
-
-  s <- as.integer(start[ok])
-  e <- pmin(as.integer(end[ok]),K+1L)
+  ss <- as.integer(start[ok])
+  ee <- pmin(as.integer(end[ok]),K+1L)
   w <- weight[ok]
-
-  delta <- delta + add_events(s,w,K+1L)
-  delta <- delta - add_events(e,w,K+1L)
-
+  delta <- delta + add_events(ss,w,K+1L)
+  delta <- delta - add_events(ee,w,K+1L)
   cumsum(delta)[seq_len(K)]
 }
 
 scan_pair_fast <- function(control_df,treatment_df,c1,c2) {
   N <- nrow(control_df)
   K <- N-c2
-
   if (K<1L) stop("No candidate k exists beyond c2.")
 
   rC_map <- rank_map(control_df)
   rT_map <- rank_map(treatment_df)
-
   ids <- control_df$feature_id
   rC <- as.integer(rC_map[ids])
   rT <- as.integer(rT_map[ids])
-
   dC <- N-rC+1L
   dT <- N-rT+1L
 
-  # Joint sites: full unit benefit after both arms include the PAS.
+  # Joint sites become active when both arms contain the PAS.
   joint_depth <- pmax(dC,dT)
   joint_n <- activate_from(joint_depth,rep(1,N),K)
 
@@ -371,65 +344,43 @@ scan_pair_fast <- function(control_df,treatment_df,c1,c2) {
   startC <- dC[idxC]
   endC <- pmin(dT[idxC],K+1L)
   oppC <- rT[idxC]
-  selC <- rC[idxC]
-
-  supportC <- ifelse(
-    oppC>c2,
-    lead_support(oppC,c2,N),
-    ifelse(oppC>=c1,div_support(oppC,c1,c2),0)
-  )
-
-  penaltyC <- ifelse(
-    oppC<c1,
-    rem_depth(oppC,c1)^2 * rank_gap(selC,oppC,N),
-    0
-  )
-
-  disC_n       <- active_interval(startC,endC,rep(1,length(idxC)),K)
-  disC_support <- active_interval(startC,endC,supportC,K)
-  disC_penalty <- active_interval(startC,endC,penaltyC,K)
-  disC_rem     <- active_interval(startC,endC,as.numeric(oppC<c1),K)
-  disC_div     <- active_interval(startC,endC,as.numeric(oppC>=c1 & oppC<=c2),K)
-  disC_le      <- active_interval(startC,endC,as.numeric(oppC>c2),K)
+  disC_n   <- active_interval(startC,endC,rep(1,length(idxC)),K)
+  disC_rem <- active_interval(startC,endC,as.numeric(oppC<c1),K)
+  disC_div <- active_interval(startC,endC,as.numeric(oppC>=c1 & oppC<=c2),K)
+  disC_le  <- active_interval(startC,endC,as.numeric(oppC>c2),K)
 
   # Treatment-only interval.
   idxT <- which(dT<dC & dT<=K)
   startT <- dT[idxT]
   endT <- pmin(dC[idxT],K+1L)
   oppT <- rC[idxT]
-  selT <- rT[idxT]
-
-  supportT <- ifelse(
-    oppT>c2,
-    lead_support(oppT,c2,N),
-    ifelse(oppT>=c1,div_support(oppT,c1,c2),0)
-  )
-
-  penaltyT <- ifelse(
-    oppT<c1,
-    rem_depth(oppT,c1)^2 * rank_gap(selT,oppT,N),
-    0
-  )
-
-  disT_n       <- active_interval(startT,endT,rep(1,length(idxT)),K)
-  disT_support <- active_interval(startT,endT,supportT,K)
-  disT_penalty <- active_interval(startT,endT,penaltyT,K)
-  disT_rem     <- active_interval(startT,endT,as.numeric(oppT<c1),K)
-  disT_div     <- active_interval(startT,endT,as.numeric(oppT>=c1 & oppT<=c2),K)
-  disT_le      <- active_interval(startT,endT,as.numeric(oppT>c2),K)
+  disT_n   <- active_interval(startT,endT,rep(1,length(idxT)),K)
+  disT_rem <- active_interval(startT,endT,as.numeric(oppT<c1),K)
+  disT_div <- active_interval(startT,endT,as.numeric(oppT>=c1 & oppT<=c2),K)
+  disT_le  <- active_interval(startT,endT,as.numeric(oppT>c2),K)
 
   disjoint_n <- disC_n+disT_n
+  opposite_le_n <- disC_le+disT_le
+  opposite_divergence_n <- disC_div+disT_div
+  remainder_cross_n <- disC_rem+disT_rem
+  good_n <- joint_n+opposite_le_n+opposite_divergence_n
+  union_n <- 2*seq_len(K)-joint_n
+
+  if (!all(good_n+remainder_cross_n == union_n)) {
+    stop("Internal union-count mismatch in count-based top-k scan.")
+  }
 
   data.frame(
     k=seq_len(K),
     joint_n=joint_n,
     disjoint_n=disjoint_n,
-    opposite_le_n=disC_le+disT_le,
-    opposite_divergence_n=disC_div+disT_div,
-    remainder_cross_n=disC_rem+disT_rem,
-    union_n=2*seq_len(K)-joint_n,
-    weighted_benefit=joint_n+disC_support+disT_support,
-    weighted_penalty=disC_penalty+disT_penalty,
+    opposite_le_n=opposite_le_n,
+    opposite_divergence_n=opposite_divergence_n,
+    remainder_cross_n=remainder_cross_n,
+    good_n=good_n,
+    union_n=union_n,
+    retained_fraction=ifelse(union_n>0,good_n/union_n,NA_real_),
+    remainder_cross_fraction=ifelse(union_n>0,remainder_cross_n/union_n,NA_real_),
     stringsAsFactors=FALSE
   )
 }
@@ -438,51 +389,96 @@ scan_pair_fast <- function(control_df,treatment_df,c1,c2) {
 # PARETO FRONTIER + MAXIMUM ENDPOINT-CHORD DEVIATION
 # =============================================================================
 
-norm01 <- function(x) {
-  r <- range(x,na.rm=TRUE)
-  if (!is.finite(diff(r)) || diff(r)==0) return(rep(0,length(x)))
-  (x-r[1])/diff(r)
+mark_pareto_frontier <- function(scan_df, good_col="good_n", cost_col="remainder_cross_n") {
+  tmp <- scan_df %>%
+    transmute(row_id=row_number(), k=k, good=.data[[good_col]], cost=.data[[cost_col]]) %>%
+    arrange(cost,desc(good),desc(k)) %>%
+    group_by(cost) %>% slice(1L) %>% ungroup() %>%
+    arrange(cost,desc(good))
+
+  running_best_before <- c(-Inf, head(cummax(tmp$good),-1L))
+  tmp$is_frontier_coord <- tmp$good > running_best_before
+  frontier <- tmp %>% filter(is_frontier_coord) %>% arrange(cost,good,k)
+
+  key_all <- paste(scan_df[[cost_col]],scan_df[[good_col]],sep="::")
+  key_frontier <- paste(frontier$cost,frontier$good,sep="::")
+  out <- scan_df
+  out$is_pareto <- key_all %in% key_frontier
+  list(scan=out,frontier=frontier)
 }
 
-pareto_frontier <- function(df) {
-  x <- df %>%
-    arrange(weighted_penalty,desc(weighted_benefit),desc(k))
-
-  keep <- logical(nrow(x))
-  best <- -Inf
-
-  for (i in seq_len(nrow(x))) {
-    if (x$weighted_benefit[i] > best) {
-      keep[i] <- TRUE
-      best <- x$weighted_benefit[i]
-    }
+select_max_endpoint_deviation <- function(scan_df,
+                                          good_col="good_n",
+                                          cost_col="remainder_cross_n") {
+  marked <- mark_pareto_frontier(scan_df, good_col, cost_col)
+  frontier <- marked$frontier %>% arrange(cost,good,k)
+  if (nrow(frontier) < 2L) {
+    stop("At least two Pareto-optimal points are required to define the endpoint chord.")
   }
 
-  x[keep,,drop=FALSE] %>% arrange(weighted_penalty)
-}
-
-pareto_max_endpoint_deviation <- function(frontier) {
-  if (nrow(frontier)==1L) return(frontier$k[1])
-
-  x <- norm01(frontier$weighted_penalty)
-  y <- norm01(frontier$weighted_benefit)
-
-  x1 <- x[1]
-  y1 <- y[1]
-  x2 <- x[length(x)]
-  y2 <- y[length(y)]
-
-  den <- sqrt((y2-y1)^2+(x2-x1)^2)
-
-  if (!is.finite(den) || den==0) {
-    return(frontier$k[which.max(y-x)])
+  # Normalize ONLY on the Pareto frontier.
+  gr <- range(frontier$good, na.rm=TRUE)
+  cr <- range(frontier$cost, na.rm=TRUE)
+  norm_good <- function(x) {
+    if (diff(gr)==0) rep(0,length(x)) else (x-gr[1])/diff(gr)
+  }
+  norm_cost <- function(x) {
+    if (diff(cr)==0) rep(0,length(x)) else (x-cr[1])/diff(cr)
   }
 
-  distance <- abs(
-    (y2-y1)*x - (x2-x1)*y + x2*y1 - y2*x1
-  )/den
+  frontier$good_norm <- norm_good(frontier$good)
+  frontier$remainder_norm <- norm_cost(frontier$cost)
 
-  frontier$k[which.max(distance)]
+  # Endpoint chord in normalized Pareto space.
+  x1 <- frontier$remainder_norm[1]
+  y1 <- frontier$good_norm[1]
+  x2 <- frontier$remainder_norm[nrow(frontier)]
+  y2 <- frontier$good_norm[nrow(frontier)]
+
+  denom <- sqrt((y2-y1)^2 + (x2-x1)^2)
+  if (!is.finite(denom) || denom <= .Machine$double.eps) {
+    stop("Normalized Pareto endpoints are coincident; endpoint chord is undefined.")
+  }
+
+  frontier$endpoint_deviation <- abs(
+    (y2-y1)*frontier$remainder_norm -
+      (x2-x1)*frontier$good_norm +
+      x2*y1 - y2*x1
+  ) / denom
+
+  best <- max(frontier$endpoint_deviation, na.rm=TRUE)
+  chosen <- frontier %>%
+    filter(abs(endpoint_deviation-best) < 1e-12) %>%
+    arrange(desc(good), cost, desc(k)) %>%
+    slice(1L)
+
+  out <- marked$scan
+  out$good_norm <- norm_good(out[[good_col]])
+  out$remainder_norm <- norm_cost(out[[cost_col]])
+  out$endpoint_deviation <- abs(
+    (y2-y1)*out$remainder_norm -
+      (x2-x1)*out$good_norm +
+      x2*y1 - y2*x1
+  ) / denom
+  out$is_selected_endpoint_max <- out$k == chosen$k[1]
+
+  chord <- data.frame(
+    remainder_norm=c(x1,x2),
+    good_norm=c(y1,y2),
+    stringsAsFactors=FALSE
+  )
+
+  list(
+    scan=out,
+    frontier=frontier,
+    chord=chord,
+    selected_k=as.integer(chosen$k[1]),
+    selected_good=chosen$good[1],
+    selected_cost=chosen$cost[1],
+    selected_good_norm=chosen$good_norm[1],
+    selected_remainder_norm=chosen$remainder_norm[1],
+    selected_endpoint_deviation=chosen$endpoint_deviation[1]
+  )
 }
 
 # =============================================================================
@@ -519,23 +515,9 @@ classify_at_k <- function(k,comparison,control_df,treatment_df,c1,c2) {
     )
   )
 
-  penalty <- ifelse(
-    joint,0,
-    ifelse(
-      opp<c1,
-      rem_depth(opp,c1)^2 * rank_gap(selected_rank,opp,N),
-      0
-    )
-  )
-
-  support <- ifelse(
-    joint,1,
-    ifelse(
-      opp>c2,
-      lead_support(opp,c2,N),
-      ifelse(opp>=c1,div_support(opp,c1,c2),0)
-    )
-  )
+  # Binary bookkeeping consistent with the validated count-based objective.
+  penalty <- ifelse(joint,0,as.numeric(opp<c1))
+  support <- ifelse(joint,1,as.numeric(opp>=c1))
 
   data.frame(
     comparison=comparison,
@@ -592,7 +574,7 @@ EVS_COL <- list(
   median    = "#CC79A7",  # reddish purple
   fit       = "#000000",
   arms      = "#9AA3AD",
-  selected  = "#CC79A7",
+  knee      = "#CC79A7",
   chord     = "#B9C0C7",
   shared    = "#7A7F86",
   joint     = "#009E73",
@@ -1017,107 +999,74 @@ panel_regime_widths <- function(method_objects, tag) {
 }
 
 # =============================================================================
-# 4. FIGURES 2-3 PANELS — Pareto frontier and maximum endpoint-deviation selection
+# 4. FIGURES 2-3 PANELS — candidate path, Pareto frontier, endpoint chord
 # =============================================================================
-
-evs_norm01 <- function(x) {
-  r <- range(x, na.rm = TRUE)
-  if (!is.finite(diff(r)) || diff(r) == 0) return(rep(0, length(x)))
-  (x - r[1]) / diff(r)
-}
-
-# Reproduces pareto_max_endpoint_deviation() exactly, so the inset shows the criterion that was
-# actually optimised rather than a redrawn approximation.
-evs_chord_distance <- function(frontier) {
-  x <- evs_norm01(frontier$weighted_penalty)
-  y <- evs_norm01(frontier$weighted_benefit)
-  n <- length(x)
-  if (n < 2L) return(rep(0, n))
-  x1 <- x[1]; y1 <- y[1]; x2 <- x[n]; y2 <- y[n]
-  den <- sqrt((y2 - y1)^2 + (x2 - x1)^2)
-  if (!is.finite(den) || den == 0) return(y - x)
-  abs((y2 - y1) * x - (x2 - x1) * y + x2 * y1 - y2 * x1) / den
-}
 
 panel_pareto <- function(method, comparison, scan, frontier, kstar, tag,
                          method_col) {
-  fr <- frontier[order(frontier$weighted_penalty), , drop = FALSE]
-  fr$endpoint_deviation <- evs_chord_distance(fr)
+  fr <- frontier[order(frontier$cost,frontier$good), , drop=FALSE]
+  sel <- fr[fr$k==kstar,,drop=FALSE]
+  if (nrow(sel)!=1L) stop("k* not found on the Pareto frontier for ", comparison)
+  if (nrow(fr)<2L) stop("Need at least two Pareto points for endpoint chord in ", comparison)
 
-  j <- which.min(abs(fr$k - kstar))
-  if (!length(j)) stop("k* not found on the frontier for ", comparison)
-  sel <- fr[j, , drop = FALSE]
+  # Full candidate trajectory gives context; Pareto frontier is emphasized.
+  sc <- scan[order(scan$k), , drop=FALSE]
+  sc_plot <- sc[evs_thin(nrow(sc),2500L),,drop=FALSE]
+  fr_plot <- fr[evs_thin(nrow(fr),1500L),,drop=FALSE]
 
-  n <- nrow(fr)
-  chord_line <- data.frame(
-    x = c(fr$weighted_penalty[1], fr$weighted_penalty[n]),
-    y = c(fr$weighted_benefit[1],  fr$weighted_benefit[n])
+  xr <- range(c(sc$remainder_cross_n,fr$cost),na.rm=TRUE)
+  yr <- range(c(sc$good_n,fr$good),na.rm=TRUE)
+  xd <- if (diff(xr)>0) diff(xr) else 1
+  yd <- if (diff(yr)>0) diff(yr) else 1
+
+  # Chord endpoints are the first and last points of the normalized frontier,
+  # mapped back to the raw R(k), G(k) coordinates for display.
+  chord_raw <- data.frame(
+    cost=c(fr$cost[1],fr$cost[nrow(fr)]),
+    good=c(fr$good[1],fr$good[nrow(fr)])
   )
-  # Vertical drop from k* to the endpoint chord: a visual cue for the gap the
-  # maximum endpoint-deviation criterion maximises.
-  drop_y <- if (diff(chord_line$x) == 0) {
-    mean(chord_line$y)
-  } else {
-    stats::approx(chord_line$x, chord_line$y,
-                  xout = sel$weighted_penalty, rule = 2)$y
-  }
 
-  fr_plot <- fr[evs_thin(n, 1500L), , drop = FALSE]
-
-  xr <- range(fr$weighted_penalty)
-  yr <- range(fr$weighted_benefit)
-  xd <- if (diff(xr) > 0) diff(xr) else 1
-  yd <- if (diff(yr) > 0) diff(yr) else 1
-  xlim <- c(xr[1] - 0.03 * xd, xr[2] + 0.05 * xd)
-  ylim <- c(yr[1] - 0.05 * yd, yr[2] + 0.10 * yd)
-
-  cmax <- max(fr$endpoint_deviation, na.rm = TRUE)
-  if (!is.finite(cmax) || cmax <= 0) cmax <- 1
-
-  ins <- ggplot(fr_plot, aes(k, endpoint_deviation)) +
-    geom_line(colour = "grey25", linewidth = 0.25) +
-    geom_vline(xintercept = sel$k, colour = EVS_COL$selected,
-               linetype = "22", linewidth = 0.3) +
-    geom_point(data = fr[j, , drop = FALSE], aes(k, endpoint_deviation),
-               colour = EVS_COL$selected, size = 0.8) +
-    scale_x_continuous(labels = evs_comma,
-                       breaks = range(pretty(fr_plot$k, 3))) +
-    scale_y_continuous(breaks = c(0, signif(cmax, 2)),
-                       limits = c(0, cmax * 1.2)) +
-    labs(x = expression(italic(k)), y = "endpoint deviation") +
+  ins <- ggplot(fr_plot,aes(k,endpoint_deviation)) +
+    geom_line(colour="grey25",linewidth=0.28) +
+    geom_vline(xintercept=sel$k,colour=EVS_COL$knee,
+               linetype="22",linewidth=0.32) +
+    geom_point(data=sel,aes(k,endpoint_deviation),
+               inherit.aes=FALSE,shape=21,size=1.0,stroke=0.25,
+               fill=EVS_COL$knee,colour="white") +
+    labs(x=expression(italic(k)),y="Endpoint deviation") +
     evs_theme_inset()
 
   ggplot() +
-    geom_line(data = chord_line, aes(x, y), colour = EVS_COL$chord,
-              linetype = "22", linewidth = 0.3) +
-    geom_line(data = fr_plot, aes(weighted_penalty, weighted_benefit),
-              colour = method_col, linewidth = 0.5) +
-    annotate("segment",
-             x = sel$weighted_penalty, xend = sel$weighted_penalty,
-             y = sel$weighted_benefit, yend = drop_y,
-             colour = "grey45", linewidth = 0.25) +
+    geom_path(data=sc_plot,aes(remainder_cross_n,good_n),
+              colour="grey78",linewidth=0.32,alpha=0.9) +
+    geom_line(data=fr_plot,aes(cost,good),
+              colour=method_col,linewidth=0.65) +
+    geom_line(data=chord_raw,aes(cost,good),
+              colour="grey45",linetype="22",linewidth=0.42) +
     annotation_custom(
       ggplotGrob(ins),
-      xmin = xlim[1] + 0.50 * diff(xlim), xmax = xlim[1] + 1.00 * diff(xlim),
-      ymin = ylim[1] + 0.04 * diff(ylim), ymax = ylim[1] + 0.46 * diff(ylim)
+      xmin=xr[1]+0.50*(xr[2]-xr[1]+1e-9),
+      xmax=xr[2]+0.05*xd,
+      ymin=yr[1]+0.04*(yr[2]-yr[1]+1e-9),
+      ymax=yr[1]+0.46*(yr[2]-yr[1]+1e-9)
     ) +
-    geom_point(data = sel, aes(weighted_penalty, weighted_benefit),
-               shape = 23, size = 1.5, stroke = 0.3,
-               fill = EVS_COL$selected, colour = "white") +
-    annotate("text",
-             x = sel$weighted_penalty - 0.015 * diff(xlim),
-             y = sel$weighted_benefit + 0.035 * diff(ylim),
-             label = sprintf("italic(k)^\"*\" * \" = \" * \"%s\"", evs_num(sel$k)),
-             parse = TRUE, hjust = 1, vjust = 0,
-             size = pt2mm(6.2), colour = EVS_COL$selected, fontface = "bold") +
-    scale_x_continuous(labels = evs_comma) +
-    scale_y_continuous(labels = evs_comma) +
-    coord_cartesian(xlim = xlim, ylim = ylim, expand = FALSE) +
+    geom_point(data=sel,aes(cost,good),shape=23,size=1.6,stroke=0.3,
+               fill=EVS_COL$knee,colour="white") +
+    annotate(
+      "text",
+      x=sel$cost-0.015*xd,
+      y=sel$good+0.035*yd,
+      label=sprintf("k* = %s",evs_num(sel$k)),
+      hjust=1,vjust=0,size=pt2mm(6.2),
+      colour=EVS_COL$knee,fontface="bold"
+    ) +
+    scale_x_continuous(labels=evs_comma) +
+    scale_y_continuous(labels=evs_comma) +
     labs(
-      tag   = tag,
-      title = evs_comparison_label(comparison),
-      x     = expression(paste("Weighted Remainder disagreement, ", italic(R)[w])),
-      y     = expression(paste("Weighted retained-site benefit, ", italic(G)[w]))
+      tag=tag,
+      title=evs_comparison_label(comparison),
+      x=expression(paste("Opposite-arm Remainder crossings, ",italic(R)(k))),
+      y=expression(paste("Joint + permissible Disjoint, ",italic(G)(k)))
     ) +
     evs_theme()
 }
@@ -1279,7 +1228,7 @@ evs_write_legends <- function(method_objects, summary_df, overlap_df,
   }, character(1)), collapse = "; ")
 
   # What fraction of candidate k are actually non-dominated? If the frontier
-  # contains nearly all of them, the maximum endpoint-deviation selector (not dominance filtering) is doing
+  # contains nearly all of them, the normalized Pareto utility is doing
   # the work, and the legend should say so rather than imply a sharp trade-off.
   fr_frac <- vapply(names(method_objects), function(m) {
     ob <- method_objects[[m]]
@@ -1313,10 +1262,10 @@ evs_write_legends <- function(method_objects, summary_df, overlap_df,
     "D(r), cumulative PC1-excess-variance divergence at rank r; DESeq2,",
     "median-of-ratios normalisation; EVS, excess-variance selection; F_E(r),",
     "cumulative excess-variance mass; F_P(r), cumulative PC1 variance-contribution",
-    "mass; G_w, weighted retained-site benefit; HC, high confidence; J, Jaccard",
+    "mass; G(k), Joint plus permissible Disjoint benefit; HC, high confidence; J, Jaccard",
     "index; k*, selected per-comparison cutoff; LE, leading edge; N, size of the",
     "experiment-wide PAS universe; PAS, polyadenylation site; PC1, first principal",
-    "component; R_w, distance-weighted Remainder disagreement; RT, [AUTHORS: define];",
+    "component; R(k), opposite-arm Remainder-crossing contamination count; RT, [AUTHORS: define];",
     "ZT, zeitgeber time.",
     "",
     "> Two abbreviations could not be recovered from the analysis code and must be",
@@ -1348,17 +1297,16 @@ evs_write_legends <- function(method_objects, summary_df, overlap_df,
     "",
     "**Figure 2. Per-comparison cutoff selection under CPM-EVS.**",
     sprintf(paste0(
-      "(A-D) Pareto frontier of weighted retained-site benefit (G_w) against ",
-      "distance-weighted Remainder disagreement (R_w) over all candidate cutoffs ",
+      "(A-D) Pareto frontier of count-based retained-site benefit G(k) against ",
+      "opposite-arm Remainder-crossing contamination R(k) over all candidate cutoffs ",
       "k, shown separately for each RT/ZT comparison; each comparison is optimised ",
-      "independently over 1 <= k <= N - c2. The grey dashed line joins the frontier ",
-      "endpoints, and the filled diamond marks k*, the point of maximum ",
-      "perpendicular distance from that endpoint chord once both axes are rescaled to ",
-      "[0, 1]; the vertical segment shows the corresponding gap. Insets plot that ",
-      "distance against k, so the selected MAXIMUM endpoint deviation is directly visible. ",
-      "Non-dominated candidates make up %.0f%% of the k values scanned under ",
-      "CPM-EVS, so the frontier is close to monotone and the maximum endpoint-deviation criterion, ",
-      "rather than dominance filtering, determines the cutoff. Selected values: ",
+      "independently over 1 <= k <= N - c2. The filled diamond marks k*, the ",
+      "Pareto-optimal candidate with the maximum perpendicular deviation from ",
+      "the chord joining the normalized Pareto endpoints after frontier-specific ",
+      "min-max normalization of benefit and contamination. The dashed line is the ",
+      "endpoint chord; insets plot endpoint deviation across the Pareto frontier. ",
+      "Non-dominated candidates make ",
+      "up %.0f%% of the k values scanned under CPM-EVS. Selected values: ",
       "k* = %s for %s respectively; full diagnostics are in Table 1."),
       100 * fr_frac[["CPM_EVS"]],
       paste(evs_num(kstar_of("CPM_EVS")), collapse = ", "),
@@ -1528,8 +1476,12 @@ for (method in METHODS) {
       knot$c2
     )
 
-    frontier <- pareto_frontier(scan)
-    kstar <- pareto_max_endpoint_deviation(frontier)
+    opt <- select_max_endpoint_deviation(
+      scan, good_col="good_n", cost_col="remainder_cross_n"
+    )
+    scan <- opt$scan
+    frontier <- opt$frontier
+    kstar <- opt$selected_k
 
     selected <- scan[scan$k==kstar,,drop=FALSE]
 
@@ -1560,12 +1512,14 @@ for (method in METHODS) {
       cutoff_rank=knot$N-kstar+1L,
       k_over_N=kstar/knot$N,
       k_over_leading_edge=kstar/K,
-      weighted_benefit=selected$weighted_benefit,
-      weighted_penalty=selected$weighted_penalty,
+      good_n=selected$good_n,
+      remainder_cross_n=selected$remainder_cross_n,
+      good_norm=selected$good_norm,
+      remainder_norm=selected$remainder_norm,
+      endpoint_deviation=selected$endpoint_deviation,
       joint_n=selected$joint_n,
       opposite_le_n=selected$opposite_le_n,
       opposite_divergence_n=selected$opposite_divergence_n,
-      remainder_cross_n=selected$remainder_cross_n,
       selected_union_n=selected$union_n,
       high_confidence_n=high_conf_n,
       penalized_remainder_n=rem_n,
@@ -1595,8 +1549,9 @@ for (method in METHODS) {
     message(
       "  ",nm,
       " | k*=",kstar,
-      " | G_w=",round(selected$weighted_benefit,2),
-      " | R_w=",round(selected$weighted_penalty,3),
+      " | G=",selected$good_n,
+      " | R=",selected$remainder_cross_n,
+      " | endpoint deviation=",round(selected$endpoint_deviation,4),
       " | Joint=",selected$joint_n,
       " | Rem-cross=",selected$remainder_cross_n
     )
@@ -1753,9 +1708,9 @@ methods_lines <- c(
   "",
   "For each EVS method separately, the eight arm-specific D_g(r) curves were jointly fit using a continuous two-knot piecewise-linear model. The shared c1 and c2 values minimized the summed squared residual error across all arms. Rank<c1 defined the Remainder, c1<=rank<=c2 the Divergence interval, and rank>c2 the Leading Edge.",
   "",
-  "Each RT/ZT comparison was then optimized independently over 1<=k<=N-c2. Joint top-k PASs received full benefit. For disjoint PASs, opposite-arm Leading-Edge support increased with (r-c2)/(N-c2), and opposite-arm Divergence support increased with (r-c1)/(c2-c1). Opposite-arm Remainder crossings were penalized by [(c1-r_opp)/(c1-1)]^2 * |r_C-r_T|/(N-1).",
+  "Each RT/ZT comparison was optimized independently over 1<=k<=N-c2. For each candidate k, G(k) was the count of Joint top-k PASs plus Disjoint PASs whose opposite-arm rank was in either the Leading Edge or Divergence interval. R(k) was the count of Disjoint PASs whose opposite-arm rank crossed below c1 into the Remainder. Thus opposite-arm Divergence crossings were permissible and only true Remainder crossings counted as contamination.",
   "",
-  "For every candidate k, weighted retained-site benefit and weighted Remainder disagreement were calculated. Nondominated candidates defined the Pareto frontier, and empirical k* was selected as the frontier point with maximum perpendicular deviation from the endpoint chord after axis normalization. Remainder-crossing PASs were retained in the exported top-k union with an explicit penalty flag; a separate high-confidence subset contained Joint, opposite-Leading-Edge, and opposite-Divergence PASs."
+  "Nondominated [R(k),G(k)] candidates defined the Pareto frontier. On that frontier, benefit and contamination were min-max normalized as G_norm=(G-G_min)/(G_max-G_min) and R_norm=(R-R_min)/(R_max-R_min). The first and last normalized Pareto points defined an endpoint chord. For every Pareto-optimal candidate, perpendicular distance to that chord was calculated, and the empirical k* was the candidate with maximum endpoint-chord deviation; ties were resolved by greater G, lower R, then larger k. Remainder-crossing PASs remained in the exported top-k union with an explicit contamination flag; the high-confidence subset contained Joint, opposite-Leading-Edge, and opposite-Divergence PASs."
 )
 
 writeLines(
