@@ -32,6 +32,8 @@ PIPELINE_BUILD <- "SEQUENCE_REFINED_EMPIRICAL_EVS_HC10_2026-08-23"
 #   NormEVS Rem
 #   RawEVS Lead
 #   RawEVS Rem
+#   CPMEVS Lead / Rem   [CPM empirical cutoff child]
+#   VSTEVS Lead / Rem   [VST empirical cutoff child]
 #
 # EIGENVECTOR SPLITTING
 # NormEVS uses DESeq2 median-of-ratios normalized counts before PCA. RawEVS
@@ -103,331 +105,1812 @@ PIPELINE_BUILD <- "SEQUENCE_REFINED_EMPIRICAL_EVS_HC10_2026-08-23"
 
 
 # =============================================================================
-# INTERNAL EMPIRICAL CUTOFF ENGINE
+# DOWNSTREAM COMPARISON SWITCHES
 # =============================================================================
-# This is deliberately run by the MASTER process before any downstream
-# differential-expression analysis.  No empirical k* values are hard-coded.
-#
-# For each preprocessing branch (log1p(CPM)-EVS and DESeq2 VST-EVS):
-#   1) rank PASs within each of the 8 arms by ascending |PC1 loading|;
-#   2) construct P_i = lambda_1 * v_i1^2 and the globally normalized
-#      excess-over-Poisson reference E_i = max(V_pool,i - mu_i,g, 0);
-#   3) fit one shared c1/c2 two-knot cumulative-divergence model across all
-#      8 arm-specific D_g(r)=F_E,g(r)-F_P,g(r) curves;
-#   4) for each RT/ZT comparison and candidate top-k, count
-#         G(k) = Joint + Disjoint whose opposite-arm rank is LE or Divergence
-#         R(k) = Disjoint whose opposite-arm rank is Remainder (< c1);
-#   5) retain the nondominated Pareto frontier, min-max normalize G and R on
-#      that frontier, connect its two endpoints with a chord, and select
-#         k* = argmax perpendicular distance to the endpoint chord.
-#
-# The resulting k* values are written to Cutoff_Method_Manifest.csv and are
-# then read back by each child run.  The fixed 5,000 comparator remains fully
-# independent of empirical cutoff estimation.
-# =============================================================================
-
-SEQCUT_GROUP_PATTERNS <- c(
-  RT0="^R0_", ZT6="^ZT6_", RT2="^R2_", ZT8="^ZT8_",
-  RT4="^R4_", ZT10="^ZT10_", RT8="^R8_", ZT14="^ZT14_"
+# These switches control the expensive downstream SEQUENCE analyses only.
+# RT4_ZT10 is ON by default. Flip any FALSE to TRUE to enable that comparison.
+# The empirical cutoff engine intentionally still uses all eight experimental
+# arms to preserve the original shared-c1/c2 geometry and therefore the same
+# comparison-specific CPM/VST cutoff derivation.
+RUN_COMPARISON_FLAGS <- c(
+  RT0_ZT6  = FALSE,
+  RT2_ZT8  = FALSE,
+  RT4_ZT10 = TRUE,
+  RT8_ZT14 = FALSE
 )
 
-SEQCUT_COMPARISONS <- list(
-  RT0_ZT6=c(control="RT0", treatment="ZT6"),
-  RT2_ZT8=c(control="RT2", treatment="ZT8"),
-  RT4_ZT10=c(control="RT4", treatment="ZT10"),
-  RT8_ZT14=c(control="RT8", treatment="ZT14")
-)
-
-seqcut_read_counts <- function(path) {
-  if (!file.exists(path)) stop("Count file not found for empirical cutoff derivation: ", path)
-  x <- read.csv(path, check.names=FALSE, stringsAsFactors=FALSE)
-  idx <- sort(unique(unlist(lapply(SEQCUT_GROUP_PATTERNS, function(p) grep(p, names(x))))))
-  if (!length(idx)) stop("No sample columns matched SEQCUT_GROUP_PATTERNS.")
-
-  ids <- trimws(as.character(x[[1]]))
-  blank <- is.na(ids) | ids == ""
-  ids[blank] <- paste0("feature_", which(blank))
-  ids <- make.unique(ids, sep="__dup_")
-
-  m <- do.call(cbind, lapply(x[,idx,drop=FALSE], function(z)
-    suppressWarnings(as.numeric(as.character(z)))
-  ))
-  rownames(m) <- ids
-  colnames(m) <- names(x)[idx]
-  storage.mode(m) <- "numeric"
-  m[!is.finite(m)] <- 0
-  m <- pmax(m, 0)
-  m <- m[rowSums(m) > 0, , drop=FALSE]
-  if (nrow(m) < 20L) stop("Too few nonzero PASs for empirical cutoff derivation.")
-  m
+if (!any(RUN_COMPARISON_FLAGS)) {
+  stop("At least one RUN_COMPARISON_FLAGS entry must be TRUE.")
 }
 
-seqcut_assign_groups <- function(samples) {
-  g <- rep(NA_character_, length(samples)); names(g) <- samples
-  for (nm in names(SEQCUT_GROUP_PATTERNS)) {
-    idx <- grep(SEQCUT_GROUP_PATTERNS[[nm]], samples)
-    if (any(!is.na(g[idx]))) stop("A sample matched more than one empirical-cutoff group.")
-    g[idx] <- nm
-  }
-  if (anyNA(g)) stop("Unassigned cutoff samples: ", paste(names(g)[is.na(g)], collapse=", "))
-  factor(g, levels=names(SEQCUT_GROUP_PATTERNS))
-}
+# The two original downstream EVS pathways remain enabled. Two additional
+# matched pathways are added:
+#   CPM empirical cutoff child -> CPM-EVS ranking/split -> raw counts -> DESeq2
+#   VST empirical cutoff child -> VST-EVS ranking/split -> raw counts -> DESeq2
+# Fixed-5,000 keeps the original NormEVS and RawEVS pathways unchanged.
+# Set this FALSE if you later want CPM-EVS and VST-EVS tracks run under every
+# cutoff method as a full cross-factorial sensitivity analysis.
+RUN_MATCHED_TRANSFORM_TRACKS_ONLY <- TRUE
 
-seqcut_normalize_and_vst <- function(counts, groups) {
-  if (!requireNamespace("DESeq2", quietly=TRUE)) stop("DESeq2 is required to derive empirical cutoffs.")
-  if (!requireNamespace("SummarizedExperiment", quietly=TRUE)) stop("SummarizedExperiment is required for VST empirical cutoffs.")
+# =============================================================================
+# INTEGRATED EMPIRICAL CUTOFF + MANUSCRIPT FIGURE ENGINE
+# =============================================================================
+# Runs once in the master process. The same fitted CPM-EVS/VST-EVS objects are
+# used both to render the cutoff manuscript figures/tables and to provide the
+# comparison-specific k* values consumed by the downstream SEQUENCE child runs.
+# No empirical cutoff is hard-coded.
+# =============================================================================
 
-  dds <- DESeq2::DESeqDataSetFromMatrix(
-    countData=round(counts),
-    colData=data.frame(group=groups, row.names=colnames(counts)),
-    design=~group
+run_sequence_empirical_cutoff_module <- function(count_path, out_root) {
+
+  suppressPackageStartupMessages({
+    library(ggplot2)
+    library(dplyr)
+    library(tidyr)
+    library(grid)
+  })
+
+  options(stringsAsFactors = FALSE)
+
+  # =============================================================================
+  # CPM-EVS vs VST-EVS — FINAL MANUSCRIPT VERSION
+  # =============================================================================
+  #
+  # DESIGN
+  # ------
+  # 1) One experiment-wide PAS universe.
+  # 2) Two EVS preprocessing methods:
+  #      CPM-EVS    = log1p(CPM) -> arm-specific PCA
+  #      VST-EVS     = DESeq2 variance-stabilizing transformation -> arm-specific PCA
+  #    VST changes ONLY the EVS/PCA geometry; the pooled NB excess-variance
+  #    reference remains based on globally DESeq2-normalized counts for both methods.
+  # 3) For each method, all 8 arm-specific D_g(r) curves are fit jointly to
+  #    estimate one shared c1/c2 regime system.
+  # 4) Each RT/ZT comparison gets its own independent cutoff k*.
+  # 5) Cutoff scoring is count-based and identical across preprocessing methods:
+  #      - Joint sites receive full unit benefit.
+  #      - Disjoint sites are permissible when the opposite-arm rank is in the
+  #        Leading Edge or Divergence interval; each receives full unit benefit.
+  #      - Only disjoint sites crossing into the opposite-arm Remainder count as
+  #        contamination.
+  # 6) On the comparison-specific Pareto frontier, G(k) and R(k) are min-max
+  #    normalized to [0,1]. The two normalized frontier endpoints define a chord.
+  #    k* is the Pareto-optimal candidate with MAXIMUM perpendicular distance
+  #    from that endpoint chord (maximum endpoint deviation).
+  # 7) Remainder-crossing sites are NOT silently discarded from the top-k union.
+  #    They are flagged as penalized/low-confidence. A separate high-confidence
+  #    subset contains Joint + opposite-LE + opposite-Divergence sites.
+  # 8) Exactly four composite manuscript figures are generated, at final
+  #    print size, by the publication figure layer defined below.
+  #
+  # =============================================================================
+
+  COUNT_FILE <- count_path
+  OUT_ROOT <- out_root
+
+  GROUP_PATTERNS <- c(
+    RT0="^R0_", ZT6="^ZT6_", RT2="^R2_", ZT8="^ZT8_",
+    RT4="^R4_", ZT10="^ZT10_", RT8="^R8_", ZT14="^ZT14_"
   )
-  dds <- tryCatch(
-    DESeq2::estimateSizeFactors(dds),
-    error=function(e) DESeq2::estimateSizeFactors(dds, type="poscounts")
+
+  COMPARISONS <- list(
+    RT0_ZT6=c(control="RT0", treatment="ZT6"),
+    RT2_ZT8=c(control="RT2", treatment="ZT8"),
+    RT4_ZT10=c(control="RT4", treatment="ZT10"),
+    RT8_ZT14=c(control="RT8", treatment="ZT14")
   )
-  vst_obj <- DESeq2::varianceStabilizingTransformation(dds, blind=TRUE)
-  vst_mat <- SummarizedExperiment::assay(vst_obj)
-  norm_mat <- DESeq2::counts(dds, normalized=TRUE)
 
-  if (!identical(dim(vst_mat), dim(counts)) ||
-      !identical(rownames(vst_mat), rownames(counts)) ||
-      !identical(colnames(vst_mat), colnames(counts))) {
-    stop("VST matrix is not aligned with the raw count matrix.")
-  }
-  if (any(!is.finite(vst_mat))) stop("VST matrix contains non-finite values.")
-  list(norm=norm_mat, vst=vst_mat)
-}
+  METHODS <- c("CPM_EVS", "VST_EVS")
 
-seqcut_cpm_log1p <- function(x) {
-  lib <- colSums(x)
-  lib[!is.finite(lib) | lib <= 0] <- 1
-  log1p(sweep(x, 2, lib/1e6, "/"))
-}
+  dir.create(OUT_ROOT, recursive=TRUE, showWarnings=FALSE)
+  FIG_DIR <- file.path(OUT_ROOT, "Figures")
+  TAB_DIR <- file.path(OUT_ROOT, "Tables")
+  dir.create(FIG_DIR, recursive=TRUE, showWarnings=FALSE)
+  dir.create(TAB_DIR, recursive=TRUE, showWarnings=FALSE)
 
-seqcut_pooled_var <- function(norm, groups) {
-  sse <- rep(0, nrow(norm)); df <- 0L
-  for (g in levels(groups)) {
-    z <- norm[,groups==g,drop=FALSE]
-    mu <- rowMeans(z)
-    sse <- sse + rowSums((z-mu)^2)
-    df <- df + ncol(z)-1L
-  }
-  if (df < 2L) stop("Insufficient pooled residual df for cutoff derivation.")
-  pmax(sse/df, 0)
-}
+  # =============================================================================
+  # INPUT / NORMALIZATION
+  # =============================================================================
 
-seqcut_pc1_rank <- function(x) {
-  p <- stats::prcomp(t(x), center=TRUE, scale.=FALSE, rank.=1)
-  loading <- p$rotation[,1]
-  loading[!is.finite(loading)] <- 0
-  list(
-    order=order(abs(loading), decreasing=FALSE),
-    loading=loading,
-    contribution=(p$sdev[1]^2)*loading^2
-  )
-}
+  read_counts <- function(path) {
+    if (!file.exists(path)) stop("Count file not found: ", path)
 
-seqcut_build_arm <- function(method, raw, norm, vst, pooled_var) {
-  rank_matrix <- switch(
-    method,
-    CPM_EVS=seqcut_cpm_log1p(raw),
-    VST_EVS=vst,
-    stop("Unknown empirical cutoff method: ", method)
-  )
-  pc <- seqcut_pc1_rank(rank_matrix)
-  ord <- pc$order
-  P <- pc$contribution[ord]
-  mu <- rowMeans(norm)[ord]
-  E <- pmax(pooled_var[ord]-mu, 0)
-  if (sum(P) <= 0 || sum(E) <= 0) stop("Undefined PC1/NB mass during empirical cutoff derivation.")
-  p <- P/sum(P); q <- E/sum(E)
-  data.frame(
-    rank=seq_along(ord),
-    feature_id=rownames(raw)[ord],
-    D=cumsum(q)-cumsum(p),
-    stringsAsFactors=FALSE
-  )
-}
+    x <- read.csv(path, check.names=FALSE, stringsAsFactors=FALSE)
+    idx <- sort(unique(unlist(lapply(GROUP_PATTERNS, \(p) grep(p, names(x))))))
 
-seqcut_piecewise_basis <- function(x,c1,c2) {
-  cbind(1, x, pmax(x-c1,0), pmax(x-c2,0))
-}
+    if (!length(idx)) stop("No sample columns matched GROUP_PATTERNS.")
 
-seqcut_fit_shared_knots <- function(arms) {
-  N <- nrow(arms[[1]])
-  if (length(unique(vapply(arms,nrow,integer(1)))) != 1L) stop("Cutoff arms do not share one PAS universe.")
-  x_full <- (seq_len(N)-1)/(N-1)
-  D_full <- do.call(cbind,lapply(arms,function(z) z$D))
+    ids <- trimws(as.character(x[[1]]))
+    blank <- is.na(ids) | ids==""
+    ids[blank] <- paste0("feature_", which(blank))
+    ids <- make.unique(ids, sep="__dup_")
 
-  opt_n <- min(4000L,N)
-  idx <- unique(as.integer(round(seq(1,N,length.out=opt_n))))
-  x <- x_full[idx]
-  D <- D_full[idx,,drop=FALSE]
-  min_gap <- max(4/(N-1),1e-4)
+    m <- do.call(cbind, lapply(x[,idx,drop=FALSE], \(z)
+      suppressWarnings(as.numeric(as.character(z)))
+    ))
 
-  objective <- function(par) {
-    c1 <- par[1]; c2 <- par[2]
-    if (!is.finite(c1) || !is.finite(c2) || c1<=0 || c2>=1 || c2-c1<=min_gap) return(1e100)
-    X <- seqcut_piecewise_basis(x,c1,c2)
-    b <- tryCatch(qr.coef(qr(X),D), error=function(e) NULL)
-    if (is.null(b) || any(!is.finite(b))) return(1e100)
-    sum((D-X%*%b)^2)
+    rownames(m) <- ids
+    colnames(m) <- names(x)[idx]
+    storage.mode(m) <- "numeric"
+    m[!is.finite(m)] <- 0
+    m <- pmax(m, 0)
+
+    # One experiment-wide PAS universe.
+    m <- m[rowSums(m) > 0, , drop=FALSE]
+
+    if (nrow(m) < 20L) stop("Too few nonzero PASs.")
+    m
   }
 
-  starts <- list(c(.05,.95),c(.12,.88),c(.22,.78),c(.32,.68))
-  fits <- lapply(starts,function(st) stats::optim(st,objective,method="Nelder-Mead",control=list(maxit=500,reltol=1e-10)))
-  best <- fits[[which.min(vapply(fits,function(z) z$value,numeric(1)))]]
+  assign_groups <- function(samples) {
+    g <- rep(NA_character_, length(samples))
+    names(g) <- samples
 
-  c1 <- as.integer(round(1+best$par[1]*(N-1)))
-  c2 <- as.integer(round(1+best$par[2]*(N-1)))
-  c1 <- max(2L,min(N-2L,c1)); c2 <- max(c1+1L,min(N-1L,c2))
+    for (nm in names(GROUP_PATTERNS)) {
+      idx <- grep(GROUP_PATTERNS[[nm]], samples)
+      if (any(!is.na(g[idx]))) stop("A sample matched >1 group.")
+      g[idx] <- nm
+    }
 
-  X_full <- seqcut_piecewise_basis(x_full,(c1-1)/(N-1),(c2-1)/(N-1))
-  coef <- qr.coef(qr(X_full),D_full)
-  fitted <- X_full%*%coef
-  list(c1=c1,c2=c2,N=N,SSE=sum((D_full-fitted)^2))
-}
+    if (anyNA(g)) {
+      stop("Unassigned samples: ", paste(names(g)[is.na(g)], collapse=", "))
+    }
 
-seqcut_rank_map <- function(df) setNames(df$rank,df$feature_id)
+    factor(g, levels=names(GROUP_PATTERNS))
+  }
 
-seqcut_add_events <- function(pos,weight,L) {
-  out <- numeric(L)
-  ok <- is.finite(pos) & is.finite(weight) & pos>=1 & pos<=L
-  if (!any(ok)) return(out)
-  z <- rowsum(weight[ok], group=as.integer(pos[ok]), reorder=FALSE)
-  out[as.integer(rownames(z))] <- z[,1]
-  out
-}
+  deseq2_normalize <- function(counts, groups) {
+    if (!requireNamespace("DESeq2", quietly=TRUE)) stop("DESeq2 is required.")
+    if (!requireNamespace("SummarizedExperiment", quietly=TRUE)) {
+      stop("SummarizedExperiment is required for the VST assay.")
+    }
 
-seqcut_activate_from <- function(depth,weight,K) cumsum(seqcut_add_events(depth,weight,K))
+    dds <- DESeq2::DESeqDataSetFromMatrix(
+      countData=round(counts),
+      colData=data.frame(group=groups, row.names=colnames(counts)),
+      design=~group
+    )
 
-seqcut_active_interval <- function(start,end,weight,K) {
-  delta <- numeric(K+1L)
-  ok <- is.finite(start) & is.finite(end) & is.finite(weight) & start>=1 & start<=K & end>start
-  if (!any(ok)) return(numeric(K))
-  ss <- as.integer(start[ok]); ee <- pmin(as.integer(end[ok]),K+1L); w <- weight[ok]
-  delta <- delta + seqcut_add_events(ss,w,K+1L)
-  delta <- delta - seqcut_add_events(ee,w,K+1L)
-  cumsum(delta)[seq_len(K)]
-}
+    dds <- tryCatch(
+      DESeq2::estimateSizeFactors(dds),
+      error=\(e) DESeq2::estimateSizeFactors(dds, type="poscounts")
+    )
 
-seqcut_scan_pair <- function(control_df,treatment_df,c1,c2) {
-  N <- nrow(control_df); K <- N-c2
-  if (K < 1L) stop("No candidate k exists beyond c2.")
+    # VST is used ONLY for the EVS/PCA geometry.  blind=TRUE prevents the
+    # experimental design from being used to preserve group differences during
+    # the transformation, keeping the PCA comparison unsupervised.
+    vst_obj <- DESeq2::varianceStabilizingTransformation(dds, blind=TRUE)
+    vst_mat <- SummarizedExperiment::assay(vst_obj)
 
-  rC_map <- seqcut_rank_map(control_df); rT_map <- seqcut_rank_map(treatment_df)
-  ids <- control_df$feature_id
-  rC <- as.integer(rC_map[ids]); rT <- as.integer(rT_map[ids])
-  if (anyNA(rC) || anyNA(rT)) stop("Cross-arm PAS rank mapping failed.")
-  dC <- N-rC+1L; dT <- N-rT+1L
-  joint_n <- seqcut_activate_from(pmax(dC,dT),rep(1,N),K)
+    if (!identical(dim(vst_mat), dim(counts))) {
+      stop("VST matrix dimensions do not match the count matrix.")
+    }
+    if (!identical(rownames(vst_mat), rownames(counts)) ||
+        !identical(colnames(vst_mat), colnames(counts))) {
+      stop("VST matrix feature/sample ordering does not match the count matrix.")
+    }
+    if (any(!is.finite(vst_mat))) stop("VST matrix contains non-finite values.")
 
-  idxC <- which(dC<dT & dC<=K)
-  startC <- dC[idxC]; endC <- pmin(dT[idxC],K+1L); oppC <- rT[idxC]
-  disC_rem <- seqcut_active_interval(startC,endC,as.numeric(oppC<c1),K)
-  disC_div <- seqcut_active_interval(startC,endC,as.numeric(oppC>=c1 & oppC<=c2),K)
-  disC_le  <- seqcut_active_interval(startC,endC,as.numeric(oppC>c2),K)
+    list(
+      counts=DESeq2::counts(dds, normalized=TRUE),
+      size_factors=DESeq2::sizeFactors(dds),
+      vst=vst_mat
+    )
+  }
 
-  idxT <- which(dT<dC & dT<=K)
-  startT <- dT[idxT]; endT <- pmin(dC[idxT],K+1L); oppT <- rC[idxT]
-  disT_rem <- seqcut_active_interval(startT,endT,as.numeric(oppT<c1),K)
-  disT_div <- seqcut_active_interval(startT,endT,as.numeric(oppT>=c1 & oppT<=c2),K)
-  disT_le  <- seqcut_active_interval(startT,endT,as.numeric(oppT>c2),K)
+  cpm_log1p <- function(x) {
+    lib <- colSums(x)
+    lib[!is.finite(lib) | lib<=0] <- 1
+    log1p(sweep(x, 2, lib/1e6, "/"))
+  }
 
-  opposite_le_n <- disC_le+disT_le
-  opposite_divergence_n <- disC_div+disT_div
-  remainder_cross_n <- disC_rem+disT_rem
-  good_n <- joint_n+opposite_le_n+opposite_divergence_n
-  union_n <- 2*seq_len(K)-joint_n
-  if (!all(good_n+remainder_cross_n == union_n)) stop("Internal union-count mismatch in cutoff scan.")
+  pooled_within_group_var <- function(norm, groups) {
+    sse <- rep(0, nrow(norm))
+    df <- 0L
 
-  data.frame(
-    k=seq_len(K), joint_n=joint_n, opposite_le_n=opposite_le_n,
-    opposite_divergence_n=opposite_divergence_n,
-    remainder_cross_n=remainder_cross_n, good_n=good_n, union_n=union_n,
-    stringsAsFactors=FALSE
+    for (g in levels(groups)) {
+      z <- norm[,groups==g,drop=FALSE]
+      mu <- rowMeans(z)
+      sse <- sse + rowSums((z-mu)^2)
+      df <- df + ncol(z)-1L
+    }
+
+    if (df < 2L) stop("Insufficient pooled residual degrees of freedom.")
+    pmax(sse/df, 0)
+  }
+
+  # =============================================================================
+  # PC1 RANKING + CUMULATIVE DIVERGENCE
+  # =============================================================================
+
+  pc1_rank <- function(x) {
+    p <- prcomp(t(x), center=TRUE, scale.=FALSE, rank.=1)
+
+    loading <- p$rotation[,1]
+    loading[!is.finite(loading)] <- 0
+
+    list(
+      order=order(abs(loading), decreasing=FALSE),
+      loading=loading,
+      contribution=(p$sdev[1]^2)*loading^2
+    )
+  }
+
+  build_arm <- function(method, arm, raw, norm, vst, pooled_var) {
+    rank_matrix <- switch(
+      method,
+      CPM_EVS=cpm_log1p(raw),
+      VST_EVS=vst,
+      stop("Unknown method: ", method)
+    )
+
+    pc <- pc1_rank(rank_matrix)
+    ord <- pc$order
+
+    P <- pc$contribution[ord]
+    mu <- rowMeans(norm)[ord]
+    V <- pooled_var[ord]
+    E <- pmax(V-mu, 0)
+
+    if (sum(P)<=0 || sum(E)<=0) {
+      stop("Undefined PC1/NB mass for ", method, " / ", arm)
+    }
+
+    p <- P/sum(P)
+    q <- E/sum(E)
+
+    data.frame(
+      method=method,
+      arm=arm,
+      rank=seq_along(ord),
+      feature_id=rownames(raw)[ord],
+      abs_pc1_loading=abs(pc$loading[ord]),
+      pc1_contribution=P,
+      pc1_mass=p,
+      excess_variance=E,
+      excess_mass=q,
+      F_P=cumsum(p),
+      F_E=cumsum(q),
+      D=cumsum(q)-cumsum(p),
+      stringsAsFactors=FALSE
+    )
+  }
+
+  # =============================================================================
+  # SHARED c1/c2 FIT
+  # =============================================================================
+
+  piecewise_basis <- function(x,c1,c2) {
+    cbind(1, x, pmax(x-c1,0), pmax(x-c2,0))
+  }
+
+  fit_shared_knots <- function(arms) {
+    N <- nrow(arms[[1]])
+    if (length(unique(vapply(arms,nrow,integer(1)))) != 1L) {
+      stop("All arms must use the same PAS universe.")
+    }
+
+    x_full <- (seq_len(N)-1)/(N-1)
+    D_full <- do.call(cbind,lapply(arms,\(z) z$D))
+    colnames(D_full) <- names(arms)
+
+    # Efficient optimization on a coarse grid; full fit performed once afterward.
+    opt_n <- min(4000L,N)
+    idx <- unique(as.integer(round(seq(1,N,length.out=opt_n))))
+    x <- x_full[idx]
+    D <- D_full[idx,,drop=FALSE]
+
+    min_gap <- max(4/(N-1),1e-4)
+
+    objective <- function(par) {
+      c1 <- par[1]
+      c2 <- par[2]
+
+      if (!is.finite(c1) || !is.finite(c2) ||
+          c1<=0 || c2>=1 || c2-c1<=min_gap) return(1e100)
+
+      X <- piecewise_basis(x,c1,c2)
+      b <- tryCatch(qr.coef(qr(X),D),error=\(e) NULL)
+
+      if (is.null(b) || any(!is.finite(b))) return(1e100)
+      sum((D-X%*%b)^2)
+    }
+
+    starts <- list(c(.05,.95),c(.12,.88),c(.22,.78),c(.32,.68))
+
+    fits <- lapply(starts,\(st)
+      optim(
+        st,objective,
+        method="Nelder-Mead",
+        control=list(maxit=500,reltol=1e-10)
+      )
+    )
+
+    best <- fits[[which.min(vapply(fits,`[[`,numeric(1),"value"))]]
+
+    c1 <- as.integer(round(1+best$par[1]*(N-1)))
+    c2 <- as.integer(round(1+best$par[2]*(N-1)))
+
+    c1 <- max(2L,min(N-2L,c1))
+    c2 <- max(c1+1L,min(N-1L,c2))
+
+    X_full <- piecewise_basis(
+      x_full,
+      (c1-1)/(N-1),
+      (c2-1)/(N-1)
+    )
+
+    coef <- qr.coef(qr(X_full),D_full)
+    fitted <- X_full%*%coef
+
+    list(
+      c1=c1,
+      c2=c2,
+      N=N,
+      groups=names(arms),
+      fitted=fitted,
+      SSE=sum((D_full-fitted)^2)
+    )
+  }
+
+  # =============================================================================
+  # FAST COUNT-BASED TOP-k SCORING
+  # =============================================================================
+
+  rank_map <- function(df) setNames(df$rank,df$feature_id)
+
+  add_events <- function(pos,weight,L) {
+    out <- numeric(L)
+    ok <- is.finite(pos) & is.finite(weight) & pos>=1 & pos<=L
+    if (!any(ok)) return(out)
+    z <- rowsum(weight[ok], group=as.integer(pos[ok]), reorder=FALSE)
+    out[as.integer(rownames(z))] <- z[,1]
+    out
+  }
+
+  activate_from <- function(depth,weight,K) {
+    cumsum(add_events(depth,weight,K))
+  }
+
+  active_interval <- function(start,end,weight,K) {
+    # Active for start <= k < end.
+    delta <- numeric(K+1L)
+    ok <- is.finite(start) & is.finite(end) & is.finite(weight) &
+          start>=1 & start<=K & end>start
+    if (!any(ok)) return(numeric(K))
+    ss <- as.integer(start[ok])
+    ee <- pmin(as.integer(end[ok]),K+1L)
+    w <- weight[ok]
+    delta <- delta + add_events(ss,w,K+1L)
+    delta <- delta - add_events(ee,w,K+1L)
+    cumsum(delta)[seq_len(K)]
+  }
+
+  scan_pair_fast <- function(control_df,treatment_df,c1,c2) {
+    N <- nrow(control_df)
+    K <- N-c2
+    if (K<1L) stop("No candidate k exists beyond c2.")
+
+    rC_map <- rank_map(control_df)
+    rT_map <- rank_map(treatment_df)
+    ids <- control_df$feature_id
+    rC <- as.integer(rC_map[ids])
+    rT <- as.integer(rT_map[ids])
+    dC <- N-rC+1L
+    dT <- N-rT+1L
+
+    # Joint sites become active when both arms contain the PAS.
+    joint_depth <- pmax(dC,dT)
+    joint_n <- activate_from(joint_depth,rep(1,N),K)
+
+    # Control-only interval.
+    idxC <- which(dC<dT & dC<=K)
+    startC <- dC[idxC]
+    endC <- pmin(dT[idxC],K+1L)
+    oppC <- rT[idxC]
+    disC_n   <- active_interval(startC,endC,rep(1,length(idxC)),K)
+    disC_rem <- active_interval(startC,endC,as.numeric(oppC<c1),K)
+    disC_div <- active_interval(startC,endC,as.numeric(oppC>=c1 & oppC<=c2),K)
+    disC_le  <- active_interval(startC,endC,as.numeric(oppC>c2),K)
+
+    # Treatment-only interval.
+    idxT <- which(dT<dC & dT<=K)
+    startT <- dT[idxT]
+    endT <- pmin(dC[idxT],K+1L)
+    oppT <- rC[idxT]
+    disT_n   <- active_interval(startT,endT,rep(1,length(idxT)),K)
+    disT_rem <- active_interval(startT,endT,as.numeric(oppT<c1),K)
+    disT_div <- active_interval(startT,endT,as.numeric(oppT>=c1 & oppT<=c2),K)
+    disT_le  <- active_interval(startT,endT,as.numeric(oppT>c2),K)
+
+    disjoint_n <- disC_n+disT_n
+    opposite_le_n <- disC_le+disT_le
+    opposite_divergence_n <- disC_div+disT_div
+    remainder_cross_n <- disC_rem+disT_rem
+    good_n <- joint_n+opposite_le_n+opposite_divergence_n
+    union_n <- 2*seq_len(K)-joint_n
+
+    if (!all(good_n+remainder_cross_n == union_n)) {
+      stop("Internal union-count mismatch in count-based top-k scan.")
+    }
+
+    data.frame(
+      k=seq_len(K),
+      joint_n=joint_n,
+      disjoint_n=disjoint_n,
+      opposite_le_n=opposite_le_n,
+      opposite_divergence_n=opposite_divergence_n,
+      remainder_cross_n=remainder_cross_n,
+      good_n=good_n,
+      union_n=union_n,
+      retained_fraction=ifelse(union_n>0,good_n/union_n,NA_real_),
+      remainder_cross_fraction=ifelse(union_n>0,remainder_cross_n/union_n,NA_real_),
+      stringsAsFactors=FALSE
+    )
+  }
+
+  # =============================================================================
+  # PARETO FRONTIER + MAXIMUM ENDPOINT-CHORD DEVIATION
+  # =============================================================================
+
+  mark_pareto_frontier <- function(scan_df, good_col="good_n", cost_col="remainder_cross_n") {
+    tmp <- scan_df %>%
+      transmute(row_id=row_number(), k=k, good=.data[[good_col]], cost=.data[[cost_col]]) %>%
+      arrange(cost,desc(good),desc(k)) %>%
+      group_by(cost) %>% slice(1L) %>% ungroup() %>%
+      arrange(cost,desc(good))
+
+    running_best_before <- c(-Inf, head(cummax(tmp$good),-1L))
+    tmp$is_frontier_coord <- tmp$good > running_best_before
+    frontier <- tmp %>% filter(is_frontier_coord) %>% arrange(cost,good,k)
+
+    key_all <- paste(scan_df[[cost_col]],scan_df[[good_col]],sep="::")
+    key_frontier <- paste(frontier$cost,frontier$good,sep="::")
+    out <- scan_df
+    out$is_pareto <- key_all %in% key_frontier
+    list(scan=out,frontier=frontier)
+  }
+
+  select_max_endpoint_deviation <- function(scan_df,
+                                            good_col="good_n",
+                                            cost_col="remainder_cross_n") {
+    marked <- mark_pareto_frontier(scan_df, good_col, cost_col)
+    frontier <- marked$frontier %>% arrange(cost,good,k)
+    if (nrow(frontier) < 2L) {
+      stop("At least two Pareto-optimal points are required to define the endpoint chord.")
+    }
+
+    # Normalize ONLY on the Pareto frontier.
+    gr <- range(frontier$good, na.rm=TRUE)
+    cr <- range(frontier$cost, na.rm=TRUE)
+    norm_good <- function(x) {
+      if (diff(gr)==0) rep(0,length(x)) else (x-gr[1])/diff(gr)
+    }
+    norm_cost <- function(x) {
+      if (diff(cr)==0) rep(0,length(x)) else (x-cr[1])/diff(cr)
+    }
+
+    frontier$good_norm <- norm_good(frontier$good)
+    frontier$remainder_norm <- norm_cost(frontier$cost)
+
+    # Endpoint chord in normalized Pareto space.
+    x1 <- frontier$remainder_norm[1]
+    y1 <- frontier$good_norm[1]
+    x2 <- frontier$remainder_norm[nrow(frontier)]
+    y2 <- frontier$good_norm[nrow(frontier)]
+
+    denom <- sqrt((y2-y1)^2 + (x2-x1)^2)
+    if (!is.finite(denom) || denom <= .Machine$double.eps) {
+      stop("Normalized Pareto endpoints are coincident; endpoint chord is undefined.")
+    }
+
+    frontier$endpoint_deviation <- abs(
+      (y2-y1)*frontier$remainder_norm -
+        (x2-x1)*frontier$good_norm +
+        x2*y1 - y2*x1
+    ) / denom
+
+    best <- max(frontier$endpoint_deviation, na.rm=TRUE)
+    chosen <- frontier %>%
+      filter(abs(endpoint_deviation-best) < 1e-12) %>%
+      arrange(desc(good), cost, desc(k)) %>%
+      slice(1L)
+
+    out <- marked$scan
+    out$good_norm <- norm_good(out[[good_col]])
+    out$remainder_norm <- norm_cost(out[[cost_col]])
+    out$endpoint_deviation <- abs(
+      (y2-y1)*out$remainder_norm -
+        (x2-x1)*out$good_norm +
+        x2*y1 - y2*x1
+    ) / denom
+    out$is_selected_endpoint_max <- out$k == chosen$k[1]
+
+    chord <- data.frame(
+      remainder_norm=c(x1,x2),
+      good_norm=c(y1,y2),
+      stringsAsFactors=FALSE
+    )
+
+    list(
+      scan=out,
+      frontier=frontier,
+      chord=chord,
+      selected_k=as.integer(chosen$k[1]),
+      selected_good=chosen$good[1],
+      selected_cost=chosen$cost[1],
+      selected_good_norm=chosen$good_norm[1],
+      selected_remainder_norm=chosen$remainder_norm[1],
+      selected_endpoint_deviation=chosen$endpoint_deviation[1]
+    )
+  }
+
+  # =============================================================================
+  # CLASSIFICATION AT k*
+  # =============================================================================
+
+  classify_at_k <- function(k,comparison,control_df,treatment_df,c1,c2) {
+    N <- nrow(control_df)
+
+    rC <- rank_map(control_df)
+    rT <- rank_map(treatment_df)
+
+    topC <- tail(control_df$feature_id,k)
+    topT <- tail(treatment_df$feature_id,k)
+    ids <- union(topC,topT)
+
+    a <- as.integer(rC[ids])
+    b <- as.integer(rT[ids])
+
+    inC <- ids%in%topC
+    inT <- ids%in%topT
+    joint <- inC & inT
+    disC <- inC & !inT
+    disT <- inT & !inC
+
+    opp <- ifelse(disC,b,ifelse(disT,a,NA_integer_))
+    selected_rank <- ifelse(disC,a,ifelse(disT,b,NA_integer_))
+
+    opp_region <- ifelse(
+      joint,"Joint",
+      ifelse(
+        opp>c2,"Opposite Leading Edge",
+        ifelse(opp>=c1,"Opposite Divergence","Opposite Remainder")
+      )
+    )
+
+    # Binary bookkeeping consistent with the validated count-based objective.
+    penalty <- ifelse(joint,0,as.numeric(opp<c1))
+    support <- ifelse(joint,1,as.numeric(opp>=c1))
+
+    data.frame(
+      comparison=comparison,
+      feature_id=ids,
+      selected_k=k,
+      control_rank=a,
+      treatment_rank=b,
+      class=ifelse(joint,"Joint",ifelse(disC,"Control only","Treatment only")),
+      opposite_region=opp_region,
+      support_score=support,
+      remainder_penalty=penalty,
+      selected_topk_union=TRUE,
+      high_confidence=joint | opp_region%in%c(
+        "Opposite Leading Edge","Opposite Divergence"
+      ),
+      penalized_remainder_crossing=opp_region=="Opposite Remainder",
+      stringsAsFactors=FALSE
+    )
+  }
+
+  # =============================================================================
+  # FIGURE SYSTEM (publication layer)
+  # =============================================================================
+  #
+  # Figures are authored at 180 mm final width with 7 pt body text at 100%
+  # reproduction, in a colourblind-safe palette, and exported as vector PDF plus
+  # 600 dpi PNG. Figure_Legends.md is generated from the fitted objects so the
+  # numbers in the legends cannot drift from the numbers in the figures.
+  #
+  # Optional: patchwork is used for panel alignment if installed. Without it a
+  # gtable aligner is used instead and everything still runs.
+  # =============================================================================
+
+  # =============================================================================
+  # 1. DESIGN SYSTEM
+  # =============================================================================
+  # Figures are authored at final print size. A figure drawn 15 in wide and then
+  # reduced to a 180 mm journal column shrinks all type by ~60%, which is the
+  # single most common reason draft figures fail production. Everything below is
+  # sized for 180 mm (double column) reproduced at 100%.
+
+  EVS_FIG_W_MM   <- 180    # double-column width
+  EVS_BASE_PT    <- 7      # body text, in points, at final size
+  EVS_PNG_DPI    <- 600
+  EVS_WRITE_TIFF <- FALSE  # set TRUE if the journal requires TIFF
+
+  mm2in <- function(mm) mm / 25.4
+  pt2mm <- function(pt) pt / .pt   # ggplot geom text size is in mm, not points
+
+  # Okabe-Ito: colourblind-safe and still separable in greyscale.
+  EVS_COL <- list(
+    cpm       = "#0072B2",  # blue
+    deseq     = "#D55E00",  # vermillion
+    median    = "#CC79A7",  # reddish purple
+    fit       = "#000000",
+    arms      = "#9AA3AD",
+    knee      = "#CC79A7",
+    chord     = "#B9C0C7",
+    shared    = "#7A7F86",
+    joint     = "#009E73",
+    opp_le    = "#56B4E9",
+    opp_div   = "#F0E442",
+    opp_rem   = "#E69F00",
+    band_rem  = "#E8ECF2",  # pale regime fills ...
+    band_div  = "#FBF0D0",
+    band_lead = "#DCEFE4",
+    edge_rem  = "#5B6672",  # ... with saturated partners for rules and labels
+    edge_div  = "#8A6D12",
+    edge_lead = "#2E8B62"
   )
-}
 
-seqcut_pareto_endpoint_max <- function(scan_df) {
-  tmp <- data.frame(row_id=seq_len(nrow(scan_df)), k=scan_df$k,
-                    good=scan_df$good_n, cost=scan_df$remainder_cross_n)
-  tmp <- tmp[order(tmp$cost,-tmp$good,-tmp$k),,drop=FALSE]
-  tmp <- tmp[!duplicated(tmp$cost),,drop=FALSE]
-  prior_best <- c(-Inf, head(cummax(tmp$good),-1L))
-  frontier <- tmp[tmp$good > prior_best,,drop=FALSE]
-  frontier <- frontier[order(frontier$cost,frontier$good,frontier$k),,drop=FALSE]
-  if (nrow(frontier) < 2L) stop("At least two Pareto points are required for the endpoint chord.")
+  EVS_METHOD_COL <- c("CPM-EVS" = EVS_COL$cpm, "VST-EVS" = EVS_COL$deseq)
 
-  gr <- range(frontier$good); cr <- range(frontier$cost)
-  norm_good <- function(x) if (diff(gr)==0) rep(0,length(x)) else (x-gr[1])/diff(gr)
-  norm_cost <- function(x) if (diff(cr)==0) rep(0,length(x)) else (x-cr[1])/diff(cr)
-  frontier$good_norm <- norm_good(frontier$good)
-  frontier$remainder_norm <- norm_cost(frontier$cost)
+  evs_method_label <- function(m) ifelse(m == "CPM_EVS", "CPM-EVS", "VST-EVS")
 
-  x1 <- frontier$remainder_norm[1]; y1 <- frontier$good_norm[1]
-  x2 <- frontier$remainder_norm[nrow(frontier)]; y2 <- frontier$good_norm[nrow(frontier)]
-  denom <- sqrt((y2-y1)^2+(x2-x1)^2)
-  if (!is.finite(denom) || denom <= .Machine$double.eps) stop("Endpoint chord is undefined.")
-  frontier$endpoint_deviation <- abs(
-    (y2-y1)*frontier$remainder_norm - (x2-x1)*frontier$good_norm + x2*y1-y2*x1
-  )/denom
+  # "RT0_ZT6" -> "RT0 vs ZT6". Underscores do not belong on a published axis.
+  evs_comparison_label <- function(x) sub("_", " vs ", x, fixed = TRUE)
 
-  best <- max(frontier$endpoint_deviation,na.rm=TRUE)
-  cand <- frontier[abs(frontier$endpoint_deviation-best)<1e-12,,drop=FALSE]
-  cand <- cand[order(-cand$good,cand$cost,-cand$k),,drop=FALSE]
-  list(selected_k=as.integer(cand$k[1]), selected=cand[1,,drop=FALSE], frontier=frontier)
-}
+  evs_num <- function(x, digits = 0) {
+    formatC(x, format = "f", digits = digits, big.mark = ",")
+  }
 
-derive_sequence_empirical_cutoffs <- function(count_path) {
-  message("Deriving CPM-EVS and VST-EVS empirical cutoffs from the raw count matrix...")
-  counts <- seqcut_read_counts(count_path)
-  groups <- seqcut_assign_groups(colnames(counts))
-  norm_obj <- seqcut_normalize_and_vst(counts,groups)
-  pooled_var <- seqcut_pooled_var(norm_obj$norm,groups)
+  evs_comma <- function(v) {
+    format(v, big.mark = ",", scientific = FALSE, trim = TRUE)
+  }
 
-  method_results <- list(); audit_rows <- list()
-  for (method in c("CPM_EVS","VST_EVS")) {
+  # legend.position.inside arrived in ggplot2 3.5.0; older versions take a
+  # numeric legend.position. Keeps the module working on both.
+  evs_legend_inside <- function(x, y, just, direction = "vertical") {
+    if (utils::packageVersion("ggplot2") >= "3.5.0") {
+      theme(legend.position = "inside",
+            legend.position.inside = c(x, y),
+            legend.justification = just,
+            legend.direction = direction)
+    } else {
+      theme(legend.position = c(x, y),
+            legend.justification = just,
+            legend.direction = direction)
+    }
+  }
+
+  evs_theme <- function(base_pt = EVS_BASE_PT) {
+    theme_classic(base_size = base_pt) +
+      theme(
+        plot.title        = element_text(size = base_pt + 0.5, face = "bold",
+                                         hjust = 0, margin = margin(b = 2.5)),
+        plot.tag          = element_text(size = base_pt + 2, face = "bold"),
+        plot.tag.position = "topleft",
+        axis.title        = element_text(size = base_pt),
+        axis.title.x      = element_text(margin = margin(t = 2.5)),
+        axis.title.y      = element_text(margin = margin(r = 2.5)),
+        axis.text         = element_text(size = base_pt - 0.5, colour = "grey15"),
+        axis.line         = element_line(linewidth = 0.25, colour = "grey20"),
+        axis.ticks        = element_line(linewidth = 0.25, colour = "grey20"),
+        axis.ticks.length = unit(1.1, "pt"),
+        legend.position   = "none",
+        legend.title      = element_blank(),
+        legend.text       = element_text(size = base_pt - 1),
+        legend.key.size   = unit(6, "pt"),
+        legend.spacing.x  = unit(2, "pt"),
+        legend.background = element_rect(fill = alpha("white", 0.85), colour = NA),
+        legend.margin     = margin(1, 2, 1, 2),
+        panel.background  = element_blank(),
+        plot.background   = element_blank(),
+        plot.margin       = margin(3, 4, 3, 3)
+      )
+  }
+
+  evs_theme_inset <- function() {
+    theme_classic(base_size = 5) +
+      theme(
+        axis.title        = element_text(size = 5, colour = "grey20"),
+        axis.title.x      = element_text(margin = margin(t = 0.5)),
+        axis.title.y      = element_text(margin = margin(r = 0.5)),
+        axis.text         = element_text(size = 4.4, colour = "grey25"),
+        axis.line         = element_line(linewidth = 0.2, colour = "grey30"),
+        axis.ticks        = element_line(linewidth = 0.2, colour = "grey30"),
+        axis.ticks.length = unit(0.8, "pt"),
+        legend.position   = "none",
+        plot.background   = element_rect(fill = "white", colour = "grey75",
+                                         linewidth = 0.2),
+        plot.margin       = margin(2, 3, 1, 1)
+      )
+  }
+
+  # An 8-arm D(r) plot over ~32,000 ranks carries ~256,000 line vertices.
+  # Thinning is visually identical at print size and keeps the PDF small enough
+  # for a submission portal.
+  evs_thin <- function(n, out = 2000L) {
+    if (n <= out) return(seq_len(n))
+    unique(c(1L, as.integer(round(seq(1, n, length.out = out))), n))
+  }
+
+  # =============================================================================
+  # 2. DEVICES AND PANEL COMPOSITION
+  # =============================================================================
+
+  evs_open_device <- function(file, width_in, height_in, kind) {
+    cairo_ok <- isTRUE(capabilities("cairo"))
+    if (kind == "pdf") {
+      if (cairo_ok) grDevices::cairo_pdf(file, width = width_in, height = height_in)
+      else          grDevices::pdf(file, width = width_in, height = height_in)
+    } else if (kind == "png") {
+      if (cairo_ok) {
+        grDevices::png(file, width = width_in, height = height_in, units = "in",
+                       res = EVS_PNG_DPI, bg = "white", type = "cairo")
+      } else {
+        grDevices::png(file, width = width_in, height = height_in, units = "in",
+                       res = EVS_PNG_DPI, bg = "white")
+      }
+    } else if (kind == "tiff") {
+      if (cairo_ok) {
+        grDevices::tiff(file, width = width_in, height = height_in, units = "in",
+                        res = EVS_PNG_DPI, bg = "white", compression = "lzw",
+                        type = "cairo")
+      } else {
+        grDevices::tiff(file, width = width_in, height = height_in, units = "in",
+                        res = EVS_PNG_DPI, bg = "white", compression = "lzw")
+      }
+    } else {
+      stop("Unknown device: ", kind)
+    }
+  }
+
+  # Align panel edges across the grid so axes line up column-wise and row-wise.
+  # Uses gtable only (ships with ggplot2), so no patchwork/cowplot dependency.
+  evs_align <- function(plots, nrow, ncol) {
+    gs <- lapply(plots, ggplot2::ggplotGrob)
+
+    same_w <- length(unique(vapply(gs, function(g) length(g$widths), integer(1)))) == 1L
+    same_h <- length(unique(vapply(gs, function(g) length(g$heights), integer(1)))) == 1L
+
+    if (same_w) {
+      for (j in seq_len(ncol)) {
+        idx <- which(((seq_along(gs) - 1L) %% ncol) + 1L == j)
+        if (length(idx) > 1L) {
+          w <- do.call(grid::unit.pmax, lapply(gs[idx], function(g) g$widths))
+          for (i in idx) gs[[i]]$widths <- w
+        }
+      }
+    }
+    if (same_h) {
+      for (r in seq_len(nrow)) {
+        idx <- which(((seq_along(gs) - 1L) %/% ncol) + 1L == r)
+        if (length(idx) > 1L) {
+          h <- do.call(grid::unit.pmax, lapply(gs[idx], function(g) g$heights))
+          for (i in idx) gs[[i]]$heights <- h
+        }
+      }
+    }
+    if (!same_w || !same_h) {
+      message("  note: heterogeneous panel layouts; drawing without full alignment")
+    }
+    gs
+  }
+
+  evs_draw_grid <- function(grobs, nrow, ncol) {
+    grid.newpage()
+    pushViewport(viewport(layout = grid.layout(nrow, ncol)))
+    for (i in seq_along(grobs)) {
+      r  <- ((i - 1L) %/% ncol) + 1L
+      cc <- ((i - 1L) %% ncol) + 1L
+      pushViewport(viewport(layout.pos.row = r, layout.pos.col = cc))
+      grid.draw(grobs[[i]])
+      popViewport()
+    }
+    popViewport()
+  }
+
+  evs_save <- function(plots, file_base, nrow, ncol,
+                       width_mm = EVS_FIG_W_MM, height_mm = 150) {
+    # patchwork aligns panels correctly even when some are faceted and some are
+    # not (Figure 4C is faceted, A/B/D are not). The gtable path below only
+    # aligns gtables of identical structure, so it is the fallback.
+    use_pw <- requireNamespace("patchwork", quietly = TRUE)
+    grobs  <- if (use_pw) NULL else evs_align(plots, nrow, ncol)
+
+    w <- mm2in(width_mm)
+    h <- mm2in(height_mm)
+    kinds <- c("pdf", "png", if (isTRUE(EVS_WRITE_TIFF)) "tiff")
+
+    for (k in kinds) {
+      f <- paste0(file_base, ".", k)
+      evs_open_device(f, w, h, k)
+      ok <- tryCatch({
+        if (use_pw) {
+          print(patchwork::wrap_plots(plots, nrow = nrow, ncol = ncol))
+        } else {
+          evs_draw_grid(grobs, nrow, ncol)
+        }
+        TRUE
+      }, error = function(e) {
+        message("  ERROR drawing ", basename(f), ": ", conditionMessage(e))
+        FALSE
+      })
+      grDevices::dev.off()
+      if (ok) message("  wrote ", basename(f))
+    }
+    invisible(file_base)
+  }
+
+  # =============================================================================
+  # 3. FIGURE 1 PANELS — regime definition
+  # =============================================================================
+
+  evs_arm_matrix <- function(arms) {
+    m <- do.call(cbind, lapply(arms, function(z) z$D))
+    if (is.null(colnames(m))) colnames(m) <- paste0("arm", seq_len(ncol(m)))
+    m
+  }
+
+  panel_regime <- function(method, arms, knot, tag, show_legend = FALSE) {
+    N   <- knot$N
+    c1  <- knot$c1
+    c2  <- knot$c2
+    idx <- evs_thin(N, 1800L)
+
+    Dm <- evs_arm_matrix(arms)[idx, , drop = FALSE]
+    rr <- idx
+
+    n_arms    <- ncol(Dm)
+    lab_arms  <- sprintf("Individual arms (n = %d)", n_arms)
+    lab_med   <- "Median observed"
+    lab_fit   <- "Shared two-knot fit"
+    key_levels <- c(lab_arms, lab_med, lab_fit)
+
+    arms_long <- data.frame(
+      rank  = rep(rr, times = n_arms),
+      D     = as.vector(Dm),
+      arm   = rep(colnames(Dm), each = length(rr)),
+      key   = lab_arms,
+      stringsAsFactors = FALSE
+    )
+    med <- data.frame(rank = rr, D = apply(Dm, 1, median), key = lab_med)
+    fit <- data.frame(rank = rr,
+                      D = apply(knot$fitted[idx, , drop = FALSE], 1, median),
+                      key = lab_fit)
+
+    yr   <- range(c(arms_long$D, fit$D), na.rm = TRUE)
+    ypad <- diff(yr)
+    if (!is.finite(ypad) || ypad <= 0) ypad <- 1
+    ylo <- yr[1] - 0.04 * ypad
+    yhi <- yr[2] + 0.32 * ypad          # headroom for the regime labels
+
+    bands <- data.frame(
+      xmin = c(1, c1, c2),
+      xmax = c(c1, c2, N),
+      fill = c(EVS_COL$band_rem, EVS_COL$band_div, EVS_COL$band_lead),
+      lab  = c("Remainder", "Divergence", "Leading edge"),
+      col  = c(EVS_COL$edge_rem, EVS_COL$edge_div, EVS_COL$edge_lead),
+      stringsAsFactors = FALSE
+    )
+    bands$xmid <- (bands$xmin + bands$xmax) / 2
+    bands$y    <- yr[2] + 0.265 * ypad
+
+    knots <- data.frame(
+      x   = c(c1, c2),
+      y   = yr[2] + 0.135 * ypad,
+      col = c(EVS_COL$edge_rem, EVS_COL$edge_lead),
+      hj  = c(1.06, -0.06),
+      lab = c(sprintf("italic(c)[1] * \" = \" * \"%s\"", evs_num(c1)),
+              sprintf("italic(c)[2] * \" = \" * \"%s\"", evs_num(c2))),
+      stringsAsFactors = FALSE
+    )
+
+    p <- ggplot() +
+      annotate("rect", xmin = bands$xmin, xmax = bands$xmax,
+               ymin = -Inf, ymax = Inf, fill = bands$fill) +
+      geom_hline(yintercept = 0, colour = "grey60", linetype = "dotted",
+                 linewidth = 0.2) +
+      geom_line(data = arms_long,
+                aes(rank, D, group = arm, colour = key, linetype = key,
+                    linewidth = key)) +
+      geom_line(data = med,
+                aes(rank, D, colour = key, linetype = key, linewidth = key)) +
+      geom_line(data = fit,
+                aes(rank, D, colour = key, linetype = key, linewidth = key)) +
+      geom_vline(xintercept = c1, colour = EVS_COL$edge_rem,
+                 linetype = "22", linewidth = 0.3) +
+      geom_vline(xintercept = c2, colour = EVS_COL$edge_lead,
+                 linetype = "22", linewidth = 0.3) +
+      geom_text(data = bands, aes(x = xmid, y = y, label = lab),
+                colour = bands$col, size = pt2mm(5.8), vjust = 1,
+                inherit.aes = FALSE) +
+      geom_text(data = knots, aes(x = x, y = y, label = lab),
+                colour = knots$col, size = pt2mm(5.6), hjust = knots$hj,
+                vjust = 1, fontface = "bold", parse = TRUE, inherit.aes = FALSE) +
+      scale_colour_manual(breaks = key_levels,
+                          values = setNames(c(EVS_COL$arms, EVS_COL$median,
+                                              EVS_COL$fit), key_levels)) +
+      scale_linetype_manual(breaks = key_levels,
+                            values = setNames(c("solid", "solid", "22"), key_levels)) +
+      scale_linewidth_manual(breaks = key_levels,
+                             values = setNames(c(0.15, 0.55, 0.42), key_levels)) +
+      scale_x_continuous(labels = evs_comma) +
+      coord_cartesian(xlim = c(1, N), ylim = c(ylo, yhi), expand = FALSE) +
+      labs(
+        tag   = tag,
+        title = evs_method_label(method),
+        x     = "PAS rank by |PC1 loading| (ascending)",
+        y     = expression(italic(D)(italic(r)) ==
+                             italic(F)[E](italic(r)) - italic(F)[P](italic(r)))
+      ) +
+      evs_theme()
+
+    if (show_legend) {
+      p <- p +
+        guides(colour    = guide_legend(order = 1),
+               linetype  = guide_legend(order = 1),
+               linewidth = guide_legend(order = 1)) +
+        evs_legend_inside(0.02, 0.60, c(0, 1))
+    }
+    p
+  }
+
+  panel_residuals <- function(method_objects, tag, n_bins = 180L) {
+    res <- bind_rows(lapply(names(method_objects), function(m) {
+      ob <- method_objects[[m]]
+      D  <- evs_arm_matrix(ob$arms)
+      R  <- D - ob$knot$fitted
+      N  <- nrow(R)
+      bin <- cut(seq_len(N), breaks = n_bins, labels = FALSE)
+      data.frame(
+        rank   = rep(seq_len(N), times = ncol(R)),
+        bin    = rep(bin, times = ncol(R)),
+        resid  = as.vector(R),
+        method = evs_method_label(m),
+        stringsAsFactors = FALSE
+      ) %>%
+        group_by(method, bin) %>%
+        summarise(rank = mean(rank),
+                  lo   = stats::quantile(resid, 0.25, names = FALSE),
+                  mid  = stats::median(resid),
+                  hi   = stats::quantile(resid, 0.75, names = FALSE),
+                  .groups = "drop")
+    }))
+    res$method <- factor(res$method, levels = names(EVS_METHOD_COL))
+
+    ggplot(res, aes(rank, mid, colour = method, fill = method)) +
+      geom_hline(yintercept = 0, colour = "grey20", linewidth = 0.25) +
+      geom_ribbon(aes(ymin = lo, ymax = hi), alpha = 0.16, colour = NA) +
+      geom_line(aes(linetype = method), linewidth = 0.4) +
+      scale_colour_manual(values = EVS_METHOD_COL) +
+      scale_fill_manual(values = EVS_METHOD_COL) +
+      scale_linetype_manual(values = c("CPM-EVS" = "solid", "VST-EVS" = "22")) +
+      scale_x_continuous(labels = evs_comma) +
+      labs(
+        tag   = tag,
+        title = "Shared-knot fit residuals",
+        x     = "PAS rank by |PC1 loading| (ascending)",
+        y     = expression(paste("Residual, ",
+                                 italic(D)[italic(g)](italic(r)) -
+                                   hat(italic(D))[italic(g)](italic(r))))
+      ) +
+      evs_theme() +
+      evs_legend_inside(0.98, 0.98, c(1, 1), direction = "horizontal")
+  }
+
+  panel_regime_widths <- function(method_objects, tag) {
+    d <- bind_rows(lapply(seq_along(method_objects), function(i) {
+      m <- names(method_objects)[i]
+      k <- method_objects[[m]]$knot
+      data.frame(
+        method = evs_method_label(m),
+        y      = length(method_objects) - i + 1,
+        xmin   = c(1, k$c1, k$c2),
+        xmax   = c(k$c1, k$c2, k$N),
+        regime = c("Remainder", "Divergence", "Leading edge"),
+        n      = c(k$c1 - 1L, k$c2 - k$c1 + 1L, k$N - k$c2),
+        c1     = k$c1, c2 = k$c2, N = k$N,
+        stringsAsFactors = FALSE
+      )
+    }))
+    d$regime <- factor(d$regime, levels = c("Remainder", "Divergence", "Leading edge"))
+    d$xmid   <- (d$xmin + d$xmax) / 2
+
+    kn <- d %>%
+      distinct(method, y, c1, c2) %>%
+      tidyr::pivot_longer(c("c1", "c2"), names_to = "which", values_to = "x") %>%
+      mutate(
+        lab = ifelse(which == "c1",
+                     sprintf("italic(c)[1] * \" = \" * \"%s\"", evs_num(x)),
+                     sprintf("italic(c)[2] * \" = \" * \"%s\"", evs_num(x))),
+        col = ifelse(which == "c1", EVS_COL$edge_rem, EVS_COL$edge_lead)
+      )
+
+    Nmax <- max(d$N)
+    h    <- 0.24
+    lab_df <- distinct(d, method, y)
+
+    ggplot(d) +
+      geom_rect(aes(xmin = xmin, xmax = xmax, ymin = y - h, ymax = y + h,
+                    fill = regime), colour = "grey45", linewidth = 0.2) +
+      geom_text(aes(x = xmid, y = y, label = evs_comma(n)), size = pt2mm(5.6)) +
+      geom_text(data = kn, aes(x = x, y = y + h + 0.09, label = lab),
+                colour = kn$col, size = pt2mm(5.2), vjust = 0,
+                parse = TRUE, inherit.aes = FALSE) +
+      geom_text(data = lab_df, aes(x = -0.015 * Nmax, y = y, label = method),
+                hjust = 1, size = pt2mm(6.2), inherit.aes = FALSE) +
+      scale_fill_manual(values = c("Remainder"    = EVS_COL$band_rem,
+                                   "Divergence"   = EVS_COL$band_div,
+                                   "Leading edge" = EVS_COL$band_lead)) +
+      scale_x_continuous(labels = evs_comma, breaks = scales::pretty_breaks(4)) +
+      coord_cartesian(xlim = c(-0.40 * Nmax, Nmax),
+                      ylim = c(0.30, max(d$y) + 0.58),
+                      expand = FALSE, clip = "off") +
+      labs(tag = tag, title = "Regime widths (PAS counts)",
+           x = "PAS rank by |PC1 loading| (ascending)", y = NULL) +
+      evs_theme() +
+      theme(
+        axis.line.y       = element_blank(),
+        axis.ticks.y      = element_blank(),
+        axis.text.y       = element_blank(),
+        legend.position   = "bottom",
+        legend.direction  = "horizontal",
+        legend.background = element_blank()
+      ) +
+      guides(fill = guide_legend(nrow = 1))
+  }
+
+  # =============================================================================
+  # 4. FIGURES 2-3 PANELS — candidate path, Pareto frontier, endpoint chord
+  # =============================================================================
+
+  panel_pareto <- function(method, comparison, scan, frontier, kstar, tag,
+                           method_col) {
+    fr <- frontier[order(frontier$cost,frontier$good), , drop=FALSE]
+    sel <- fr[fr$k==kstar,,drop=FALSE]
+    if (nrow(sel)!=1L) stop("k* not found on the Pareto frontier for ", comparison)
+    if (nrow(fr)<2L) stop("Need at least two Pareto points for endpoint chord in ", comparison)
+
+    # Full candidate trajectory gives context; Pareto frontier is emphasized.
+    sc <- scan[order(scan$k), , drop=FALSE]
+    sc_plot <- sc[evs_thin(nrow(sc),2500L),,drop=FALSE]
+    fr_plot <- fr[evs_thin(nrow(fr),1500L),,drop=FALSE]
+
+    xr <- range(c(sc$remainder_cross_n,fr$cost),na.rm=TRUE)
+    yr <- range(c(sc$good_n,fr$good),na.rm=TRUE)
+    xd <- if (diff(xr)>0) diff(xr) else 1
+    yd <- if (diff(yr)>0) diff(yr) else 1
+
+    # Chord endpoints are the first and last points of the normalized frontier,
+    # mapped back to the raw R(k), G(k) coordinates for display.
+    chord_raw <- data.frame(
+      cost=c(fr$cost[1],fr$cost[nrow(fr)]),
+      good=c(fr$good[1],fr$good[nrow(fr)])
+    )
+
+    ins <- ggplot(fr_plot,aes(k,endpoint_deviation)) +
+      geom_line(colour="grey25",linewidth=0.28) +
+      geom_vline(xintercept=sel$k,colour=EVS_COL$knee,
+                 linetype="22",linewidth=0.32) +
+      geom_point(data=sel,aes(k,endpoint_deviation),
+                 inherit.aes=FALSE,shape=21,size=1.0,stroke=0.25,
+                 fill=EVS_COL$knee,colour="white") +
+      labs(x=expression(italic(k)),y="Endpoint deviation") +
+      evs_theme_inset()
+
+    ggplot() +
+      geom_path(data=sc_plot,aes(remainder_cross_n,good_n),
+                colour="grey78",linewidth=0.32,alpha=0.9) +
+      geom_line(data=fr_plot,aes(cost,good),
+                colour=method_col,linewidth=0.65) +
+      geom_line(data=chord_raw,aes(cost,good),
+                colour="grey45",linetype="22",linewidth=0.42) +
+      annotation_custom(
+        ggplotGrob(ins),
+        xmin=xr[1]+0.50*(xr[2]-xr[1]+1e-9),
+        xmax=xr[2]+0.05*xd,
+        ymin=yr[1]+0.04*(yr[2]-yr[1]+1e-9),
+        ymax=yr[1]+0.46*(yr[2]-yr[1]+1e-9)
+      ) +
+      geom_point(data=sel,aes(cost,good),shape=23,size=1.6,stroke=0.3,
+                 fill=EVS_COL$knee,colour="white") +
+      annotate(
+        "text",
+        x=sel$cost-0.015*xd,
+        y=sel$good+0.035*yd,
+        label=sprintf("k* = %s",evs_num(sel$k)),
+        hjust=1,vjust=0,size=pt2mm(6.2),
+        colour=EVS_COL$knee,fontface="bold"
+      ) +
+      scale_x_continuous(labels=evs_comma) +
+      scale_y_continuous(labels=evs_comma) +
+      labs(
+        tag=tag,
+        title=evs_comparison_label(comparison),
+        x=expression(paste("Opposite-arm Remainder crossings, ",italic(R)(k))),
+        y=expression(paste("Joint + permissible Disjoint, ",italic(G)(k)))
+      ) +
+      evs_theme()
+  }
+
+  # =============================================================================
+  # 5. FIGURE 4 PANELS — cross-method summary
+  # =============================================================================
+
+  evs_prep_summary <- function(summary_df, comparisons) {
+    summary_df %>%
+      mutate(
+        method     = factor(evs_method_label(method), levels = names(EVS_METHOD_COL)),
+        comparison = factor(evs_comparison_label(comparison),
+                            levels = evs_comparison_label(names(comparisons)))
+      )
+  }
+
+  panel_kstar <- function(summary_df, comparisons, tag) {
+    d <- evs_prep_summary(summary_df, comparisons)
+    ggplot(d, aes(comparison, selected_k, fill = method)) +
+      geom_col(position = position_dodge(width = 0.72), width = 0.62) +
+      geom_text(aes(label = evs_comma(selected_k)),
+                position = position_dodge(width = 0.72),
+                vjust = -0.45, size = pt2mm(5.4)) +
+      scale_fill_manual(values = EVS_METHOD_COL) +
+      scale_y_continuous(labels = evs_comma,
+                         expand = expansion(mult = c(0, 0.16))) +
+      labs(tag = tag, title = "Dataset-specific cutoffs", x = NULL,
+           y = expression(paste("Selected cutoff, ", italic(k)^"*", " (PAS)"))) +
+      evs_theme() +
+      evs_legend_inside(0.99, 0.99, c(1, 1), direction = "horizontal")
+  }
+
+  panel_hc_membership <- function(overlap_df, comparisons, tag) {
+    d <- overlap_df %>%
+      mutate(
+        cpm_only   = CPM_high_confidence    - overlap_high_confidence,
+        shared     = overlap_high_confidence,
+        vst_only = VST_high_confidence - overlap_high_confidence,
+        comparison = factor(evs_comparison_label(comparison),
+                            levels = evs_comparison_label(names(comparisons)))
+      )
+
+    tot <- d %>%
+      transmute(comparison,
+                total   = cpm_only + shared + vst_only,
+                jaccard = jaccard_high_confidence)
+
+    long <- d %>%
+      select(comparison, cpm_only, shared, vst_only) %>%
+      tidyr::pivot_longer(-comparison, names_to = "set", values_to = "n") %>%
+      mutate(set = factor(recode(set,
+                                 cpm_only   = "CPM-EVS only",
+                                 shared     = "Shared",
+                                 vst_only = "VST-EVS only"),
+                          levels = c("CPM-EVS only", "Shared", "VST-EVS only")))
+
+    ggplot(long, aes(comparison, n, fill = set)) +
+      geom_col(width = 0.56, colour = "white", linewidth = 0.2) +
+      geom_text(aes(label = evs_comma(n)),
+                position = position_stack(vjust = 0.5),
+                size = pt2mm(5.0), colour = "white") +
+      geom_text(data = tot, inherit.aes = FALSE,
+                aes(x = comparison, y = total,
+                    label = sprintf("italic(J) * \" = \" * \"%.2f\"", jaccard)),
+                parse = TRUE, vjust = -0.6, size = pt2mm(5.4), fontface = "bold") +
+      scale_fill_manual(values = c("CPM-EVS only"    = EVS_COL$cpm,
+                                   "Shared"          = EVS_COL$shared,
+                                   "VST-EVS only" = EVS_COL$deseq)) +
+      scale_y_continuous(labels = evs_comma,
+                         expand = expansion(mult = c(0, 0.20))) +
+      labs(tag = tag, title = "High-confidence EVS membership", x = NULL,
+           y = "High-confidence PAS (count)") +
+      evs_theme() +
+      evs_legend_inside(0.5, 1.0, c(0.5, 1), direction = "horizontal")
+  }
+
+  panel_composition <- function(summary_df, comparisons, tag) {
+    d <- evs_prep_summary(summary_df, comparisons) %>%
+      select(method, comparison, joint_n, opposite_le_n,
+             opposite_divergence_n, remainder_cross_n) %>%
+      tidyr::pivot_longer(-c("method", "comparison"),
+                          names_to = "cls", values_to = "n") %>%
+      mutate(cls = factor(recode(cls,
+                                 joint_n               = "Joint",
+                                 opposite_le_n         = "Opposite LE",
+                                 opposite_divergence_n = "Opposite Divergence",
+                                 remainder_cross_n     = "Opposite Remainder"),
+                          levels = c("Joint", "Opposite LE",
+                                     "Opposite Divergence", "Opposite Remainder"))) %>%
+      group_by(method, comparison) %>%
+      mutate(pct = 100 * n / sum(n)) %>%
+      ungroup()
+
+    ggplot(d, aes(method, pct, fill = cls)) +
+      geom_col(width = 0.62, colour = "white", linewidth = 0.2) +
+      geom_text(aes(label = ifelse(pct >= 8, sprintf("%.0f", pct), "")),
+                position = position_stack(vjust = 0.5), size = pt2mm(4.8)) +
+      facet_wrap(~ comparison, nrow = 1, strip.position = "bottom") +
+      scale_fill_manual(values = c("Joint"               = EVS_COL$joint,
+                                   "Opposite LE"         = EVS_COL$opp_le,
+                                   "Opposite Divergence" = EVS_COL$opp_div,
+                                   "Opposite Remainder"  = EVS_COL$opp_rem)) +
+      scale_x_discrete(labels = c("CPM-EVS" = "CPM", "VST-EVS" = "VST")) +
+      scale_y_continuous(expand = expansion(mult = c(0, 0.02))) +
+      labs(tag = tag,
+           title = expression(paste("Site composition at ", italic(k)^"*")),
+           x = NULL,
+           y = expression(paste("Composition of top-", italic(k)^"*", " union (%)"))) +
+      evs_theme() +
+      theme(
+        strip.background  = element_blank(),
+        strip.placement   = "outside",
+        strip.text        = element_text(size = EVS_BASE_PT - 0.5,
+                                         margin = margin(t = 1.5)),
+        panel.spacing.x   = unit(3, "pt"),
+        axis.text.x       = element_text(size = EVS_BASE_PT - 1.6, angle = 90,
+                                         hjust = 1, vjust = 0.5),
+        legend.position   = "bottom",
+        legend.direction  = "horizontal",
+        legend.background = element_blank()
+      ) +
+      guides(fill = guide_legend(nrow = 2, byrow = TRUE))
+  }
+
+  panel_le_fraction <- function(summary_df, comparisons, tag) {
+    d <- evs_prep_summary(summary_df, comparisons) %>%
+      mutate(pct = 100 * k_over_leading_edge)
+    ggplot(d, aes(comparison, pct, fill = method)) +
+      geom_col(position = position_dodge(width = 0.72), width = 0.62) +
+      geom_text(aes(label = sprintf("%.1f", pct)),
+                position = position_dodge(width = 0.72),
+                vjust = -0.45, size = pt2mm(5.4)) +
+      scale_fill_manual(values = EVS_METHOD_COL) +
+      scale_y_continuous(expand = expansion(mult = c(0, 0.16))) +
+      labs(tag = tag, title = "Fraction of candidate leading edge selected",
+           x = NULL,
+           y = expression(paste(italic(k)^"*", " as % of leading-edge domain"))) +
+      evs_theme() +
+      evs_legend_inside(0.99, 0.99, c(1, 1), direction = "horizontal")
+  }
+
+  # =============================================================================
+  # 6. AUTO-GENERATED FIGURE LEGENDS
+  # =============================================================================
+  # Legends are written with the run's real numbers, so the manuscript text
+  # cannot drift out of sync with the figures.
+
+  evs_write_legends <- function(method_objects, summary_df, overlap_df,
+                                comparisons, out_root) {
+
+    kn <- lapply(method_objects, function(o) o$knot)
+    N  <- kn[[1]]$N
+
+    knot_txt <- paste(vapply(names(kn), function(m) {
+      k <- kn[[m]]
+      sprintf("%s, c1 = %s and c2 = %s", evs_method_label(m),
+              evs_num(k$c1), evs_num(k$c2))
+    }, character(1)), collapse = "; ")
+
+    # What fraction of candidate k are actually non-dominated? If the frontier
+    # contains nearly all of them, the normalized Pareto utility is doing
+    # the work, and the legend should say so rather than imply a sharp trade-off.
+    fr_frac <- vapply(names(method_objects), function(m) {
+      ob <- method_objects[[m]]
+      mean(vapply(names(comparisons), function(nm) {
+        nrow(ob$frontiers[[nm]]) / nrow(ob$scans[[nm]])
+      }, numeric(1)))
+    }, numeric(1))
+
+    kstar_of <- function(m) {
+      vapply(names(comparisons),
+             function(nm) method_objects[[m]]$pairs[[nm]]$kstar, numeric(1))
+    }
+    kstar_txt <- paste(vapply(names(method_objects), function(m) {
+      sprintf("%s, k* = %s", evs_method_label(m),
+              paste(evs_num(kstar_of(m)), collapse = ", "))
+    }, character(1)), collapse = "; ")
+
+    jac <- sprintf("%.2f-%.2f",
+                   min(overlap_df$jaccard_high_confidence, na.rm = TRUE),
+                   max(overlap_df$jaccard_high_confidence, na.rm = TRUE))
+
+    L <- c(
+      "# Figure legends",
+      "",
+      "<!-- Auto-generated by EVS_Manuscript_Figures.R. Do not hand-edit: edit the",
+      "     generator instead, so the numbers can never drift from the figures. -->",
+      "",
+      "## Abbreviations",
+      "",
+      "CPM, counts per million; c1 and c2, shared lower and upper rank knots;",
+      "D(r), cumulative PC1-excess-variance divergence at rank r; DESeq2,",
+      "median-of-ratios normalisation; EVS, excess-variance selection; F_E(r),",
+      "cumulative excess-variance mass; F_P(r), cumulative PC1 variance-contribution",
+      "mass; G(k), Joint plus permissible Disjoint benefit; HC, high confidence; J, Jaccard",
+      "index; k*, selected per-comparison cutoff; LE, leading edge; N, size of the",
+      "experiment-wide PAS universe; PAS, polyadenylation site; PC1, first principal",
+      "component; R(k), opposite-arm Remainder-crossing contamination count; RT, [AUTHORS: define];",
+      "ZT, zeitgeber time.",
+      "",
+      "> Two abbreviations could not be recovered from the analysis code and must be",
+      "> set by the authors before submission: **EVS** (written above as",
+      "> \"excess-variance selection\") and **RT**. Edit `evs_write_legends()` once",
+      "> the intended expansions are fixed, and they will propagate to every run.",
+      "",
+      "---",
+      "",
+      "**Figure 1. Definition of the Remainder, Divergence and Leading-Edge rank",
+      "regimes under two normalisation strategies.**",
+      sprintf(paste0(
+        "(A, B) Cumulative PC1-excess-variance divergence, D(r) = F_E(r) - F_P(r), ",
+        "against PAS rank by ascending absolute PC1 loading, for (A) CPM-EVS and ",
+        "(B) VST-EVS. Grey lines show all eight experimental arms, the coloured ",
+        "line the across-arm median, and the dashed black line the shared two-knot ",
+        "piecewise-linear fit estimated jointly across arms by minimising the summed ",
+        "squared residual. Vertical dashed lines mark the shared knots (%s), which ",
+        "partition the universe of N = %s PAS into the Remainder (rank < c1), ",
+        "Divergence (c1 <= rank <= c2) and Leading Edge (rank > c2), shaded left to ",
+        "right. (C) Residuals of the shared-knot fit, D_g(r) - Dhat_g(r), binned by ",
+        "rank; lines show the across-arm median and shaded envelopes the ",
+        "interquartile range. (D) Widths of the three regimes for each method, ",
+        "annotated with PAS counts. c1 and c2 define rank regimes common to all arms ",
+        "and are not themselves the selected cutoff k*."),
+        knot_txt, evs_num(N)),
+      "",
+      "---",
+      "",
+      "**Figure 2. Per-comparison cutoff selection under CPM-EVS.**",
+      sprintf(paste0(
+        "(A-D) Pareto frontier of count-based retained-site benefit G(k) against ",
+        "opposite-arm Remainder-crossing contamination R(k) over all candidate cutoffs ",
+        "k, shown separately for each RT/ZT comparison; each comparison is optimised ",
+        "independently over 1 <= k <= N - c2. The filled diamond marks k*, the ",
+        "Pareto-optimal candidate with the maximum perpendicular deviation from ",
+        "the chord joining the normalized Pareto endpoints after frontier-specific ",
+        "min-max normalization of benefit and contamination. The dashed line is the ",
+        "endpoint chord; insets plot endpoint deviation across the Pareto frontier. ",
+        "Non-dominated candidates make ",
+        "up %.0f%% of the k values scanned under CPM-EVS. Selected values: ",
+        "k* = %s for %s respectively; full diagnostics are in Table 1."),
+        100 * fr_frac[["CPM_EVS"]],
+        paste(evs_num(kstar_of("CPM_EVS")), collapse = ", "),
+        paste(evs_comparison_label(names(comparisons)), collapse = ", ")),
+      "",
+      "---",
+      "",
+      "**Figure 3. Per-comparison cutoff selection under VST-EVS.**",
+      sprintf(paste0(
+        "Panels, axes and annotations are as in Figure 2, computed from ",
+        "DESeq2 variance-stabilized counts (varianceStabilizingTransformation, blind=TRUE). Non-dominated ",
+        "candidates make up %.0f%% of the k values scanned. Selected values: ",
+        "k* = %s."),
+        100 * fr_frac[["VST_EVS"]],
+        paste(evs_num(kstar_of("VST_EVS")), collapse = ", ")),
+      "",
+      "---",
+      "",
+      "**Figure 4. CPM-EVS and VST-EVS compared across all four RT/ZT",
+      "comparisons.**",
+      sprintf(paste0(
+        "(A) Selected cutoff k* for each comparison and method (%s). (B) ",
+        "High-confidence PAS membership, partitioned into sites recovered only by ",
+        "CPM-EVS, only by VST-EVS, or by both; J is the Jaccard index of the two ",
+        "high-confidence sets (range across comparisons, %s). High-confidence sites ",
+        "are Joint sites together with disjoint sites whose opposite-arm rank falls ",
+        "in the Leading Edge or Divergence regime. (C) Composition of the selected ",
+        "top-k* union at k*, as a percentage of union size; segment labels are ",
+        "omitted below 8%%. Opposite-Remainder sites are retained in the exported ",
+        "union with a penalty flag rather than discarded. (D) k* as a percentage of ",
+        "the candidate Leading-Edge domain, N - c2. Bars in A and D are annotated ",
+        "with their values; exact counts are given in Tables 1 and 2."),
+        kstar_txt, jac),
+      "",
+      "---",
+      "",
+      "*Figures were authored at 180 mm final width and are supplied as vector PDF",
+      "and 600 dpi raster. Colours follow the Okabe-Ito palette and remain",
+      "distinguishable under common forms of colour-vision deficiency and in",
+      "greyscale.*"
+    )
+
+    writeLines(L, file.path(out_root, "Figure_Legends.md"))
+    message("  wrote Figure_Legends.md")
+    invisible(TRUE)
+  }
+
+  # =============================================================================
+  # 7. TOP-LEVEL RENDER
+  # =============================================================================
+
+  evs_render_all <- function(method_objects, summary_df, overlap_df,
+                             comparisons, fig_dir, out_root) {
+
+    dir.create(fig_dir,  recursive = TRUE, showWarnings = FALSE)
+    dir.create(out_root, recursive = TRUE, showWarnings = FALSE)
+    tags <- LETTERS[1:4]
+
+    message("Figure 1 ...")
+    f1 <- list(
+      panel_regime("CPM_EVS", method_objects[["CPM_EVS"]]$arms,
+                   method_objects[["CPM_EVS"]]$knot, "A", show_legend = TRUE),
+      panel_regime("VST_EVS", method_objects[["VST_EVS"]]$arms,
+                   method_objects[["VST_EVS"]]$knot, "B"),
+      panel_residuals(method_objects, "C"),
+      panel_regime_widths(method_objects, "D")
+    )
+    evs_save(f1, file.path(fig_dir, "Figure_1_Regime_Definition"),
+             nrow = 2, ncol = 2, height_mm = 150)
+
+    for (m in names(method_objects)) {
+      fig_no <- if (m == "CPM_EVS") 2L else 3L
+      message("Figure ", fig_no, " ...")
+      ob  <- method_objects[[m]]
+      col <- unname(EVS_METHOD_COL[evs_method_label(m)])
+      pl  <- lapply(seq_along(comparisons), function(i) {
+        nm <- names(comparisons)[i]
+        panel_pareto(m, nm, ob$scans[[nm]], ob$frontiers[[nm]],
+                     ob$pairs[[nm]]$kstar, tags[i], col)
+      })
+      evs_save(pl, file.path(fig_dir,
+                             sprintf("Figure_%d_%s_Pareto_Cutoffs", fig_no, m)),
+               nrow = 2, ncol = 2, height_mm = 145)
+    }
+
+    message("Figure 4 ...")
+    f4 <- list(
+      panel_kstar(summary_df, comparisons, "A"),
+      panel_hc_membership(overlap_df, comparisons, "B"),
+      panel_composition(summary_df, comparisons, "C"),
+      panel_le_fraction(summary_df, comparisons, "D")
+    )
+    evs_save(f4, file.path(fig_dir, "Figure_4_CPM_vs_VST_EVS_Summary"),
+             nrow = 2, ncol = 2, height_mm = 150)
+
+    evs_write_legends(method_objects, summary_df, overlap_df, comparisons, out_root)
+    message("Figures complete: ", fig_dir)
+    invisible(TRUE)
+  }
+
+  # =============================================================================
+  # RUN ANALYSIS
+  # =============================================================================
+
+  message("Reading count matrix...")
+  counts <- read_counts(COUNT_FILE)
+  groups <- assign_groups(colnames(counts))
+
+  message(
+    "Features: ",nrow(counts),
+    " | samples: ",ncol(counts),
+    " | arms: ",length(levels(groups))
+  )
+
+  message("Global DESeq2 normalization...")
+  norm_obj <- deseq2_normalize(counts,groups)
+  norm <- norm_obj$counts
+  vst  <- norm_obj$vst
+
+  message("VST matrix computed globally for the EVS/PCA branch (blind=TRUE).")
+  message("Pooled normalized within-group variance...")
+  pooled_var <- pooled_within_group_var(norm,groups)
+
+  method_objects <- list()
+  summary_rows <- list()
+  site_rows <- list()
+  scan_rows <- list()
+  frontier_rows <- list()
+
+  for (method in METHODS) {
+
+    message("============================================================")
+    message("METHOD: ",method)
+
     arms <- list()
+
     for (g in levels(groups)) {
       idx <- which(groups==g)
-      arms[[g]] <- seqcut_build_arm(
+
+      arms[[g]] <- build_arm(
         method=method,
+        arm=g,
         raw=counts[,idx,drop=FALSE],
-        norm=norm_obj$norm[,idx,drop=FALSE],
-        vst=norm_obj$vst[,idx,drop=FALSE],
+        norm=norm[,idx,drop=FALSE],
+        vst=vst[,idx,drop=FALSE],
         pooled_var=pooled_var
       )
     }
-    knot <- seqcut_fit_shared_knots(arms)
-    message("  ",method,": shared c1=",knot$c1," | c2=",knot$c2," | SSE=",signif(knot$SSE,7))
-    ks <- integer(length(SEQCUT_COMPARISONS)); names(ks) <- names(SEQCUT_COMPARISONS)
 
-    for (nm in names(SEQCUT_COMPARISONS)) {
-      mp <- SEQCUT_COMPARISONS[[nm]]
-      scan <- seqcut_scan_pair(arms[[mp[["control"]]]],arms[[mp[["treatment"]]]],knot$c1,knot$c2)
-      opt <- seqcut_pareto_endpoint_max(scan)
-      kstar <- opt$selected_k
-      sel <- scan[scan$k==kstar,,drop=FALSE]
-      ks[nm] <- kstar
-      audit_rows[[paste(method,nm,sep="__")]] <- data.frame(
-        Method=method, Comparison=nm, N=knot$N, c1=knot$c1, c2=knot$c2,
-        Candidate_k_max=knot$N-knot$c2, k_star=kstar,
-        G=sel$good_n, R=sel$remainder_cross_n,
-        Joint=sel$joint_n, Opposite_LE=sel$opposite_le_n,
-        Opposite_Divergence=sel$opposite_divergence_n,
-        Endpoint_deviation=opt$selected$endpoint_deviation,
-        Knot_SSE=knot$SSE, stringsAsFactors=FALSE
+    knot <- fit_shared_knots(arms)
+    K <- knot$N-knot$c2
+
+    message(
+      "Shared c1=",knot$c1,
+      " | c2=",knot$c2,
+      " | candidate k=1..",K
+    )
+
+    scans <- list()
+    frontiers <- list()
+    pair_results <- list()
+
+    for (nm in names(COMPARISONS)) {
+      mp <- COMPARISONS[[nm]]
+
+      scan <- scan_pair_fast(
+        arms[[mp[["control"]]]],
+        arms[[mp[["treatment"]]]],
+        knot$c1,
+        knot$c2
       )
-      message("    ",nm,": k*=",kstar," | G=",sel$good_n," | R=",sel$remainder_cross_n,
-              " | endpoint deviation=",round(opt$selected$endpoint_deviation,6))
+
+      opt <- select_max_endpoint_deviation(
+        scan, good_col="good_n", cost_col="remainder_cross_n"
+      )
+      scan <- opt$scan
+      frontier <- opt$frontier
+      kstar <- opt$selected_k
+
+      selected <- scan[scan$k==kstar,,drop=FALSE]
+
+      cls <- classify_at_k(
+        k=kstar,
+        comparison=nm,
+        control_df=arms[[mp[["control"]]]],
+        treatment_df=arms[[mp[["treatment"]]]],
+        c1=knot$c1,
+        c2=knot$c2
+      )
+
+      cls$method <- method
+
+      high_conf_n <- sum(cls$high_confidence)
+      rem_n <- sum(cls$penalized_remainder_crossing)
+
+      row <- data.frame(
+        method=method,
+        comparison=nm,
+        N=knot$N,
+        c1=knot$c1,
+        c2=knot$c2,
+        remainder_size=knot$c1-1L,
+        divergence_size=knot$c2-knot$c1+1L,
+        leading_edge_candidate_size=K,
+        selected_k=kstar,
+        cutoff_rank=knot$N-kstar+1L,
+        k_over_N=kstar/knot$N,
+        k_over_leading_edge=kstar/K,
+        good_n=selected$good_n,
+        remainder_cross_n=selected$remainder_cross_n,
+        good_norm=selected$good_norm,
+        remainder_norm=selected$remainder_norm,
+        endpoint_deviation=selected$endpoint_deviation,
+        joint_n=selected$joint_n,
+        opposite_le_n=selected$opposite_le_n,
+        opposite_divergence_n=selected$opposite_divergence_n,
+        selected_union_n=selected$union_n,
+        high_confidence_n=high_conf_n,
+        penalized_remainder_n=rem_n,
+        knot_SSE=knot$SSE,
+        stringsAsFactors=FALSE
+      )
+
+      scans[[nm]] <- scan
+      frontiers[[nm]] <- frontier
+      pair_results[[nm]] <- list(
+        kstar=kstar,
+        sites=cls,
+        summary=row
+      )
+
+      key <- paste(method,nm,sep="__")
+
+      summary_rows[[key]] <- row
+      site_rows[[key]] <- cls
+      scan_rows[[key]] <- mutate(
+        scan,method=method,comparison=nm
+      )
+      frontier_rows[[key]] <- mutate(
+        frontier,method=method,comparison=nm
+      )
+
+      message(
+        "  ",nm,
+        " | k*=",kstar,
+        " | G=",selected$good_n,
+        " | R=",selected$remainder_cross_n,
+        " | endpoint deviation=",round(selected$endpoint_deviation,4),
+        " | Joint=",selected$joint_n,
+        " | Rem-cross=",selected$remainder_cross_n
+      )
     }
-    method_results[[method]] <- ks
+
+    method_objects[[method]] <- list(
+      arms=arms,
+      knot=knot,
+      scans=scans,
+      frontiers=frontiers,
+      pairs=pair_results
+    )
   }
 
-  audit <- do.call(rbind,audit_rows); rownames(audit) <- NULL
-  list(cpm=method_results[["CPM_EVS"]], vst=method_results[["VST_EVS"]], audit=audit)
+  summary_df <- bind_rows(summary_rows)
+  sites_df <- bind_rows(site_rows)
+  scans_df <- bind_rows(scan_rows)
+  frontiers_df <- bind_rows(frontier_rows)
+
+  # =============================================================================
+  # SUMMARY / OVERLAP TABLES
+  # =============================================================================
+
+  overlap_df <- bind_rows(lapply(names(COMPARISONS),\(nm) {
+
+    cpm <- sites_df %>%
+      filter(
+        method=="CPM_EVS",
+        comparison==nm,
+        high_confidence
+      ) %>%
+      pull(feature_id) %>%
+      unique()
+
+    vst_sites <- sites_df %>%
+      filter(
+        method=="VST_EVS",
+        comparison==nm,
+        high_confidence
+      ) %>%
+      pull(feature_id) %>%
+      unique()
+
+    u <- union(cpm,vst_sites)
+
+    data.frame(
+      comparison=nm,
+      CPM_high_confidence=length(cpm),
+      VST_high_confidence=length(vst_sites),
+      overlap_high_confidence=length(intersect(cpm,vst_sites)),
+      union_high_confidence=length(u),
+      jaccard_high_confidence=ifelse(
+        length(u)>0,
+        length(intersect(cpm,vst_sites))/length(u),
+        NA_real_
+      ),
+      stringsAsFactors=FALSE
+    )
+  }))
+
+  write.csv(
+    summary_df,
+    file.path(TAB_DIR,"Table_1_EVS_Cutoff_Summary.csv"),
+    row.names=FALSE
+  )
+
+  write.csv(
+    overlap_df,
+    file.path(TAB_DIR,"Table_2_CPM_vs_VST_HighConfidence_Overlap.csv"),
+    row.names=FALSE
+  )
+
+  write.csv(
+    sites_df,
+    file.path(TAB_DIR,"Table_3_All_Selected_TopK_Union_Sites.csv"),
+    row.names=FALSE
+  )
+
+  write.csv(
+    sites_df %>% filter(high_confidence),
+    file.path(TAB_DIR,"Table_4_HighConfidence_EVS_Sites.csv"),
+    row.names=FALSE
+  )
+
+  write.csv(
+    sites_df %>% filter(penalized_remainder_crossing),
+    file.path(TAB_DIR,"Table_5_Penalized_Remainder_Crossing_Sites.csv"),
+    row.names=FALSE
+  )
+
+  write.csv(
+    scans_df,
+    file.path(TAB_DIR,"Table_S1_All_Cutoff_Scans.csv"),
+    row.names=FALSE
+  )
+
+  write.csv(
+    frontiers_df,
+    file.path(TAB_DIR,"Table_S2_All_Pareto_Frontiers.csv"),
+    row.names=FALSE
+  )
+
+  # =============================================================================
+  # MANUSCRIPT FIGURES
+  # =============================================================================
+
+  # Clear figures from earlier runs. The manifest and zip steps below glob every
+  # PNG/PDF in FIG_DIR, so stale files from a previous naming scheme would
+  # otherwise be packaged alongside the current ones.
+  old_figure_files <- list.files(
+    FIG_DIR,
+    pattern="\\.(png|pdf|tif|tiff)$",
+    full.names=TRUE,
+    ignore.case=TRUE
+  )
+
+  if (length(old_figure_files)) unlink(old_figure_files)
+
+  # Cache the fitted objects so figures can be re-rendered later without re-running
+  # the whole pipeline:
+  #   z <- readRDS(file.path(OUT_ROOT,"analysis_objects.rds"))
+  #   evs_render_all(z$method_objects, z$summary_df, z$overlap_df,
+  #                  COMPARISONS, FIG_DIR, OUT_ROOT)
+  saveRDS(
+    list(
+      method_objects=method_objects,
+      summary_df=summary_df,
+      overlap_df=overlap_df,
+      sites_df=sites_df
+    ),
+    file.path(OUT_ROOT,"analysis_objects.rds")
+  )
+
+  evs_render_all(
+    method_objects = method_objects,
+    summary_df     = summary_df,
+    overlap_df     = overlap_df,
+    comparisons    = COMPARISONS,
+    fig_dir        = FIG_DIR,
+    out_root       = OUT_ROOT
+  )
+
+  # =============================================================================
+  # MANUSCRIPT METHODS
+  # (Figure legends are generated by evs_write_legends(), above.)
+  # =============================================================================
+
+  methods_lines <- c(
+    "# Methods",
+    "",
+    "Two EVS preprocessing strategies were evaluated using a common experiment-wide PAS universe. CPM-EVS used log1p-transformed counts per million. VST-EVS used the DESeq2 variance-stabilizing transformation (varianceStabilizingTransformation, blind=TRUE) computed experiment-wide after median-of-ratios size-factor estimation. PCA was performed independently within each experimental arm on the corresponding transformed matrix, and PASs were ranked from lowest to highest absolute PC1 loading.",
+    "",
+    "For each PAS, PC1 variance contribution was P_i=lambda_1*v_i1^2. A pooled within-group variance was calculated separately from globally DESeq2 median-of-ratios normalized counts across the eight experimental arms, and arm-specific excess variance was E_ig=max(V_pool,i-mu_ig,0). PC1 contribution and excess variance were converted to rank-wise probability masses and cumulative distributions. Cumulative divergence was D_g(r)=F_E,g(r)-F_P,g(r).",
+    "",
+    "For each EVS method separately, the eight arm-specific D_g(r) curves were jointly fit using a continuous two-knot piecewise-linear model. The shared c1 and c2 values minimized the summed squared residual error across all arms. Rank<c1 defined the Remainder, c1<=rank<=c2 the Divergence interval, and rank>c2 the Leading Edge.",
+    "",
+    "Each RT/ZT comparison was optimized independently over 1<=k<=N-c2. For each candidate k, G(k) was the count of Joint top-k PASs plus Disjoint PASs whose opposite-arm rank was in either the Leading Edge or Divergence interval. R(k) was the count of Disjoint PASs whose opposite-arm rank crossed below c1 into the Remainder. Thus opposite-arm Divergence crossings were permissible and only true Remainder crossings counted as contamination.",
+    "",
+    "Nondominated [R(k),G(k)] candidates defined the Pareto frontier. On that frontier, benefit and contamination were min-max normalized as G_norm=(G-G_min)/(G_max-G_min) and R_norm=(R-R_min)/(R_max-R_min). The first and last normalized Pareto points defined an endpoint chord. For every Pareto-optimal candidate, perpendicular distance to that chord was calculated, and the empirical k* was the candidate with maximum endpoint-chord deviation; ties were resolved by greater G, lower R, then larger k. Remainder-crossing PASs remained in the exported top-k union with an explicit contamination flag; the high-confidence subset contained Joint, opposite-Leading-Edge, and opposite-Divergence PASs."
+  )
+
+  writeLines(
+    methods_lines,
+    file.path(OUT_ROOT,"Methods_Manuscript.md")
+  )
+
+  # =============================================================================
+
+  cpm_rows <- summary_df[summary_df$method == "CPM_EVS", , drop=FALSE]
+  vst_rows <- summary_df[summary_df$method == "VST_EVS", , drop=FALSE]
+  cpm_k <- setNames(as.integer(cpm_rows$selected_k), cpm_rows$comparison)
+  vst_k <- setNames(as.integer(vst_rows$selected_k), vst_rows$comparison)
+
+  audit <- summary_df
+  names(audit)[names(audit) == "method"] <- "Method"
+  names(audit)[names(audit) == "comparison"] <- "Comparison"
+  names(audit)[names(audit) == "selected_k"] <- "k_star"
+
+  list(
+    cpm = cpm_k,
+    vst = vst_k,
+    audit = audit,
+    method_objects = method_objects,
+    summary_df = summary_df,
+    overlap_df = overlap_df,
+    sites_df = sites_df,
+    scans_df = scans_df,
+    frontiers_df = frontiers_df,
+    output_root = OUT_ROOT,
+    figure_dir = FIG_DIR,
+    table_dir = TAB_DIR
+  )
 }
 
 # =============================================================================
@@ -475,8 +1958,11 @@ if (!SEQUENCE_CHILD_RUN) {
     file.path(repo_guess, "data", "WTTS-Seq_2022.2_DE_raw_read_numbers.csv")
   }
 
-  cutoff_fit <- derive_sequence_empirical_cutoffs(count_path)
-  cmp_names <- names(SEQCUT_COMPARISONS)
+  empirical_output_root <- file.path(multi_root, "Empirical_Cutoff_Manuscript")
+  cutoff_fit <- run_sequence_empirical_cutoff_module(
+    count_path = count_path,
+    out_root = empirical_output_root
+  )
   cutoff_manifest <- data.frame(
     Cutoff_Method = c("Fixed_5000", "CPM_Empirical", "VST_Empirical"),
     RT0_ZT6 = c(5000L, cutoff_fit$cpm[["RT0_ZT6"]], cutoff_fit$vst[["RT0_ZT6"]]),
@@ -492,6 +1978,13 @@ if (!SEQUENCE_CHILD_RUN) {
   )
   utils::write.csv(cutoff_manifest, file.path(multi_root, "Cutoff_Method_Manifest.csv"), row.names = FALSE)
   utils::write.csv(cutoff_fit$audit, file.path(multi_root, "Empirical_Cutoff_Derivation_Audit.csv"), row.names = FALSE)
+  utils::write.csv(
+    cutoff_fit$summary_df,
+    file.path(multi_root, "Empirical_Cutoff_Manuscript_Summary.csv"),
+    row.names = FALSE
+  )
+  message("Empirical cutoff manuscript figures written to: ", cutoff_fit$figure_dir)
+  message("Empirical cutoff manuscript tables written to: ", cutoff_fit$table_dir)
 
   methods <- c("fixed5000", "cpm_empirical", "vst_empirical")
   for (method in methods) {
@@ -701,8 +2194,28 @@ dataset_short <- c(
 
 track_short <- c(
   normalized_evs = "NormEVS",
-  raw_evs = "RawEVS"
+  raw_evs = "RawEVS",
+  cpm_evs = "CPMEVS",
+  vst_evs = "VSTEVS"
 )
+
+active_evs_track_keys <- function() {
+  base_tracks <- c("normalized_evs", "raw_evs")
+
+  if (!isTRUE(RUN_MATCHED_TRANSFORM_TRACKS_ONLY)) {
+    return(c(base_tracks, "cpm_evs", "vst_evs"))
+  }
+
+  if (identical(CUTOFF_METHOD_KEY, "cpm_empirical")) {
+    return(c(base_tracks, "cpm_evs"))
+  }
+
+  if (identical(CUTOFF_METHOD_KEY, "vst_empirical")) {
+    return(c(base_tracks, "vst_evs"))
+  }
+
+  base_tracks
+}
 
 dataset_key_order <- c(
   "raw_dataset",
@@ -782,6 +2295,24 @@ comparison_table <- data.frame(
   cpm_empirical_k = as.integer(unlist(cpm_row[c("RT0_ZT6","RT2_ZT8","RT4_ZT10","RT8_ZT14")], use.names=FALSE)),
   vst_empirical_k = as.integer(unlist(vst_row[c("RT0_ZT6","RT2_ZT8","RT4_ZT10","RT8_ZT14")], use.names=FALSE)),
   stringsAsFactors = FALSE
+)
+
+enabled_comparisons <- names(RUN_COMPARISON_FLAGS)[RUN_COMPARISON_FLAGS]
+comparison_table <- comparison_table[
+  comparison_table$comparison_name %in% enabled_comparisons,
+  ,
+  drop = FALSE
+]
+
+if (!nrow(comparison_table)) {
+  stop("No downstream comparisons are enabled by RUN_COMPARISON_FLAGS.")
+}
+
+message(
+  "Downstream comparison switch: running ",
+  paste(comparison_table$comparison_name, collapse = ", "),
+  "; disabled: ",
+  paste(setdiff(names(RUN_COMPARISON_FLAGS), comparison_table$comparison_name), collapse = ", ")
 )
 
 get_active_evs_cutoff <- function(comparison_name) {
@@ -1658,6 +3189,101 @@ OrigID_Symbol <- OrigID_Symbol %>%
   )
 
 
+# -----------------------------------------------------------------------------
+# Lazy experiment-wide CPM/VST matrices for the added matched EVS pathways
+# -----------------------------------------------------------------------------
+# These reproduce the preprocessing used by the empirical cutoff engine.
+# They are used ONLY for PCA/PC1 ranking and Lead/Rem membership. The selected
+# feature IDs are always applied back to the raw integer count matrix before
+# downstream DESeq2/HBFSS/TWAS testing.
+.evs_transform_cache <- new.env(parent = emptyenv())
+
+full_wtts_raw_counts <- function() {
+  x <- as.matrix(WTTS_Seq[, meta_all$id, drop = FALSE])
+  storage.mode(x) <- "numeric"
+  rownames(x) <- rownames(WTTS_Seq)
+  x <- x[rowSums(x) > 0, , drop = FALSE]
+  x
+}
+
+get_experimentwide_cpm_evs_matrix <- function() {
+  if (exists("cpm", envir = .evs_transform_cache, inherits = FALSE)) {
+    return(get("cpm", envir = .evs_transform_cache, inherits = FALSE))
+  }
+
+  raw <- full_wtts_raw_counts()
+  lib <- colSums(raw)
+  lib[!is.finite(lib) | lib <= 0] <- 1
+  cpm_mat <- log1p(sweep(raw, 2, lib / 1e6, "/"))
+
+  if (any(!is.finite(cpm_mat))) {
+    stop("Experiment-wide CPM-EVS matrix contains non-finite values.")
+  }
+
+  assign("cpm", cpm_mat, envir = .evs_transform_cache)
+  cpm_mat
+}
+
+get_experimentwide_vst_evs_matrix <- function() {
+  if (exists("vst", envir = .evs_transform_cache, inherits = FALSE)) {
+    return(get("vst", envir = .evs_transform_cache, inherits = FALSE))
+  }
+
+  raw <- full_wtts_raw_counts()
+
+  time_group <- rep(NA_character_, ncol(raw))
+  names(time_group) <- colnames(raw)
+  group_patterns <- c(
+    RT0 = "^R0_", ZT6 = "^ZT6_",
+    RT2 = "^R2_", ZT8 = "^ZT8_",
+    RT4 = "^R4_", ZT10 = "^ZT10_",
+    RT8 = "^R8_", ZT14 = "^ZT14_"
+  )
+
+  for (nm in names(group_patterns)) {
+    idx <- grep(group_patterns[[nm]], colnames(raw))
+    if (any(!is.na(time_group[idx]))) {
+      stop("A sample matched more than one VST time-group pattern.")
+    }
+    time_group[idx] <- nm
+  }
+
+  if (anyNA(time_group)) {
+    stop(
+      "Unassigned samples in experiment-wide VST-EVS matrix: ",
+      paste(names(time_group)[is.na(time_group)], collapse = ", ")
+    )
+  }
+
+  time_group <- factor(time_group, levels = names(group_patterns))
+
+  dds_vst <- DESeq2::DESeqDataSetFromMatrix(
+    countData = round(raw),
+    colData = data.frame(group = time_group, row.names = colnames(raw)),
+    design = ~ group
+  )
+
+  dds_vst <- tryCatch(
+    DESeq2::estimateSizeFactors(dds_vst),
+    error = function(e) DESeq2::estimateSizeFactors(dds_vst, type = "poscounts")
+  )
+
+  vst_obj <- DESeq2::varianceStabilizingTransformation(dds_vst, blind = TRUE)
+  vst_mat <- SummarizedExperiment::assay(vst_obj)
+
+  if (!identical(dim(vst_mat), dim(raw)) ||
+      !identical(rownames(vst_mat), rownames(raw)) ||
+      !identical(colnames(vst_mat), colnames(raw))) {
+    stop("Experiment-wide VST-EVS matrix does not match the raw count matrix.")
+  }
+
+  if (any(!is.finite(vst_mat))) {
+    stop("Experiment-wide VST-EVS matrix contains non-finite values.")
+  }
+
+  assign("vst", vst_mat, envir = .evs_transform_cache)
+  vst_mat
+}
 
 
 # -----------------------------------------------------------------------------
@@ -1788,13 +3414,60 @@ coerce_raw_count_matrix_for_deseq2 <- function(count_mat, context = "count matri
 }
 
 make_rank_matrix_for_track <- function(count_matrix, coldata, track_key) {
-  track_key <- match.arg(track_key, c("normalized_evs", "raw_evs"))
+  track_key <- match.arg(
+    track_key,
+    c("normalized_evs", "raw_evs", "cpm_evs", "vst_evs")
+  )
 
   if (track_key == "raw_evs") {
     return(
       list(
         rank_matrix = as.data.frame(count_matrix),
         preprocessing_label = "Raw counts prior to EVS; PCA is performed directly on raw counts"
+      )
+    )
+  }
+
+  if (track_key == "cpm_evs") {
+    full_cpm <- get_experimentwide_cpm_evs_matrix()
+    missing_rows <- setdiff(rownames(count_matrix), rownames(full_cpm))
+    missing_cols <- setdiff(colnames(count_matrix), colnames(full_cpm))
+    if (length(missing_rows) || length(missing_cols)) {
+      stop("CPM-EVS rank matrix is missing comparison features or samples.")
+    }
+
+    cpm_sub <- full_cpm[
+      rownames(count_matrix),
+      colnames(count_matrix),
+      drop = FALSE
+    ]
+
+    return(
+      list(
+        rank_matrix = as.data.frame(cpm_sub),
+        preprocessing_label = "Experiment-wide log1p(CPM) prior to EVS; PCA is performed directly on CPM-transformed values"
+      )
+    )
+  }
+
+  if (track_key == "vst_evs") {
+    full_vst <- get_experimentwide_vst_evs_matrix()
+    missing_rows <- setdiff(rownames(count_matrix), rownames(full_vst))
+    missing_cols <- setdiff(colnames(count_matrix), colnames(full_vst))
+    if (length(missing_rows) || length(missing_cols)) {
+      stop("VST-EVS rank matrix is missing comparison features or samples.")
+    }
+
+    vst_sub <- full_vst[
+      rownames(count_matrix),
+      colnames(count_matrix),
+      drop = FALSE
+    ]
+
+    return(
+      list(
+        rank_matrix = as.data.frame(vst_sub),
+        preprocessing_label = "Experiment-wide DESeq2 VST (blind=TRUE) prior to EVS; PCA is performed directly on VST values"
       )
     )
   }
@@ -1876,7 +3549,7 @@ compute_pc1_loading_table <- function(value_df, sample_names, top_n, preprocessi
 }
 
 build_eigenvector_split <- function(comparison_name, count_matrix, coldata, track_key) {
-  track_key <- match.arg(track_key, c("normalized_evs", "raw_evs"))
+  track_key <- match.arg(track_key, c("normalized_evs", "raw_evs", "cpm_evs", "vst_evs"))
   empirical_k <- get_empirical_evs_cutoff(comparison_name)
 
   # The EVS matrix is used only to choose feature IDs. The normalized track
@@ -2686,9 +4359,11 @@ run_one_evs_track <- function(comparison_name, track_key, count_matrix, coldata,
     coldata = coldata
   )
 
-  # Original is independent of the EVS preprocessing path and is analyzed once.
+  # Original is independent of the EVS preprocessing path and is analyzed once,
+  # under the first/original NormEVS registry entry only. Every added EVS track
+  # contributes Lead/Rem views without redundantly re-running Original.
   analysis_dataset_list <- dataset_list
-  if (identical(track_key, "raw_evs")) analysis_dataset_list$raw_dataset <- NULL
+  if (!identical(track_key, "normalized_evs")) analysis_dataset_list$raw_dataset <- NULL
 
   analysis_results <- list()
   for (nm in names(analysis_dataset_list)) {
@@ -2754,19 +4429,60 @@ build_support_label <- function(df) {
 }
 
 comparison_analysis_views <- function() {
-  data.frame(
-    track_key = c(
-      "normalized_evs",
-      "normalized_evs", "normalized_evs",
-      "raw_evs", "raw_evs"
-    ),
-    dataset_key = c(
-      "raw_dataset",
-      "leading_edge_dataset", "remainder_dataset",
-      "leading_edge_dataset", "remainder_dataset"
-    ),
-    stringsAsFactors = FALSE
+  tracks <- active_evs_track_keys()
+
+  rows <- list(
+    data.frame(
+      track_key = "normalized_evs",
+      dataset_key = "raw_dataset",
+      stringsAsFactors = FALSE
+    )
   )
+
+  for (track_key in tracks) {
+    rows[[length(rows) + 1L]] <- data.frame(
+      track_key = track_key,
+      dataset_key = "leading_edge_dataset",
+      stringsAsFactors = FALSE
+    )
+    rows[[length(rows) + 1L]] <- data.frame(
+      track_key = track_key,
+      dataset_key = "remainder_dataset",
+      stringsAsFactors = FALSE
+    )
+  }
+
+  dplyr::bind_rows(rows)
+}
+
+analysis_view_levels <- function() {
+  views <- comparison_analysis_views()
+  unique(vapply(seq_len(nrow(views)), function(i) {
+    analysis_view_label(views$track_key[i], views$dataset_key[i])
+  }, character(1)))
+}
+
+analysis_view_short_map <- function() {
+  lev <- analysis_view_levels()
+  out <- setNames(lev, lev)
+  out["Original (No EVS)"] <- "Orig"
+
+  for (nm in names(track_short)) {
+    lead <- paste0(unname(track_short[nm]), " Lead")
+    rem  <- paste0(unname(track_short[nm]), " Rem")
+    prefix <- switch(
+      nm,
+      normalized_evs = "N",
+      raw_evs = "R",
+      cpm_evs = "C",
+      vst_evs = "V",
+      unname(track_short[nm])
+    )
+    if (lead %in% names(out)) out[lead] <- paste0(prefix, "-Lead")
+    if (rem %in% names(out)) out[rem] <- paste0(prefix, "-Rem")
+  }
+
+  out
 }
 
 analysis_view_folder_name <- function(track_key, dataset_key) {
@@ -2894,7 +4610,7 @@ export_comparison_manuscript_tables <- function(comparison_name) {
     if (nrow(sig_out)) comparison_sig_rows[[length(comparison_sig_rows) + 1L]] <- sig_out
 
     # Individual view figures are optional. Journal-ready review uses the
-    # comparison-level panels generated after all five analysis views are fit.
+    # comparison-level panels generated after all active analysis views are fit.
     if (isTRUE(EXPORT_INDIVIDUAL_VIEW_FIGURES)) {
       dataset_name <- paste(comparison_name, unname(track_short[track_key]), dataset_key, sep = "_")
       volcano <- plot_final_volcano(
@@ -2967,7 +4683,7 @@ write_methods_note <- function() {
     "# Manuscript Methods",
     "",
     "## Study unit and comparisons",
-    "The analytical unit was the polyadenylation-site (PAS) feature defined by OrigID in the WTTS-Seq raw-count matrix. PASs were retained as separate observations throughout differential testing and gene symbols were retained as annotation. Four comparisons were analyzed: RT0 versus ZT6, RT2 versus ZT8, RT4 versus ZT10, and RT8 versus ZT14. Within each pairwise comparison, PASs with zero counts across every treatment and control sample were removed before EVS and differential-expression analysis; all remaining nonzero PASs were retained.",
+    paste0("The analytical unit was the polyadenylation-site (PAS) feature defined by OrigID in the WTTS-Seq raw-count matrix. PASs were retained as separate observations throughout differential testing and gene symbols were retained as annotation. Enabled downstream comparison(s): ", paste(comparison_table$comparison_name, collapse = ", "), ". Within each enabled pairwise comparison, PASs with zero counts across every treatment and control sample were removed before EVS and differential-expression analysis; all remaining nonzero PASs were retained."),
     "",
     "## Eigenvector splitting",
     paste0(
@@ -2983,7 +4699,7 @@ write_methods_note <- function() {
       "Within each condition, prcomp was applied to the transposed feature-by-sample matrix with centering and without scaling. ",
       "PASs were ranked by absolute PC1 loading, and the comparison-specific k* highest-loading PASs were selected independently from the RT and ZT condition eigenvectors."
     ),
-    "PASs present in both condition-specific top-k* sets were classified as Joint; PASs present in only one set were classified as Disjoint for that condition. Joint plus both Disjoint sets formed the Leading Edge, and all other PASs formed the Remainder. EVS defined PAS membership only. Downstream DESeq2 analyses received the corresponding raw-count subset and estimated normalization and dispersion parameters within that analysis view. The five reported views were Original (No EVS), NormEVS Lead, NormEVS Rem, RawEVS Lead, and RawEVS Rem.",
+    "PASs present in both condition-specific top-k* sets were classified as Joint; PASs present in only one set were classified as Disjoint for that condition. Joint plus both Disjoint sets formed the Leading Edge, and all other PASs formed the Remainder. EVS defined PAS membership only. Downstream DESeq2 analyses received the corresponding raw-count subset and estimated normalization and dispersion parameters within that analysis view. Original (No EVS), NormEVS Lead/Rem, and RawEVS Lead/Rem were retained; the CPM empirical child additionally ran CPMEVS Lead/Rem using experiment-wide log1p(CPM) for the EVS ranking, and the VST empirical child additionally ran VSTEVS Lead/Rem using experiment-wide DESeq2 VST (blind=TRUE) for the EVS ranking. In every pathway, DESeq2 differential testing still received raw integer counts after membership was defined.",
     "",
     "## DESeq2 model and log2 fold-change shrinkage",
     "Each analysis view was modeled independently with DESeq2 using a negative-binomial generalized linear model with design ~ condition and ZT/untrt as the reference. DESeq2 estimated median-of-ratios size factors, gene-wise dispersions, the mean-dispersion relationship, final dispersions, and Wald statistics for the RT/trt coefficient. Log2 fold changes were then shrunken with apeglm. The apeglm-shrunken log2 fold change was the reported effect estimate, the effect term in HBFSS, the direction indicator, and the x-coordinate for all significance figures.",
@@ -3025,7 +4741,7 @@ write_methods_note <- function() {
     "Human 3'aTWAS gene symbols were mapped to rat gene symbols by combining database-supported babelgene human-to-rat ortholog mappings (top=FALSE) with direct case-insensitive symbol-equivalent matches present in the WTTS annotation. For every comparison and analysis view, mapped TWAS orthologs were intersected with Standard, Strong, Weak, and HBFSS WTTS discoveries. Concise TWAS tables reported the human TWAS symbol, rat ortholog, total TWAS records, distinct TWAS transcript count, TWAS multi-transcript/APA status, total WTTS PAS count, WTTS multi-PAS/APA status, significant WTTS PAS identifiers, significant multi-PAS status, and the method(s) and analysis view in which significance was observed.",
     "",
     "## Output organization",
-    "Original (No EVS), NormEVS Lead, NormEVS Rem, RawEVS Lead, and RawEVS Rem were written to separate folders within each comparison for view-specific tables. Manuscript figures were organized as comparison-level panels so related volcano, PCA/EVS, and 3'aTWAS results could be reviewed side by side without redundant individual images. The curated figure archive SEQUENCE_ALL_FIGURES.zip contained manuscript PNG panels only. The separate archive SEQUENCE_ALL_TABLES.zip contained the locked empirical EVS cutoff table, EVS split audit table, overall differential-expression method-count table, quantitative EVS/PCA evidence table, one all-view significant-PAS table and method-count table for each comparison, and the combined 3'aTWAS PAS-, gene-, and method-summary tables."
+    "Original (No EVS) and every active EVS Lead/Rem view were written to separate folders within each enabled comparison for view-specific tables. Manuscript figures were organized as comparison-level panels so related volcano, PCA/EVS, and 3'aTWAS results could be reviewed side by side without redundant individual images. The curated figure archive SEQUENCE_ALL_FIGURES.zip contained manuscript PNG panels only. The separate archive SEQUENCE_ALL_TABLES.zip contained the locked empirical EVS cutoff table, EVS split audit table, overall differential-expression method-count table, quantitative EVS/PCA evidence table, one all-view significant-PAS table and method-count table for each enabled comparison, and the combined 3'aTWAS PAS-, gene-, and method-summary tables."
   )
 
   writeLines(methods_text, file.path(output_dir, "Methods_Manuscript.md"), useBytes = TRUE)
@@ -3035,7 +4751,7 @@ write_methods_note <- function() {
 run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata, annot_df) {
   dir.create(file.path(output_dir, comparison_name), recursive = TRUE, showWarnings = FALSE)
 
-  for (track_key in c("normalized_evs", "raw_evs")) {
+  for (track_key in active_evs_track_keys()) {
     message("Running ", comparison_name, " ", unname(track_short[track_key]))
     ok <- run_one_evs_track(
       comparison_name = comparison_name,
@@ -3108,13 +4824,7 @@ compute_global_volcano_y_limit <- function() {
 save_paper_volcano_panels <- function() {
   dir.create(paper_fig_dir, recursive = TRUE, showWarnings = FALSE)
   views <- comparison_analysis_views()
-  short_view <- c(
-    "Original (No EVS)" = "Orig",
-    "NormEVS Lead" = "N-Lead",
-    "NormEVS Rem" = "N-Rem",
-    "RawEVS Lead" = "R-Lead",
-    "RawEVS Rem" = "R-Rem"
-  )
+  short_view <- analysis_view_short_map()
 
   # Computed once so every comparison/view volcano in the manuscript shares
   # the same y-axis scale (see plot_final_volcano's y_limit_override).
@@ -3382,7 +5092,7 @@ build_evs_split_audit_table <- function() {
   rows <- list()
 
   for (comparison_name in as.character(comparison_table$comparison_name)) {
-    for (track_key in c("normalized_evs", "raw_evs")) {
+    for (track_key in active_evs_track_keys()) {
       obj <- paper_registry[[registry_key(comparison_name, track_key)]]
       if (is.null(obj) || is.null(obj$evs)) next
 
@@ -3427,7 +5137,7 @@ build_evs_split_audit_table <- function() {
 build_evs_pca_evidence_table <- function(comparison_name) {
   rows <- list()
 
-  for (track_key in c("normalized_evs", "raw_evs")) {
+  for (track_key in active_evs_track_keys()) {
     obj <- paper_registry[[registry_key(comparison_name, track_key)]]
     if (is.null(obj) || is.null(obj$evs)) next
 
@@ -3634,7 +5344,7 @@ save_paper_pca_panels <- function() {
   for (comparison_name in as.character(comparison_table$comparison_name)) {
     plots <- list()
 
-    for (track_key in c("normalized_evs", "raw_evs")) {
+    for (track_key in active_evs_track_keys()) {
       obj <- paper_registry[[registry_key(comparison_name, track_key)]]
       if (is.null(obj) || is.null(obj$evs)) next
 
@@ -3642,7 +5352,14 @@ save_paper_pca_panels <- function() {
       original_stats <- pca_variance_stats(original_mat, obj$coldata)
       if (is.null(original_stats)) next
 
-      track_abbr <- if (track_key == "normalized_evs") "Norm" else "Raw"
+      track_abbr <- switch(
+        track_key,
+        normalized_evs = "Norm",
+        raw_evs = "Raw",
+        cpm_evs = "CPM",
+        vst_evs = "VST",
+        unname(track_short[track_key])
+      )
 
       for (dataset_key in c("raw_dataset", "leading_edge_dataset", "remainder_dataset")) {
         mat <- pca_track_matrix(obj, dataset_key)
@@ -3717,8 +5434,8 @@ save_paper_empirical_hbfss_panels <- function() {
       output_suffix <- "Raw_AllComparisons"
       panel_height <- 5.8
     } else {
-      track_order_use <- c("normalized_evs", "raw_evs")
-      panel_title <- paste0("HBFSS calibration | ", unname(dataset_short[dataset_key]), " (Norm vs Raw) | ", CUTOFF_METHOD_LABEL)
+      track_order_use <- active_evs_track_keys()
+      panel_title <- paste0("HBFSS calibration | ", unname(dataset_short[dataset_key]), " | active EVS tracks | ", CUTOFF_METHOD_LABEL)
       output_suffix <- paste0(unname(dataset_short[dataset_key]), "_AllComparisons_NormEVS_vs_RawEVS")
       panel_height <- 11.0
     }
@@ -4101,11 +5818,7 @@ build_twas_overlap_pas_table <- function(all_results, twas_rat_meta) {
         )
         paste(tags, collapse = "+")
       }, character(1)),
-      Analysis = factor(Analysis, levels = c(
-        "Original (No EVS)",
-        "NormEVS Lead", "NormEVS Rem",
-        "RawEVS Lead", "RawEVS Rem"
-      ))
+      Analysis = factor(Analysis, levels = analysis_view_levels())
     ) %>%
     dplyr::transmute(
       Comparison,
@@ -4129,11 +5842,7 @@ build_twas_overlap_pas_table <- function(all_results, twas_rat_meta) {
     ) %>%
     dplyr::arrange(
       Comparison,
-      factor(Analysis, levels = c(
-        "Original (No EVS)",
-        "NormEVS Lead", "NormEVS Rem",
-        "RawEVS Lead", "RawEVS Rem"
-      )),
+      factor(Analysis, levels = analysis_view_levels()),
       Rat_Ortholog,
       WTTS_DE_PAS
     )
@@ -4187,11 +5896,7 @@ build_twas_overlap_gene_table <- function(pas_table) {
     ) %>%
     dplyr::arrange(
       Comparison,
-      factor(Analysis, levels = c(
-        "Original (No EVS)",
-        "NormEVS Lead", "NormEVS Rem",
-        "RawEVS Lead", "RawEVS Rem"
-      )),
+      factor(Analysis, levels = analysis_view_levels()),
       Rat_Ortholog
     )
 }
@@ -4217,13 +5922,7 @@ build_twas_overlap_summary <- function(gene_table) {
 plot_twas_gene_support <- function(gene_table, figure_dir) {
   if (!nrow(gene_table)) return(invisible(NULL))
 
-  analysis_map <- c(
-    "Original (No EVS)"="Orig",
-    "NormEVS Lead"="N-Lead",
-    "NormEVS Rem"="N-Rem",
-    "RawEVS Lead"="R-Lead",
-    "RawEVS Rem"="R-Rem"
-  )
+  analysis_map <- analysis_view_short_map()
   analysis_levels <- unname(analysis_map)
 
   method_rows <- list()
@@ -4372,18 +6071,12 @@ save_twas_comparison_panels <- function(summary_table) {
     sub <- summary_table[summary_table$Comparison == comparison_name, , drop = FALSE]
     if (!nrow(sub)) next
 
-    preferred_views <- c("Original (No EVS)", "NormEVS Lead", "NormEVS Rem", "RawEVS Lead", "RawEVS Rem")
+    preferred_views <- analysis_view_levels()
     views <- preferred_views[preferred_views %in% unique(as.character(sub$Analysis))]
     plots <- lapply(views, function(v) {
       one <- sub[sub$Analysis == v, , drop = FALSE]
       if (!nrow(one)) return(NULL)
-      short <- c(
-        "Original (No EVS)"="Orig",
-        "NormEVS Lead"="N-Lead",
-        "NormEVS Rem"="N-Rem",
-        "RawEVS Lead"="R-Lead",
-        "RawEVS Rem"="R-Rem"
-      )[[v]]
+      short <- unname(analysis_view_short_map()[[v]])
       plot_twas_view_counts(one, short)
     })
     plots <- Filter(Negate(is.null), plots)
