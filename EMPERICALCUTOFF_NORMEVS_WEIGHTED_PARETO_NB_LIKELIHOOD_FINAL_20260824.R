@@ -26,7 +26,7 @@ options(stringsAsFactors = FALSE)
 #      - Joint sites receive full unit benefit.
 #      - For a disjoint PAS, Delta=|r_selected-r_opposite|/(N-1).
 #      - If the opposite-arm rank is in Leading Edge or Divergence, benefit is 1-Delta.
-#      - If the opposite-arm rank is in Remainder, contamination cost is Delta.
+#      - Opposite-arm LE/Divergence support is boundary-depth weighted; Remainder contamination combines depth below c1 with cross-arm rank gap.
 # 6) k* maximizes equal-weight normalized Pareto utility U=G_norm-R_norm on the
 #    comparison-specific Pareto frontier.
 # 7) Remainder-crossing sites are NOT silently discarded from the top-k union.
@@ -336,56 +336,90 @@ scan_pair_fast <- function(control_df,treatment_df,c1,c2) {
   joint_depth <- pmax(dC,dT)
   joint_n <- activate_from(joint_depth,rep(1,N),K)
 
-  # Cross-arm rank distance is normalized to [0,1].
-  # Supported disjoint PAS: benefit = 1 - delta.
-  # Opposite-arm Remainder PAS: contamination = delta.
-  rank_delta <- abs(rC-rT)/max(N-1L,1L)
+  # Boundary-aware continuous support/penalty functions.
+  # Leading Edge support: 0 at c2, 1 at rank N.
+  lead_support <- function(r) {
+    pmax(0,pmin(1,(r-c2)/max(N-c2,1L)))
+  }
+
+  # Divergence support: 0 at c1, 1 at c2.
+  div_support <- function(r) {
+    pmax(0,pmin(1,(r-c1)/max(c2-c1,1L)))
+  }
+
+  # Remainder depth: 0 at c1, 1 at the bottom of the rank axis.
+  rem_depth <- function(r) {
+    pmax(0,pmin(1,(c1-r)/max(c1-1L,1L)))
+  }
+
+  # Cross-arm rank disagreement: 0 for identical ranks, 1 for maximal separation.
+  rank_gap <- function(a,b) {
+    pmax(0,pmin(1,abs(a-b)/max(N-1L,1L)))
+  }
 
   # Control-only interval.
   idxC <- which(dC<dT & dC<=K)
   startC <- dC[idxC]
   endC <- pmin(dT[idxC],K+1L)
   oppC <- rT[idxC]
-  deltaC <- rank_delta[idxC]
-  supportC <- ifelse(oppC>=c1, 1-deltaC, 0)
-  costC <- ifelse(oppC<c1, deltaC, 0)
+  selC <- rC[idxC]
+
+  supportC <- ifelse(
+    oppC>c2,
+    lead_support(oppC),
+    ifelse(oppC>=c1,div_support(oppC),0)
+  )
+  penaltyC <- ifelse(
+    oppC<c1,
+    rem_depth(oppC)^2 * rank_gap(selC,oppC),
+    0
+  )
 
   disC_n       <- active_interval(startC,endC,rep(1,length(idxC)),K)
   disC_rem     <- active_interval(startC,endC,as.numeric(oppC<c1),K)
   disC_div     <- active_interval(startC,endC,as.numeric(oppC>=c1 & oppC<=c2),K)
   disC_le      <- active_interval(startC,endC,as.numeric(oppC>c2),K)
   disC_support <- active_interval(startC,endC,supportC,K)
-  disC_cost    <- active_interval(startC,endC,costC,K)
+  disC_cost    <- active_interval(startC,endC,penaltyC,K)
 
-  # Treatment-only interval (symmetric rule).
+  # Treatment-only interval (exactly symmetric rule).
   idxT <- which(dT<dC & dT<=K)
   startT <- dT[idxT]
   endT <- pmin(dC[idxT],K+1L)
   oppT <- rC[idxT]
-  deltaT <- rank_delta[idxT]
-  supportT <- ifelse(oppT>=c1, 1-deltaT, 0)
-  costT <- ifelse(oppT<c1, deltaT, 0)
+  selT <- rT[idxT]
+
+  supportT <- ifelse(
+    oppT>c2,
+    lead_support(oppT),
+    ifelse(oppT>=c1,div_support(oppT),0)
+  )
+  penaltyT <- ifelse(
+    oppT<c1,
+    rem_depth(oppT)^2 * rank_gap(selT,oppT),
+    0
+  )
 
   disT_n       <- active_interval(startT,endT,rep(1,length(idxT)),K)
   disT_rem     <- active_interval(startT,endT,as.numeric(oppT<c1),K)
   disT_div     <- active_interval(startT,endT,as.numeric(oppT>=c1 & oppT<=c2),K)
   disT_le      <- active_interval(startT,endT,as.numeric(oppT>c2),K)
   disT_support <- active_interval(startT,endT,supportT,K)
-  disT_cost    <- active_interval(startT,endT,costT,K)
+  disT_cost    <- active_interval(startT,endT,penaltyT,K)
 
   disjoint_n <- disC_n+disT_n
   opposite_le_n <- disC_le+disT_le
   opposite_divergence_n <- disC_div+disT_div
   remainder_cross_n <- disC_rem+disT_rem
 
-  # Count-based quantities are retained as diagnostics.
+  # Raw categorical counts are retained as diagnostics.
   good_n <- joint_n+opposite_le_n+opposite_divergence_n
   union_n <- 2*seq_len(K)-joint_n
   if (!all(good_n+remainder_cross_n == union_n)) {
-    stop("Internal union-count mismatch in distance-weighted top-k scan.")
+    stop("Internal union-count mismatch in boundary-aware top-k scan.")
   }
 
-  # Primary continuous Pareto coordinates.
+  # Primary Pareto coordinates retain continuous positional information.
   supported_disjoint_score <- disC_support+disT_support
   good_score <- joint_n+supported_disjoint_score
   remainder_distance_cost <- disC_cost+disT_cost
@@ -503,10 +537,20 @@ classify_at_k <- function(k,comparison,control_df,treatment_df,c1,c2) {
     )
   )
 
-  # Continuous cross-arm rank concordance. Joint PASs receive full support.
+  # Boundary-aware continuous scoring used by the cutoff scan.
   rank_distance_norm <- ifelse(joint,0,abs(selected_rank-opp)/max(N-1L,1L))
-  support <- ifelse(joint,1,ifelse(opp>=c1,1-rank_distance_norm,0))
-  penalty <- ifelse(joint,0,ifelse(opp<c1,rank_distance_norm,0))
+  le_support <- ifelse(joint,NA_real_,pmax(0,pmin(1,(opp-c2)/max(N-c2,1L))))
+  div_support <- ifelse(joint,NA_real_,pmax(0,pmin(1,(opp-c1)/max(c2-c1,1L))))
+  remainder_depth <- ifelse(joint,0,pmax(0,pmin(1,(c1-opp)/max(c1-1L,1L))))
+
+  support <- ifelse(
+    joint,1,
+    ifelse(opp>c2,le_support,ifelse(opp>=c1,div_support,0))
+  )
+  penalty <- ifelse(
+    joint,0,
+    ifelse(opp<c1,remainder_depth^2 * rank_distance_norm,0)
+  )
 
   data.frame(
     comparison=comparison,
@@ -518,6 +562,9 @@ classify_at_k <- function(k,comparison,control_df,treatment_df,c1,c2) {
     opposite_region=opp_region,
     cross_arm_rank_distance=ifelse(joint,0,abs(selected_rank-opp)),
     cross_arm_rank_distance_norm=rank_distance_norm,
+    leading_edge_depth_score=ifelse(joint,NA_real_,le_support),
+    divergence_depth_score=ifelse(joint,NA_real_,div_support),
+    remainder_depth_score=remainder_depth,
     support_score=support,
     remainder_penalty=penalty,
     selected_topk_union=TRUE,
@@ -1053,8 +1100,12 @@ panel_pareto <- function(method, comparison, scan, frontier, kstar, tag,
   )
 
   ggplot() +
+    # Line 1: the complete candidate-k trajectory.
+    geom_path(data = scan_plot, aes(cost, good),
+              colour = "grey78", linewidth = 0.45, alpha = 0.70) +
     geom_point(data = scan_plot, aes(cost, good),
-               colour = "grey78", size = 0.75, alpha = 0.55) +
+               colour = "grey72", size = 0.65, alpha = 0.50) +
+    # Line 2: only the nondominated Pareto frontier.
     geom_path(data = fr_plot, aes(cost, good),
               colour = method_col, linewidth = 0.65) +
     geom_point(data = fr_plot, aes(cost, good),
@@ -1088,9 +1139,9 @@ panel_pareto <- function(method, comparison, scan, frontier, kstar, tag,
     labs(
       tag = tag,
       title = evs_comparison_label(comparison),
-      subtitle = "All candidate k values (gray), Pareto frontier, and selected distance-weighted optimum",
-      x = expression(paste("Distance-weighted Remainder disagreement, ", italic(R)[Delta](k))),
-      y = expression(paste("Concordance-weighted retained support, ", italic(G)[Delta](k)))
+      subtitle = "All candidate k values (gray), Pareto frontier, and selected boundary-aware optimum",
+      x = expression(paste("Boundary-aware Remainder penalty, ", italic(R)[Delta](k))),
+      y = expression(paste("Boundary-aware retained support, ", italic(G)[Delta](k)))
     ) +
     evs_theme() +
     theme(
@@ -1816,9 +1867,9 @@ methods_lines <- c(
   "",
   "For each EVS method separately, the eight arm-specific D_g(r) curves were jointly fit using a continuous two-knot piecewise-linear model. The shared c1 and c2 values minimized the summed squared residual error across all arms. Rank<c1 defined the Remainder, c1<=rank<=c2 the Divergence interval, and rank>c2 the Leading Edge.",
   "",
-  "Each RT/ZT comparison was optimized independently over 1<=k<=N-c2. For each disjoint PAS, cross-arm rank distance was Delta=|r_selected-r_opposite|/(N-1). Joint PASs received full unit benefit. Disjoint PASs whose opposite-arm rank remained in the Leading Edge or Divergence interval received support 1-Delta; disjoint PASs whose opposite-arm rank crossed below c1 into the Remainder received contamination cost Delta. Thus the regime boundaries determine whether a disjoint PAS is supportive or contaminating, while its observed cross-arm rank distance determines the magnitude.",
+  "Each RT/ZT comparison was optimized independently over 1<=k<=N-c2. Joint PASs received full unit benefit. For a disjoint PAS, the opposite-arm regime determined whether it contributed benefit or contamination. If the opposite-arm rank was in the Leading Edge, support was S_LE=(r_opposite-c2)/(N-c2). If it was in the Divergence interval, support was S_DIV=(r_opposite-c1)/(c2-c1). If it crossed below c1 into the Remainder, contamination was P_REM=[(c1-r_opposite)/(c1-1)]^2*|r_selected-r_opposite|/(N-1). All scores were clipped to their natural 0-1 domains. Thus c1 and c2 determine the qualitative regime, while rank depth and cross-arm disagreement determine the magnitude.",
   "",
-  "For each candidate k, G_Delta(k)=N_Joint+sum_supported(1-Delta_i) and R_Delta(k)=sum_remainder(Delta_i). Nondominated [R_Delta(k),G_Delta(k)] candidates defined the Pareto frontier. On that frontier, benefit and contamination were min-max normalized and, with equal weights, U(k)=G_norm(k)-R_norm(k). The empirical k* was the Pareto-optimal candidate maximizing U(k); ties were resolved by greater G_Delta, lower R_Delta, then larger k. Raw Joint/Leading-Edge/Divergence/Remainder counts were retained as diagnostics and all site-level distances and scores were exported."
+  "For each candidate k, G_w(k)=N_Joint+sum(S_LE)+sum(S_DIV), and R_w(k)=sum(P_REM). Nondominated [R_w(k),G_w(k)] candidates defined the Pareto frontier. On that frontier, benefit and contamination were independently min-max normalized and, with equal top-level weights, U(k)=G_norm(k)-R_norm(k). The empirical k* was the Pareto-optimal candidate maximizing U(k), not a geometric knee; ties were resolved by greater G_w, lower R_w, then larger k. The figures therefore show two trajectories: the complete candidate-k path in gray and the nondominated Pareto frontier in color. Raw Joint/Leading-Edge/Divergence/Remainder counts and all site-level scores were retained as diagnostics."
 )
 
 writeLines(
