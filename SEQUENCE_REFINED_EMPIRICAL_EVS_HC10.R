@@ -37,8 +37,7 @@ PIPELINE_BUILD <- "SEQUENCE_REFINED_EMPIRICAL_EVS_HC10_2026-08-23"
 # NormEVS uses DESeq2 median-of-ratios normalized counts before PCA. RawEVS
 # uses raw counts before PCA. Within each comparison, the EVS selection size k*
 # is the comparison-specific empirical weighted-Pareto optimum derived from the
-# raw-count variance geometry: RT0_ZT6=3532, RT2_ZT8=4617, RT4_ZT10=3983, and
-# RT8_ZT14=5664. The same comparison-specific k* is applied to NormEVS and
+# raw-count variance geometry: the active fixed/CPM/DESeq2 cutoff table defined below. The same comparison-specific k* is applied to NormEVS and
 # RawEVS so those tracks differ only in the matrix used for PC1 ranking, not in
 # the number of PASs admitted per condition. Within each condition, prcomp is
 # applied directly to the corresponding feature-by-sample matrix, absolute PC1
@@ -96,6 +95,110 @@ PIPELINE_BUILD <- "SEQUENCE_REFINED_EMPIRICAL_EVS_HC10_2026-08-23"
 # ortholog, significant PASs, method support, and whether the rat gene contains
 # multiple WTTS PAS features consistent with alternative polyadenylation.
 # =============================================================================
+
+
+# =============================================================================
+# MULTI-CUTOFF ORCHESTRATION
+# Runs this same script three times in isolated output folders, then creates one
+# final ZIP containing all figures, tables, audit files, and TWAS results.
+# =============================================================================
+
+SEQUENCE_CHILD_RUN <- identical(Sys.getenv("SEQUENCE_CHILD_RUN", unset = "0"), "1")
+
+if (!SEQUENCE_CHILD_RUN) {
+  script_args <- commandArgs(trailingOnly = FALSE)
+  script_arg <- grep("^--file=", script_args, value = TRUE)
+  if (!length(script_arg)) stop("Run this pipeline with Rscript so the master process can relaunch itself.")
+  this_script <- normalizePath(sub("^--file=", "", script_arg[1]), winslash = "/", mustWork = TRUE)
+
+  root_candidates <- unique(c(
+    Sys.getenv("SEQUENCE_REPO_ROOT", unset = ""),
+    getwd(), dirname(getwd()), "/root/REAPER98632", dirname(this_script)
+  ))
+  root_candidates <- root_candidates[nzchar(root_candidates)]
+  repo_guess <- NULL
+  for (cand in root_candidates) {
+    if (file.exists(file.path(cand, "WTTS-Seq_2022.2_DE_raw_read_numbers.csv")) ||
+        file.exists(file.path(cand, "data", "WTTS-Seq_2022.2_DE_raw_read_numbers.csv"))) {
+      repo_guess <- normalizePath(cand, winslash = "/", mustWork = TRUE)
+      break
+    }
+  }
+  if (is.null(repo_guess) && dir.exists("/root/REAPER98632")) {
+    repo_guess <- normalizePath("/root/REAPER98632", winslash = "/", mustWork = TRUE)
+  }
+  if (is.null(repo_guess)) repo_guess <- normalizePath(getwd(), winslash = "/", mustWork = TRUE)
+
+  multi_root <- Sys.getenv(
+    "SEQUENCE_MULTI_ROOT",
+    unset = file.path(repo_guess, "exports", "sequence_final_three_cutoffs")
+  )
+  if (dir.exists(multi_root)) unlink(multi_root, recursive = TRUE, force = TRUE)
+  dir.create(multi_root, recursive = TRUE, showWarnings = FALSE)
+
+  cutoff_manifest <- data.frame(
+    Cutoff_Method = c("Fixed_5000", "CPM_Empirical", "DESeq2_Empirical"),
+    RT0_ZT6 = c(5000L, 4921L, 4478L),
+    RT2_ZT8 = c(5000L, 5188L, 3783L),
+    RT4_ZT10 = c(5000L, 5334L, 4174L),
+    RT8_ZT14 = c(5000L, 4970L, 3596L),
+    Source = c(
+      "Prespecified fixed comparator",
+      "Final CPM-EVS weighted-Pareto empirical cutoff",
+      "Final DESeq2-normalized EVS weighted-Pareto empirical cutoff"
+    ),
+    stringsAsFactors = FALSE
+  )
+  utils::write.csv(cutoff_manifest, file.path(multi_root, "Cutoff_Method_Manifest.csv"), row.names = FALSE)
+
+  methods <- c("fixed5000", "cpm_empirical", "deseq2_empirical")
+  for (method in methods) {
+    message("=====================================================")
+    message("Starting cutoff method: ", method)
+    status <- system2(
+      command = file.path(R.home("bin"), "Rscript"),
+      args = shQuote(this_script),
+      env = c(
+        "SEQUENCE_CHILD_RUN=1",
+        paste0("SEQUENCE_CUTOFF_METHOD=", method),
+        paste0("SEQUENCE_MULTI_ROOT=", multi_root),
+        paste0("SEQUENCE_REPO_ROOT=", repo_guess)
+      )
+    )
+    if (!identical(as.integer(status), 0L)) {
+      stop("Cutoff-method run failed: ", method, " (exit status ", status, ")")
+    }
+  }
+
+  final_zip <- file.path(dirname(multi_root), "SEQUENCE_FINAL_ALL_CUTOFF_METHODS.zip")
+  if (file.exists(final_zip)) unlink(final_zip, force = TRUE)
+  oldwd <- getwd(); on.exit(setwd(oldwd), add = TRUE)
+  setwd(dirname(multi_root))
+  zip_rel <- list.files(multi_root, recursive = TRUE, all.files = FALSE)
+  zip_rel <- zip_rel[!grepl("SEQUENCE_ALL_(FIGURES|TABLES)\\.zip$", zip_rel)]
+  zip_items <- file.path(basename(multi_root), zip_rel)
+  zip_items <- zip_items[file.exists(zip_items)]
+  utils::zip(zipfile = basename(final_zip), files = zip_items, flags = "-q")
+  if (!file.exists(final_zip)) stop("Final multi-cutoff ZIP creation failed: ", final_zip)
+
+  cat("\n=====================================================\n")
+  cat("All three cutoff-method runs complete.\n")
+  cat("Final combined ZIP:\n", normalizePath(final_zip, winslash = "/", mustWork = TRUE), "\n", sep = "")
+  cat("=====================================================\n\n")
+  quit(save = "no", status = 0L)
+}
+
+# Active child-run cutoff method.
+CUTOFF_METHOD_KEY <- Sys.getenv("SEQUENCE_CUTOFF_METHOD", unset = "fixed5000")
+CUTOFF_METHOD_INFO <- switch(
+  CUTOFF_METHOD_KEY,
+  fixed5000 = list(slug = "Fixed_5000", label = "Fixed 5,000", basis = "Prespecified fixed top-5,000 PASs per condition"),
+  cpm_empirical = list(slug = "CPM_Empirical", label = "CPM empirical k*", basis = "Final CPM-EVS weighted-Pareto empirical cutoff"),
+  deseq2_empirical = list(slug = "DESeq2_Empirical", label = "DESeq2 empirical k*", basis = "Final DESeq2-normalized EVS weighted-Pareto empirical cutoff"),
+  stop("Unknown SEQUENCE_CUTOFF_METHOD: ", CUTOFF_METHOD_KEY)
+)
+CUTOFF_METHOD_SLUG <- CUTOFF_METHOD_INFO$slug
+CUTOFF_METHOD_LABEL <- CUTOFF_METHOD_INFO$label
 
 required_packages <- c(
   "DESeq2",
@@ -189,10 +292,10 @@ if (!is.numeric(HC_ALPHA0) || length(HC_ALPHA0) != 1L ||
 
 # EVS selection size is comparison-specific and is defined in comparison_table
 # below from the empirically estimated weighted-Pareto optimum (k*). No global
-# fixed top-N cutoff is used in this refined pipeline.
-EMPIRICAL_EVS_CUTOFF_BASIS <- paste(
-  "raw-count variance geometry; comparison-specific weighted-Pareto optimum;",
-  "locked before downstream DE significance testing"
+# active cutoff is selected by the multi-cutoff orchestration layer.
+EMPIRICAL_EVS_CUTOFF_BASIS <- paste0(
+  CUTOFF_METHOD_INFO$basis,
+  "; locked before downstream DE significance testing"
 )
 
 figure_dpi <- 320
@@ -316,29 +419,35 @@ comparison_table <- data.frame(
   comparison_name = c("RT0_ZT6", "RT2_ZT8", "RT4_ZT10", "RT8_ZT14"),
   group1_prefix   = c("R0", "R2", "R4", "R8"),
   group2_prefix   = c("ZT6", "ZT8", "ZT10", "ZT14"),
-  empirical_evs_k = c(3532L, 4617L, 3983L, 5664L),
+  fixed_5000_k    = rep(5000L, 4L),
+  cpm_empirical_k = c(4921L, 5188L, 5334L, 4970L),
+  deseq2_empirical_k = c(4478L, 3783L, 4174L, 3596L),
   stringsAsFactors = FALSE
 )
 
-get_empirical_evs_cutoff <- function(comparison_name) {
+get_active_evs_cutoff <- function(comparison_name) {
   idx <- match(as.character(comparison_name), comparison_table$comparison_name)
-  if (is.na(idx)) {
-    stop("No empirical EVS cutoff is defined for comparison: ", comparison_name)
-  }
-
-  k <- as.integer(comparison_table$empirical_evs_k[idx])
+  if (is.na(idx)) stop("No EVS cutoff is defined for comparison: ", comparison_name)
+  k <- switch(
+    CUTOFF_METHOD_KEY,
+    fixed5000 = comparison_table$fixed_5000_k[idx],
+    cpm_empirical = comparison_table$cpm_empirical_k[idx],
+    deseq2_empirical = comparison_table$deseq2_empirical_k[idx]
+  )
+  k <- as.integer(k)
   if (length(k) != 1L || is.na(k) || !is.finite(k) || k < 1L) {
-    stop("Invalid empirical EVS cutoff for comparison: ", comparison_name)
+    stop("Invalid EVS cutoff for ", comparison_name, " under ", CUTOFF_METHOD_LABEL)
   }
   k
 }
 
-if (anyDuplicated(comparison_table$comparison_name)) {
-  stop("comparison_table contains duplicated comparison names.")
-}
-if (any(is.na(comparison_table$empirical_evs_k)) ||
-    any(comparison_table$empirical_evs_k < 1L)) {
-  stop("Every comparison must have a positive empirical EVS cutoff.")
+# Backward-compatible function name used throughout the established pipeline.
+get_empirical_evs_cutoff <- get_active_evs_cutoff
+
+if (anyDuplicated(comparison_table$comparison_name)) stop("comparison_table contains duplicated comparison names.")
+cutoff_cols <- c("fixed_5000_k", "cpm_empirical_k", "deseq2_empirical_k")
+if (any(vapply(comparison_table[cutoff_cols], function(x) any(is.na(x) | x < 1L), logical(1)))) {
+  stop("Every comparison must have a positive cutoff for every cutoff method.")
 }
 
 # -----------------------------------------------------------------------------
@@ -405,15 +514,13 @@ find_repo_root <- function() {
 
 repo_root <- find_repo_root()
 
-output_dir <- file.path(
-  repo_root,
-  "exports",
-  "sequence_refined_empirical_evs_hc10"
+multi_output_root <- Sys.getenv(
+  "SEQUENCE_MULTI_ROOT",
+  unset = file.path(repo_root, "exports", "sequence_final_three_cutoffs")
 )
+output_dir <- file.path(multi_output_root, CUTOFF_METHOD_SLUG)
 
-if (dir.exists(output_dir)) {
-  unlink(output_dir, recursive = TRUE, force = TRUE)
-}
+if (dir.exists(output_dir)) unlink(output_dir, recursive = TRUE, force = TRUE)
 
 dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
 
@@ -2505,11 +2612,14 @@ write_methods_note <- function() {
     "",
     "## Eigenvector splitting",
     paste0(
-      "The EVS selection size was comparison-specific rather than fixed globally. ",
-      "The empirically derived weighted-Pareto optima from raw-count variance geometry were ",
-      "RT0_ZT6 k*=3532, RT2_ZT8 k*=4617, RT4_ZT10 k*=3983, and RT8_ZT14 k*=5664. ",
-      "These k* values were treated as locked EVS inputs and were not tuned using downstream differential-expression calls. ",
-      "The same comparison-specific k* was applied to NormEVS and RawEVS so the two EVS tracks differed only in the matrix used for PC1 ranking, not in the number of PASs selected per condition. ",
+      "This run used the ", CUTOFF_METHOD_LABEL, " EVS selection rule. ",
+      "The active per-comparison cutoffs were: ",
+      paste(
+        paste0(comparison_table$comparison_name, " k=", vapply(comparison_table$comparison_name, get_active_evs_cutoff, integer(1))),
+        collapse = ", "
+      ),
+      ". These cutoffs were locked before downstream differential-expression testing. ",
+      "The same active cutoff was applied to NormEVS and RawEVS within each comparison so the two EVS tracks differed only in the matrix used for PC1 ranking, not in the number of PASs selected per condition. ",
       "NormEVS used DESeq2 median-of-ratios normalized counts before PCA, whereas RawEVS used raw counts before PCA. ",
       "Within each condition, prcomp was applied to the transposed feature-by-sample matrix with centering and without scaling. ",
       "PASs were ranked by absolute PC1 loading, and the comparison-specific k* highest-loading PASs were selected independently from the RT and ZT condition eigenvectors."
@@ -2682,15 +2792,16 @@ save_paper_volcano_panels <- function() {
 
     panel <- assemble_one_legend_panel(
       plots,
-      panel_title = paste0(comparison_name, " | significance across five analysis views"),
-      ncol = 5
+      panel_title = paste0(comparison_name, " | ", CUTOFF_METHOD_LABEL, " | significance across ", length(plots), " analysis view", ifelse(length(plots) == 1L, "", "s")),
+      ncol = length(plots)
     )
 
     panel_dir <- file.path(output_dir, comparison_name, "Panels")
     dir.create(panel_dir, recursive = TRUE, showWarnings = FALSE)
-    base <- file.path(panel_dir, paste0("Figure_", comparison_name, "_Volcano_5Views"))
-    save_grob(panel, paste0(base, ".png"), width = 25.0, height = 7.6)
-    save_grob(panel, paste0(base, ".pdf"), width = 25.0, height = 7.6)
+    base <- file.path(panel_dir, paste0("Figure_", comparison_name, "_Volcano_", length(plots), "Views"))
+    panel_width <- max(10.0, 5.0 * length(plots))
+    save_grob(panel, paste0(base, ".png"), width = panel_width, height = 7.6)
+    save_grob(panel, paste0(base, ".pdf"), width = panel_width, height = 7.6)
   }
 
   invisible(TRUE)
@@ -3198,7 +3309,7 @@ save_paper_pca_panels <- function() {
     if (length(plots)) {
       panel <- assemble_one_legend_panel(
         plots,
-        panel_title = paste0(comparison_name, " | PCA structure before and after EVS"),
+        panel_title = paste0(comparison_name, " | ", CUTOFF_METHOD_LABEL, " | PCA structure before and after EVS"),
         ncol = 3
       )
       base <- file.path(panel_dir, paste0("Figure_", comparison_name, "_PCA_EVS_2x3"))
@@ -3243,12 +3354,12 @@ save_paper_empirical_hbfss_panels <- function() {
 
     if (identical(dataset_key, "raw_dataset")) {
       track_order_use <- "normalized_evs"
-      panel_title <- "HBFSS calibration | Orig"
+      panel_title <- paste0("HBFSS calibration | Orig | ", CUTOFF_METHOD_LABEL)
       output_suffix <- "Raw_AllComparisons"
       panel_height <- 5.8
     } else {
       track_order_use <- c("normalized_evs", "raw_evs")
-      panel_title <- paste0("HBFSS calibration | ", unname(dataset_short[dataset_key]), " (Norm vs Raw)")
+      panel_title <- paste0("HBFSS calibration | ", unname(dataset_short[dataset_key]), " (Norm vs Raw) | ", CUTOFF_METHOD_LABEL)
       output_suffix <- paste0(unname(dataset_short[dataset_key]), "_AllComparisons_NormEVS_vs_RawEVS")
       panel_height <- 11.0
     }
@@ -3369,7 +3480,7 @@ save_discovery_count_panel <- function(summary_df) {
       name = "Method"
     ) +
     labs(
-      title = "Significant PAS counts by method",
+      title = paste0("Significant PAS counts by method | ", CUTOFF_METHOD_LABEL),
       x = NULL,
       y = "Significant PASs",
       caption = "Ovlp is reported separately; method totals are not mutually exclusive."
@@ -3798,7 +3909,7 @@ plot_twas_gene_support <- function(gene_table, figure_dir) {
       name = "Method"
     ) +
     labs(
-      title = "3'aTWAS ortholog genes identified in WTTS-Seq",
+      title = paste0("3'aTWAS ortholog genes identified in WTTS-Seq | ", CUTOFF_METHOD_LABEL),
       x = NULL,
       y = "Rat ortholog [human TWAS]"
     ) +
@@ -3902,7 +4013,8 @@ save_twas_comparison_panels <- function(summary_table) {
     sub <- summary_table[summary_table$Comparison == comparison_name, , drop = FALSE]
     if (!nrow(sub)) next
 
-    views <- c("Original (No EVS)", "NormEVS Lead", "NormEVS Rem", "RawEVS Lead", "RawEVS Rem")
+    preferred_views <- c("Original (No EVS)", "NormEVS Lead", "NormEVS Rem", "RawEVS Lead", "RawEVS Rem")
+    views <- preferred_views[preferred_views %in% unique(as.character(sub$Analysis))]
     plots <- lapply(views, function(v) {
       one <- sub[sub$Analysis == v, , drop = FALSE]
       if (!nrow(one)) return(NULL)
@@ -3916,16 +4028,20 @@ save_twas_comparison_panels <- function(summary_table) {
       plot_twas_view_counts(one, short)
     })
     plots <- Filter(Negate(is.null), plots)
-    if (!length(plots)) next
+    n_views <- length(plots)
+    if (!n_views) next
 
     panel <- assemble_one_legend_panel(
       lapply(plots, function(p) p + theme(legend.position = "bottom")),
-      panel_title = paste0(comparison_name, " | 3'aTWAS overlap across five views"),
-      ncol = 5
+      panel_title = paste0(
+        comparison_name, " | ", CUTOFF_METHOD_LABEL, " | 3'aTWAS overlap across ",
+        n_views, " view", ifelse(n_views == 1L, "", "s")
+      ),
+      ncol = n_views
     )
     panel_dir <- file.path(output_dir, comparison_name, "Panels")
     dir.create(panel_dir, recursive = TRUE, showWarnings = FALSE)
-    base <- file.path(panel_dir, paste0("Figure_", comparison_name, "_TWAS_5Views"))
+    base <- file.path(panel_dir, paste0("Figure_", comparison_name, "_TWAS_", n_views, "Views"))
     save_grob(panel, paste0(base, ".png"), width = 20.0, height = 6.0)
     save_grob(panel, paste0(base, ".pdf"), width = 20.0, height = 6.0)
   }
@@ -4022,13 +4138,24 @@ if (nrow(overall_summary) > 0L) {
 }
 
 empirical_cutoff_export <- comparison_table[, c(
-  "comparison_name", "group1_prefix", "group2_prefix", "empirical_evs_k"
+  "comparison_name", "group1_prefix", "group2_prefix",
+  "fixed_5000_k", "cpm_empirical_k", "deseq2_empirical_k"
 ), drop = FALSE]
 names(empirical_cutoff_export) <- c(
-  "Comparison", "RT_prefix", "ZT_prefix", "Empirical_EVS_k_per_condition"
+  "Comparison", "RT_prefix", "ZT_prefix",
+  "Fixed_5000_k", "CPM_Empirical_k", "DESeq2_Empirical_k"
+)
+empirical_cutoff_export$Active_Cutoff_Method <- CUTOFF_METHOD_LABEL
+empirical_cutoff_export$Active_k_per_condition <- vapply(
+  empirical_cutoff_export$Comparison, get_active_evs_cutoff, integer(1)
 )
 empirical_cutoff_export$Basis <- EMPIRICAL_EVS_CUTOFF_BASIS
 empirical_cutoff_export$Applied_to <- "NormEVS and RawEVS"
+save_csv(
+  empirical_cutoff_export,
+  file.path(summary_table_dir, "Table_EVS_Cutoffs.csv")
+)
+# Compatibility filename retained for the existing table-ZIP collector.
 save_csv(
   empirical_cutoff_export,
   file.path(summary_table_dir, "Table_EVS_Empirical_Cutoffs.csv")
@@ -4055,6 +4182,7 @@ table_zip <- create_all_tables_zip()
 cat("\n=====================================================\n")
 cat("Pipeline complete.\n")
 cat("Build: ", PIPELINE_BUILD, "\n", sep = "")
+cat("Cutoff method: ", CUTOFF_METHOD_LABEL, "\n", sep = "")
 cat("Repository root:\n", repo_root, "\n", sep = "")
 cat("Output directory:\n", output_dir, "\n", sep = "")
 cat("3'aTWAS overlap: complete\n")
