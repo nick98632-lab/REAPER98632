@@ -10,7 +10,7 @@ suppressPackageStartupMessages({
 options(stringsAsFactors = FALSE)
 
 # =============================================================================
-# CPM-EVS vs DESeq2-EVS — FINAL MANUSCRIPT VERSION
+# CPM-EVS vs VST-EVS — FINAL MANUSCRIPT VERSION
 # =============================================================================
 #
 # DESIGN
@@ -18,7 +18,9 @@ options(stringsAsFactors = FALSE)
 # 1) One experiment-wide PAS universe.
 # 2) Two EVS preprocessing methods:
 #      CPM-EVS    = log1p(CPM) -> arm-specific PCA
-#      DESeq2-EVS = log1p(DESeq2-normalized counts) -> arm-specific PCA
+#      VST-EVS     = DESeq2 variance-stabilizing transformation -> arm-specific PCA
+#    VST changes ONLY the EVS/PCA geometry; the pooled NB excess-variance
+#    reference remains based on globally DESeq2-normalized counts for both methods.
 # 3) For each method, all 8 arm-specific D_g(r) curves are fit jointly to
 #    estimate one shared c1/c2 regime system.
 # 4) Each RT/ZT comparison gets its own independent cutoff k*.
@@ -41,7 +43,7 @@ options(stringsAsFactors = FALSE)
 # =============================================================================
 
 COUNT_FILE <- "/root/REAPER98632/data/WTTS-Seq_2022.2_DE_raw_read_numbers.csv"
-OUT_ROOT  <- "/root/REAPER98632/exports/cpm_vs_deseq2_evs_manuscript_final"
+OUT_ROOT  <- "/root/REAPER98632/exports/cpm_vs_vst_evs_manuscript_final"
 
 GROUP_PATTERNS <- c(
   RT0="^R0_", ZT6="^ZT6_", RT2="^R2_", ZT8="^ZT8_",
@@ -55,7 +57,7 @@ COMPARISONS <- list(
   RT8_ZT14=c(control="RT8", treatment="ZT14")
 )
 
-METHODS <- c("CPM_EVS", "DESeq2_EVS")
+METHODS <- c("CPM_EVS", "VST_EVS")
 
 dir.create(OUT_ROOT, recursive=TRUE, showWarnings=FALSE)
 FIG_DIR <- file.path(OUT_ROOT, "Figures")
@@ -116,6 +118,9 @@ assign_groups <- function(samples) {
 
 deseq2_normalize <- function(counts, groups) {
   if (!requireNamespace("DESeq2", quietly=TRUE)) stop("DESeq2 is required.")
+  if (!requireNamespace("SummarizedExperiment", quietly=TRUE)) {
+    stop("SummarizedExperiment is required for the VST assay.")
+  }
 
   dds <- DESeq2::DESeqDataSetFromMatrix(
     countData=round(counts),
@@ -128,9 +133,25 @@ deseq2_normalize <- function(counts, groups) {
     error=\(e) DESeq2::estimateSizeFactors(dds, type="poscounts")
   )
 
+  # VST is used ONLY for the EVS/PCA geometry.  blind=TRUE prevents the
+  # experimental design from being used to preserve group differences during
+  # the transformation, keeping the PCA comparison unsupervised.
+  vst_obj <- DESeq2::varianceStabilizingTransformation(dds, blind=TRUE)
+  vst_mat <- SummarizedExperiment::assay(vst_obj)
+
+  if (!identical(dim(vst_mat), dim(counts))) {
+    stop("VST matrix dimensions do not match the count matrix.")
+  }
+  if (!identical(rownames(vst_mat), rownames(counts)) ||
+      !identical(colnames(vst_mat), colnames(counts))) {
+    stop("VST matrix feature/sample ordering does not match the count matrix.")
+  }
+  if (any(!is.finite(vst_mat))) stop("VST matrix contains non-finite values.")
+
   list(
     counts=DESeq2::counts(dds, normalized=TRUE),
-    size_factors=DESeq2::sizeFactors(dds)
+    size_factors=DESeq2::sizeFactors(dds),
+    vst=vst_mat
   )
 }
 
@@ -172,11 +193,11 @@ pc1_rank <- function(x) {
   )
 }
 
-build_arm <- function(method, arm, raw, norm, pooled_var) {
+build_arm <- function(method, arm, raw, norm, vst, pooled_var) {
   rank_matrix <- switch(
     method,
     CPM_EVS=cpm_log1p(raw),
-    DESeq2_EVS=log1p(norm),
+    VST_EVS=vst,
     stop("Unknown method: ", method)
   )
 
@@ -589,9 +610,9 @@ EVS_COL <- list(
   edge_lead = "#2E8B62"
 )
 
-EVS_METHOD_COL <- c("CPM-EVS" = EVS_COL$cpm, "DESeq2-EVS" = EVS_COL$deseq)
+EVS_METHOD_COL <- c("CPM-EVS" = EVS_COL$cpm, "VST-EVS" = EVS_COL$deseq)
 
-evs_method_label <- function(m) ifelse(m == "CPM_EVS", "CPM-EVS", "DESeq2-EVS")
+evs_method_label <- function(m) ifelse(m == "CPM_EVS", "CPM-EVS", "VST-EVS")
 
 # "RT0_ZT6" -> "RT0 vs ZT6". Underscores do not belong on a published axis.
 evs_comparison_label <- function(x) sub("_", " vs ", x, fixed = TRUE)
@@ -922,7 +943,7 @@ panel_residuals <- function(method_objects, tag, n_bins = 180L) {
     geom_line(aes(linetype = method), linewidth = 0.4) +
     scale_colour_manual(values = EVS_METHOD_COL) +
     scale_fill_manual(values = EVS_METHOD_COL) +
-    scale_linetype_manual(values = c("CPM-EVS" = "solid", "DESeq2-EVS" = "22")) +
+    scale_linetype_manual(values = c("CPM-EVS" = "solid", "VST-EVS" = "22")) +
     scale_x_continuous(labels = evs_comma) +
     labs(
       tag   = tag,
@@ -1105,24 +1126,24 @@ panel_hc_membership <- function(overlap_df, comparisons, tag) {
     mutate(
       cpm_only   = CPM_high_confidence    - overlap_high_confidence,
       shared     = overlap_high_confidence,
-      deseq_only = DESeq2_high_confidence - overlap_high_confidence,
+      vst_only = VST_high_confidence - overlap_high_confidence,
       comparison = factor(evs_comparison_label(comparison),
                           levels = evs_comparison_label(names(comparisons)))
     )
 
   tot <- d %>%
     transmute(comparison,
-              total   = cpm_only + shared + deseq_only,
+              total   = cpm_only + shared + vst_only,
               jaccard = jaccard_high_confidence)
 
   long <- d %>%
-    select(comparison, cpm_only, shared, deseq_only) %>%
+    select(comparison, cpm_only, shared, vst_only) %>%
     tidyr::pivot_longer(-comparison, names_to = "set", values_to = "n") %>%
     mutate(set = factor(recode(set,
                                cpm_only   = "CPM-EVS only",
                                shared     = "Shared",
-                               deseq_only = "DESeq2-EVS only"),
-                        levels = c("CPM-EVS only", "Shared", "DESeq2-EVS only")))
+                               vst_only = "VST-EVS only"),
+                        levels = c("CPM-EVS only", "Shared", "VST-EVS only")))
 
   ggplot(long, aes(comparison, n, fill = set)) +
     geom_col(width = 0.56, colour = "white", linewidth = 0.2) +
@@ -1135,7 +1156,7 @@ panel_hc_membership <- function(overlap_df, comparisons, tag) {
               parse = TRUE, vjust = -0.6, size = pt2mm(5.4), fontface = "bold") +
     scale_fill_manual(values = c("CPM-EVS only"    = EVS_COL$cpm,
                                  "Shared"          = EVS_COL$shared,
-                                 "DESeq2-EVS only" = EVS_COL$deseq)) +
+                                 "VST-EVS only" = EVS_COL$deseq)) +
     scale_y_continuous(labels = evs_comma,
                        expand = expansion(mult = c(0, 0.20))) +
     labs(tag = tag, title = "High-confidence EVS membership", x = NULL,
@@ -1170,7 +1191,7 @@ panel_composition <- function(summary_df, comparisons, tag) {
                                  "Opposite LE"         = EVS_COL$opp_le,
                                  "Opposite Divergence" = EVS_COL$opp_div,
                                  "Opposite Remainder"  = EVS_COL$opp_rem)) +
-    scale_x_discrete(labels = c("CPM-EVS" = "CPM", "DESeq2-EVS" = "DESeq2")) +
+    scale_x_discrete(labels = c("CPM-EVS" = "CPM", "VST-EVS" = "VST")) +
     scale_y_continuous(expand = expansion(mult = c(0, 0.02))) +
     labs(tag = tag,
          title = expression(paste("Site composition at ", italic(k)^"*")),
@@ -1280,7 +1301,7 @@ evs_write_legends <- function(method_objects, summary_df, overlap_df,
     sprintf(paste0(
       "(A, B) Cumulative PC1-excess-variance divergence, D(r) = F_E(r) - F_P(r), ",
       "against PAS rank by ascending absolute PC1 loading, for (A) CPM-EVS and ",
-      "(B) DESeq2-EVS. Grey lines show all eight experimental arms, the coloured ",
+      "(B) VST-EVS. Grey lines show all eight experimental arms, the coloured ",
       "line the across-arm median, and the dashed black line the shared two-knot ",
       "piecewise-linear fit estimated jointly across arms by minimising the summed ",
       "squared residual. Vertical dashed lines mark the shared knots (%s), which ",
@@ -1314,23 +1335,23 @@ evs_write_legends <- function(method_objects, summary_df, overlap_df,
     "",
     "---",
     "",
-    "**Figure 3. Per-comparison cutoff selection under DESeq2-EVS.**",
+    "**Figure 3. Per-comparison cutoff selection under VST-EVS.**",
     sprintf(paste0(
       "Panels, axes and annotations are as in Figure 2, computed from ",
-      "log1p-transformed DESeq2 median-of-ratios normalised counts. Non-dominated ",
+      "DESeq2 variance-stabilized counts (varianceStabilizingTransformation, blind=TRUE). Non-dominated ",
       "candidates make up %.0f%% of the k values scanned. Selected values: ",
       "k* = %s."),
-      100 * fr_frac[["DESeq2_EVS"]],
-      paste(evs_num(kstar_of("DESeq2_EVS")), collapse = ", ")),
+      100 * fr_frac[["VST_EVS"]],
+      paste(evs_num(kstar_of("VST_EVS")), collapse = ", ")),
     "",
     "---",
     "",
-    "**Figure 4. CPM-EVS and DESeq2-EVS compared across all four RT/ZT",
+    "**Figure 4. CPM-EVS and VST-EVS compared across all four RT/ZT",
     "comparisons.**",
     sprintf(paste0(
       "(A) Selected cutoff k* for each comparison and method (%s). (B) ",
       "High-confidence PAS membership, partitioned into sites recovered only by ",
-      "CPM-EVS, only by DESeq2-EVS, or by both; J is the Jaccard index of the two ",
+      "CPM-EVS, only by VST-EVS, or by both; J is the Jaccard index of the two ",
       "high-confidence sets (range across comparisons, %s). High-confidence sites ",
       "are Joint sites together with disjoint sites whose opposite-arm rank falls ",
       "in the Leading Edge or Divergence regime. (C) Composition of the selected ",
@@ -1369,8 +1390,8 @@ evs_render_all <- function(method_objects, summary_df, overlap_df,
   f1 <- list(
     panel_regime("CPM_EVS", method_objects[["CPM_EVS"]]$arms,
                  method_objects[["CPM_EVS"]]$knot, "A", show_legend = TRUE),
-    panel_regime("DESeq2_EVS", method_objects[["DESeq2_EVS"]]$arms,
-                 method_objects[["DESeq2_EVS"]]$knot, "B"),
+    panel_regime("VST_EVS", method_objects[["VST_EVS"]]$arms,
+                 method_objects[["VST_EVS"]]$knot, "B"),
     panel_residuals(method_objects, "C"),
     panel_regime_widths(method_objects, "D")
   )
@@ -1399,7 +1420,7 @@ evs_render_all <- function(method_objects, summary_df, overlap_df,
     panel_composition(summary_df, comparisons, "C"),
     panel_le_fraction(summary_df, comparisons, "D")
   )
-  evs_save(f4, file.path(fig_dir, "Figure_4_CPM_vs_DESeq2_EVS_Summary"),
+  evs_save(f4, file.path(fig_dir, "Figure_4_CPM_vs_VST_EVS_Summary"),
            nrow = 2, ncol = 2, height_mm = 150)
 
   evs_write_legends(method_objects, summary_df, overlap_df, comparisons, out_root)
@@ -1424,7 +1445,9 @@ message(
 message("Global DESeq2 normalization...")
 norm_obj <- deseq2_normalize(counts,groups)
 norm <- norm_obj$counts
+vst  <- norm_obj$vst
 
+message("VST matrix computed globally for the EVS/PCA branch (blind=TRUE).")
 message("Pooled normalized within-group variance...")
 pooled_var <- pooled_within_group_var(norm,groups)
 
@@ -1449,6 +1472,7 @@ for (method in METHODS) {
       arm=g,
       raw=counts[,idx,drop=FALSE],
       norm=norm[,idx,drop=FALSE],
+      vst=vst[,idx,drop=FALSE],
       pooled_var=pooled_var
     )
   }
@@ -1586,26 +1610,26 @@ overlap_df <- bind_rows(lapply(names(COMPARISONS),\(nm) {
     pull(feature_id) %>%
     unique()
 
-  des <- sites_df %>%
+  vst_sites <- sites_df %>%
     filter(
-      method=="DESeq2_EVS",
+      method=="VST_EVS",
       comparison==nm,
       high_confidence
     ) %>%
     pull(feature_id) %>%
     unique()
 
-  u <- union(cpm,des)
+  u <- union(cpm,vst_sites)
 
   data.frame(
     comparison=nm,
     CPM_high_confidence=length(cpm),
-    DESeq2_high_confidence=length(des),
-    overlap_high_confidence=length(intersect(cpm,des)),
+    VST_high_confidence=length(vst_sites),
+    overlap_high_confidence=length(intersect(cpm,vst_sites)),
     union_high_confidence=length(u),
     jaccard_high_confidence=ifelse(
       length(u)>0,
-      length(intersect(cpm,des))/length(u),
+      length(intersect(cpm,vst_sites))/length(u),
       NA_real_
     ),
     stringsAsFactors=FALSE
@@ -1620,7 +1644,7 @@ write.csv(
 
 write.csv(
   overlap_df,
-  file.path(TAB_DIR,"Table_2_CPM_vs_DESeq2_HighConfidence_Overlap.csv"),
+  file.path(TAB_DIR,"Table_2_CPM_vs_VST_HighConfidence_Overlap.csv"),
   row.names=FALSE
 )
 
@@ -1702,9 +1726,9 @@ evs_render_all(
 methods_lines <- c(
   "# Methods",
   "",
-  "Two EVS preprocessing strategies were evaluated using a common experiment-wide PAS universe. CPM-EVS used log1p-transformed counts per million, whereas DESeq2-EVS used log1p-transformed DESeq2 median-of-ratios normalized counts. PCA was performed independently within each experimental arm, and PASs were ranked from lowest to highest absolute PC1 loading.",
+  "Two EVS preprocessing strategies were evaluated using a common experiment-wide PAS universe. CPM-EVS used log1p-transformed counts per million. VST-EVS used the DESeq2 variance-stabilizing transformation (varianceStabilizingTransformation, blind=TRUE) computed experiment-wide after median-of-ratios size-factor estimation. PCA was performed independently within each experimental arm on the corresponding transformed matrix, and PASs were ranked from lowest to highest absolute PC1 loading.",
   "",
-  "For each PAS, PC1 variance contribution was P_i=lambda_1*v_i1^2. A pooled within-group variance was calculated from globally DESeq2-normalized counts across the eight experimental arms, and arm-specific excess variance was E_ig=max(V_pool,i-mu_ig,0). PC1 contribution and excess variance were converted to rank-wise probability masses and cumulative distributions. Cumulative divergence was D_g(r)=F_E,g(r)-F_P,g(r).",
+  "For each PAS, PC1 variance contribution was P_i=lambda_1*v_i1^2. A pooled within-group variance was calculated separately from globally DESeq2 median-of-ratios normalized counts across the eight experimental arms, and arm-specific excess variance was E_ig=max(V_pool,i-mu_ig,0). PC1 contribution and excess variance were converted to rank-wise probability masses and cumulative distributions. Cumulative divergence was D_g(r)=F_E,g(r)-F_P,g(r).",
   "",
   "For each EVS method separately, the eight arm-specific D_g(r) curves were jointly fit using a continuous two-knot piecewise-linear model. The shared c1 and c2 values minimized the summed squared residual error across all arms. Rank<c1 defined the Remainder, c1<=rank<=c2 the Divergence interval, and rank>c2 the Leading Edge.",
   "",
@@ -1777,7 +1801,7 @@ zip_folder <- function(zipfile,files,root) {
 
 FIG_ZIP <- file.path(OUT_ROOT,"Manuscript_Ready_Figures.zip")
 TAB_ZIP <- file.path(OUT_ROOT,"Manuscript_Ready_Tables.zip")
-ALL_ZIP <- file.path(OUT_ROOT,"CPM_vs_DESeq2_EVS_Complete_Outputs.zip")
+ALL_ZIP <- file.path(OUT_ROOT,"CPM_vs_VST_EVS_Complete_Outputs.zip")
 
 # Figure zip.
 old <- getwd()
