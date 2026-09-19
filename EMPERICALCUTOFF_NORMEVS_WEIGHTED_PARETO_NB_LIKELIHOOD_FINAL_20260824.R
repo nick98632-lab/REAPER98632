@@ -451,8 +451,14 @@ select_weighted_pareto_optimum <- function(scan_df, good_col="good_n", cost_col=
     arrange(desc(good),cost,desc(k)) %>% slice(1L)
 
   out <- marked$scan
-  out$good_norm <- norm_good(out[[good_col]])
-  out$remainder_norm <- norm_cost(out[[cost_col]])
+  # Keep canonical generic coordinates on BOTH the full candidate scan and the
+  # Pareto frontier.  The publication plotting layer intentionally consumes
+  # these generic names so it is agnostic to the particular benefit/cost
+  # formulation supplied to this selector.
+  out$good <- out[[good_col]]
+  out$cost <- out[[cost_col]]
+  out$good_norm <- norm_good(out$good)
+  out$remainder_norm <- norm_cost(out$cost)
   out$weighted_utility <- benefit_weight*out$good_norm - contamination_weight*out$remainder_norm
   out$is_selected_weighted <- out$k==chosen$k[1]
 
@@ -527,7 +533,7 @@ classify_at_k <- function(k,comparison,control_df,treatment_df,c1,c2) {
 # FIGURE SYSTEM (publication layer)
 # =============================================================================
 #
-# Figures are authored at 180 mm final width with 7 pt body text at 100%
+# Figures are authored at 180 mm final width with readable final-size text.
 # reproduction, in a colourblind-safe palette, and exported as vector PDF plus
 # 600 dpi PNG. Figure_Legends.md is generated from the fitted objects so the
 # numbers in the legends cannot drift from the numbers in the figures.
@@ -545,7 +551,7 @@ classify_at_k <- function(k,comparison,control_df,treatment_df,c1,c2) {
 # sized for 180 mm (double column) reproduced at 100%.
 
 EVS_FIG_W_MM   <- 180    # double-column width
-EVS_BASE_PT    <- 7      # body text, in points, at final size
+EVS_BASE_PT    <- 8      # body text, in points, at final size
 EVS_PNG_DPI    <- 600
 EVS_WRITE_TIFF <- FALSE  # set TRUE if the journal requires TIFF
 
@@ -746,19 +752,45 @@ evs_save <- function(plots, file_base, nrow, ncol,
 
   for (k in kinds) {
     f <- paste0(file_base, ".", k)
-    evs_open_device(f, w, h, k)
-    ok <- tryCatch({
-      if (use_pw) {
-        print(patchwork::wrap_plots(plots, nrow = nrow, ncol = ncol))
+
+    draw_once <- function(use_patchwork) {
+      evs_open_device(f, w, h, k)
+      on.exit(try(grDevices::dev.off(), silent=TRUE), add=TRUE)
+      if (use_patchwork) {
+        print(patchwork::wrap_plots(plots, nrow=nrow, ncol=ncol))
       } else {
-        evs_draw_grid(grobs, nrow, ncol)
+        fallback_grobs <- evs_align(plots, nrow, ncol)
+        evs_draw_grid(fallback_grobs, nrow, ncol)
       }
+      grDevices::dev.off()
+      on.exit(NULL, add=FALSE)
       TRUE
-    }, error = function(e) {
-      message("  ERROR drawing ", basename(f), ": ", conditionMessage(e))
-      FALSE
-    })
-    grDevices::dev.off()
+    }
+
+    ok <- FALSE
+    first_error <- NULL
+    if (use_pw) {
+      ok <- tryCatch(
+        draw_once(TRUE),
+        error=function(e) { first_error <<- conditionMessage(e); FALSE }
+      )
+      if (!ok) {
+        message("  patchwork render failed for ", basename(f),
+                "; retrying with base grid/gtable: ", first_error)
+      }
+    }
+
+    if (!ok) {
+      ok <- tryCatch(
+        draw_once(FALSE),
+        error=function(e) {
+          stop("Figure rendering failed for ", basename(f),
+               if (!is.null(first_error)) paste0(" [patchwork: ", first_error, "]"),
+               " [grid/gtable: ", conditionMessage(e), "]")
+        }
+      )
+    }
+
     if (ok) message("  wrote ", basename(f))
   }
   invisible(file_base)
@@ -989,35 +1021,83 @@ panel_regime_widths <- function(method_objects, tag) {
 
 panel_pareto <- function(method, comparison, scan, frontier, kstar, tag,
                          method_col) {
-  fr <- frontier[order(frontier$cost,frontier$good), , drop = FALSE]
-  sel <- fr[fr$k==kstar,,drop=FALSE]
-  if (nrow(sel)!=1L) stop("k* not found on the frontier for ", comparison)
+  fr <- frontier[order(frontier$cost, frontier$good), , drop = FALSE]
+  sel <- fr[fr$k == kstar, , drop = FALSE]
+  if (nrow(sel) != 1L) stop("k* not found on the frontier for ", comparison)
 
-  fr_plot <- fr[evs_thin(nrow(fr),1500L),,drop=FALSE]
-  xr <- range(fr$cost,na.rm=TRUE); yr <- range(fr$good,na.rm=TRUE)
-  xd <- if (diff(xr)>0) diff(xr) else 1; yd <- if (diff(yr)>0) diff(yr) else 1
+  # Plot all candidates lightly, Pareto frontier prominently, selected point clearly.
+  scan_plot <- scan[evs_thin(nrow(scan), 2500L), , drop = FALSE]
+  fr_plot   <- fr[evs_thin(nrow(fr), 1500L), , drop = FALSE]
 
-  ins <- ggplot(fr_plot,aes(k,weighted_utility)) +
-    geom_line(colour="grey25",linewidth=0.25) +
-    geom_vline(xintercept=sel$k,colour=EVS_COL$knee,linetype="22",linewidth=0.3) +
-    labs(x=expression(italic(k)),y="U(k)") + evs_theme_inset()
+  xr <- range(c(scan$cost, fr$cost), na.rm = TRUE)
+  yr <- range(c(scan$good, fr$good), na.rm = TRUE)
+  xd <- if (diff(xr) > 0) diff(xr) else 1
+  yd <- if (diff(yr) > 0) diff(yr) else 1
+
+  # Utility inset: same k-domain as the candidate scan, with selected k* marked.
+  util_plot <- scan[order(scan$k), , drop = FALSE]
+  util_plot <- util_plot[evs_thin(nrow(util_plot), 1800L), , drop = FALSE]
+  ins <- ggplot(util_plot, aes(k, weighted_utility)) +
+    geom_line(colour = "grey30", linewidth = 0.30) +
+    geom_vline(xintercept = sel$k, colour = EVS_COL$knee,
+               linetype = "22", linewidth = 0.35) +
+    geom_point(data = sel, aes(k, weighted_utility), inherit.aes = FALSE,
+               shape = 21, size = 1.2, stroke = 0.25,
+               fill = EVS_COL$knee, colour = "white") +
+    labs(x = "k", y = "U(k)") +
+    evs_theme_inset()
+
+  label_txt <- sprintf(
+    "k* = %s\nGΔ = %.1f\nRΔ = %.2f\nU = %.3f",
+    evs_num(sel$k), sel$good, sel$cost, sel$weighted_utility
+  )
 
   ggplot() +
-    geom_line(data=fr_plot,aes(cost,good),colour=method_col,linewidth=0.5) +
-    annotation_custom(ggplotGrob(ins),
-      xmin=xr[1]+0.50*(xr[2]-xr[1]+1e-9),xmax=xr[2]+0.05*xd,
-      ymin=yr[1]+0.04*(yr[2]-yr[1]+1e-9),ymax=yr[1]+0.46*(yr[2]-yr[1]+1e-9)) +
-    geom_point(data=sel,aes(cost,good),shape=23,size=1.5,stroke=0.3,
-               fill=EVS_COL$knee,colour="white") +
-    annotate("text",x=sel$cost-0.015*xd,y=sel$good+0.035*yd,
-             label=sprintf("italic(k)^"*" * " = " * "%s"",evs_num(sel$k)),
-             parse=TRUE,hjust=1,vjust=0,size=pt2mm(6.2),
-             colour=EVS_COL$knee,fontface="bold") +
-    scale_x_continuous(labels=evs_comma) + scale_y_continuous(labels=evs_comma) +
-    labs(tag=tag,title=evs_comparison_label(comparison),
-         x=expression(paste("Distance-weighted Remainder disagreement, ",italic(R)[Delta](k))),
-         y=expression(paste("Concordance-weighted retained support, ",italic(G)[Delta](k)))) +
-    evs_theme()
+    geom_point(data = scan_plot, aes(cost, good),
+               colour = "grey78", size = 0.75, alpha = 0.55) +
+    geom_path(data = fr_plot, aes(cost, good),
+              colour = method_col, linewidth = 0.65) +
+    geom_point(data = fr_plot, aes(cost, good),
+               colour = method_col, size = 0.75, alpha = 0.8) +
+    annotation_custom(
+      ggplotGrob(ins),
+      xmin = xr[1] + 0.53 * xd,
+      xmax = xr[2] + 0.03 * xd,
+      ymin = yr[1] + 0.04 * yd,
+      ymax = yr[1] + 0.46 * yd
+    ) +
+    geom_point(data = sel, aes(cost, good),
+               shape = 23, size = 2.2, stroke = 0.45,
+               fill = EVS_COL$knee, colour = "white") +
+    annotate(
+      "label",
+      x = sel$cost - 0.02 * xd,
+      y = sel$good + 0.055 * yd,
+      label = label_txt,
+      hjust = 1, vjust = 0,
+      size = pt2mm(5.5),
+      colour = "grey10",
+      fill = alpha("white", 0.94),
+      label.size = 0.18,
+      label.r = unit(1.2, "pt")
+    ) +
+    scale_x_continuous(labels = evs_comma,
+                       expand = expansion(mult = c(0.03, 0.08))) +
+    scale_y_continuous(labels = evs_comma,
+                       expand = expansion(mult = c(0.04, 0.12))) +
+    labs(
+      tag = tag,
+      title = evs_comparison_label(comparison),
+      subtitle = "All candidate k values (gray), Pareto frontier, and selected distance-weighted optimum",
+      x = expression(paste("Distance-weighted Remainder disagreement, ", italic(R)[Delta](k))),
+      y = expression(paste("Concordance-weighted retained support, ", italic(G)[Delta](k)))
+    ) +
+    evs_theme() +
+    theme(
+      plot.subtitle = element_text(size = EVS_BASE_PT - 0.8,
+                                   colour = "grey30",
+                                   margin = margin(b = 2.2))
+    )
 }
 
 # =============================================================================
@@ -1302,11 +1382,89 @@ evs_write_legends <- function(method_objects, summary_df, overlap_df,
 }
 
 # =============================================================================
-# 7. TOP-LEVEL RENDER
+# 7. PRE-FLIGHT VALIDATION + TOP-LEVEL RENDER
 # =============================================================================
+
+evs_validate_figure_inputs <- function(method_objects, summary_df, overlap_df, comparisons) {
+  if (!all(c("CPM_EVS", "DESeq2_EVS") %in% names(method_objects))) {
+    stop("Figure validation failed: both CPM_EVS and DESeq2_EVS objects are required.")
+  }
+
+  req_summary <- c(
+    "method", "comparison", "selected_k", "k_over_leading_edge",
+    "joint_n", "opposite_le_n", "opposite_divergence_n",
+    "remainder_cross_n"
+  )
+  miss_summary <- setdiff(req_summary, names(summary_df))
+  if (length(miss_summary)) {
+    stop("Figure validation failed: summary_df missing columns: ",
+         paste(miss_summary, collapse=", "))
+  }
+
+  req_overlap <- c(
+    "comparison", "CPM_high_confidence", "DESeq2_high_confidence",
+    "overlap_high_confidence", "jaccard_high_confidence"
+  )
+  miss_overlap <- setdiff(req_overlap, names(overlap_df))
+  if (length(miss_overlap)) {
+    stop("Figure validation failed: overlap_df missing columns: ",
+         paste(miss_overlap, collapse=", "))
+  }
+
+  for (m in names(method_objects)) {
+    ob <- method_objects[[m]]
+    if (is.null(ob$arms) || is.null(ob$knot) || is.null(ob$scans) ||
+        is.null(ob$frontiers) || is.null(ob$pairs)) {
+      stop("Figure validation failed: incomplete method object for ", m)
+    }
+    if (!all(names(comparisons) %in% names(ob$scans)) ||
+        !all(names(comparisons) %in% names(ob$frontiers)) ||
+        !all(names(comparisons) %in% names(ob$pairs))) {
+      stop("Figure validation failed: missing comparison object(s) for ", m)
+    }
+
+    for (nm in names(comparisons)) {
+      sc <- ob$scans[[nm]]
+      fr <- ob$frontiers[[nm]]
+      ks <- ob$pairs[[nm]]$kstar
+
+      req_scan <- c("k", "good", "cost", "good_norm", "remainder_norm",
+                    "weighted_utility", "is_pareto")
+      miss_scan <- setdiff(req_scan, names(sc))
+      if (length(miss_scan)) {
+        stop("Figure validation failed: ", m, " / ", nm,
+             " scan missing columns: ", paste(miss_scan, collapse=", "))
+      }
+
+      req_frontier <- c("k", "good", "cost", "good_norm",
+                        "remainder_norm", "weighted_utility")
+      miss_frontier <- setdiff(req_frontier, names(fr))
+      if (length(miss_frontier)) {
+        stop("Figure validation failed: ", m, " / ", nm,
+             " frontier missing columns: ", paste(miss_frontier, collapse=", "))
+      }
+
+      if (nrow(sc) < 1L || nrow(fr) < 1L) {
+        stop("Figure validation failed: empty scan/frontier for ", m, " / ", nm)
+      }
+      if (length(ks) != 1L || !is.finite(ks) || !(ks %in% fr$k)) {
+        stop("Figure validation failed: selected k* is not uniquely present on the frontier for ",
+             m, " / ", nm)
+      }
+      numeric_cols <- c("good", "cost", "good_norm", "remainder_norm", "weighted_utility")
+      if (any(!vapply(sc[numeric_cols], function(z) all(is.finite(z)), logical(1)))) {
+        stop("Figure validation failed: non-finite Pareto coordinates for ", m, " / ", nm)
+      }
+    }
+  }
+
+  invisible(TRUE)
+}
 
 evs_render_all <- function(method_objects, summary_df, overlap_df,
                            comparisons, fig_dir, out_root) {
+
+  evs_validate_figure_inputs(method_objects, summary_df, overlap_df, comparisons)
 
   dir.create(fig_dir,  recursive = TRUE, showWarnings = FALSE)
   dir.create(out_root, recursive = TRUE, showWarnings = FALSE)
@@ -1322,7 +1480,7 @@ evs_render_all <- function(method_objects, summary_df, overlap_df,
     panel_regime_widths(method_objects, "D")
   )
   evs_save(f1, file.path(fig_dir, "Figure_1_Regime_Definition"),
-           nrow = 2, ncol = 2, height_mm = 150)
+           nrow = 2, ncol = 2, height_mm = 165)
 
   for (m in names(method_objects)) {
     fig_no <- if (m == "CPM_EVS") 2L else 3L
@@ -1336,7 +1494,7 @@ evs_render_all <- function(method_objects, summary_df, overlap_df,
     })
     evs_save(pl, file.path(fig_dir,
                            sprintf("Figure_%d_%s_Pareto_Cutoffs", fig_no, m)),
-             nrow = 2, ncol = 2, height_mm = 145)
+             nrow = 2, ncol = 2, height_mm = 160)
   }
 
   message("Figure 4 ...")
@@ -1347,7 +1505,7 @@ evs_render_all <- function(method_objects, summary_df, overlap_df,
     panel_le_fraction(summary_df, comparisons, "D")
   )
   evs_save(f4, file.path(fig_dir, "Figure_4_CPM_vs_DESeq2_EVS_Summary"),
-           nrow = 2, ncol = 2, height_mm = 150)
+           nrow = 2, ncol = 2, height_mm = 165)
 
   evs_write_legends(method_objects, summary_df, overlap_df, comparisons, out_root)
   message("Figures complete: ", fig_dir)
