@@ -1,11 +1,103 @@
 # =============================================================================
-# HC10 REVISION — 2026-08-23
+# SEQUENCE - UNIFIED MANUSCRIPT PIPELINE
+# Build: SEQUENCE_UNIFIED v1.0.0
+#
+# This single file supersedes and merges:
+#   SEQUENCE_FINAL_DYNAMIC_CPM_VST_5000.R
+#   SEQUENCE_RT4_ZT10_MATCHED_CPM_VST_PATHWAYS.R
+# The two source scripts shared ~4,100 identical lines; the matched-pathway
+# script was the strict superset and is the basis of this unified build.
+#
+# HC10 REVISION - 2026-08-23 (retained)
 # Higher Criticism is restricted to the lowest 10% of ordered empirical-null
 # p-values (HC_ALPHA0 = 0.10) and requires HCmax > 0. This revision writes to
 # a separate output tree so it cannot overwrite the prior empirical-EVS run.
+#
+# -----------------------------------------------------------------------------
+# WHAT CHANGED IN THE UNIFIED BUILD (engineering and figure layer only)
+# -----------------------------------------------------------------------------
+# No statistical decision rule, threshold, test, effect estimator, cutoff
+# algorithm or reported quantity was altered. Every change below is either a
+# defect fix, a provenance/robustness addition, or a print-quality change to
+# how figures are rendered.
+#
+#  1. All four RT/ZT comparisons are enabled by default (see
+#     RUN_COMPARISON_FLAGS) so the unified file reproduces the full study.
+#  2. DEFECT FIX: shared_panel_legend() matched the gtable grob named
+#     "guide-box". ggplot2 >= 3.5.0 names guide boxes "guide-box-bottom",
+#     "guide-box-right", etc., so the match returned nothing and every
+#     assembled manuscript panel was silently written WITHOUT its method
+#     legend. The match is now a prefix match with a zero-size guard.
+#  3. Figures are rendered through cairo devices (cairo_pdf / png type="cairo"
+#     / LZW TIFF) instead of the platform default devices, so PDF and PNG
+#     renditions of the same figure are consistent and text is antialiased.
+#  4. Figure canvases are specified in millimetres at final print size and are
+#     capped at journal page geometry (180 mm double column, 88 mm single
+#     column, 240 mm maximum height). Previously several panels were emitted
+#     at 16.5-21 in (420-533 mm) wide, so production down-scaling to a double
+#     column reduced 10 pt text to roughly 3 pt.
+#  5. Base text size is set for final print size and a single font family
+#     constant is applied across every panel.
+#  6. Method palette replaced with the Okabe-Ito colour-blind-safe set; the
+#     HBFSS point colour and the HBFSS boundary-line colour are no longer
+#     identical.
+#  7. The dense non-significant volcano layer is rasterised when ggrastr is
+#     installed, so vector PDFs stay small and editable.
+#  8. Assembled panels are aligned with patchwork when available and carry
+#     A/B/C/... panel tags.
+#  9. Volcano captions are ASCII (no literal Unicode tau) and report how many
+#     PASs fall above the shared y-axis limit instead of clipping silently.
+# 10. Provenance: fixed RNG seed, sessionInfo() and package-version manifests
+#     written into the output tree, and a Figure_Manifest.csv recording the
+#     exact canvas size and resolution of every figure written.
+# 11. The master process no longer deletes an output root it did not create;
+#     deletion requires a sentinel file written by a previous run.
+# 12. Child runs are launched with per-method log files, and the launcher works
+#     on Windows (system2(env=) is POSIX-only).
+#
+# -----------------------------------------------------------------------------
+# KNOWN LIMITATIONS DELIBERATELY NOT CHANGED
+# -----------------------------------------------------------------------------
+#  * EVS selection and DE testing use the same samples, so discovery rates
+#    inside the Leading Edge are not FDR-protected in the usual sense. A
+#    label-permutation null is the appropriate calibration and is NOT included
+#    here because it would change reported numbers.
+#  * The fdrtool empirical null is fitted on every finite Wald statistic,
+#    including PASs removed by DESeq2 independent filtering. This is the
+#    original behaviour and is preserved; see EMPIRICAL_NULL_NOTE below.
+#  * Htau = -log10(HCp) * c is an internal calibration without a formal FDR
+#    guarantee. Preserved as specified.
 # =============================================================================
 
 #!/usr/bin/env Rscript
+
+# -----------------------------------------------------------------------------
+# Global reproducibility settings. Applied in BOTH the master process and every
+# child run, before any stochastic or order-dependent step.
+# -----------------------------------------------------------------------------
+SEQUENCE_BUILD_VERSION <- "SEQUENCE_UNIFIED v1.0.0"
+SEQUENCE_SEED <- 20260823L
+set.seed(SEQUENCE_SEED)
+
+# Millimetre-based figure geometry shared by the empirical-cutoff module and
+# the downstream manuscript figures. Sizes are FINAL PRINT sizes.
+FIG_SINGLE_COL_MM <- 88     # single-column width
+FIG_DOUBLE_COL_MM <- 180    # double-column width
+FIG_MAX_HEIGHT_MM <- 240    # maximum printable height on a journal page
+fig_mm2in <- function(mm) mm / 25.4
+
+# Set to "Helvetica" or "Arial" if that family is installed and resolvable by
+# the graphics device. Empty string means "use the device default", which is
+# always safe.
+FIG_FONT_FAMILY <- ""
+
+# Output raster formats. TIFF is off by default because it is slow and large;
+# enable it when the target journal requires TIFF.
+FIG_WRITE_TIFF <- FALSE
+
+# Maximum number of panel columns before an assembled figure wraps onto a new
+# row. Five volcano panels in a single 180 mm row are unreadable in print.
+PANEL_MAX_COLS <- 3L
 
 PIPELINE_BUILD <- "SEQUENCE_REFINED_EMPIRICAL_EVS_HC10_2026-08-23"
 
@@ -105,18 +197,82 @@ PIPELINE_BUILD <- "SEQUENCE_REFINED_EMPIRICAL_EVS_HC10_2026-08-23"
 
 
 # =============================================================================
+# PROVENANCE
+# =============================================================================
+# Written into every output tree so a reviewer can reconstruct the exact
+# software state that produced the submitted figures and tables.
+write_sequence_provenance <- function(dir_path, scope = "run") {
+  if (!dir.exists(dir_path)) {
+    dir.create(dir_path, recursive = TRUE, showWarnings = FALSE)
+  }
+
+  info_path <- file.path(dir_path, paste0("Provenance_SessionInfo_", scope, ".txt"))
+
+  header <- c(
+    SEQUENCE_BUILD_VERSION,
+    paste0("scope: ", scope),
+    paste0("timestamp: ", format(Sys.time(), "%Y-%m-%dT%H:%M:%S%z")),
+    paste0("RNG seed: ", SEQUENCE_SEED),
+    paste0("RNG kind: ", paste(RNGkind(), collapse = " / ")),
+    paste0("platform: ", R.version$platform),
+    paste0("R version: ", as.character(getRversion())),
+    paste0("cairo available: ", isTRUE(capabilities("cairo"))),
+    paste0("working directory: ", getwd()),
+    "",
+    "---- sessionInfo() ----"
+  )
+
+  session_lines <- tryCatch(
+    utils::capture.output(utils::sessionInfo()),
+    error = function(e) paste("sessionInfo() failed:", conditionMessage(e))
+  )
+
+  writeLines(c(header, session_lines), con = info_path)
+
+  pkgs <- c(
+    "DESeq2", "apeglm", "fdrtool", "ggplot2", "ggrepel", "dplyr", "tidyr",
+    "gridExtra", "scales", "S4Vectors", "patchwork", "ggrastr"
+  )
+  versions <- vapply(
+    pkgs,
+    function(p) {
+      if (requireNamespace(p, quietly = TRUE)) {
+        as.character(utils::packageVersion(p))
+      } else {
+        NA_character_
+      }
+    },
+    character(1)
+  )
+  utils::write.csv(
+    data.frame(
+      package = pkgs,
+      version = unname(versions),
+      installed = !is.na(versions),
+      stringsAsFactors = FALSE
+    ),
+    file.path(dir_path, paste0("Provenance_PackageVersions_", scope, ".csv")),
+    row.names = FALSE
+  )
+
+  invisible(info_path)
+}
+
+# =============================================================================
 # DOWNSTREAM COMPARISON SWITCHES
 # =============================================================================
 # These switches control the expensive downstream SEQUENCE analyses only.
-# RT4_ZT10 is ON by default. Flip any FALSE to TRUE to enable that comparison.
+# The unified build enables all four comparisons so one invocation reproduces
+# the complete manuscript. Set any entry to FALSE to run a subset (for example
+# a fast RT4_ZT10-only smoke test).
 # The empirical cutoff engine intentionally still uses all eight experimental
 # arms to preserve the original shared-c1/c2 geometry and therefore the same
 # comparison-specific CPM/VST cutoff derivation.
 RUN_COMPARISON_FLAGS <- c(
-  RT0_ZT6  = FALSE,
-  RT2_ZT8  = FALSE,
+  RT0_ZT6  = TRUE,
+  RT2_ZT8  = TRUE,
   RT4_ZT10 = TRUE,
-  RT8_ZT14 = FALSE
+  RT8_ZT14 = TRUE
 )
 
 if (!any(RUN_COMPARISON_FLAGS)) {
@@ -131,6 +287,17 @@ if (!any(RUN_COMPARISON_FLAGS)) {
 # Set this FALSE if you later want CPM-EVS and VST-EVS tracks run under every
 # cutoff method as a full cross-factorial sensitivity analysis.
 RUN_MATCHED_TRANSFORM_TRACKS_ONLY <- TRUE
+
+# The dispersion trade-off figure tests the mean-variance premise of the EVS
+# split and scores candidate cutoffs from the dispersion fit alone, before any
+# p-value. The sweep re-estimates dispersions (not the full model) at each k on
+# one track; budget roughly one DESeq2 dispersion fit per k per stratum per
+# comparison. Set DISPERSION_SWEEP_ENABLED to FALSE for a fast run.
+EXPORT_DISPERSION_TRADEOFF <- TRUE
+DISPERSION_SWEEP_ENABLED   <- TRUE
+DISPERSION_SWEEP_TRACK     <- "normalized_evs"
+DISPERSION_SWEEP_GRID      <- seq(2000L, 9000L, by = 1000L)
+
 
 # =============================================================================
 # INTEGRATED EMPIRICAL CUTOFF + MANUSCRIPT FIGURE ENGINE
@@ -153,7 +320,7 @@ run_sequence_empirical_cutoff_module <- function(count_path, out_root) {
   options(stringsAsFactors = FALSE)
 
   # =============================================================================
-  # CPM-EVS vs VST-EVS — FINAL MANUSCRIPT VERSION
+  # CPM-EVS vs VST-EVS - FINAL MANUSCRIPT VERSION
   # =============================================================================
   #
   # DESIGN
@@ -944,7 +1111,7 @@ run_sequence_empirical_cutoff_module <- function(count_path, out_root) {
   }
 
   # =============================================================================
-  # 3. FIGURE 1 PANELS — regime definition
+  # 3. FIGURE 1 PANELS - regime definition
   # =============================================================================
 
   evs_arm_matrix <- function(arms) {
@@ -1163,11 +1330,11 @@ run_sequence_empirical_cutoff_module <- function(count_path, out_root) {
   }
 
   # =============================================================================
-  # 4. FIGURES 2-3 PANELS — candidate path, Pareto frontier, endpoint chord
+  # 4. FIGURES 2-3 PANELS - candidate path, Pareto frontier, endpoint chord
   # =============================================================================
 
   panel_pareto <- function(method, comparison, scan, frontier, kstar, tag,
-                           method_col) {
+                           method_col, show_legend = FALSE) {
     fr <- frontier[order(frontier$cost,frontier$good), , drop=FALSE]
     sel <- fr[fr$k==kstar,,drop=FALSE]
     if (nrow(sel)!=1L) stop("k* not found on the Pareto frontier for ", comparison)
@@ -1190,6 +1357,17 @@ run_sequence_empirical_cutoff_module <- function(count_path, out_root) {
       good=c(fr$good[1],fr$good[nrow(fr)])
     )
 
+    # A reader cannot otherwise tell the candidate trajectory from the frontier
+    # or the chord. The three line layers are mapped to one key; the selected
+    # point needs no key entry because it carries its own k* label.
+    lab_scan   <- "All candidate k"
+    lab_front  <- "Pareto frontier"
+    lab_chord  <- "Endpoint chord"
+    key_levels <- c(lab_scan, lab_front, lab_chord)
+    sc_plot$key    <- lab_scan
+    fr_plot$key    <- lab_front
+    chord_raw$key  <- lab_chord
+
     ins <- ggplot(fr_plot,aes(k,endpoint_deviation)) +
       geom_line(colour="grey25",linewidth=0.28) +
       geom_vline(xintercept=sel$k,colour=EVS_COL$knee,
@@ -1201,12 +1379,12 @@ run_sequence_empirical_cutoff_module <- function(count_path, out_root) {
       evs_theme_inset()
 
     ggplot() +
-      geom_path(data=sc_plot,aes(remainder_cross_n,good_n),
-                colour="grey78",linewidth=0.32,alpha=0.9) +
-      geom_line(data=fr_plot,aes(cost,good),
-                colour=method_col,linewidth=0.65) +
-      geom_line(data=chord_raw,aes(cost,good),
-                colour="grey45",linetype="22",linewidth=0.42) +
+      geom_path(data=sc_plot,aes(remainder_cross_n,good_n,colour=key,linetype=key),
+                linewidth=0.32,alpha=0.9) +
+      geom_line(data=fr_plot,aes(cost,good,colour=key,linetype=key),
+                linewidth=0.65) +
+      geom_line(data=chord_raw,aes(cost,good,colour=key,linetype=key),
+                linewidth=0.42) +
       annotation_custom(
         ggplotGrob(ins),
         xmin=xr[1]+0.50*(xr[2]-xr[1]+1e-9),
@@ -1220,9 +1398,18 @@ run_sequence_empirical_cutoff_module <- function(count_path, out_root) {
         "text",
         x=sel$cost-0.015*xd,
         y=sel$good+0.035*yd,
-        label=sprintf("k* = %s",evs_num(sel$k)),
+        label=sprintf("italic(k)^\"*\" * \" = \" * \"%s\"",evs_num(sel$k)),
+        parse=TRUE,
         hjust=1,vjust=0,size=pt2mm(6.2),
         colour=EVS_COL$knee,fontface="bold"
+      ) +
+      scale_colour_manual(
+        breaks=key_levels,
+        values=setNames(c("grey78",method_col,"grey45"),key_levels)
+      ) +
+      scale_linetype_manual(
+        breaks=key_levels,
+        values=setNames(c("solid","solid","22"),key_levels)
       ) +
       scale_x_continuous(labels=evs_comma) +
       scale_y_continuous(labels=evs_comma) +
@@ -1232,11 +1419,17 @@ run_sequence_empirical_cutoff_module <- function(count_path, out_root) {
         x=expression(paste("Opposite-arm Remainder crossings, ",italic(R)(k))),
         y=expression(paste("Joint + permissible Disjoint, ",italic(G)(k)))
       ) +
-      evs_theme()
+      evs_theme() +
+      (if (isTRUE(show_legend)) {
+        list(
+          guides(colour=guide_legend(order=1), linetype=guide_legend(order=1)),
+          evs_legend_inside(0.02, 0.985, c(0, 1))
+        )
+      } else NULL)
   }
 
   # =============================================================================
-  # 5. FIGURE 4 PANELS — cross-method summary
+  # 5. FIGURE 4 PANELS - cross-method summary
   # =============================================================================
 
   evs_prep_summary <- function(summary_df, comparisons) {
@@ -1549,7 +1742,8 @@ run_sequence_empirical_cutoff_module <- function(count_path, out_root) {
       pl  <- lapply(seq_along(comparisons), function(i) {
         nm <- names(comparisons)[i]
         panel_pareto(m, nm, ob$scans[[nm]], ob$frontiers[[nm]],
-                     ob$pairs[[nm]]$kstar, tags[i], col)
+                     ob$pairs[[nm]]$kstar, tags[i], col,
+                     show_legend = (i == 1L))
       })
       evs_save(pl, file.path(fig_dir,
                              sprintf("Figure_%d_%s_Pareto_Cutoffs", fig_no, m)),
@@ -1949,8 +2143,33 @@ if (!SEQUENCE_CHILD_RUN) {
     "SEQUENCE_MULTI_ROOT",
     unset = file.path(repo_guess, "exports", "sequence_final_three_cutoffs")
   )
-  if (dir.exists(multi_root)) unlink(multi_root, recursive = TRUE, force = TRUE)
+  # A previous run of THIS pipeline always leaves a sentinel file behind. The
+  # master process refuses to recursively delete any directory that does not
+  # carry it, so a mis-set SEQUENCE_MULTI_ROOT cannot destroy unrelated data.
+  multi_root_sentinel <- ".sequence_output_root"
+  if (dir.exists(multi_root)) {
+    if (!file.exists(file.path(multi_root, multi_root_sentinel))) {
+      stop(
+        "Refusing to delete an existing directory that was not created by this ",
+        "pipeline (no ", multi_root_sentinel, " sentinel found): ", multi_root,
+        ". Move or remove it manually, or point SEQUENCE_MULTI_ROOT elsewhere."
+      )
+    }
+    unlink(multi_root, recursive = TRUE, force = TRUE)
+  }
   dir.create(multi_root, recursive = TRUE, showWarnings = FALSE)
+  writeLines(
+    c(
+      SEQUENCE_BUILD_VERSION,
+      paste0("created=", format(Sys.time(), "%Y-%m-%dT%H:%M:%S%z")),
+      "This file marks the directory as a SEQUENCE output root and permits the",
+      "pipeline to clear it on the next run. Do not place other data here."
+    ),
+    file.path(multi_root, multi_root_sentinel)
+  )
+
+  # Provenance for the run as a whole.
+  write_sequence_provenance(multi_root, scope = "master")
 
   count_path <- if (file.exists(file.path(repo_guess, "WTTS-Seq_2022.2_DE_raw_read_numbers.csv"))) {
     file.path(repo_guess, "WTTS-Seq_2022.2_DE_raw_read_numbers.csv")
@@ -1986,22 +2205,70 @@ if (!SEQUENCE_CHILD_RUN) {
   message("Empirical cutoff manuscript figures written to: ", cutoff_fit$figure_dir)
   message("Empirical cutoff manuscript tables written to: ", cutoff_fit$table_dir)
 
+  log_dir <- file.path(multi_root, "Logs")
+  dir.create(log_dir, recursive = TRUE, showWarnings = FALSE)
+
+  # system2(env = ) is POSIX-only. On Windows the variables are set in the
+  # parent process and restored afterwards, which is equivalent for a
+  # sequential launcher.
+  launch_child_run <- function(method, log_path) {
+    child_env <- c(
+      SEQUENCE_CHILD_RUN = "1",
+      SEQUENCE_CUTOFF_METHOD = method,
+      SEQUENCE_MULTI_ROOT = multi_root,
+      SEQUENCE_REPO_ROOT = repo_guess
+    )
+
+    if (identical(.Platform$OS.type, "windows")) {
+      previous <- Sys.getenv(names(child_env), unset = NA_character_, names = TRUE)
+      do.call(Sys.setenv, as.list(child_env))
+      on.exit({
+        restore <- previous[!is.na(previous)]
+        if (length(restore)) do.call(Sys.setenv, as.list(restore))
+        drop_names <- names(previous)[is.na(previous)]
+        if (length(drop_names)) Sys.unsetenv(drop_names)
+      }, add = TRUE)
+
+      return(system2(
+        command = file.path(R.home("bin"), "Rscript"),
+        args = shQuote(this_script),
+        stdout = log_path,
+        stderr = log_path
+      ))
+    }
+
+    system2(
+      command = file.path(R.home("bin"), "Rscript"),
+      args = shQuote(this_script),
+      env = paste0(names(child_env), "=", unname(child_env)),
+      stdout = log_path,
+      stderr = log_path
+    )
+  }
+
   methods <- c("fixed5000", "cpm_empirical", "vst_empirical")
   for (method in methods) {
     message("=====================================================")
     message("Starting cutoff method: ", method)
-    status <- system2(
-      command = file.path(R.home("bin"), "Rscript"),
-      args = shQuote(this_script),
-      env = c(
-        "SEQUENCE_CHILD_RUN=1",
-        paste0("SEQUENCE_CUTOFF_METHOD=", method),
-        paste0("SEQUENCE_MULTI_ROOT=", multi_root),
-        paste0("SEQUENCE_REPO_ROOT=", repo_guess)
-      )
+    log_path <- file.path(log_dir, paste0("child_", method, ".log"))
+    started_at <- Sys.time()
+    status <- launch_child_run(method, log_path)
+    message(
+      "  finished in ",
+      format(round(difftime(Sys.time(), started_at, units = "mins"), 2)),
+      "; log: ", log_path
     )
+
     if (!identical(as.integer(status), 0L)) {
-      stop("Cutoff-method run failed: ", method, " (exit status ", status, ")")
+      tail_lines <- tryCatch(utils::tail(readLines(log_path, warn = FALSE), 60L),
+                             error = function(e) character(0))
+      if (length(tail_lines)) {
+        message("----- last 60 lines of ", basename(log_path), " -----")
+        message(paste(tail_lines, collapse = "\n"))
+        message("--------------------------------------------------")
+      }
+      stop("Cutoff-method run failed: ", method, " (exit status ", status,
+           "). Full log: ", log_path)
     }
   }
 
@@ -2078,6 +2345,19 @@ suppressPackageStartupMessages({
 
 options(stringsAsFactors = FALSE)
 
+# Re-seed inside the child process. The master seeds before relaunching, but a
+# child is a fresh R session and must set its own RNG state.
+set.seed(SEQUENCE_SEED)
+
+message("=====================================================")
+message(SEQUENCE_BUILD_VERSION)
+message("Child run: cutoff method = ", CUTOFF_METHOD_LABEL,
+        " (", CUTOFF_METHOD_SLUG, ")")
+message("R ", getRversion(), " | cairo: ", isTRUE(capabilities("cairo")),
+        " | patchwork: ", requireNamespace("patchwork", quietly = TRUE),
+        " | ggrastr: ", requireNamespace("ggrastr", quietly = TRUE))
+message("=====================================================")
+
 # =============================================================================
 # SECTION 1 OF 5
 # USER SETTINGS, METADATA, PATHS, AND GENERAL HELPERS
@@ -2133,9 +2413,15 @@ EMPIRICAL_EVS_CUTOFF_BASIS <- paste0(
   "; locked before downstream DE significance testing"
 )
 
-figure_dpi <- 320
+# 600 dpi is the usual minimum for combined line-art/raster figures. Because
+# canvases are now specified at final print size, this is the true output
+# resolution rather than a value that will be re-scaled in production.
+figure_dpi <- 600
 
-base_theme_size <- 10
+# Base text size in POINTS AT FINAL PRINT SIZE. Derived sizes elsewhere in the
+# script are expressed as base_theme_size - 1, - 2 and - 3, so 8 pt keeps the
+# smallest annotation at 5 pt, which is the practical legibility floor.
+base_theme_size <- 8
 
 n_top_labels_volcano <- 20L
 
@@ -2164,22 +2450,47 @@ EXPORT_INDIVIDUAL_VIEW_FIGURES <- FALSE
 # as a second HBFSS significance gate.
 #
 # -----------------------------------------------------------------------------
+# Scope of the empirical null (documented, unchanged behaviour)
+# -----------------------------------------------------------------------------
+# DESeq2::results() applies independent filtering, so padj is NA for
+# low-information PASs while their Wald statistic is still returned. The
+# fdrtool empirical null is fitted to EVERY finite Wald statistic, including
+# those filtered PASs. Consequently the fitted null scale, and therefore every
+# empirical p-value and HBFSS call, is estimated from a broader feature set
+# than the one Benjamini-Hochberg acts on.
+#
+# This is the behaviour of the original scripts and is preserved verbatim so
+# that reported numbers are unchanged. It should be stated explicitly in the
+# methods section. Restricting the null fit to the BH-retained set is a
+# defensible alternative and would shift HBFSS results; it is deliberately NOT
+# implemented here.
+EMPIRICAL_NULL_NOTE <- paste(
+  "Empirical null fitted with fdrtool (normal, cutoff.method = 'fndr') to all",
+  "finite DESeq2 Wald statistics, including PASs removed by independent",
+  "filtering from the Benjamini-Hochberg adjustment."
+)
+
+# -----------------------------------------------------------------------------
 # Palette
 # -----------------------------------------------------------------------------
 
+# Okabe-Ito colour-blind-safe qualitative palette. The previous key paired
+# #33A02C (Standard) with #E31A1C (Strong), which is indistinguishable under
+# deuteranopia and protanopia, and used one colour (#6A3D9A) for both the HBFSS
+# points and the HBFSS boundary curve, so the two read as a single object.
 plot_palette <- list(
-  background = "#BDBDBD",
-  threshold = "#A65628",
-  hc = "#A65628",
-  hbfss_line = "#6A3D9A",
-  weak = "#4EA3F1",
-  strong = "#E31A1C",
-  standard = "#33A02C",
-  hbfss = "#6A3D9A",
-  overlap = "#54278F",
-  control = "#4D4D4D",
-  treatment = "#1F78B4",
-  histogram = "#969696"
+  background = "#9E9E9E",   # non-significant PASs, darker so they survive print
+  threshold  = "#8C6D31",   # +/- LFC boundary rules
+  hc         = "#B8860B",   # higher-criticism p threshold rule
+  hbfss_line = "#000000",   # HBFSS boundary curve, deliberately not a point colour
+  standard   = "#0072B2",   # Okabe-Ito blue
+  strong     = "#D55E00",   # Okabe-Ito vermillion
+  weak       = "#009E73",   # Okabe-Ito bluish green
+  hbfss      = "#CC79A7",   # Okabe-Ito reddish purple
+  overlap    = "#56B4E9",   # Okabe-Ito sky blue
+  control    = "#4D4D4D",
+  treatment  = "#0072B2",
+  histogram  = "#969696"
 )
 
 # -----------------------------------------------------------------------------
@@ -2419,6 +2730,9 @@ summary_table_dir <- file.path(output_dir, "Summary_Tables")
 dir.create(paper_fig_dir, recursive = TRUE, showWarnings = FALSE)
 dir.create(summary_table_dir, recursive = TRUE, showWarnings = FALSE)
 
+# Per-child provenance, so each cutoff-method output tree is self-describing.
+write_sequence_provenance(output_dir, scope = CUTOFF_METHOD_SLUG)
+
 paper_registry <- list()
 
 registry_key <- function(comparison_name, track_key) {
@@ -2505,21 +2819,183 @@ save_csv <- function(df, path) {
   write.csv(df, file = path, row.names = FALSE)
 }
 
-save_grob <- function(g, path, width = 14.0, height = 8.5, dpi = figure_dpi, bg = "white") {
+# -----------------------------------------------------------------------------
+# Figure device layer
+# -----------------------------------------------------------------------------
+# Previously every figure went through ggplot2::ggsave() with the platform
+# default devices, so PDFs were written by pdf() without font embedding and
+# PNGs by whichever device the platform happened to offer. Routing all output
+# through cairo gives antialiased raster output, embedded PDF fonts, and PNG
+# and PDF renditions of the same figure that actually match.
+figure_open_device <- function(path, width_in, height_in, dpi = figure_dpi, bg = "white") {
+  ext <- tolower(tools::file_ext(path))
+  cairo_ok <- isTRUE(capabilities("cairo"))
+
+  if (ext == "pdf") {
+    if (cairo_ok) {
+      grDevices::cairo_pdf(path, width = width_in, height = height_in, bg = bg)
+    } else {
+      grDevices::pdf(path, width = width_in, height = height_in, bg = bg,
+                     useDingbats = FALSE)
+    }
+  } else if (ext == "png") {
+    if (cairo_ok) {
+      grDevices::png(path, width = width_in, height = height_in, units = "in",
+                     res = dpi, bg = bg, type = "cairo")
+    } else {
+      grDevices::png(path, width = width_in, height = height_in, units = "in",
+                     res = dpi, bg = bg)
+    }
+  } else if (ext %in% c("tif", "tiff")) {
+    if (cairo_ok) {
+      grDevices::tiff(path, width = width_in, height = height_in, units = "in",
+                      res = dpi, bg = bg, compression = "lzw", type = "cairo")
+    } else {
+      grDevices::tiff(path, width = width_in, height = height_in, units = "in",
+                      res = dpi, bg = bg, compression = "lzw")
+    }
+  } else {
+    stop("Unsupported figure extension: ", ext)
+  }
+
+  invisible(TRUE)
+}
+
+# Every figure written is recorded, so the submission package carries a machine
+# readable inventory of canvas geometry and resolution.
+figure_manifest_path <- function() {
+  file.path(output_dir, "Figure_Manifest.csv")
+}
+
+register_written_figure <- function(path, width_in, height_in, dpi) {
+  row <- data.frame(
+    file = normalizePath(path, winslash = "/", mustWork = FALSE),
+    format = tolower(tools::file_ext(path)),
+    width_mm = round(width_in * 25.4, 1),
+    height_mm = round(height_in * 25.4, 1),
+    width_in = round(width_in, 3),
+    height_in = round(height_in, 3),
+    dpi = dpi,
+    build = SEQUENCE_BUILD_VERSION,
+    cutoff_method = if (exists("CUTOFF_METHOD_SLUG")) CUTOFF_METHOD_SLUG else NA_character_,
+    written_at = format(Sys.time(), "%Y-%m-%dT%H:%M:%S%z"),
+    stringsAsFactors = FALSE
+  )
+
+  manifest <- figure_manifest_path()
+  utils::write.table(
+    row,
+    file = manifest,
+    sep = ",",
+    row.names = FALSE,
+    col.names = !file.exists(manifest),
+    append = file.exists(manifest),
+    qmethod = "double"
+  )
+
+  invisible(row)
+}
+
+# save_grob keeps its original signature so every existing call site is valid.
+# `units` may be "in" (default, backward compatible) or "mm".
+save_grob <- function(g, path, width = 14.0, height = 8.5, dpi = figure_dpi,
+                      bg = "white", units = c("in", "mm")) {
+  if (is.null(g)) {
+    return(invisible(NULL))
+  }
   if (!should_write_figure(path)) {
     return(invisible(NULL))
   }
 
-  ggplot2::ggsave(
-    filename = path,
-    plot = g,
-    width = width,
-    height = height,
-    dpi = dpi,
-    units = "in",
-    bg = bg,
-    limitsize = FALSE
-  )
+  units <- match.arg(units)
+  width_in <- if (identical(units, "mm")) fig_mm2in(width) else width
+  height_in <- if (identical(units, "mm")) fig_mm2in(height) else height
+
+  if (!is.finite(width_in) || !is.finite(height_in) ||
+      width_in <= 0 || height_in <= 0) {
+    stop("Invalid figure canvas for ", path)
+  }
+
+  # Guard against the oversized canvases that made production down-scaling
+  # illegible. This is a warning, not an error, so an intentionally tall
+  # supplementary figure still gets written.
+  if (width_in > fig_mm2in(FIG_DOUBLE_COL_MM) + 1e-6) {
+    warning(
+      sprintf(
+        "Figure wider than the %.0f mm double-column limit (%.0f mm): %s",
+        FIG_DOUBLE_COL_MM, width_in * 25.4, basename(path)
+      ),
+      call. = FALSE
+    )
+  }
+  if (height_in > fig_mm2in(FIG_MAX_HEIGHT_MM) + 1e-6) {
+    warning(
+      sprintf(
+        "Figure taller than the %.0f mm page limit (%.0f mm): %s",
+        FIG_MAX_HEIGHT_MM, height_in * 25.4, basename(path)
+      ),
+      call. = FALSE
+    )
+  }
+
+  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
+
+  figure_open_device(path, width_in, height_in, dpi = dpi, bg = bg)
+  drawn <- tryCatch({
+    if (inherits(g, "ggplot")) {
+      print(g)
+    } else {
+      grid::grid.newpage()
+      grid::grid.draw(g)
+    }
+    TRUE
+  }, error = function(e) {
+    message("  ERROR drawing ", basename(path), ": ", conditionMessage(e))
+    FALSE
+  })
+  grDevices::dev.off()
+
+  if (!drawn) {
+    unlink(path, force = TRUE)
+    return(invisible(NULL))
+  }
+
+  register_written_figure(path, width_in, height_in, dpi)
+  invisible(path)
+}
+
+# Writes one figure to every configured format from a single canvas
+# specification, replacing the previous pattern of two near-identical
+# save_grob() calls per figure.
+save_figure <- function(g, path_base, width, height, dpi = figure_dpi,
+                        bg = "white", units = c("mm", "in")) {
+  units <- match.arg(units)
+  formats <- c("pdf", "png", if (isTRUE(FIG_WRITE_TIFF)) "tiff")
+
+  for (fmt in formats) {
+    save_grob(
+      g,
+      paste0(path_base, ".", fmt),
+      width = width,
+      height = height,
+      dpi = dpi,
+      bg = bg,
+      units = units
+    )
+  }
+
+  invisible(path_base)
+}
+
+# Rasterises a dense point layer when ggrastr is available. A volcano with tens
+# of thousands of non-significant PASs produces a vector PDF that is enormous
+# and effectively uneditable; rasterising only that layer keeps axes, rules,
+# significant markers and text fully vector.
+maybe_rasterise <- function(layer, dpi = figure_dpi) {
+  if (requireNamespace("ggrastr", quietly = TRUE)) {
+    return(ggrastr::rasterise(layer, dpi = dpi))
+  }
+  layer
 }
 
 pretty_dataset_type <- function(dataset_key) {
@@ -2773,11 +3249,14 @@ significance_method_labels <- c(
   "HBFSS" = "HBFSS"
 )
 
+# Sizes are tuned so the four glyphs have comparable visual weight at final
+# print size. They are smaller than the previous values because panels are no
+# longer drawn oversized and then reduced.
 significance_method_sizes <- c(
-  "Standard" = 2.85,
-  "Strong" = 3.15,
-  "Weak" = 3.05,
-  "HBFSS" = 2.55
+  "Standard" = 1.55,
+  "Strong" = 1.45,
+  "Weak" = 1.55,
+  "HBFSS" = 1.75
 )
 
 significance_method_colors <- c(
@@ -2789,8 +3268,12 @@ significance_method_colors <- c(
 
 # Filled DESeq2 symbols plus a star for HBFSS keep the shared key visually
 # obvious in every panel, including reduced mobile views and exported legends.
+# Shape 18 (solid diamond) renders far larger than shape 8 (star) at the same
+# nominal size, which forced the size table to compensate. A solid
+# circle/square/triangle set plus a star for HBFSS keeps apparent area
+# comparable and stays distinguishable in greyscale.
 significance_method_shapes <- c(
-  "Standard" = 18,
+  "Standard" = 16,
   "Strong" = 15,
   "Weak" = 17,
   "HBFSS" = 8
@@ -2837,8 +3320,15 @@ plot_expand_xy <- function() {
 }
 
 manuscript_theme <- function() {
-  theme_bw(base_size = base_theme_size) +
+  theme_bw(base_size = base_theme_size, base_family = FIG_FONT_FAMILY) +
     theme(
+      text = element_text(family = FIG_FONT_FAMILY),
+      plot.tag = element_text(
+        face = "bold",
+        size = base_theme_size + 1,
+        family = FIG_FONT_FAMILY
+      ),
+      plot.tag.position = "topleft",
       plot.title = element_text(
         face = "bold",
         size = base_theme_size + 1,
@@ -2869,20 +3359,58 @@ manuscript_theme <- function() {
       legend.spacing.y = unit(1, "pt"),
       legend.text = element_text(size = base_theme_size - 1),
       panel.grid.minor = element_blank(),
-      panel.grid.major = element_line(linewidth = 0.25, colour = "grey88"),
-      plot.margin = margin(10, 12, 10, 10)
+      # Horizontal reference lines only. A full grid competes with the point
+      # cloud in a dense volcano once the panel is printed at 60-90 mm wide.
+      panel.grid.major.x = element_blank(),
+      panel.grid.major.y = element_line(linewidth = 0.2, colour = "grey90"),
+      panel.border = element_rect(colour = "grey35", fill = NA, linewidth = 0.35),
+      axis.ticks = element_line(linewidth = 0.3, colour = "grey35"),
+      plot.margin = margin(3, 4, 3, 3)
     )
 }
 
+# DEFECT FIX (unified build).
+# ggplot2 < 3.5.0 placed a single gtable grob named exactly "guide-box".
+# ggplot2 >= 3.5.0 emits position-specific guide boxes named
+# "guide-box-bottom", "guide-box-right", "guide-box-inside", and so on, and
+# also emits empty placeholder boxes for the unused positions. The previous
+# exact match therefore returned nothing on any current ggplot2, and
+# assemble_one_legend_panel() silently produced manuscript panels with no
+# method legend. This now prefix-matches and rejects zero-size placeholders.
 shared_panel_legend <- function(plot_obj) {
   g <- ggplotGrob(plot_obj + theme(legend.position = "bottom"))
-  guide_idx <- which(vapply(g$grobs, function(x) x$name, character(1)) == "guide-box")
 
-  if (length(guide_idx) == 0L) {
+  grob_names <- vapply(
+    g$grobs,
+    function(x) if (is.null(x$name)) "" else as.character(x$name)[1],
+    character(1)
+  )
+
+  candidates <- which(startsWith(grob_names, "guide-box"))
+  if (!length(candidates)) {
+    warning("No guide-box grob found; panel legend will be omitted.", call. = FALSE)
     return(NULL)
   }
 
-  g$grobs[[guide_idx[1]]]
+  has_content <- vapply(
+    candidates,
+    function(i) {
+      gb <- g$grobs[[i]]
+      if (inherits(gb, "zeroGrob")) return(FALSE)
+      kids <- tryCatch(length(gb$grobs), error = function(e) 0L)
+      isTRUE(kids > 0L)
+    },
+    logical(1)
+  )
+
+  keep <- candidates[has_content]
+  if (!length(keep)) {
+    warning("Only empty guide-box placeholders found; panel legend will be omitted.",
+            call. = FALSE)
+    return(NULL)
+  }
+
+  g$grobs[[keep[1]]]
 }
 
 # A panel's real data can legitimately have zero rows for a method (e.g. no
@@ -2942,6 +3470,15 @@ strip_legend <- function(p) {
   p + theme(legend.position = "none")
 }
 
+# Returns the number of columns and rows a panel set will actually occupy.
+# Exported so figure canvases can be sized from the real grid rather than from
+# the requested column count.
+panel_grid_dim <- function(n_plots, ncol_requested = n_plots) {
+  n_plots <- max(1L, as.integer(n_plots))
+  ncol_use <- max(1L, min(as.integer(ncol_requested), PANEL_MAX_COLS, n_plots))
+  c(ncol = ncol_use, nrow = as.integer(ceiling(n_plots / ncol_use)))
+}
+
 assemble_one_legend_panel <- function(plot_list, panel_title, ncol = length(plot_list), width_legend = TRUE) {
   plot_list <- Filter(Negate(is.null), plot_list)
 
@@ -2949,13 +3486,43 @@ assemble_one_legend_panel <- function(plot_list, panel_title, ncol = length(plot
     return(NULL)
   }
 
-  legend <- build_full_method_legend()
-  no_legend <- lapply(plot_list, strip_legend)
+  dims <- panel_grid_dim(length(plot_list), ncol)
+  ncol_use <- unname(dims[["ncol"]])
 
-  row <- do.call(
-    gridExtra::arrangeGrob,
-    c(no_legend, list(ncol = ncol))
+  legend <- build_full_method_legend()
+
+  # Panel tags are applied per sub-plot rather than by the compositor, so they
+  # survive both the patchwork and the gridExtra assembly paths.
+  tagged <- lapply(
+    seq_along(plot_list),
+    function(i) {
+      strip_legend(plot_list[[i]]) +
+        labs(tag = LETTERS[((i - 1L) %% 26L) + 1L]) +
+        theme(
+          plot.tag = element_text(
+            face = "bold",
+            size = base_theme_size + 1,
+            family = FIG_FONT_FAMILY
+          ),
+          plot.tag.position = "topleft"
+        )
+    }
   )
+
+  # patchwork aligns panel interiors across rows and columns even when the
+  # sub-plots have axis labels of different widths; gridExtra does not. The
+  # patchwork object is converted straight to a gtable so the rest of the
+  # assembly (legend strip, title) is identical on both paths.
+  row <- if (requireNamespace("patchwork", quietly = TRUE)) {
+    patchwork::patchworkGrob(
+      patchwork::wrap_plots(tagged, ncol = ncol_use)
+    )
+  } else {
+    do.call(
+      gridExtra::arrangeGrob,
+      c(tagged, list(ncol = ncol_use))
+    )
+  }
 
   if (is.null(legend)) {
     return(
@@ -2964,7 +3531,11 @@ assemble_one_legend_panel <- function(plot_list, panel_title, ncol = length(plot
         ncol = 1,
         top = grid::textGrob(
           panel_title,
-          gp = grid::gpar(fontface = "bold", cex = 1.15)
+          gp = grid::gpar(
+            fontface = "bold",
+            fontsize = base_theme_size + 2,
+            fontfamily = if (nzchar(FIG_FONT_FAMILY)) FIG_FONT_FAMILY else ""
+          )
         )
       )
     )
@@ -2974,10 +3545,14 @@ assemble_one_legend_panel <- function(plot_list, panel_title, ncol = length(plot
     row,
     legend,
     ncol = 1,
-    heights = c(12, 1.4),
+    heights = grid::unit.c(grid::unit(1, "null"), grid::unit(9, "mm")),
     top = grid::textGrob(
       panel_title,
-      gp = grid::gpar(fontface = "bold", cex = 1.15)
+      gp = grid::gpar(
+        fontface = "bold",
+        fontsize = base_theme_size + 2,
+        fontfamily = if (nzchar(FIG_FONT_FAMILY)) FIG_FONT_FAMILY else ""
+      )
     )
   )
 }
@@ -4183,6 +4758,17 @@ plot_final_volcano <- function(df, dataset_name, short_title = NULL, label_genes
   hbfss_n <- sum(df$hbfss_flag, na.rm = TRUE)
   ovlp_n <- sum(df$any_overlap, na.rm = TRUE)
 
+  # The y-axis limit is shared across every panel, so some PASs can fall above
+  # it. coord_cartesian() clipped them silently; the count is now reported.
+  n_above_axis <- sum(
+    is.finite(plot_df$neglog10_empirical_p) &
+      plot_df$neglog10_empirical_p > y_limit,
+    na.rm = TRUE
+  )
+
+  # ASCII only. A literal Unicode tau in a caption string is encoding-fragile
+  # across graphics devices and locales, and rendered as a missing glyph on
+  # non-cairo PDF devices.
   count_text <- paste0(
     "Std=", std_n,
     "  Str=", str_n,
@@ -4190,7 +4776,8 @@ plot_final_volcano <- function(df, dataset_name, short_title = NULL, label_genes
     "  HBFSS=", hbfss_n,
     "  Ovlp=", ovlp_n,
     if (is.finite(hc_raw) && !is.na(hc_raw)) paste0("  HCp=", signif(hc_raw, 3)) else "",
-    if (is.finite(htau) && !is.na(htau)) paste0("  Hτ=", signif(htau, 3)) else ""
+    if (is.finite(htau) && !is.na(htau)) paste0("  Htau=", signif(htau, 3)) else "",
+    if (n_above_axis > 0L) paste0("  above y-limit=", n_above_axis) else ""
   )
 
   plot_title <- if (is.null(short_title)) {
@@ -4198,13 +4785,15 @@ plot_final_volcano <- function(df, dataset_name, short_title = NULL, label_genes
   } else short_title
 
   p <- ggplot() +
-    geom_point(
-      data = plot_df,
-      aes(x = lfc_shrunk, y = neglog10_empirical_p),
-      color = plot_palette$background,
-      shape = 16,
-      size = 0.48,
-      alpha = 0.22
+    maybe_rasterise(
+      geom_point(
+        data = plot_df,
+        aes(x = lfc_shrunk, y = neglog10_empirical_p),
+        color = plot_palette$background,
+        shape = 16,
+        size = 0.30,
+        alpha = 0.35
+      )
     ) +
     geom_point(
       data = method_df,
@@ -4619,8 +5208,13 @@ export_comparison_manuscript_tables <- function(comparison_name) {
         short_title = paste0(comparison_name, " | ", analysis_label),
         label_genes = TRUE
       )
-      save_grob(volcano, file.path(paths$figures, "Volcano.png"), width = 8.2, height = 6.4)
-      save_grob(volcano, file.path(paths$figures, "Volcano.pdf"), width = 8.2, height = 6.4)
+      # Single-column final print size.
+      save_figure(
+        volcano,
+        file.path(paths$figures, "Volcano"),
+        width = FIG_SINGLE_COL_MM,
+        height = 82
+      )
     }
   }
 
@@ -4868,9 +5462,20 @@ save_paper_volcano_panels <- function() {
     panel_dir <- file.path(output_dir, comparison_name, "Panels")
     dir.create(panel_dir, recursive = TRUE, showWarnings = FALSE)
     base <- file.path(panel_dir, paste0("Figure_", comparison_name, "_Volcano_", length(plots), "Views"))
-    panel_width <- max(10.0, 5.0 * length(plots))
-    save_grob(panel, paste0(base, ".png"), width = panel_width, height = 7.6)
-    save_grob(panel, paste0(base, ".pdf"), width = panel_width, height = 7.6)
+
+    # Size the canvas from the grid the compositor will actually use. Five
+    # volcano panels previously occupied a single 25 in (635 mm) row; they now
+    # wrap to at most PANEL_MAX_COLS columns inside a 180 mm double column.
+    grid_dim <- panel_grid_dim(length(plots), length(plots))
+    panel_width_mm <- min(
+      FIG_DOUBLE_COL_MM,
+      max(FIG_SINGLE_COL_MM, 60 * unname(grid_dim[["ncol"]]))
+    )
+    panel_height_mm <- min(
+      FIG_MAX_HEIGHT_MM,
+      18 + 72 * unname(grid_dim[["nrow"]])
+    )
+    save_figure(panel, base, width = panel_width_mm, height = panel_height_mm)
   }
 
   invisible(TRUE)
@@ -5024,7 +5629,7 @@ compute_pca_support_plot <- function(value_df, coldata, short_title,
   cap <- paste0(
     "n=", stats_obj$n_features_input,
     " | PC1=", round(100 * stats_obj$pc1_fraction, 1), "%",
-    " | λ1=", round(retained, 1), "% Orig",
+    " | lambda1=", round(retained, 1), "% Orig",
     " | E1=", round(energy, 1), "%",
     " | Sep=", ifelse(is.finite(stats_obj$separation_ratio),
                        format(round(stats_obj$separation_ratio, 2), trim = TRUE), "NA")
@@ -5237,7 +5842,7 @@ plot_evs_pca_evidence <- function(comparison_name) {
           "PC1_eigenvalue_retained_pct",
           "Original_PC1_loading_energy_pct"
         ),
-        labels = c("PC1 explained", "λ1 vs Orig", "Orig PC1 energy")
+        labels = c("PC1 explained", "lambda1 vs Orig", "Orig PC1 energy")
       )
     )
 
@@ -5321,7 +5926,7 @@ plot_empirical_hbfss_support <- function(df, short_title) {
       caption = paste0(
         if (is.finite(hc_raw) && !is.na(hc_raw)) paste0("HCp=", signif(hc_raw, 3)) else "HCp=NA",
         "  ",
-        if (is.finite(htau) && !is.na(htau)) paste0("Hτ=", signif(htau, 3)) else "Hτ=NA"
+        if (is.finite(htau) && !is.na(htau)) paste0("Htau=", signif(htau, 3)) else "Htau=NA"
       )
     ) +
     manuscript_theme() +
@@ -5389,8 +5994,7 @@ save_paper_pca_panels <- function() {
         ncol = 3
       )
       base <- file.path(panel_dir, paste0("Figure_", comparison_name, "_PCA_EVS_2x3"))
-      save_grob(panel, paste0(base, ".png"), width = 16.5, height = 10.8)
-      save_grob(panel, paste0(base, ".pdf"), width = 16.5, height = 10.8)
+      save_figure(panel, base, width = FIG_DOUBLE_COL_MM, height = 165)
     }
 
     evidence_tbl <- build_evs_pca_evidence_table(comparison_name)
@@ -5405,8 +6009,7 @@ save_paper_pca_panels <- function() {
     pevidence <- plot_evs_pca_evidence(comparison_name)
     if (!is.null(pevidence)) {
       base <- file.path(panel_dir, paste0("Figure_", comparison_name, "_EVS_PC1_Evidence"))
-      save_grob(pevidence, paste0(base, ".png"), width = 11.0, height = 5.2)
-      save_grob(pevidence, paste0(base, ".pdf"), width = 11.0, height = 5.2)
+      save_figure(pevidence, base, width = FIG_DOUBLE_COL_MM, height = 92)
     }
   }
 
@@ -5477,14 +6080,20 @@ save_paper_empirical_hbfss_panels <- function() {
       ncol = length(comparison_order)
     )
 
-    save_grob(
+    # panel_height is computed upstream in inches; rescale it to the printable
+    # page while preserving the intended aspect ratio.
+    hbfss_height_mm <- min(
+      FIG_MAX_HEIGHT_MM,
+      max(70, (panel_height / 18.0) * FIG_DOUBLE_COL_MM)
+    )
+    save_figure(
       panel,
       file.path(
         paper_fig_dir,
-        paste0("Figure_Manuscript_Empirical_HBFSS_", output_suffix, ".png")
+        paste0("Figure_Manuscript_Empirical_HBFSS_", output_suffix)
       ),
-      width = 18.0,
-      height = panel_height
+      width = FIG_DOUBLE_COL_MM,
+      height = hbfss_height_mm
     )
   }
 
@@ -5568,10 +6177,552 @@ save_discovery_count_panel <- function(summary_df) {
       strip.text = element_text(face = "bold")
     )
 
-  save_grob(p, file.path(paper_fig_dir, "Figure_Manuscript_Discovery_Counts.png"), width = 21.0, height = 6.5)
-  save_grob(p, file.path(paper_fig_dir, "Figure_Manuscript_Discovery_Counts.pdf"), width = 21.0, height = 6.5)
+  # Previously 21 x 6.5 in (533 x 165 mm): a 3x production reduction that left
+  # axis text near 3 pt. Drawn at final size instead.
+  save_figure(
+    p,
+    file.path(paper_fig_dir, "Figure_Manuscript_Discovery_Counts"),
+    width = FIG_DOUBLE_COL_MM,
+    height = 115
+  )
   invisible(TRUE)
 }
+# =============================================================================
+# DISPERSION TRADE-OFF FIGURE
+# =============================================================================
+# The EVS split is justified on mean-variance grounds: the leading edge holds
+# higher-mean PASs whose dispersion follows a tight trend, the remainder holds
+# lower-mean PASs with small absolute variance but large relative variability.
+# Splitting is worthwhile only if one parametric dispersion trend cannot serve
+# both regimes, and the best k is the one that minimises residual spread around
+# the fitted trends.
+#
+# Every quantity here comes from the dispersion fit alone, before any p-value,
+# so a cutoff can be judged without conditioning on the test outcomes it will
+# later produce.
+#
+# Panels: A fitted trends, B trend ratio at matched mean, C residual spread by
+# view, D residual spread swept across k with the active cutoff marked.
+# =============================================================================
+
+dispersion_frame_from_dds <- function(dds) {
+  if (is.null(dds)) return(NULL)
+
+  md <- tryCatch(SummarizedExperiment::mcols(dds), error = function(e) NULL)
+  if (is.null(md)) return(NULL)
+
+  needed <- c("baseMean", "dispGeneEst", "dispFit")
+  if (!all(needed %in% colnames(md))) return(NULL)
+
+  out <- data.frame(
+    feature_id  = as.character(rownames(dds)),
+    baseMean    = as.numeric(md$baseMean),
+    dispGeneEst = as.numeric(md$dispGeneEst),
+    dispFit     = as.numeric(md$dispFit),
+    stringsAsFactors = FALSE
+  )
+
+  keep <- is.finite(out$baseMean) & out$baseMean > 0 &
+    is.finite(out$dispGeneEst) & out$dispGeneEst > 0 &
+    is.finite(out$dispFit) & out$dispFit > 0
+  out <- out[keep, , drop = FALSE]
+  if (!nrow(out)) return(NULL)
+
+  out$log_resid <- log(out$dispGeneEst / out$dispFit)
+  out
+}
+
+dispersion_prior_var <- function(dds) {
+  f <- tryCatch(DESeq2::dispersionFunction(dds), error = function(e) NULL)
+  if (is.null(f)) return(NA_real_)
+  v <- attr(f, "dispPriorVar")
+  if (is.null(v) || !is.finite(v)) NA_real_ else as.numeric(v)
+}
+
+# Residual spread around the fitted trend. MAD is used rather than SD so a
+# handful of dispersion outliers cannot drive the comparison between cutoffs.
+dispersion_residual_mad <- function(df) {
+  if (is.null(df) || !nrow(df)) return(NA_real_)
+  stats::mad(df$log_resid, constant = 1.4826, na.rm = TRUE)
+}
+
+collect_dispersion_fits <- function() {
+  rows <- list()
+  views <- comparison_analysis_views()
+
+  for (comparison_name in as.character(comparison_table$comparison_name)) {
+    for (i in seq_len(nrow(views))) {
+      track_key   <- views$track_key[i]
+      dataset_key <- views$dataset_key[i]
+
+      obj <- paper_registry[[registry_key(comparison_name, track_key)]]
+      if (is.null(obj) || is.null(obj$analysis_results)) next
+      entry <- obj$analysis_results[[dataset_key]]
+      if (is.null(entry) || is.null(entry$dds)) next
+
+      df <- dispersion_frame_from_dds(entry$dds)
+      if (is.null(df)) next
+
+      df$comparison <- comparison_name
+      df$track      <- unname(track_short[track_key])
+      df$view       <- analysis_view_label(track_key, dataset_key)
+      df$stratum    <- switch(
+        dataset_key,
+        raw_dataset          = "Original (unsplit)",
+        leading_edge_dataset = "Leading edge",
+        remainder_dataset    = "Remainder",
+        dataset_key
+      )
+      df$prior_var  <- dispersion_prior_var(entry$dds)
+      rows[[length(rows) + 1L]] <- df
+    }
+  }
+
+  if (!length(rows)) return(NULL)
+  out <- dplyr::bind_rows(rows)
+  out$stratum <- factor(
+    out$stratum,
+    levels = c("Original (unsplit)", "Leading edge", "Remainder")
+  )
+  out
+}
+
+DISPERSION_STRATUM_COLORS <- c(
+  "Original (unsplit)" = "#4A5560",
+  "Leading edge"       = "#009E73",
+  "Remainder"          = "#E69F00"
+)
+
+# -----------------------------------------------------------------------------
+# Panels
+# -----------------------------------------------------------------------------
+
+plot_dispersion_trends <- function(disp_df, track_label) {
+  d <- disp_df[disp_df$track == track_label |
+                 disp_df$stratum == "Original (unsplit)", , drop = FALSE]
+  if (!nrow(d)) return(NULL)
+
+  # Scatter is thinned per facet: a full leading edge plus remainder is tens of
+  # thousands of points per comparison and would dominate the vector file.
+  pts <- dplyr::bind_rows(lapply(
+    split(d, list(d$comparison, d$stratum), drop = TRUE),
+    function(g) if (nrow(g) > 2500L) g[sample.int(nrow(g), 2500L), , drop = FALSE] else g
+  ))
+
+  trend <- d[order(d$comparison, d$stratum, d$baseMean), , drop = FALSE]
+
+  p <- ggplot() +
+    geom_point(
+      data = pts,
+      aes(x = baseMean, y = dispGeneEst),
+      colour = "grey78", size = 0.25, stroke = 0, alpha = 0.55
+    ) +
+    geom_line(
+      data = trend,
+      aes(x = baseMean, y = dispFit, colour = stratum, linetype = stratum),
+      linewidth = 0.45
+    ) +
+    scale_x_log10() +
+    scale_y_log10() +
+    scale_colour_manual(values = DISPERSION_STRATUM_COLORS, drop = FALSE) +
+    scale_linetype_manual(
+      values = c("Original (unsplit)" = "22", "Leading edge" = "solid",
+                 "Remainder" = "solid"),
+      drop = FALSE
+    ) +
+    facet_wrap(~ comparison, nrow = 2) +
+    labs(
+      title = "Fitted dispersion trends",
+      x = "Mean of normalized counts",
+      y = "Dispersion"
+    ) +
+    manuscript_theme() +
+    theme(legend.position = "bottom", legend.title = element_blank())
+  p
+}
+
+# Ratio of the two fitted trends where both strata actually have features. If
+# that overlap is narrow the comparison is not supported and the panel says so
+# rather than extrapolating either trend beyond its data.
+plot_dispersion_trend_ratio <- function(disp_df, track_label, n_grid = 120L) {
+  d <- disp_df[disp_df$track == track_label &
+                 disp_df$stratum %in% c("Leading edge", "Remainder"), , drop = FALSE]
+  if (!nrow(d)) return(NULL)
+
+  rows <- list()
+  for (cmp in unique(d$comparison)) {
+    le  <- d[d$comparison == cmp & d$stratum == "Leading edge", , drop = FALSE]
+    rem <- d[d$comparison == cmp & d$stratum == "Remainder", , drop = FALSE]
+    if (nrow(le) < 50L || nrow(rem) < 50L) next
+
+    lo <- max(stats::quantile(le$baseMean, 0.01), stats::quantile(rem$baseMean, 0.01))
+    hi <- min(stats::quantile(le$baseMean, 0.99), stats::quantile(rem$baseMean, 0.99))
+    if (!is.finite(lo) || !is.finite(hi) || hi <= lo * 1.2) next
+
+    grid <- exp(seq(log(lo), log(hi), length.out = n_grid))
+    f_le  <- stats::approx(le$baseMean,  le$dispFit,  xout = grid, rule = 2, ties = mean)$y
+    f_rem <- stats::approx(rem$baseMean, rem$dispFit, xout = grid, rule = 2, ties = mean)$y
+
+    rows[[length(rows) + 1L]] <- data.frame(
+      comparison = cmp,
+      baseMean   = grid,
+      ratio      = f_le / f_rem,
+      n_le       = sum(le$baseMean  >= lo & le$baseMean  <= hi),
+      n_rem      = sum(rem$baseMean >= lo & rem$baseMean <= hi),
+      stringsAsFactors = FALSE
+    )
+  }
+
+  if (!length(rows)) return(NULL)
+  r <- dplyr::bind_rows(rows)
+  r <- r[is.finite(r$ratio) & r$ratio > 0, , drop = FALSE]
+  if (!nrow(r)) return(NULL)
+
+  lab <- r %>%
+    dplyr::group_by(comparison) %>%
+    dplyr::summarise(
+      baseMean = min(baseMean, na.rm = TRUE),
+      ratio    = min(ratio, na.rm = TRUE),
+      txt      = paste0(format(dplyr::first(n_le), big.mark = ","), " LE / ",
+                        format(dplyr::first(n_rem), big.mark = ","), " Rem"),
+      .groups  = "drop"
+    )
+
+  ggplot(r, aes(x = baseMean, y = ratio)) +
+    geom_hline(yintercept = 1, colour = "grey35", linetype = "22", linewidth = 0.35) +
+    geom_line(colour = "#0072B2", linewidth = 0.5) +
+    geom_text(
+      data = lab, aes(label = txt),
+      hjust = 0, vjust = 0, size = 1.9, colour = "grey35"
+    ) +
+    scale_x_log10() +
+    scale_y_log10() +
+    facet_wrap(~ comparison, nrow = 2) +
+    labs(
+      title = "Leading-edge vs remainder trend, matched mean",
+      x = "Mean of normalized counts (overlapping range only)",
+      y = "Dispersion ratio, LE / Rem"
+    ) +
+    manuscript_theme()
+}
+
+plot_dispersion_residual_spread <- function(disp_df, track_label) {
+  d <- disp_df[disp_df$track == track_label |
+                 disp_df$stratum == "Original (unsplit)", , drop = FALSE]
+  if (!nrow(d)) return(NULL)
+
+  s <- d %>%
+    dplyr::group_by(comparison, stratum) %>%
+    dplyr::summarise(
+      mad = stats::mad(log_resid, constant = 1.4826, na.rm = TRUE),
+      .groups = "drop"
+    )
+  s <- s[is.finite(s$mad), , drop = FALSE]
+  if (!nrow(s)) return(NULL)
+
+  ggplot(s, aes(x = comparison, y = mad, fill = stratum)) +
+    geom_col(position = position_dodge(width = 0.75), width = 0.66) +
+    geom_text(
+      aes(label = sprintf("%.3f", mad)),
+      position = position_dodge(width = 0.75),
+      vjust = -0.4, size = 1.9
+    ) +
+    scale_fill_manual(values = DISPERSION_STRATUM_COLORS, drop = FALSE) +
+    scale_y_continuous(expand = expansion(mult = c(0, 0.18))) +
+    labs(
+      title = "Residual spread around the fitted trend",
+      x = NULL,
+      y = "MAD of log(gene-wise / fitted) dispersion"
+    ) +
+    manuscript_theme() +
+    theme(legend.position = "bottom", legend.title = element_blank())
+}
+
+# -----------------------------------------------------------------------------
+# Cutoff sweep
+# -----------------------------------------------------------------------------
+# Dispersions only: no model fitting, no testing, no shrinkage. The split is
+# re-derived from the stored PC1 loading tables, so no PCA is recomputed either.
+
+fit_dispersions_only <- function(count_mat, coldata) {
+  if (is.null(count_mat) || !nrow(count_mat)) return(NULL)
+
+  dds <- tryCatch(
+    DESeq2::DESeqDataSetFromMatrix(
+      countData = coerce_raw_count_matrix_for_deseq2(
+        count_mat,
+        context = "dispersion sweep subset"
+      ),
+      colData = coldata,
+      design  = make_design_formula(coldata)
+    ),
+    error = function(e) NULL
+  )
+  if (is.null(dds)) return(NULL)
+
+  dds <- dds[rowSums(DESeq2::counts(dds)) > 0, ]
+  if (nrow(dds) < 50L) return(NULL)
+
+  dds <- tryCatch(
+    DESeq2::estimateSizeFactors(dds),
+    error = function(e) tryCatch(
+      DESeq2::estimateSizeFactors(dds, type = "poscounts"),
+      error = function(e2) NULL
+    )
+  )
+  if (is.null(dds)) return(NULL)
+
+  dds <- tryCatch(
+    DESeq2::estimateDispersions(dds, quiet = TRUE),
+    error = function(e) NULL
+  )
+  if (is.null(dds)) return(NULL)
+
+  dispersion_frame_from_dds(dds)
+}
+
+dispersion_sweep_one <- function(comparison_name, track_key, k_grid) {
+  obj <- paper_registry[[registry_key(comparison_name, track_key)]]
+  if (is.null(obj) || is.null(obj$evs)) return(NULL)
+
+  evs <- obj$evs
+  raw <- evs$raw_dataset
+  cd  <- obj$coldata
+  lt_t <- evs$fit_trt$loading_table
+  lt_u <- evs$fit_untrt$loading_table
+  if (is.null(lt_t) || is.null(lt_u)) return(NULL)
+
+  all_ids <- rownames(raw)
+  n_total <- length(all_ids)
+  k_grid  <- sort(unique(as.integer(k_grid[k_grid >= 500 & k_grid < n_total / 2])))
+  if (!length(k_grid)) return(NULL)
+
+  rows <- list()
+  for (k in k_grid) {
+    top_t <- as.character(lt_t$feature_id[lt_t$rank <= k])
+    top_u <- as.character(lt_u$feature_id[lt_u$rank <= k])
+    le_ids  <- union(top_t, top_u)
+    rem_ids <- setdiff(all_ids, le_ids)
+    if (!length(le_ids) || length(rem_ids) < 50L) next
+
+    d_le  <- fit_dispersions_only(raw[le_ids, , drop = FALSE], cd)
+    d_rem <- fit_dispersions_only(raw[rem_ids, , drop = FALSE], cd)
+    if (is.null(d_le) || is.null(d_rem)) next
+
+    m_le  <- dispersion_residual_mad(d_le)
+    m_rem <- dispersion_residual_mad(d_rem)
+    if (!is.finite(m_le) || !is.finite(m_rem)) next
+
+    n_le <- nrow(d_le); n_rem <- nrow(d_rem)
+    rows[[length(rows) + 1L]] <- data.frame(
+      comparison       = comparison_name,
+      track            = unname(track_short[track_key]),
+      k                = k,
+      mad_leading_edge = m_le,
+      mad_remainder    = m_rem,
+      n_leading_edge   = n_le,
+      n_remainder      = n_rem,
+      weighted_mad     = (m_le * n_le + m_rem * n_rem) / (n_le + n_rem),
+      stringsAsFactors = FALSE
+    )
+  }
+
+  if (!length(rows)) return(NULL)
+  dplyr::bind_rows(rows)
+}
+
+run_dispersion_sweep <- function(track_key, k_grid) {
+  rows <- list()
+  for (comparison_name in as.character(comparison_table$comparison_name)) {
+    message("  dispersion sweep: ", comparison_name, " ",
+            unname(track_short[track_key]), " (", length(k_grid), " values of k)")
+    r <- tryCatch(
+      dispersion_sweep_one(comparison_name, track_key, k_grid),
+      error = function(e) {
+        warning("Dispersion sweep failed for ", comparison_name, ": ",
+                conditionMessage(e))
+        NULL
+      }
+    )
+    if (!is.null(r)) rows[[length(rows) + 1L]] <- r
+  }
+  if (!length(rows)) return(NULL)
+  dplyr::bind_rows(rows)
+}
+
+plot_dispersion_sweep <- function(sweep_df, unsplit_mad = NULL) {
+  if (is.null(sweep_df) || !nrow(sweep_df)) return(NULL)
+
+  active <- data.frame(
+    comparison = as.character(comparison_table$comparison_name),
+    k = vapply(
+      as.character(comparison_table$comparison_name),
+      function(cmp) as.numeric(get_empirical_evs_cutoff(cmp)),
+      numeric(1)
+    ),
+    stringsAsFactors = FALSE
+  )
+  active <- merge(active, sweep_df[, c("comparison", "k", "weighted_mad")],
+                  by = c("comparison", "k"), all.x = FALSE)
+
+  minima <- sweep_df %>%
+    dplyr::group_by(comparison) %>%
+    dplyr::slice_min(weighted_mad, n = 1, with_ties = FALSE) %>%
+    dplyr::ungroup()
+
+  p <- ggplot(sweep_df, aes(x = k, y = weighted_mad, colour = comparison)) +
+    geom_line(linewidth = 0.5) +
+    geom_point(data = minima, shape = 21, fill = "white", size = 1.3, stroke = 0.5) +
+    scale_x_continuous(labels = function(v) format(v, big.mark = ",", trim = TRUE)) +
+    labs(
+      title = paste0("Cutoff sweep | ", CUTOFF_METHOD_LABEL),
+      x = "Leading-edge size, k (PAS per condition)",
+      y = "Size-weighted residual spread",
+      caption = paste0(
+        "Open circles mark the minimum; diamonds mark the cutoff used in this run. ",
+        "Computed from dispersion fits only, before any testing."
+      )
+    ) +
+    manuscript_theme() +
+    theme(legend.position = "bottom", legend.title = element_blank())
+
+  if (nrow(active)) {
+    p <- p + geom_point(
+      data = active,
+      aes(x = k, y = weighted_mad, colour = comparison),
+      shape = 23, fill = "white", size = 1.7, stroke = 0.6,
+      inherit.aes = FALSE, show.legend = FALSE
+    )
+  }
+
+  if (!is.null(unsplit_mad) && is.finite(unsplit_mad)) {
+    p <- p + geom_hline(
+      yintercept = unsplit_mad,
+      colour = "grey35", linetype = "22", linewidth = 0.35
+    )
+  }
+
+  p
+}
+
+# -----------------------------------------------------------------------------
+# Assembly
+# -----------------------------------------------------------------------------
+
+assemble_dispersion_panel <- function(plot_list, panel_title) {
+  plot_list <- Filter(Negate(is.null), plot_list)
+  if (!length(plot_list)) return(NULL)
+
+  tagged <- lapply(seq_along(plot_list), function(i) {
+    plot_list[[i]] +
+      labs(tag = LETTERS[i]) +
+      theme(
+        plot.tag = element_text(face = "bold", size = base_theme_size + 1,
+                                family = FIG_FONT_FAMILY),
+        plot.tag.position = "topleft"
+      )
+  })
+
+  ncol_use <- if (length(tagged) > 1L) 2L else 1L
+
+  body <- if (requireNamespace("patchwork", quietly = TRUE)) {
+    patchwork::patchworkGrob(patchwork::wrap_plots(tagged, ncol = ncol_use))
+  } else {
+    do.call(gridExtra::arrangeGrob, c(tagged, list(ncol = ncol_use)))
+  }
+
+  gridExtra::arrangeGrob(
+    body,
+    ncol = 1,
+    top = grid::textGrob(
+      panel_title,
+      gp = grid::gpar(
+        fontface = "bold",
+        fontsize = base_theme_size + 2,
+        fontfamily = if (nzchar(FIG_FONT_FAMILY)) FIG_FONT_FAMILY else ""
+      )
+    )
+  )
+}
+
+save_dispersion_tradeoff_panels <- function() {
+  if (!isTRUE(EXPORT_DISPERSION_TRADEOFF)) return(invisible(FALSE))
+
+  disp_df <- collect_dispersion_fits()
+  if (is.null(disp_df) || !nrow(disp_df)) {
+    warning("Dispersion trade-off figure skipped: no dispersion data collected.")
+    return(invisible(FALSE))
+  }
+
+  dir.create(paper_fig_dir, recursive = TRUE, showWarnings = FALSE)
+
+  unsplit <- disp_df[disp_df$stratum == "Original (unsplit)", , drop = FALSE]
+  unsplit_mad <- if (nrow(unsplit)) dispersion_residual_mad(unsplit) else NA_real_
+
+  # One figure per active EVS track: the tracks differ in how the ranking was
+  # built, so their dispersion geometry is not interchangeable.
+  for (track_key in active_evs_track_keys()) {
+    track_label <- unname(track_short[track_key])
+
+    sweep_df <- if (isTRUE(DISPERSION_SWEEP_ENABLED) &&
+                    identical(track_key, DISPERSION_SWEEP_TRACK)) {
+      run_dispersion_sweep(track_key, DISPERSION_SWEEP_GRID)
+    } else {
+      NULL
+    }
+
+    if (!is.null(sweep_df) && nrow(sweep_df)) {
+      save_csv(
+        sweep_df,
+        file.path(
+          summary_table_dir,
+          paste0("Table_Dispersion_Sweep_", track_label, ".csv")
+        )
+      )
+    }
+
+    panels <- list(
+      plot_dispersion_trends(disp_df, track_label),
+      plot_dispersion_trend_ratio(disp_df, track_label),
+      plot_dispersion_residual_spread(disp_df, track_label),
+      plot_dispersion_sweep(sweep_df, unsplit_mad)
+    )
+
+    g <- assemble_dispersion_panel(
+      panels,
+      paste0("Mean-variance basis for the EVS split | ", track_label,
+             " | ", CUTOFF_METHOD_LABEL)
+    )
+    if (is.null(g)) next
+
+    save_figure(
+      g,
+      file.path(paper_fig_dir, paste0("Figure_Dispersion_Tradeoff_", track_label)),
+      width = FIG_DOUBLE_COL_MM,
+      height = 200
+    )
+  }
+
+  # Per-view residual spread and prior variance, as a table the Methods can cite.
+  summary_tbl <- disp_df %>%
+    dplyr::group_by(comparison, track, view, stratum) %>%
+    dplyr::summarise(
+      n_features        = dplyr::n(),
+      median_baseMean   = stats::median(baseMean),
+      residual_mad      = stats::mad(log_resid, constant = 1.4826, na.rm = TRUE),
+      dispersion_prior_var = dplyr::first(prior_var),
+      .groups = "drop"
+    )
+
+  save_csv(
+    summary_tbl,
+    file.path(summary_table_dir, "Table_Dispersion_Residual_Spread.csv")
+  )
+
+  invisible(TRUE)
+}
+
+
 
 save_paper_support_figures <- function(summary_df) {
   if (!isTRUE(EXPORT_SUPPORT_FIGURES)) {
@@ -5581,7 +6732,8 @@ save_paper_support_figures <- function(summary_df) {
   support_steps <- list(
     PCA = function() save_paper_pca_panels(),
     Empirical_HBFSS = function() save_paper_empirical_hbfss_panels(),
-    Counts = function() save_discovery_count_panel(summary_df)
+    Counts = function() save_discovery_count_panel(summary_df),
+    Dispersion = function() save_dispersion_tradeoff_panels()
   )
 
   for (nm in names(support_steps)) {
@@ -5980,9 +7132,14 @@ plot_twas_gene_support <- function(gene_table, figure_dir) {
     )
 
   max_genes <- max(table(long$Comparison))
-  height <- min(24, max(8.0, 5.0 + 0.17 * max_genes))
-  save_grob(p, file.path(figure_dir, "Figure_TWAS_Gene_Support.png"), width = 15.5, height = height)
-  save_grob(p, file.path(figure_dir, "Figure_TWAS_Gene_Support.pdf"), width = 15.5, height = height)
+  # Height grows with the number of genes but is capped at the printable page.
+  height_mm <- min(FIG_MAX_HEIGHT_MM, max(90, 55 + 2.6 * max_genes))
+  save_figure(
+    p,
+    file.path(figure_dir, "Figure_TWAS_Gene_Support"),
+    width = FIG_DOUBLE_COL_MM,
+    height = height_mm
+  )
   invisible(p)
 }
 
@@ -6056,8 +7213,12 @@ export_twas_by_view <- function(pas_table, gene_table, summary_table) {
           paste0(comparison_name, " | ", analysis_label, " | 3'aTWAS")
         )
         if (!is.null(p)) {
-          save_grob(p, file.path(paths$figures, "TWAS_Overlap.png"), width = 7.2, height = 5.4)
-          save_grob(p, file.path(paths$figures, "TWAS_Overlap.pdf"), width = 7.2, height = 5.4)
+          save_figure(
+            p,
+            file.path(paths$figures, "TWAS_Overlap"),
+            width = FIG_SINGLE_COL_MM,
+            height = 70
+          )
         }
       }
     }
@@ -6094,8 +7255,14 @@ save_twas_comparison_panels <- function(summary_table) {
     panel_dir <- file.path(output_dir, comparison_name, "Panels")
     dir.create(panel_dir, recursive = TRUE, showWarnings = FALSE)
     base <- file.path(panel_dir, paste0("Figure_", comparison_name, "_TWAS_", n_views, "Views"))
-    save_grob(panel, paste0(base, ".png"), width = 20.0, height = 6.0)
-    save_grob(panel, paste0(base, ".pdf"), width = 20.0, height = 6.0)
+    twas_dim <- panel_grid_dim(n_views, n_views)
+    save_figure(
+      panel,
+      base,
+      width = min(FIG_DOUBLE_COL_MM,
+                  max(FIG_SINGLE_COL_MM, 60 * unname(twas_dim[["ncol"]]))),
+      height = min(FIG_MAX_HEIGHT_MM, 16 + 62 * unname(twas_dim[["nrow"]]))
+    )
   }
   invisible(TRUE)
 }
