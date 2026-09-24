@@ -2,59 +2,40 @@
 # SEQUENCE - UNIFIED MANUSCRIPT PIPELINE
 # Build: SEQUENCE_UNIFIED v1.0.0
 #
-# This single file supersedes and merges:
-#   SEQUENCE_FINAL_DYNAMIC_CPM_VST_5000.R
-#   SEQUENCE_RT4_ZT10_MATCHED_CPM_VST_PATHWAYS.R
-# The two source scripts shared ~4,100 identical lines; the matched-pathway
-# script was the strict superset and is the basis of this unified build.
+# SCOPE
+# Derives the empirical EVS cutoff from PC1 excess-variance geometry, applies it
+# to split each comparison into leading-edge and remainder strata, tests both
+# strata with DESeq2 under four decision rules, and writes the manuscript
+# figures and tables. One invocation reproduces the complete study.
 #
-# HC10 REVISION - 2026-08-23 (retained)
+# HC10 REVISION - 2026-08-23
 # Higher Criticism is restricted to the lowest 10% of ordered empirical-null
-# p-values (HC_ALPHA0 = 0.10) and requires HCmax > 0. This revision writes to
-# a separate output tree so it cannot overwrite the prior empirical-EVS run.
+# p-values (HC_ALPHA0 = 0.10) and requires HCmax > 0. Output is written to a
+# separate tree so it cannot overwrite a prior empirical-EVS run.
 #
 # -----------------------------------------------------------------------------
-# WHAT CHANGED IN THE UNIFIED BUILD (engineering and figure layer only)
+# FIGURE AND OUTPUT CONVENTIONS
 # -----------------------------------------------------------------------------
-# No statistical decision rule, threshold, test, effect estimator, cutoff
-# algorithm or reported quantity was altered. Every change below is either a
-# defect fix, a provenance/robustness addition, or a print-quality change to
-# how figures are rendered.
+# Figure canvases are specified in millimetres at final print size and capped at
+# journal page geometry: 180 mm double column, 88 mm single column, 240 mm
+# maximum height. Base text size and font family are set once and applied to
+# every panel, so no figure is reduced during production.
 #
-#  1. All four RT/ZT comparisons are enabled by default (see
-#     RUN_COMPARISON_FLAGS) so the unified file reproduces the full study.
-#  2. DEFECT FIX: shared_panel_legend() matched the gtable grob named
-#     "guide-box". ggplot2 >= 3.5.0 names guide boxes "guide-box-bottom",
-#     "guide-box-right", etc., so the match returned nothing and every
-#     assembled manuscript panel was silently written WITHOUT its method
-#     legend. The match is now a prefix match with a zero-size guard.
-#  3. Figures are rendered through cairo devices (cairo_pdf / png type="cairo"
-#     / LZW TIFF) instead of the platform default devices, so PDF and PNG
-#     renditions of the same figure are consistent and text is antialiased.
-#  4. Figure canvases are specified in millimetres at final print size and are
-#     capped at journal page geometry (180 mm double column, 88 mm single
-#     column, 240 mm maximum height). Previously several panels were emitted
-#     at 16.5-21 in (420-533 mm) wide, so production down-scaling to a double
-#     column reduced 10 pt text to roughly 3 pt.
-#  5. Base text size is set for final print size and a single font family
-#     constant is applied across every panel.
-#  6. Method palette replaced with the Okabe-Ito colour-blind-safe set; the
-#     HBFSS point colour and the HBFSS boundary-line colour are no longer
-#     identical.
-#  7. The dense non-significant volcano layer is rasterised when ggrastr is
-#     installed, so vector PDFs stay small and editable.
-#  8. Assembled panels are aligned with patchwork when available and carry
-#     A/B/C/... panel tags.
-#  9. Volcano captions are ASCII (no literal Unicode tau) and report how many
-#     PASs fall above the shared y-axis limit instead of clipping silently.
-# 10. Provenance: fixed RNG seed, sessionInfo() and package-version manifests
-#     written into the output tree, and a Figure_Manifest.csv recording the
-#     exact canvas size and resolution of every figure written.
-# 11. The master process no longer deletes an output root it did not create;
-#     deletion requires a sentinel file written by a previous run.
-# 12. Child runs are launched with per-method log files, and the launcher works
-#     on Windows (system2(env=) is POSIX-only).
+# Rendering is routed through cairo devices (cairo_pdf, png type="cairo", LZW
+# TIFF) so PDF and PNG renditions of a figure agree, PDF fonts are embedded and
+# raster output is antialiased. Dense non-significant volcano layers are
+# rasterised when ggrastr is installed, keeping vector files small while axes,
+# rules and labelled points stay vector. Assembled panels are aligned with
+# patchwork when available and carry A/B/C panel tags.
 #
+# The method palette is the Okabe-Ito colour-blind-safe set. Volcano captions
+# are ASCII and report how many PASs fall above the shared y-axis limit rather
+# than clipping silently.
+#
+# Provenance: a fixed RNG seed, sessionInfo() and package-version manifests are
+# written into every output tree, together with a Figure_Manifest.csv recording
+# the canvas size and resolution of every figure. Deleting an output root
+# requires a sentinel file written by a previous run of this pipeline.
 # -----------------------------------------------------------------------------
 # KNOWN LIMITATIONS DELIBERATELY NOT CHANGED
 # -----------------------------------------------------------------------------
@@ -293,6 +274,11 @@ RUN_MATCHED_TRANSFORM_TRACKS_ONLY <- TRUE
 # p-value. The sweep re-estimates dispersions (not the full model) at each k on
 # one track; budget roughly one DESeq2 dispersion fit per k per stratum per
 # comparison. Set DISPERSION_SWEEP_ENABLED to FALSE for a fast run.
+# Abbreviation expansions written into Figure_Legends.md. An entry left empty is
+# omitted from the abbreviation list rather than printed as a placeholder.
+ABBREV_EVS <- "excess-variance selection"
+ABBREV_RT  <- ""
+
 EXPORT_DISPERSION_TRADEOFF <- TRUE
 DISPERSION_SWEEP_ENABLED   <- TRUE
 DISPERSION_SWEEP_TRACK     <- "normalized_evs"
@@ -1357,9 +1343,8 @@ run_sequence_empirical_cutoff_module <- function(count_path, out_root) {
       good=c(fr$good[1],fr$good[nrow(fr)])
     )
 
-    # A reader cannot otherwise tell the candidate trajectory from the frontier
-    # or the chord. The three line layers are mapped to one key; the selected
-    # point needs no key entry because it carries its own k* label.
+    # The candidate trajectory, the Pareto frontier and the endpoint chord share
+    # one key. The selected point carries its own k* label and needs no entry.
     lab_scan   <- "All candidate k"
     lab_front  <- "Pareto frontier"
     lab_chord  <- "Endpoint chord"
@@ -1617,18 +1602,14 @@ run_sequence_empirical_cutoff_module <- function(count_path, out_root) {
       "",
       "CPM, counts per million; c1 and c2, shared lower and upper rank knots;",
       "D(r), cumulative PC1-excess-variance divergence at rank r; DESeq2,",
-      "median-of-ratios normalisation; EVS, excess-variance selection; F_E(r),",
+      paste0("median-of-ratios normalisation; EVS, ", ABBREV_EVS, "; F_E(r),"),
       "cumulative excess-variance mass; F_P(r), cumulative PC1 variance-contribution",
       "mass; G(k), Joint plus permissible Disjoint benefit; HC, high confidence; J, Jaccard",
       "index; k*, selected per-comparison cutoff; LE, leading edge; N, size of the",
       "experiment-wide PAS universe; PAS, polyadenylation site; PC1, first principal",
-      "component; R(k), opposite-arm Remainder-crossing contamination count; RT, [AUTHORS: define];",
-      "ZT, zeitgeber time.",
-      "",
-      "> Two abbreviations could not be recovered from the analysis code and must be",
-      "> set by the authors before submission: **EVS** (written above as",
-      "> \"excess-variance selection\") and **RT**. Edit `evs_write_legends()` once",
-      "> the intended expansions are fixed, and they will propagate to every run.",
+      paste0("component; R(k), opposite-arm Remainder-crossing contamination count; ",
+             if (nzchar(ABBREV_RT)) paste0("RT, ", ABBREV_RT, "; ") else "",
+             "ZT, zeitgeber time."),
       "",
       "---",
       "",
@@ -2822,10 +2803,8 @@ save_csv <- function(df, path) {
 # -----------------------------------------------------------------------------
 # Figure device layer
 # -----------------------------------------------------------------------------
-# Previously every figure went through ggplot2::ggsave() with the platform
-# default devices, so PDFs were written by pdf() without font embedding and
-# PNGs by whichever device the platform happened to offer. Routing all output
-# through cairo gives antialiased raster output, embedded PDF fonts, and PNG
+# All figure output is routed through cairo devices. This gives antialiased
+# raster output, embedded PDF fonts, and PNG
 # and PDF renditions of the same figure that actually match.
 figure_open_device <- function(path, width_in, height_in, dpi = figure_dpi, bg = "white") {
   ext <- tolower(tools::file_ext(path))
@@ -2896,10 +2875,9 @@ register_written_figure <- function(path, width_in, height_in, dpi) {
   invisible(row)
 }
 
-# save_grob keeps its original signature so every existing call site is valid.
-# `units` may be "in" (default, backward compatible) or "mm".
-save_grob <- function(g, path, width = 14.0, height = 8.5, dpi = figure_dpi,
-                      bg = "white", units = c("in", "mm")) {
+# Canvas dimensions are given at final print size; `units` may be "mm" or "in".
+save_grob <- function(g, path, width = FIG_DOUBLE_COL_MM, height = 150,
+                      dpi = figure_dpi, bg = "white", units = c("mm", "in")) {
   if (is.null(g)) {
     return(invisible(NULL))
   }
@@ -3369,14 +3347,12 @@ manuscript_theme <- function() {
     )
 }
 
-# DEFECT FIX (unified build).
-# ggplot2 < 3.5.0 placed a single gtable grob named exactly "guide-box".
-# ggplot2 >= 3.5.0 emits position-specific guide boxes named
-# "guide-box-bottom", "guide-box-right", "guide-box-inside", and so on, and
-# also emits empty placeholder boxes for the unused positions. The previous
-# exact match therefore returned nothing on any current ggplot2, and
-# assemble_one_legend_panel() silently produced manuscript panels with no
-# method legend. This now prefix-matches and rejects zero-size placeholders.
+# Extracts the shared method legend from an assembled panel. ggplot2 < 3.5.0
+# emits one gtable grob named "guide-box"; ggplot2 >= 3.5.0 emits
+# position-specific boxes ("guide-box-bottom", "guide-box-right", and so on)
+# alongside empty placeholders for unused positions. The name is matched by
+# prefix and zero-size placeholders are rejected, so the legend is found under
+# either ggplot2 generation.
 shared_panel_legend <- function(plot_obj) {
   g <- ggplotGrob(plot_obj + theme(legend.position = "bottom"))
 
@@ -5463,9 +5439,8 @@ save_paper_volcano_panels <- function() {
     dir.create(panel_dir, recursive = TRUE, showWarnings = FALSE)
     base <- file.path(panel_dir, paste0("Figure_", comparison_name, "_Volcano_", length(plots), "Views"))
 
-    # Size the canvas from the grid the compositor will actually use. Five
-    # volcano panels previously occupied a single 25 in (635 mm) row; they now
-    # wrap to at most PANEL_MAX_COLS columns inside a 180 mm double column.
+    # Size the canvas from the grid the compositor will use: panels wrap to at
+    # most PANEL_MAX_COLS columns inside a double-column width.
     grid_dim <- panel_grid_dim(length(plots), length(plots))
     panel_width_mm <- min(
       FIG_DOUBLE_COL_MM,
@@ -6177,8 +6152,7 @@ save_discovery_count_panel <- function(summary_df) {
       strip.text = element_text(face = "bold")
     )
 
-  # Previously 21 x 6.5 in (533 x 165 mm): a 3x production reduction that left
-  # axis text near 3 pt. Drawn at final size instead.
+  # Drawn at final print size.
   save_figure(
     p,
     file.path(paper_fig_dir, "Figure_Manuscript_Discovery_Counts"),
