@@ -8,11 +8,6 @@
 # strata with DESeq2 under four decision rules, and writes the manuscript
 # figures and tables. One invocation reproduces the complete study.
 #
-# HC10 REVISION - 2026-08-23
-# Higher Criticism is restricted to the lowest 10% of ordered empirical-null
-# p-values (HC_ALPHA0 = 0.10) and requires HCmax > 0. Output is written to a
-# separate tree so it cannot overwrite a prior empirical-EVS run.
-#
 # -----------------------------------------------------------------------------
 # FIGURE AND OUTPUT CONVENTIONS
 # -----------------------------------------------------------------------------
@@ -35,19 +30,7 @@
 # Provenance: a fixed RNG seed, sessionInfo() and package-version manifests are
 # written into every output tree, together with a Figure_Manifest.csv recording
 # the canvas size and resolution of every figure. Deleting an output root
-# requires a sentinel file written by a previous run of this pipeline.
-# -----------------------------------------------------------------------------
-# KNOWN LIMITATIONS DELIBERATELY NOT CHANGED
-# -----------------------------------------------------------------------------
-#  * EVS selection and DE testing use the same samples, so discovery rates
-#    inside the Leading Edge are not FDR-protected in the usual sense. A
-#    label-permutation null is the appropriate calibration and is NOT included
-#    here because it would change reported numbers.
-#  * The fdrtool empirical null is fitted on every finite Wald statistic,
-#    including PASs removed by DESeq2 independent filtering. This is the
-#    original behaviour and is preserved; see EMPIRICAL_NULL_NOTE below.
-#  * Htau = -log10(HCp) * c is an internal calibration without a formal FDR
-#    guarantee. Preserved as specified.
+# recursive deletion requires the pipeline sentinel file in the output root.
 # =============================================================================
 
 #!/usr/bin/env Rscript
@@ -242,13 +225,8 @@ write_sequence_provenance <- function(dir_path, scope = "run") {
 # =============================================================================
 # DOWNSTREAM COMPARISON SWITCHES
 # =============================================================================
-# These switches control the expensive downstream SEQUENCE analyses only.
-# The unified build enables all four comparisons so one invocation reproduces
-# the complete manuscript. Set any entry to FALSE to run a subset (for example
-# a fast RT4_ZT10-only smoke test).
-# The empirical cutoff engine intentionally still uses all eight experimental
-# arms to preserve the original shared-c1/c2 geometry and therefore the same
-# comparison-specific CPM/VST cutoff derivation.
+# All four prespecified RT/ZT comparisons are enabled for downstream analysis.
+# Empirical cutoff derivation uses all eight experimental arms.
 RUN_COMPARISON_FLAGS <- c(
   RT0_ZT6  = TRUE,
   RT2_ZT8  = TRUE,
@@ -260,22 +238,13 @@ if (!any(RUN_COMPARISON_FLAGS)) {
   stop("At least one RUN_COMPARISON_FLAGS entry must be TRUE.")
 }
 
-# The two original downstream EVS pathways remain enabled. Two additional
-# matched pathways are added:
-#   CPM empirical cutoff child -> CPM-EVS ranking/split -> raw counts -> DESeq2
-#   VST empirical cutoff child -> VST-EVS ranking/split -> raw counts -> DESeq2
-# Fixed-5,000 keeps the original NormEVS and RawEVS pathways unchanged.
-# Set this FALSE if you later want CPM-EVS and VST-EVS tracks run under every
-# cutoff method as a full cross-factorial sensitivity analysis.
+# Active EVS tracks by cutoff method:
+# Fixed 5,000: NormEVS and RawEVS. CPM empirical: NormEVS, RawEVS, and CPMEVS.
+# VST empirical: NormEVS, RawEVS, and VSTEVS. All DESeq2 tests use raw counts.
 RUN_MATCHED_TRANSFORM_TRACKS_ONLY <- TRUE
 
-# The dispersion trade-off figure tests the mean-variance premise of the EVS
-# split and scores candidate cutoffs from the dispersion fit alone, before any
-# p-value. The sweep re-estimates dispersions (not the full model) at each k on
-# one track; budget roughly one DESeq2 dispersion fit per k per stratum per
-# comparison. Set DISPERSION_SWEEP_ENABLED to FALSE for a fast run.
-# Abbreviation expansions written into Figure_Legends.md. An entry left empty is
-# omitted from the abbreviation list rather than printed as a placeholder.
+# Dispersion diagnostics re-estimate DESeq2 dispersions across the specified k grid
+# and include the active comparison-specific cutoff as an exactly evaluated point.
 ABBREV_EVS <- "excess-variance selection"
 ABBREV_RT  <- ""
 
@@ -330,9 +299,9 @@ run_sequence_empirical_cutoff_module <- function(count_path, out_root) {
   #    normalized to [0,1]. The two normalized frontier endpoints define a chord.
   #    k* is the Pareto-optimal candidate with MAXIMUM perpendicular distance
   #    from that endpoint chord (maximum endpoint deviation).
-  # 7) Remainder-crossing sites are NOT silently discarded from the top-k union.
-  #    They are flagged as penalized/low-confidence. A separate high-confidence
-  #    subset contains Joint + opposite-LE + opposite-Divergence sites.
+  # 7) Remainder-crossing disjoint sites remain in the top-k union and are flagged
+  #    as penalized/low-confidence. The high-confidence subset contains Joint,
+  #    opposite-Leading-Edge, and opposite-Divergence sites.
   # 8) Exactly four composite manuscript figures are generated, at final
   #    print size, by the publication figure layer defined below.
   #
@@ -2000,9 +1969,7 @@ run_sequence_empirical_cutoff_module <- function(count_path, out_root) {
   # MANUSCRIPT FIGURES
   # =============================================================================
 
-  # Clear figures from earlier runs. The manifest and zip steps below glob every
-  # PNG/PDF in FIG_DIR, so stale files from a previous naming scheme would
-  # otherwise be packaged alongside the current ones.
+  # Clear prior figure files so manifests and archives contain only the current run.
   old_figure_files <- list.files(
     FIG_DIR,
     pattern="\\.(png|pdf|tif|tiff)$",
@@ -2011,21 +1978,6 @@ run_sequence_empirical_cutoff_module <- function(count_path, out_root) {
   )
 
   if (length(old_figure_files)) unlink(old_figure_files)
-
-  # Cache the fitted objects so figures can be re-rendered later without re-running
-  # the whole pipeline:
-  #   z <- readRDS(file.path(OUT_ROOT,"analysis_objects.rds"))
-  #   evs_render_all(z$method_objects, z$summary_df, z$overlap_df,
-  #                  COMPARISONS, FIG_DIR, OUT_ROOT)
-  saveRDS(
-    list(
-      method_objects=method_objects,
-      summary_df=summary_df,
-      overlap_df=overlap_df,
-      sites_df=sites_df
-    ),
-    file.path(OUT_ROOT,"analysis_objects.rds")
-  )
 
   evs_render_all(
     method_objects = method_objects,
@@ -2038,21 +1990,20 @@ run_sequence_empirical_cutoff_module <- function(count_path, out_root) {
 
   # =============================================================================
   # MANUSCRIPT METHODS
-  # (Figure legends are generated by evs_write_legends(), above.)
   # =============================================================================
 
   methods_lines <- c(
     "# Methods",
     "",
-    "Two EVS preprocessing strategies were evaluated using a common experiment-wide PAS universe. CPM-EVS used log1p-transformed counts per million. VST-EVS used the DESeq2 variance-stabilizing transformation (varianceStabilizingTransformation, blind=TRUE) computed experiment-wide after median-of-ratios size-factor estimation. PCA was performed independently within each experimental arm on the corresponding transformed matrix, and PASs were ranked from lowest to highest absolute PC1 loading.",
+    "CPM-EVS and VST-EVS were evaluated on the common experiment-wide PAS count matrix. CPM-EVS used log1p-transformed counts per million. VST-EVS used the DESeq2 variance-stabilizing transformation with blind=TRUE after median-of-ratios size-factor estimation. For each transformed matrix, PCA was performed separately within each experimental arm and PASs were ranked by absolute PC1 loading.",
     "",
-    "For each PAS, PC1 variance contribution was P_i=lambda_1*v_i1^2. A pooled within-group variance was calculated separately from globally DESeq2 median-of-ratios normalized counts across the eight experimental arms, and arm-specific excess variance was E_ig=max(V_pool,i-mu_ig,0). PC1 contribution and excess variance were converted to rank-wise probability masses and cumulative distributions. Cumulative divergence was D_g(r)=F_E,g(r)-F_P,g(r).",
+    "For PAS i, PC1 variance contribution was defined as P_i=lambda_1*v_i1^2. Pooled within-arm variance was calculated from experiment-wide DESeq2 median-of-ratios normalized counts, and arm-specific excess variance was E_ig=max(V_pool,i-mu_ig,0). PC1 contribution and excess variance were converted to rank-wise probability masses and cumulative distributions, and cumulative divergence was D_g(r)=F_E,g(r)-F_P,g(r).",
     "",
-    "For each EVS method separately, the eight arm-specific D_g(r) curves were jointly fit using a continuous two-knot piecewise-linear model. The shared c1 and c2 values minimized the summed squared residual error across all arms. Rank<c1 defined the Remainder, c1<=rank<=c2 the Divergence interval, and rank>c2 the Leading Edge.",
+    "For each EVS preprocessing method, the eight arm-specific divergence curves were jointly fit with a continuous two-knot piecewise-linear model. Shared knots c1 and c2 minimized the summed squared residual error across all arms. Ranks below c1 were classified as Remainder, ranks from c1 through c2 as the Divergence interval, and ranks above c2 as Leading Edge.",
     "",
-    "Each RT/ZT comparison was optimized independently over 1<=k<=N-c2. For each candidate k, G(k) was the count of Joint top-k PASs plus Disjoint PASs whose opposite-arm rank was in either the Leading Edge or Divergence interval. R(k) was the count of Disjoint PASs whose opposite-arm rank crossed below c1 into the Remainder. Thus opposite-arm Divergence crossings were permissible and only true Remainder crossings counted as contamination.",
+    "Each RT/ZT comparison was optimized independently over candidate top-k values from 1 through N-c2. At each k, benefit G(k) counted Joint top-k PASs plus Disjoint PASs whose opposite-arm rank remained in the Leading Edge or Divergence interval. Contamination R(k) counted Disjoint PASs whose opposite-arm rank fell below c1 into the Remainder.",
     "",
-    "Nondominated [R(k),G(k)] candidates defined the Pareto frontier. On that frontier, benefit and contamination were min-max normalized as G_norm=(G-G_min)/(G_max-G_min) and R_norm=(R-R_min)/(R_max-R_min). The first and last normalized Pareto points defined an endpoint chord. For every Pareto-optimal candidate, perpendicular distance to that chord was calculated, and the empirical k* was the candidate with maximum endpoint-chord deviation; ties were resolved by greater G, lower R, then larger k. Remainder-crossing PASs remained in the exported top-k union with an explicit contamination flag; the high-confidence subset contained Joint, opposite-Leading-Edge, and opposite-Divergence PASs."
+    "Nondominated [R(k),G(k)] candidates defined the Pareto frontier. Benefit and contamination were min-max normalized on the frontier. The empirical cutoff k* was the Pareto candidate with the greatest perpendicular distance from the chord joining the first and last normalized frontier points. Ties were resolved by greater G, then lower R, then larger k. The selected k* was calculated independently for each comparison and separately for CPM-EVS and VST-EVS."
   )
 
   writeLines(
@@ -2090,7 +2041,7 @@ run_sequence_empirical_cutoff_module <- function(count_path, out_root) {
 
 # =============================================================================
 # MULTI-CUTOFF ORCHESTRATION
-# Runs this same script three times in isolated output folders, then creates one
+# Runs this script once for each cutoff method in isolated output folders, then creates one
 # final ZIP containing all figures, tables, audit files, and TWAS results.
 # =============================================================================
 
@@ -2124,16 +2075,11 @@ if (!SEQUENCE_CHILD_RUN) {
     "SEQUENCE_MULTI_ROOT",
     unset = file.path(repo_guess, "exports", "sequence_final_three_cutoffs")
   )
-  # A previous run of THIS pipeline always leaves a sentinel file behind. The
-  # master process refuses to recursively delete any directory that does not
-  # carry it, so a mis-set SEQUENCE_MULTI_ROOT cannot destroy unrelated data.
+  # Output roots are deleted only when marked by this pipeline's sentinel file.
   multi_root_sentinel <- ".sequence_output_root"
   if (dir.exists(multi_root)) {
     if (!file.exists(file.path(multi_root, multi_root_sentinel))) {
-      # Do not delete an unmarked directory, but also do not abort the run.
-      # Older SEQUENCE builds may have created the same output folder before
-      # the sentinel convention was introduced. Use a fresh sibling output
-      # directory instead and preserve the existing directory untouched.
+      # Preserve an unmarked directory and write to a timestamped sibling root.
       original_multi_root <- multi_root
       multi_root <- paste0(
         original_multi_root,
@@ -2404,10 +2350,7 @@ if (!is.numeric(HC_ALPHA0) || length(HC_ALPHA0) != 1L ||
 # EVS selection size is comparison-specific and is defined in comparison_table
 # below from the empirically estimated weighted-Pareto optimum (k*). No global
 # active cutoff is selected by the multi-cutoff orchestration layer.
-EMPIRICAL_EVS_CUTOFF_BASIS <- paste0(
-  CUTOFF_METHOD_INFO$basis,
-  "; locked before downstream DE significance testing"
-)
+EMPIRICAL_EVS_CUTOFF_BASIS <- CUTOFF_METHOD_INFO$basis
 
 # 600 dpi is the usual minimum for combined line-art/raster figures. Because
 # canvases are now specified at final print size, this is the true output
@@ -2446,34 +2389,16 @@ EXPORT_INDIVIDUAL_VIEW_FIGURES <- FALSE
 # as a second HBFSS significance gate.
 #
 # -----------------------------------------------------------------------------
-# Scope of the empirical null (documented, unchanged behaviour)
+# Scope of the empirical null
 # -----------------------------------------------------------------------------
-# DESeq2::results() applies independent filtering, so padj is NA for
-# low-information PASs while their Wald statistic is still returned. The
-# fdrtool empirical null is fitted to EVERY finite Wald statistic, including
-# those filtered PASs. Consequently the fitted null scale, and therefore every
-# empirical p-value and HBFSS call, is estimated from a broader feature set
-# than the one Benjamini-Hochberg acts on.
-#
-# This is the behaviour of the original scripts and is preserved verbatim so
-# that reported numbers are unchanged. It should be stated explicitly in the
-# methods section. Restricting the null fit to the BH-retained set is a
-# defensible alternative and would shift HBFSS results; it is deliberately NOT
-# implemented here.
-EMPIRICAL_NULL_NOTE <- paste(
-  "Empirical null fitted with fdrtool (normal, cutoff.method = 'fndr') to all",
-  "finite DESeq2 Wald statistics, including PASs removed by independent",
-  "filtering from the Benjamini-Hochberg adjustment."
-)
+# fdrtool is fit to every finite DESeq2 Wald statistic returned for the view,
+# including PASs with NA BH-adjusted p-values after DESeq2 independent filtering.
 
 # -----------------------------------------------------------------------------
 # Palette
 # -----------------------------------------------------------------------------
 
-# Okabe-Ito colour-blind-safe qualitative palette. The previous key paired
-# #33A02C (Standard) with #E31A1C (Strong), which is indistinguishable under
-# deuteranopia and protanopia, and used one colour (#6A3D9A) for both the HBFSS
-# points and the HBFSS boundary curve, so the two read as a single object.
+# Okabe-Ito colour-blind-safe palette used consistently across significance figures.
 plot_palette <- list(
   background = "#9E9E9E",   # non-significant PASs, darker so they survive print
   threshold  = "#8C6D31",   # +/- LFC boundary rules
@@ -2637,9 +2562,6 @@ get_active_evs_cutoff <- function(comparison_name) {
   }
   k
 }
-
-# Backward-compatible function name used throughout the established pipeline.
-get_empirical_evs_cutoff <- get_active_evs_cutoff
 
 if (anyDuplicated(comparison_table$comparison_name)) stop("comparison_table contains duplicated comparison names.")
 cutoff_cols <- c("fixed_5000_k", "cpm_empirical_k", "vst_empirical_k")
@@ -2957,9 +2879,7 @@ save_grob <- function(g, path, width = FIG_DOUBLE_COL_MM, height = 150,
   invisible(path)
 }
 
-# Writes one figure to every configured format from a single canvas
-# specification, replacing the previous pattern of two near-identical
-# save_grob() calls per figure.
+# Write each figure to every configured output format from one canvas specification.
 save_figure <- function(g, path_base, width, height, dpi = figure_dpi,
                         bg = "white", units = c("mm", "in")) {
   units <- match.arg(units)
@@ -2991,6 +2911,10 @@ maybe_rasterise <- function(layer, dpi = figure_dpi) {
   layer
 }
 
+# Display form of a comparison key: "RT0_ZT6" -> "RT0 vs ZT6". The underscored
+# key is used for file paths and list names; figures show the readable form.
+pretty_comparison <- function(x) sub("_", " vs ", x, fixed = TRUE)
+
 pretty_dataset_type <- function(dataset_key) {
   switch(
     dataset_key,
@@ -3013,12 +2937,13 @@ pretty_dataset_label <- function(dataset_name) {
   if (length(parts) >= 5L && parts[3] %in% unname(track_short)) {
     track_label <- parts[3]
     dataset_key <- paste(parts[4:length(parts)], collapse = "_")
-    return(paste(comparison_name, track_label, pretty_dataset_type(dataset_key), sep = " | "))
+    return(paste(pretty_comparison(comparison_name), track_label,
+                 pretty_dataset_type(dataset_key), sep = " | "))
   }
 
   dataset_key <- paste(parts[3:length(parts)], collapse = "_")
 
-  paste(comparison_name, pretty_dataset_type(dataset_key), sep = " | ")
+  paste(pretty_comparison(comparison_name), pretty_dataset_type(dataset_key), sep = " | ")
 }
 
 
@@ -3242,9 +3167,7 @@ significance_method_labels <- c(
   "HBFSS" = "HBFSS"
 )
 
-# Sizes are tuned so the four glyphs have comparable visual weight at final
-# print size. They are smaller than the previous values because panels are no
-# longer drawn oversized and then reduced.
+# Marker sizes used consistently across significance figures.
 significance_method_sizes <- c(
   "Standard" = 1.55,
   "Strong" = 1.45,
@@ -3259,12 +3182,7 @@ significance_method_colors <- c(
   "HBFSS" = plot_palette$hbfss
 )
 
-# Filled DESeq2 symbols plus a star for HBFSS keep the shared key visually
-# obvious in every panel, including reduced mobile views and exported legends.
-# Shape 18 (solid diamond) renders far larger than shape 8 (star) at the same
-# nominal size, which forced the size table to compensate. A solid
-# circle/square/triangle set plus a star for HBFSS keeps apparent area
-# comparable and stays distinguishable in greyscale.
+# Distinct marker shapes for Standard, Strong, Weak, and HBFSS.
 significance_method_shapes <- c(
   "Standard" = 16,
   "Strong" = 15,
@@ -3365,8 +3283,6 @@ manuscript_theme <- function() {
 # Extracts the shared method legend from an assembled panel. ggplot2 < 3.5.0
 # emits one gtable grob named "guide-box"; ggplot2 >= 3.5.0 emits
 # position-specific boxes ("guide-box-bottom", "guide-box-right", and so on)
-# alongside empty placeholders for unused positions. The name is matched by
-# prefix and zero-size placeholders are rejected, so the legend is found under
 # either ggplot2 generation.
 shared_panel_legend <- function(plot_obj) {
   g <- ggplotGrob(plot_obj + theme(legend.position = "bottom"))
@@ -3404,13 +3320,7 @@ shared_panel_legend <- function(plot_obj) {
   g$grobs[[keep[1]]]
 }
 
-# A panel's real data can legitimately have zero rows for a method (e.g. no
-# Weak-CNH discoveries in a given view). When that happens to be true of the
-# specific panel a legend gets borrowed from, ggplot silently omits that
-# method's marker glyph from the legend key even with drop = FALSE. To
-# guarantee every manuscript legend always shows all four method markers,
-# build the shared legend from a small synthetic dataset that always
-# contains exactly one row per method, rather than reusing a real panel.
+# Build the shared legend from one synthetic row per method so all four markers are shown.
 build_full_method_legend <- function() {
   dummy <- data.frame(
     x = rep(0, length(significance_method_levels)),
@@ -3548,10 +3458,116 @@ assemble_one_legend_panel <- function(plot_list, panel_title, ncol = length(plot
   )
 }
 
+artifact_relative_path <- function(path, root) {
+  root_norm <- normalizePath(root, winslash = "/", mustWork = TRUE)
+  path_norm <- normalizePath(path, winslash = "/", mustWork = TRUE)
+  substring(path_norm, nchar(root_norm) + 2L)
+}
+
+copy_artifact_preserving_path <- function(source_path, source_root, destination_root) {
+  rel <- artifact_relative_path(source_path, source_root)
+  destination <- file.path(destination_root, rel)
+  dir.create(dirname(destination), recursive = TRUE, showWarnings = FALSE)
+  if (!file.copy(source_path, destination, overwrite = TRUE, copy.date = TRUE)) {
+    stop("Failed to copy artifact: ", source_path)
+  }
+  destination
+}
+
+create_comparison_artifact_package <- function(comparison_name) {
+  comparison_dir <- file.path(output_dir, comparison_name)
+  if (!dir.exists(comparison_dir)) stop("Comparison output directory is missing: ", comparison_dir)
+
+  figures_dir <- file.path(comparison_dir, "Figures")
+  tables_dir <- file.path(comparison_dir, "Tables")
+  if (dir.exists(figures_dir)) unlink(figures_dir, recursive = TRUE, force = TRUE)
+  if (dir.exists(tables_dir)) unlink(tables_dir, recursive = TRUE, force = TRUE)
+  dir.create(figures_dir, recursive = TRUE, showWarnings = FALSE)
+  dir.create(tables_dir, recursive = TRUE, showWarnings = FALSE)
+
+  source_files <- list.files(comparison_dir, recursive = TRUE, full.names = TRUE, all.files = FALSE)
+  source_files <- source_files[file.info(source_files)$isdir %in% FALSE]
+  normalized <- gsub("\\\\", "/", source_files)
+  source_files <- source_files[!grepl("/(Figures|Tables)/", normalized)]
+  source_files <- source_files[!grepl("\\.zip$", source_files, ignore.case = TRUE)]
+
+  fig_files <- source_files[grepl("\\.(png|pdf|tif|tiff)$", source_files, ignore.case = TRUE)]
+  tab_files <- source_files[grepl("\\.(csv|tsv|txt)$", source_files, ignore.case = TRUE)]
+
+  if (length(fig_files)) {
+    invisible(vapply(fig_files, copy_artifact_preserving_path, character(1), source_root = comparison_dir, destination_root = figures_dir))
+  }
+  if (length(tab_files)) {
+    invisible(vapply(tab_files, copy_artifact_preserving_path, character(1), source_root = comparison_dir, destination_root = tables_dir))
+  }
+  if (!length(fig_files) && !length(tab_files)) stop("No tables or figures found for ", comparison_name)
+
+  zip_path <- file.path(comparison_dir, paste0(comparison_name, ".zip"))
+  package_items <- c()
+  if (length(list.files(figures_dir, recursive = TRUE))) package_items <- c(package_items, "Figures")
+  if (length(list.files(tables_dir, recursive = TRUE))) package_items <- c(package_items, "Tables")
+  if (file.exists(zip_path)) unlink(zip_path, force = TRUE)
+  old_wd <- getwd()
+  on.exit(setwd(old_wd), add = TRUE)
+  setwd(comparison_dir)
+  utils::zip(zipfile = basename(zip_path), files = package_items, flags = "-rq")
+  if (!file.exists(zip_path)) stop("Comparison ZIP creation failed: ", zip_path)
+  normalizePath(zip_path, winslash = "/", mustWork = TRUE)
+}
+
+create_cutoff_artifact_package <- function() {
+  figures_dir <- file.path(output_dir, "Figures")
+  tables_dir <- file.path(output_dir, "Tables")
+  if (dir.exists(figures_dir)) unlink(figures_dir, recursive = TRUE, force = TRUE)
+  if (dir.exists(tables_dir)) unlink(tables_dir, recursive = TRUE, force = TRUE)
+  dir.create(figures_dir, recursive = TRUE, showWarnings = FALSE)
+  dir.create(tables_dir, recursive = TRUE, showWarnings = FALSE)
+
+  artifact_roots <- c(
+    file.path(output_dir, "Combined_Figures"),
+    file.path(output_dir, "Summary_Tables"),
+    file.path(output_dir, "TWAS"),
+    file.path(output_dir, as.character(comparison_table$comparison_name))
+  )
+  artifact_roots <- artifact_roots[dir.exists(artifact_roots)]
+
+  source_files <- unlist(lapply(
+    artifact_roots,
+    function(root) list.files(root, recursive = TRUE, full.names = TRUE, all.files = FALSE)
+  ), use.names = FALSE)
+  source_files <- unique(source_files[file.info(source_files)$isdir %in% FALSE])
+  normalized <- gsub("\\\\", "/", source_files)
+  source_files <- source_files[!grepl("/(Figures|Tables)/", normalized)]
+  source_files <- source_files[!grepl("\\.zip$", source_files, ignore.case = TRUE)]
+
+  fig_files <- source_files[grepl("\\.(png|pdf|tif|tiff)$", source_files, ignore.case = TRUE)]
+  tab_files <- source_files[grepl("\\.(csv|tsv|txt)$", source_files, ignore.case = TRUE)]
+
+  if (length(fig_files)) {
+    invisible(vapply(fig_files, copy_artifact_preserving_path, character(1), source_root = output_dir, destination_root = figures_dir))
+  }
+  if (length(tab_files)) {
+    invisible(vapply(tab_files, copy_artifact_preserving_path, character(1), source_root = output_dir, destination_root = tables_dir))
+  }
+  if (!length(fig_files) && !length(tab_files)) stop("No cutoff-level tables or figures found for ", CUTOFF_METHOD_SLUG)
+
+  cutoff_zip <- file.path(output_dir, paste0(CUTOFF_METHOD_SLUG, ".zip"))
+  if (file.exists(cutoff_zip)) unlink(cutoff_zip, force = TRUE)
+  package_items <- c("Figures", "Tables")
+  if (file.exists(file.path(output_dir, "Methods_Manuscript.md"))) {
+    package_items <- c(package_items, "Methods_Manuscript.md")
+  }
+
+  old_wd <- getwd()
+  on.exit(setwd(old_wd), add = TRUE)
+  setwd(output_dir)
+  utils::zip(zipfile = basename(cutoff_zip), files = package_items, flags = "-rq")
+  if (!file.exists(cutoff_zip)) stop("Cutoff ZIP creation failed: ", cutoff_zip)
+  normalizePath(cutoff_zip, winslash = "/", mustWork = TRUE)
+}
+
 create_all_figures_zip <- function() {
-  # The manuscript figure archive contains curated PNG panels only. Individual
-  # per-view figures and duplicate PDF renditions remain available in the output
-  # tree when generated, but are excluded from the archive to avoid redundancy.
+  # Collect manuscript PNG panels for the figure archive.
   panel_patterns <- c(
     "/Panels/.*\\.png$",
     "/Combined_Figures/.*\\.png$",
@@ -3572,8 +3588,6 @@ create_all_figures_zip <- function() {
   for (pat in panel_patterns) keep <- keep | grepl(pat, normalized)
   figure_files <- all_png[keep]
 
-  # The global TWAS method-count figure is intentionally excluded because the
-  # per-comparison five-view TWAS panels already contain the same count summary.
   figure_files <- figure_files[
     !grepl("Figure_TWAS_Method_Counts\\.png$", figure_files)
   ]
@@ -3600,9 +3614,7 @@ create_all_figures_zip <- function() {
 }
 
 create_all_tables_zip <- function() {
-  # The manuscript table archive contains the concise tables used to interpret
-  # significance, EVS/PCA evidence, and 3'aTWAS overlap. Per-view working tables
-  # remain in their comparison folders but are not duplicated in the archive.
+  # Collect manuscript summary tables for the table archive.
   wanted <- character(0)
 
   add_if_exists <- function(path) {
@@ -3610,7 +3622,7 @@ create_all_tables_zip <- function() {
   }
 
   add_if_exists(file.path(summary_table_dir, "Table_DE_Method_Counts.csv"))
-  add_if_exists(file.path(summary_table_dir, "Table_EVS_Empirical_Cutoffs.csv"))
+  add_if_exists(file.path(summary_table_dir, "Table_EVS_Cutoffs.csv"))
   add_if_exists(file.path(summary_table_dir, "Table_EVS_Split_Audit.csv"))
   add_if_exists(file.path(summary_table_dir, "Table_EVS_PCA_Evidence.csv"))
 
@@ -4116,7 +4128,7 @@ compute_pc1_loading_table <- function(value_df, sample_names, top_n, preprocessi
 
 build_eigenvector_split <- function(comparison_name, count_matrix, coldata, track_key) {
   track_key <- match.arg(track_key, c("normalized_evs", "raw_evs", "cpm_evs", "vst_evs"))
-  empirical_k <- get_empirical_evs_cutoff(comparison_name)
+  empirical_k <- get_active_evs_cutoff(comparison_name)
 
   # The EVS matrix is used only to choose feature IDs. The normalized track
   # follows the supplied workflow: median-of-ratios normalization of the full
@@ -5106,7 +5118,7 @@ export_comparison_manuscript_tables <- function(comparison_name) {
     method_counts <- data.frame(
       Comparison = comparison_name,
       Analysis = analysis_label,
-      EVS_k_per_condition = if (identical(dataset_key, "raw_dataset")) NA_integer_ else get_empirical_evs_cutoff(comparison_name),
+      EVS_k_per_condition = if (identical(dataset_key, "raw_dataset")) NA_integer_ else get_active_evs_cutoff(comparison_name),
       PAS_tested = nrow(df),
       HC_alpha0 = HC_ALPHA0,
       HCp = hc,
@@ -5152,7 +5164,7 @@ export_comparison_manuscript_tables <- function(comparison_name) {
       sig_out <- data.frame(
         Comparison = comparison_name,
         Analysis = analysis_label,
-        EVS_k_per_condition = if (identical(dataset_key, "raw_dataset")) NA_integer_ else get_empirical_evs_cutoff(comparison_name),
+        EVS_k_per_condition = if (identical(dataset_key, "raw_dataset")) NA_integer_ else get_active_evs_cutoff(comparison_name),
         PAS = pas,
         Gene = gene,
         Direction = as.character(sig$regulation_direction),
@@ -5196,7 +5208,7 @@ export_comparison_manuscript_tables <- function(comparison_name) {
       volcano <- plot_final_volcano(
         df,
         dataset_name = dataset_name,
-        short_title = paste0(comparison_name, " | ", analysis_label),
+        short_title = paste0(pretty_comparison(comparison_name), " | ", analysis_label),
         label_genes = TRUE
       )
       # Single-column final print size.
@@ -5248,7 +5260,7 @@ build_overall_manuscript_summary <- function() {
       rows[[length(rows) + 1L]] <- data.frame(
         Comparison = comparison_name,
         Analysis = analysis_view_label(track_key, dataset_key),
-        EVS_k_per_condition = if (identical(dataset_key, "raw_dataset")) NA_integer_ else get_empirical_evs_cutoff(comparison_name),
+        EVS_k_per_condition = if (identical(dataset_key, "raw_dataset")) NA_integer_ else get_active_evs_cutoff(comparison_name),
         PAS_tested = nrow(df),
         Std = sum(df$standard_flag, na.rm = TRUE),
         Strong = sum(df$strong_cnh_flag, na.rm = TRUE),
@@ -5267,66 +5279,32 @@ write_methods_note <- function() {
   methods_text <- c(
     "# Manuscript Methods",
     "",
-    "## Study unit and comparisons",
-    paste0("The analytical unit was the polyadenylation-site (PAS) feature defined by OrigID in the WTTS-Seq raw-count matrix. PASs were retained as separate observations throughout differential testing and gene symbols were retained as annotation. Enabled downstream comparison(s): ", paste(comparison_table$comparison_name, collapse = ", "), ". Within each enabled pairwise comparison, PASs with zero counts across every treatment and control sample were removed before EVS and differential-expression analysis; all remaining nonzero PASs were retained."),
+    "## PAS filtering and pairwise comparisons",
+    paste0("The analytical unit was the polyadenylation-site (PAS) feature identified by OrigID in the WTTS-Seq raw-count matrix. The analyzed pairwise comparisons were ", paste(comparison_table$comparison_name, collapse = ", "), ". Within each comparison, PASs with zero counts across all samples in the two compared groups were removed; all remaining PASs were retained for analysis."),
     "",
     "## Eigenvector splitting",
-    paste0(
-      "This run used the ", CUTOFF_METHOD_LABEL, " EVS selection rule. ",
-      "The active per-comparison cutoffs were: ",
-      paste(
-        paste0(comparison_table$comparison_name, " k=", vapply(comparison_table$comparison_name, get_active_evs_cutoff, integer(1))),
-        collapse = ", "
-      ),
-      ". These cutoffs were locked before downstream differential-expression testing. ",
-      "The same active cutoff was applied to NormEVS and RawEVS within each comparison so the two EVS tracks differed only in the matrix used for PC1 ranking, not in the number of PASs selected per condition. ",
-      "NormEVS used DESeq2 median-of-ratios normalized counts before PCA, whereas RawEVS used raw counts before PCA. ",
-      "Within each condition, prcomp was applied to the transposed feature-by-sample matrix with centering and without scaling. ",
-      "PASs were ranked by absolute PC1 loading, and the comparison-specific k* highest-loading PASs were selected independently from the RT and ZT condition eigenvectors."
-    ),
-    "PASs present in both condition-specific top-k* sets were classified as Joint; PASs present in only one set were classified as Disjoint for that condition. Joint plus both Disjoint sets formed the Leading Edge, and all other PASs formed the Remainder. EVS defined PAS membership only. Downstream DESeq2 analyses received the corresponding raw-count subset and estimated normalization and dispersion parameters within that analysis view. Original (No EVS), NormEVS Lead/Rem, and RawEVS Lead/Rem were retained; the CPM empirical child additionally ran CPMEVS Lead/Rem using experiment-wide log1p(CPM) for the EVS ranking, and the VST empirical child additionally ran VSTEVS Lead/Rem using experiment-wide DESeq2 VST (blind=TRUE) for the EVS ranking. In every pathway, DESeq2 differential testing still received raw integer counts after membership was defined.",
+    paste0("This analysis used the ", CUTOFF_METHOD_LABEL, " cutoff rule. The comparison-specific top-k values were ", paste(paste0(comparison_table$comparison_name, " k=", vapply(comparison_table$comparison_name, get_active_evs_cutoff, integer(1))), collapse = ", "), ". NormEVS ranked PASs using PCA of DESeq2 median-of-ratios normalized counts, and RawEVS ranked PASs using PCA of raw counts. PCA was performed separately within each condition by applying prcomp to the transposed PAS-by-sample matrix with centering and without feature scaling. PASs were ranked by absolute PC1 loading, and the k highest-ranking PASs were selected independently in the RT and ZT arms."),
+    "PASs selected in both arms were classified as Joint. PASs selected in only one arm were classified as Disjoint for that arm. The union of Joint and Disjoint PASs defined the Leading Edge; all unselected PASs defined the Remainder. EVS determined PAS membership only. Differential-expression testing for every view used the corresponding subset of raw integer counts.",
+    paste0(if (identical(CUTOFF_METHOD_KEY, "cpm_empirical")) "For the CPM empirical analysis, an additional CPMEVS track ranked PASs using experiment-wide log1p(CPM) values. " else "", if (identical(CUTOFF_METHOD_KEY, "vst_empirical")) "For the VST empirical analysis, an additional VSTEVS track ranked PASs using experiment-wide DESeq2 variance-stabilized values with blind=TRUE. " else "", "The Original view contained all nonzero PASs without EVS splitting."),
     "",
-    "## DESeq2 model and log2 fold-change shrinkage",
-    "Each analysis view was modeled independently with DESeq2 using a negative-binomial generalized linear model with design ~ condition and ZT/untrt as the reference. DESeq2 estimated median-of-ratios size factors, gene-wise dispersions, the mean-dispersion relationship, final dispersions, and Wald statistics for the RT/trt coefficient. Log2 fold changes were then shrunken with apeglm. The apeglm-shrunken log2 fold change was the reported effect estimate, the effect term in HBFSS, the direction indicator, and the x-coordinate for all significance figures.",
-    "",
-    "## Standard effect",
-    sprintf("The Standard effect used the ordinary two-sided DESeq2 Wald p-value with Benjamini-Hochberg adjustment at FDR %.2f and the prespecified manuscript effect boundary on the apeglm-shrunken estimate. A PAS was reported as Standard when padj < %.2f and |apeglm LFC| >= %.1f. The ordinary DESeq2 Wald p-value/padj were retained separately from the empirical-null p-value used for HBFSS.", BH_FDR_STANDARD, BH_FDR_STANDARD, lfc_boundary),
-    "",
-    "## Strong (decoupled) composite-null effect",
-    sprintf("Strong (decoupled) effects were tested with DESeq2 results(..., lfcThreshold=%.1f, altHypothesis='greaterAbs'), followed by Benjamini-Hochberg adjustment at FDR %.2f. Reported Strong PASs additionally had |apeglm LFC| >= %.1f so the plotted/reported shrunken effect remained outside the stated effect boundary.", lfc_boundary, BH_FDR_STRONG, lfc_boundary),
-    "",
-    "## Weak composite-null effect",
-    sprintf("Weak-effect support was tested with DESeq2 results(..., lfcThreshold=%.1f, altHypothesis='lessAbs'). Weak-CNH support required Benjamini-Hochberg adjusted p-value < %.2f and |apeglm LFC| < %.1f. A lessAbs rejection alone was not reported as differential expression. A PAS was reported as final Weak only when the same sub-boundary PAS also passed HBFSS.", lfc_boundary, BH_FDR_WEAK, lfc_boundary),
+    "## Differential-expression analysis",
+    "Each analysis view was fit independently with DESeq2 using a negative-binomial generalized linear model with design ~ condition and the ZT/untrt group as the reference. DESeq2 estimated median-of-ratios size factors, dispersions, and Wald statistics. Log2 fold changes for the RT/trt coefficient were shrunken with apeglm and the shrunken estimate was used as the reported effect size.",
+    sprintf("Standard significance required the ordinary two-sided DESeq2 Wald Benjamini-Hochberg adjusted p-value < %.2f and |apeglm-shrunken log2 fold change| >= %.1f.", BH_FDR_STANDARD, lfc_boundary),
+    sprintf("Strong composite-null significance used DESeq2 results with lfcThreshold=%.1f and altHypothesis='greaterAbs', followed by Benjamini-Hochberg adjustment at FDR %.2f; reported Strong PASs also required |apeglm-shrunken log2 fold change| >= %.1f.", lfc_boundary, BH_FDR_STRONG, lfc_boundary),
+    sprintf("Weak composite-null support used DESeq2 results with lfcThreshold=%.1f and altHypothesis='lessAbs', followed by Benjamini-Hochberg adjustment at FDR %.2f and |apeglm-shrunken log2 fold change| < %.1f. Final Weak significance additionally required HBFSS significance.", lfc_boundary, BH_FDR_WEAK, lfc_boundary),
     "",
     "## Empirical-null calibration, higher criticism, and HBFSS",
-    sprintf(
-      paste0(
-        "Finite ordinary DESeq2 Wald statistics were supplied directly to fdrtool with statistic='normal' and cutoff.method='fndr' to estimate a zero-centered normal empirical null and the corresponding empirical-null p-values. ",
-        "These empirical p-values were distinct from the ordinary DESeq2 Wald p-values and from the greaterAbs/lessAbs p-values. ",
-        "Higher-Criticism scores were then calculated from the ordered empirical-null p-values with fdrtool::hc.score. ",
-        "The HC maximization region was prespecified as the lowest %.0f%% of ordered empirical p-values (alpha0=%.2f), matching the lower-tail restriction provided by fdrtool::hc.thresh(alpha0=...). ",
-        "Within that region, HCp was the empirical p-value at the maximum HC score. A dataset/view was assigned an HCp threshold only when that maximum HC score was strictly positive; if the maximum HC score was non-positive or no valid search point existed, HCp and Htau were left undefined and no PAS in that dataset/view was called HBFSS-significant."
-      ),
-      100 * HC_ALPHA0,
-      HC_ALPHA0
-    ),
-    sprintf("For each PAS, HBFSS = |apeglm-shrunken LFC| x [-log10(empirical p)]. With c=%.1f, Htau = -log10(HCp) x c when a valid positive-HC threshold existed. A PAS was HBFSS-significant when HBFSS > Htau. HCp served only to derive Htau and was not imposed as an additional per-PAS significance gate. HBFSS significance did not use a DESeq2 adjusted-p-value gate.", lfc_boundary),
+    sprintf("Finite ordinary DESeq2 Wald statistics were supplied to fdrtool with statistic='normal' and cutoff.method='fndr' to estimate empirical-null p-values. Higher-Criticism scores were calculated from ordered empirical-null p-values with fdrtool::hc.score. The HC search was restricted to the lowest %.0f%% of ordered empirical p-values (alpha0=%.2f). When the maximum HC score was positive, HCp was the empirical p-value at that maximum; otherwise HCp and Htau were undefined and no PAS in that view was classified as HBFSS-significant.", 100 * HC_ALPHA0, HC_ALPHA0),
+    sprintf("For each PAS, HBFSS was |apeglm-shrunken log2 fold change| multiplied by -log10(empirical-null p). Htau was -log10(HCp) multiplied by %.1f. A PAS was HBFSS-significant when HBFSS > Htau.", lfc_boundary),
     "",
-    "## Overlap",
-    "Overlap was the number of unique HBFSS-significant PASs that also satisfied at least one DESeq2 criterion (Standard, Strong, or Weak-CNH). Overlap was a comparison quantity, not a separate significance test. Because final Weak required HBFSS, every final Weak PAS contributed to the overlap set.",
+    "## Method overlap",
+    "Method overlap was defined as the set of HBFSS-significant PASs that also satisfied at least one DESeq2-based criterion: Standard, Strong, or Weak-CNH. Final Weak significance was the intersection of Weak-CNH and HBFSS.",
     "",
-    "## PCA comparison after eigenvector splitting",
-    "PCA comparison figures used the same matrices that defined EVS: full-comparison median-of-ratios normalized counts for NormEVS and raw counts for RawEVS. No additional log transformation or post-split re-normalization was applied. Original, Leading Edge, and Remainder were compared within the same preprocessing scale. For each view, the full PCA eigenspectrum was used to calculate the percentage of total variance explained by PC1 and PC2. PC1 eigenvalue retention was calculated as the first eigenvalue of the view divided by the first eigenvalue of the corresponding Original matrix. Original-PC1 loading energy captured by a feature subset was calculated as the sum of squared Original PC1 loadings for that subset divided by the sum of squared Original PC1 loadings for all PASs. Leading Edge and Remainder loading-energy fractions were required to sum to 100%. Treatment-control separation was summarized in the PC1-PC2 plane as centroid distance divided by pooled within-group root-mean-square distance. PCA panels reported PAS count, PC1 explained variance, PC1 eigenvalue retention, Original-PC1 loading-energy fraction, and the separation ratio.",
+    "## PCA summaries after EVS",
+    "PCA summaries used the same preprocessing matrix used to define each EVS track. Original, Leading Edge, and Remainder subsets were evaluated on that common scale. Reported metrics included PC1 and PC2 variance explained, PC1 eigenvalue retention relative to the Original matrix, the fraction of Original-PC1 loading energy contained in each subset, and RT-ZT separation in the PC1-PC2 plane defined as centroid distance divided by pooled within-group root-mean-square distance.",
     "",
-    "## Volcano figures and tables",
-    sprintf("All significance volcanoes used the HBFSS plotting coordinates: apeglm-shrunken log2 fold change on the x-axis and -log10(empirical-null p) on the y-axis. Standard DESeq2, Strong greaterAbs, and Weak lessAbs significance were determined from their own DESeq2 p-values and BH-adjusted p-values, then their markers were projected onto these common HBFSS coordinates only for visual comparison. The HBFSS boundary y=Htau/|LFC| and HCp reference were drawn on the same axes. The same key was used throughout: Std = green diamond, Strong = red square, Weak = blue triangle, HBFSS = purple star. Multiple method markers were superimposed at the same PAS coordinate. LessAbs-only PASs remained background. Each volcano reported the number of significant PASs for Std, Strong, Weak, HBFSS, and their HBFSS/DESeq2 overlap and labeled at most %d final significant PASs.", n_top_labels_volcano),
-    "Each comparison/view folder contained one significant-PAS table and one method-count table. Significant-PAS tables contained only the union of final Standard, Strong, Weak, and HBFSS discoveries and reported the DESeq2 p-values/BH-adjusted p-values used by the applicable DESeq2 tests together with empirical p, HBFSS, HC alpha0, HCp, Htau, apeglm LFC, and explicit method indicators. Method-count tables also reported HC alpha0, HCp, and Htau for view-level calibration auditing.",
-    "",
-    "## 3'aTWAS ortholog overlap",
-    "Human 3'aTWAS gene symbols were mapped to rat gene symbols by combining database-supported babelgene human-to-rat ortholog mappings (top=FALSE) with direct case-insensitive symbol-equivalent matches present in the WTTS annotation. For every comparison and analysis view, mapped TWAS orthologs were intersected with Standard, Strong, Weak, and HBFSS WTTS discoveries. Concise TWAS tables reported the human TWAS symbol, rat ortholog, total TWAS records, distinct TWAS transcript count, TWAS multi-transcript/APA status, total WTTS PAS count, WTTS multi-PAS/APA status, significant WTTS PAS identifiers, significant multi-PAS status, and the method(s) and analysis view in which significance was observed.",
-    "",
-    "## Output organization",
-    "Original (No EVS) and every active EVS Lead/Rem view were written to separate folders within each enabled comparison for view-specific tables. Manuscript figures were organized as comparison-level panels so related volcano, PCA/EVS, and 3'aTWAS results could be reviewed side by side without redundant individual images. The curated figure archive SEQUENCE_ALL_FIGURES.zip contained manuscript PNG panels only. The separate archive SEQUENCE_ALL_TABLES.zip contained the locked empirical EVS cutoff table, EVS split audit table, overall differential-expression method-count table, quantitative EVS/PCA evidence table, one all-view significant-PAS table and method-count table for each enabled comparison, and the combined 3'aTWAS PAS-, gene-, and method-summary tables."
+    "## 3'aTWAS overlap",
+    "Human 3'aTWAS gene symbols were mapped to rat genes using babelgene human-to-rat ortholog mappings together with direct case-insensitive symbol-equivalent matches present in the WTTS annotation. For each comparison and analysis view, mapped TWAS orthologs were intersected with Standard, Strong, final Weak, and HBFSS WTTS discoveries."
   )
 
   writeLines(methods_text, file.path(output_dir, "Methods_Manuscript.md"), useBytes = TRUE)
@@ -5446,7 +5424,7 @@ save_paper_volcano_panels <- function() {
 
     panel <- assemble_one_legend_panel(
       plots,
-      panel_title = paste0(comparison_name, " | ", CUTOFF_METHOD_LABEL, " | significance across ", length(plots), " analysis view", ifelse(length(plots) == 1L, "", "s")),
+      panel_title = paste0(pretty_comparison(comparison_name), " | ", CUTOFF_METHOD_LABEL, " | significance across ", length(plots), " analysis view", ifelse(length(plots) == 1L, "", "s")),
       ncol = length(plots)
     )
 
@@ -5850,7 +5828,7 @@ plot_evs_pca_evidence <- function(comparison_name) {
     facet_wrap(~ Track, nrow = 1) +
     scale_y_continuous(expand = expansion(mult = c(0.05, 0.20))) +
     labs(
-      title = paste0(comparison_name, " | quantitative EVS/PC1 evidence"),
+      title = paste0(pretty_comparison(comparison_name), " | quantitative EVS/PC1 evidence"),
       x = NULL,
       y = "Percent",
       shape = NULL,
@@ -5980,7 +5958,7 @@ save_paper_pca_panels <- function() {
     if (length(plots)) {
       panel <- assemble_one_legend_panel(
         plots,
-        panel_title = paste0(comparison_name, " | ", CUTOFF_METHOD_LABEL, " | PCA structure before and after EVS"),
+        panel_title = paste0(pretty_comparison(comparison_name), " | ", CUTOFF_METHOD_LABEL, " | PCA structure before and after EVS"),
         ncol = 3
       )
       base <- file.path(panel_dir, paste0("Figure_", comparison_name, "_PCA_EVS_2x3"))
@@ -6167,7 +6145,6 @@ save_discovery_count_panel <- function(summary_df) {
       strip.text = element_text(face = "bold")
     )
 
-  # Drawn at final print size.
   save_figure(
     p,
     file.path(paper_fig_dir, "Figure_Manuscript_Discovery_Counts"),
@@ -6179,19 +6156,9 @@ save_discovery_count_panel <- function(summary_df) {
 # =============================================================================
 # DISPERSION TRADE-OFF FIGURE
 # =============================================================================
-# The EVS split is justified on mean-variance grounds: the leading edge holds
-# higher-mean PASs whose dispersion follows a tight trend, the remainder holds
-# lower-mean PASs with small absolute variance but large relative variability.
-# Splitting is worthwhile only if one parametric dispersion trend cannot serve
-# both regimes, and the best k is the one that minimises residual spread around
-# the fitted trends.
-#
-# Every quantity here comes from the dispersion fit alone, before any p-value,
-# so a cutoff can be judged without conditioning on the test outcomes it will
-# later produce.
-#
-# Panels: A fitted trends, B trend ratio at matched mean, C residual spread by
-# view, D residual spread swept across k with the active cutoff marked.
+# DESeq2 dispersion fits are summarized for Leading Edge and Remainder strata.
+# The sweep evaluates residual dispersion spread across k values and marks the
+# active comparison-specific cutoff. No DE p-values are used in this module.
 # =============================================================================
 
 dispersion_frame_from_dds <- function(dds) {
@@ -6252,7 +6219,7 @@ collect_dispersion_fits <- function() {
       df <- dispersion_frame_from_dds(entry$dds)
       if (is.null(df)) next
 
-      df$comparison <- comparison_name
+      df$comparison <- pretty_comparison(comparison_name)
       df$track      <- unname(track_short[track_key])
       df$view       <- analysis_view_label(track_key, dataset_key)
       df$stratum    <- switch(
@@ -6483,7 +6450,10 @@ dispersion_sweep_one <- function(comparison_name, track_key, k_grid) {
 
   all_ids <- rownames(raw)
   n_total <- length(all_ids)
-  k_grid  <- sort(unique(as.integer(k_grid[k_grid >= 500 & k_grid < n_total / 2])))
+  # Include the active cutoff in the evaluated dispersion sweep.
+  k_active <- as.integer(get_active_evs_cutoff(comparison_name))
+  k_grid <- c(as.integer(k_grid), k_active)
+  k_grid <- sort(unique(k_grid[k_grid >= 500L & k_grid < n_total / 2]))
   if (!length(k_grid)) return(NULL)
 
   rows <- list()
@@ -6504,7 +6474,7 @@ dispersion_sweep_one <- function(comparison_name, track_key, k_grid) {
 
     n_le <- nrow(d_le); n_rem <- nrow(d_rem)
     rows[[length(rows) + 1L]] <- data.frame(
-      comparison       = comparison_name,
+      comparison       = pretty_comparison(comparison_name),
       track            = unname(track_short[track_key]),
       k                = k,
       mad_leading_edge = m_le,
@@ -6543,11 +6513,11 @@ plot_dispersion_sweep <- function(sweep_df, unsplit_mad = NULL) {
   if (is.null(sweep_df) || !nrow(sweep_df)) return(NULL)
 
   active <- data.frame(
-    comparison = as.character(comparison_table$comparison_name),
+    comparison = pretty_comparison(as.character(comparison_table$comparison_name)),
     k = vapply(
       as.character(comparison_table$comparison_name),
-      function(cmp) as.numeric(get_empirical_evs_cutoff(cmp)),
-      numeric(1)
+      function(cmp) as.integer(get_active_evs_cutoff(cmp)),
+      integer(1)
     ),
     stringsAsFactors = FALSE
   )
@@ -7199,7 +7169,7 @@ export_twas_by_view <- function(pas_table, gene_table, summary_table) {
       if (isTRUE(EXPORT_INDIVIDUAL_VIEW_FIGURES)) {
         p <- plot_twas_view_counts(
           summary_sub,
-          paste0(comparison_name, " | ", analysis_label, " | 3'aTWAS")
+          paste0(pretty_comparison(comparison_name), " | ", analysis_label, " | 3'aTWAS")
         )
         if (!is.null(p)) {
           save_figure(
@@ -7363,12 +7333,6 @@ save_csv(
   empirical_cutoff_export,
   file.path(summary_table_dir, "Table_EVS_Cutoffs.csv")
 )
-# Compatibility filename retained for the existing table-ZIP collector.
-save_csv(
-  empirical_cutoff_export,
-  file.path(summary_table_dir, "Table_EVS_Empirical_Cutoffs.csv")
-)
-
 evs_split_audit <- build_evs_split_audit_table()
 if (nrow(evs_split_audit) > 0L) {
   save_csv(
@@ -7384,8 +7348,13 @@ save_paper_support_figures(overall_summary)
 # Final analytical stage: 3'aTWAS ortholog overlap with every reported WTTS method.
 twas_results <- run_twas_overlap_analysis()
 
+comparison_zips <- setNames(
+  vapply(as.character(comparison_table$comparison_name), create_comparison_artifact_package, character(1)),
+  as.character(comparison_table$comparison_name)
+)
 figure_zip <- create_all_figures_zip()
 table_zip <- create_all_tables_zip()
+cutoff_zip <- create_cutoff_artifact_package()
 
 cat("\n=====================================================\n")
 cat("Pipeline complete.\n")
@@ -7396,6 +7365,8 @@ cat("Output directory:\n", output_dir, "\n", sep = "")
 cat("3'aTWAS overlap: complete\n")
 cat("Figure ZIP:\n", figure_zip, "\n", sep = "")
 cat("Table ZIP:\n", table_zip, "\n", sep = "")
+cat("Cutoff ZIP:\n", cutoff_zip, "\n", sep = "")
+cat("Per-comparison ZIPs:\n", paste(unname(comparison_zips), collapse = "\n"), "\n", sep = "")
 cat("=====================================================\n\n")
 
 if (nrow(overall_summary) > 0L) print(overall_summary)
