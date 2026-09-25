@@ -2130,13 +2130,24 @@ if (!SEQUENCE_CHILD_RUN) {
   multi_root_sentinel <- ".sequence_output_root"
   if (dir.exists(multi_root)) {
     if (!file.exists(file.path(multi_root, multi_root_sentinel))) {
-      stop(
-        "Refusing to delete an existing directory that was not created by this ",
-        "pipeline (no ", multi_root_sentinel, " sentinel found): ", multi_root,
-        ". Move or remove it manually, or point SEQUENCE_MULTI_ROOT elsewhere."
+      # Do not delete an unmarked directory, but also do not abort the run.
+      # Older SEQUENCE builds may have created the same output folder before
+      # the sentinel convention was introduced. Use a fresh sibling output
+      # directory instead and preserve the existing directory untouched.
+      original_multi_root <- multi_root
+      multi_root <- paste0(
+        original_multi_root,
+        "_run_",
+        format(Sys.time(), "%Y%m%d_%H%M%S")
       )
+      warning(
+        "Existing output directory has no ", multi_root_sentinel,
+        " sentinel and will NOT be deleted: ", original_multi_root,
+        ". Writing this run to: ", multi_root
+      )
+    } else {
+      unlink(multi_root, recursive = TRUE, force = TRUE)
     }
-    unlink(multi_root, recursive = TRUE, force = TRUE)
   }
   dir.create(multi_root, recursive = TRUE, showWarnings = FALSE)
   writeLines(
@@ -2255,13 +2266,17 @@ if (!SEQUENCE_CHILD_RUN) {
 
   final_zip <- file.path(dirname(multi_root), "SEQUENCE_FINAL_ALL_CUTOFF_METHODS.zip")
   if (file.exists(final_zip)) unlink(final_zip, force = TRUE)
-  oldwd <- getwd(); on.exit(setwd(oldwd), add = TRUE)
-  setwd(dirname(multi_root))
-  zip_rel <- list.files(multi_root, recursive = TRUE, all.files = FALSE)
-  zip_rel <- zip_rel[!grepl("SEQUENCE_ALL_(FIGURES|TABLES)\\.zip$", zip_rel)]
-  zip_items <- file.path(basename(multi_root), zip_rel)
-  zip_items <- zip_items[file.exists(zip_items)]
-  utils::zip(zipfile = basename(final_zip), files = zip_items, flags = "-q")
+  oldwd <- getwd()
+  tryCatch({
+    setwd(dirname(multi_root))
+    zip_rel <- list.files(multi_root, recursive = TRUE, all.files = FALSE)
+    zip_rel <- zip_rel[!grepl("SEQUENCE_ALL_(FIGURES|TABLES)\\.zip$", zip_rel)]
+    zip_items <- file.path(basename(multi_root), zip_rel)
+    zip_items <- zip_items[file.exists(zip_items)]
+    utils::zip(zipfile = basename(final_zip), files = zip_items, flags = "-q")
+  }, finally = {
+    setwd(oldwd)
+  })
   if (!file.exists(final_zip)) stop("Final multi-cutoff ZIP creation failed: ", final_zip)
 
   cat("\n=====================================================\n")
