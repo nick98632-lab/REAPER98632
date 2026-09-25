@@ -2040,6 +2040,433 @@ run_sequence_empirical_cutoff_module <- function(count_path, out_root) {
 }
 
 # =============================================================================
+# CROSS-CUTOFF SENSITIVITY MODULE
+# =============================================================================
+# The three cutoff methods differ only in the number of PASs admitted to the
+# leading edge: the PC1 ranking, the DESeq2 model and the four decision rules
+# are identical across runs, so the comparison is a one-variable sensitivity
+# analysis in k.
+#
+# Because the rankings are fixed, the three top-k sets are nested and overlap
+# statistics between them are determined by the ratios of the k values alone.
+# What is informative is what happens to the calls, reported in two strata:
+#
+#   Common stratum   PASs admitted under the smallest cutoff and therefore
+#                    tested in all three runs. A call that changes here cannot
+#                    be explained by a feature entering or leaving the set; it
+#                    reflects the dispersion trend, independent filtering, the
+#                    BH denominator and the empirical null being re-fit on a
+#                    different surrounding set. Its flip rate is the headline
+#                    sensitivity number.
+#
+#   Margin stratum   PASs admitted only at larger k, which can only gain calls
+#                    as k grows. Differences there are expected rather than
+#                    evidence of instability.
+#
+# This module runs in the master process after all child runs complete, since
+# no child can see another child's output. It is self-contained for the same
+# reason as the empirical cutoff module: the master reaches it before the
+# downstream figure helpers are defined.
+# =============================================================================
+
+run_cutoff_sensitivity_module <- function(multi_root, methods, cutoff_manifest) {
+
+  suppressPackageStartupMessages({
+    library(ggplot2)
+    library(dplyr)
+    library(tidyr)
+    library(grid)
+  })
+
+  MM_PER_IN <- 25.4
+  sens_pretty <- function(x) sub("_", " vs ", x, fixed = TRUE)
+
+  sens_theme <- function(base_pt = 7) {
+    theme_classic(base_size = base_pt) +
+      theme(
+        plot.title   = element_text(size = base_pt + 0.5, face = "bold", hjust = 0,
+                                    margin = margin(b = 2.5)),
+        plot.caption = element_text(size = base_pt - 1.5, colour = "grey35",
+                                    hjust = 0, margin = margin(t = 3)),
+        plot.tag     = element_text(size = base_pt + 2, face = "bold"),
+        plot.tag.position = "topleft",
+        axis.title   = element_text(size = base_pt),
+        axis.text    = element_text(size = base_pt - 0.5, colour = "grey15"),
+        axis.line    = element_line(linewidth = 0.25, colour = "grey20"),
+        axis.ticks   = element_line(linewidth = 0.25, colour = "grey20"),
+        strip.background = element_blank(),
+        strip.text   = element_text(size = base_pt - 0.5, face = "bold"),
+        legend.position = "bottom",
+        legend.title = element_blank(),
+        legend.text  = element_text(size = base_pt - 1),
+        legend.key.size = unit(7, "pt"),
+        panel.background = element_blank(),
+        plot.margin  = margin(3, 4, 3, 3)
+      )
+  }
+
+  sens_save <- function(g, path_base, width_mm = 180, height_mm = 200) {
+    w <- width_mm / MM_PER_IN
+    h <- height_mm / MM_PER_IN
+    cairo_ok <- isTRUE(capabilities("cairo"))
+    if (cairo_ok) grDevices::cairo_pdf(paste0(path_base, ".pdf"), width = w, height = h)
+    else          grDevices::pdf(paste0(path_base, ".pdf"), width = w, height = h)
+    grid::grid.draw(g); grDevices::dev.off()
+    if (cairo_ok) {
+      grDevices::png(paste0(path_base, ".png"), width = w, height = h, units = "in",
+                     res = 600, bg = "white", type = "cairo")
+    } else {
+      grDevices::png(paste0(path_base, ".png"), width = w, height = h, units = "in",
+                     res = 600, bg = "white")
+    }
+    grid::grid.draw(g); grDevices::dev.off()
+  }
+
+
+  sensitivity_method_levels <- function() {
+    c("Fixed_5000", "CPM_Empirical", "VST_Empirical")
+  }
+
+  sensitivity_method_labels <- function() {
+    c(Fixed_5000 = "Fixed 5,000",
+      CPM_Empirical = "CPM k*",
+      VST_Empirical = "VST k*")
+  }
+
+  # Per-PAS leading-edge membership, written by each child run. Only leading-edge
+  # identifiers are stored; the remainder is the complement within a comparison.
+  read_membership_tables <- function(multi_root, methods) {
+    rows <- list()
+    for (m in methods) {
+      f <- file.path(multi_root, m, "Summary_Tables",
+                     "Table_EVS_Leading_Edge_Membership.csv")
+      if (!file.exists(f)) next
+      d <- utils::read.csv(f, stringsAsFactors = FALSE, check.names = FALSE)
+      if (!nrow(d)) next
+      d$Cutoff_Method <- m
+      rows[[length(rows) + 1L]] <- d
+    }
+    if (!length(rows)) return(NULL)
+    dplyr::bind_rows(rows)
+  }
+
+  read_significance_tables <- function(multi_root, methods) {
+    rows <- list()
+    for (m in methods) {
+      root <- file.path(multi_root, m)
+      if (!dir.exists(root)) next
+      files <- list.files(root, pattern = "^Table_Significant_Sites\\.csv$",
+                          recursive = TRUE, full.names = TRUE)
+      for (f in files) {
+        d <- tryCatch(
+          utils::read.csv(f, stringsAsFactors = FALSE, check.names = FALSE),
+          error = function(e) NULL
+        )
+        if (is.null(d) || !nrow(d)) next
+        d$Cutoff_Method <- m
+        rows[[length(rows) + 1L]] <- d
+      }
+    }
+    if (!length(rows)) return(NULL)
+
+    out <- dplyr::bind_rows(rows)
+    needed <- c("Comparison", "Analysis", "PAS", "Std", "Strong", "Weak", "HBFSS_sig")
+    if (!all(needed %in% names(out))) {
+      warning("Significance tables are missing expected columns: ",
+              paste(setdiff(needed, names(out)), collapse = ", "))
+      return(NULL)
+    }
+    for (v in c("Std", "Strong", "Weak", "HBFSS_sig")) {
+      out[[v]] <- as.logical(out[[v]])
+      out[[v]][is.na(out[[v]])] <- FALSE
+    }
+    out
+  }
+
+  # Long form: one row per PAS x method x decision rule that was called.
+  sensitivity_long_calls <- function(sig_df) {
+    rules <- c(Standard = "Std", Strong = "Strong", Weak = "Weak", HBFSS = "HBFSS_sig")
+    dplyr::bind_rows(lapply(names(rules), function(rule) {
+      col <- rules[[rule]]
+      d <- sig_df[sig_df[[col]], c("Comparison", "Analysis", "PAS", "Cutoff_Method"),
+                  drop = FALSE]
+      if (!nrow(d)) return(NULL)
+      d$Rule <- rule
+      d
+    }))
+  }
+
+  # Agreement across cutoffs, over the union of PASs called by any of them.
+  sensitivity_agreement <- function(calls_df, n_methods) {
+    if (is.null(calls_df) || !nrow(calls_df)) return(NULL)
+    calls_df %>%
+      dplyr::distinct(Comparison, Analysis, Rule, PAS, Cutoff_Method) %>%
+      dplyr::group_by(Comparison, Analysis, Rule, PAS) %>%
+      dplyr::summarise(n_methods_calling = dplyr::n(), .groups = "drop") %>%
+      dplyr::group_by(Comparison, Analysis, Rule) %>%
+      dplyr::summarise(
+        union_calls = dplyr::n(),
+        called_by_all = sum(n_methods_calling == n_methods),
+        called_by_two = sum(n_methods_calling == 2L),
+        called_by_one = sum(n_methods_calling == 1L),
+        pct_called_by_all = 100 * sum(n_methods_calling == n_methods) / dplyr::n(),
+        .groups = "drop"
+      )
+  }
+
+  # Flip rate within the common stratum. A PAS counts as flipped when it is
+  # called by at least one cutoff but not by all of them, restricted to PASs that
+  # every cutoff admitted and therefore tested.
+  sensitivity_flip_rate <- function(calls_df, member_df, methods) {
+    if (is.null(calls_df) || !nrow(calls_df)) return(NULL)
+
+    if (is.null(member_df) || !nrow(member_df)) {
+      warning("Leading-edge membership tables were not found; the common-stratum ",
+              "flip rate cannot be computed and is omitted.")
+      return(NULL)
+    }
+
+    # Nested rankings mean the smallest cutoff's leading edge is contained in the
+    # others, so its membership defines the commonly tested stratum.
+    common <- member_df %>%
+      dplyr::distinct(Comparison, Track, PAS, Cutoff_Method) %>%
+      dplyr::group_by(Comparison, Track, PAS) %>%
+      dplyr::summarise(n_admitting = dplyr::n(), .groups = "drop") %>%
+      dplyr::filter(n_admitting == length(methods)) %>%
+      dplyr::select(Comparison, Track, PAS)
+
+    if (!nrow(common)) return(NULL)
+
+    # Analysis labels carry the track, e.g. "NormEVS Lead"; remainder views are
+    # outside the leading-edge stratum and are excluded here.
+    calls <- calls_df[grepl("Lead", calls_df$Analysis, fixed = TRUE), , drop = FALSE]
+    if (!nrow(calls)) return(NULL)
+    calls$Track <- ifelse(grepl("NormEVS", calls$Analysis, fixed = TRUE),
+                          "NormEVS", "RawEVS")
+
+    calls <- dplyr::inner_join(calls, common, by = c("Comparison", "Track", "PAS"))
+    if (!nrow(calls)) return(NULL)
+
+    calls %>%
+      dplyr::distinct(Comparison, Analysis, Rule, PAS, Cutoff_Method) %>%
+      dplyr::group_by(Comparison, Analysis, Rule, PAS) %>%
+      dplyr::summarise(n_methods_calling = dplyr::n(), .groups = "drop") %>%
+      dplyr::group_by(Comparison, Analysis, Rule) %>%
+      dplyr::summarise(
+        n_called_in_common_stratum = dplyr::n(),
+        n_flipped = sum(n_methods_calling < length(methods)),
+        pct_flipped = 100 * sum(n_methods_calling < length(methods)) / dplyr::n(),
+        .groups = "drop"
+      )
+  }
+
+  sensitivity_counts <- function(calls_df, cutoff_manifest) {
+    if (is.null(calls_df) || !nrow(calls_df)) return(NULL)
+    k_long <- tidyr::pivot_longer(
+      cutoff_manifest,
+      cols = dplyr::any_of(c("RT0_ZT6", "RT2_ZT8", "RT4_ZT10", "RT8_ZT14")),
+      names_to = "Comparison", values_to = "k"
+    )
+    k_long$k <- as.integer(k_long$k)
+
+    calls_df %>%
+      dplyr::distinct(Comparison, Analysis, Rule, PAS, Cutoff_Method) %>%
+      dplyr::group_by(Comparison, Analysis, Rule, Cutoff_Method) %>%
+      dplyr::summarise(n_significant = dplyr::n(), .groups = "drop") %>%
+      dplyr::left_join(
+        k_long[, c("Cutoff_Method", "Comparison", "k")],
+        by = c("Cutoff_Method", "Comparison")
+      )
+  }
+
+  # -----------------------------------------------------------------------------
+  # Panels
+  # -----------------------------------------------------------------------------
+
+  SENSITIVITY_AGREE_COLORS <- c(
+    "Called by all cutoffs" = "#009E73",
+    "Called by two"         = "#9AA3AD",
+    "Called by one only"    = "#D55E00"
+  )
+
+  plot_sensitivity_counts <- function(cnt_df, stratum_regex, panel_title) {
+    if (is.null(cnt_df) || !nrow(cnt_df)) return(NULL)
+    d <- cnt_df[grepl(stratum_regex, cnt_df$Analysis), , drop = FALSE]
+    d <- d[!is.na(d$k), , drop = FALSE]
+    if (!nrow(d)) return(NULL)
+
+    d <- d %>%
+      dplyr::group_by(Comparison, Analysis, Cutoff_Method, k) %>%
+      dplyr::summarise(n_significant = sum(n_significant), .groups = "drop")
+    d$Track <- ifelse(grepl("NormEVS", d$Analysis, fixed = TRUE), "NormEVS", "RawEVS")
+    d$Comparison <- sens_pretty(d$Comparison)
+
+    ggplot(d, aes(x = k, y = n_significant, colour = Comparison, linetype = Track)) +
+      geom_line(linewidth = 0.45) +
+      geom_point(size = 0.9) +
+      scale_x_continuous(labels = function(v) format(v, big.mark = ",", trim = TRUE)) +
+      labs(
+        title = panel_title,
+        x = "Leading-edge size, k (PAS per condition)",
+        y = "Significant PAS (any decision rule)"
+      ) +
+      sens_theme() +
+      theme(legend.position = "bottom", legend.title = element_blank())
+  }
+
+  plot_sensitivity_agreement <- function(agree_df) {
+    if (is.null(agree_df) || !nrow(agree_df)) return(NULL)
+    d <- agree_df[grepl("Lead", agree_df$Analysis, fixed = TRUE), , drop = FALSE]
+    if (!nrow(d)) return(NULL)
+
+    long <- d %>%
+      dplyr::select(Comparison, Analysis, Rule, called_by_all, called_by_two, called_by_one) %>%
+      tidyr::pivot_longer(c("called_by_all", "called_by_two", "called_by_one"),
+                          names_to = "agreement", values_to = "n") %>%
+      dplyr::mutate(
+        agreement = factor(
+          dplyr::recode(agreement,
+                        called_by_all = "Called by all cutoffs",
+                        called_by_two = "Called by two",
+                        called_by_one = "Called by one only"),
+          levels = names(SENSITIVITY_AGREE_COLORS)
+        ),
+        Comparison = sens_pretty(Comparison)
+      ) %>%
+      dplyr::group_by(Comparison, Rule, agreement) %>%
+      dplyr::summarise(n = sum(n), .groups = "drop") %>%
+      dplyr::group_by(Comparison, Rule) %>%
+      dplyr::mutate(pct = 100 * n / sum(n)) %>%
+      dplyr::ungroup()
+
+    ggplot(long, aes(x = Rule, y = pct, fill = agreement)) +
+      geom_col(width = 0.68, colour = "white", linewidth = 0.2) +
+      facet_wrap(~ Comparison, nrow = 1) +
+      scale_fill_manual(values = SENSITIVITY_AGREE_COLORS) +
+      scale_y_continuous(expand = expansion(mult = c(0, 0.02))) +
+      labs(
+        title = "Agreement of calls across the three cutoffs",
+        x = NULL, y = "% of union of calls"
+      ) +
+      sens_theme() +
+      theme(
+        legend.position = "bottom", legend.title = element_blank(),
+        axis.text.x = element_text(angle = 45, hjust = 1)
+      )
+  }
+
+  plot_sensitivity_flips <- function(flip_df) {
+    if (is.null(flip_df) || !nrow(flip_df)) return(NULL)
+    d <- flip_df %>%
+      dplyr::group_by(Comparison, Rule) %>%
+      dplyr::summarise(
+        n_flipped = sum(n_flipped),
+        n_total = sum(n_called_in_common_stratum),
+        .groups = "drop"
+      ) %>%
+      dplyr::mutate(pct = 100 * n_flipped / n_total,
+                    Comparison = sens_pretty(Comparison))
+
+    ggplot(d, aes(x = Comparison, y = pct, fill = Rule)) +
+      geom_col(position = position_dodge(width = 0.78), width = 0.70) +
+      geom_text(aes(label = sprintf("%.0f", pct)),
+                position = position_dodge(width = 0.78),
+                vjust = -0.4, size = 1.9) +
+      scale_y_continuous(expand = expansion(mult = c(0, 0.18))) +
+      labs(
+        title = "Calls that change within the commonly tested stratum",
+        x = NULL, y = "% of calls that flip",
+        caption = paste0(
+          "Restricted to PASs admitted by every cutoff, so set membership is held ",
+          "constant and a flip reflects re-fitting rather than a feature entering ",
+          "or leaving the analysis."
+        )
+      ) +
+      sens_theme() +
+      theme(legend.position = "bottom", legend.title = element_blank())
+  }
+
+  # -----------------------------------------------------------------------------
+  # Driver
+  # -----------------------------------------------------------------------------
+
+  run_cutoff_sensitivity_analysis <- function(multi_root, methods, cutoff_manifest) {
+    out_dir <- file.path(multi_root, "Cutoff_Sensitivity")
+    dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+    sig_df <- read_significance_tables(multi_root, methods)
+    if (is.null(sig_df)) {
+      warning("Cutoff sensitivity analysis skipped: no significance tables found.")
+      return(invisible(FALSE))
+    }
+
+    calls_df <- sensitivity_long_calls(sig_df)
+    if (is.null(calls_df) || !nrow(calls_df)) {
+      warning("Cutoff sensitivity analysis skipped: no significant calls found.")
+      return(invisible(FALSE))
+    }
+
+    member_df <- read_membership_tables(multi_root, methods)
+
+    cnt   <- sensitivity_counts(calls_df, cutoff_manifest)
+    agree <- sensitivity_agreement(calls_df, length(methods))
+    flips <- sensitivity_flip_rate(calls_df, member_df, methods)
+
+    if (!is.null(cnt))   utils::write.csv(cnt,   file.path(out_dir, "Table_Sensitivity_Discovery_Counts.csv"), row.names = FALSE)
+    if (!is.null(agree)) utils::write.csv(agree, file.path(out_dir, "Table_Sensitivity_Call_Agreement.csv"), row.names = FALSE)
+    if (!is.null(flips)) utils::write.csv(flips, file.path(out_dir, "Table_Sensitivity_Flip_Rate.csv"), row.names = FALSE)
+
+    panels <- list(
+      plot_sensitivity_counts(cnt, "Lead", "Discoveries in the leading edge"),
+      plot_sensitivity_counts(cnt, "Rem",  "Discoveries left in the remainder"),
+      plot_sensitivity_agreement(agree),
+      plot_sensitivity_flips(flips)
+    )
+    panels <- Filter(Negate(is.null), panels)
+    if (!length(panels)) {
+      warning("Cutoff sensitivity figure skipped: no panel could be built.")
+      return(invisible(FALSE))
+    }
+
+    tagged <- lapply(seq_along(panels), function(i) {
+      panels[[i]] +
+        labs(tag = LETTERS[i]) +
+        theme(plot.tag = element_text(face = "bold", size = 7 + 1,
+                                      family = NULL),
+              plot.tag.position = "topleft")
+    })
+
+    body <- if (requireNamespace("patchwork", quietly = TRUE)) {
+      patchwork::patchworkGrob(
+        patchwork::wrap_plots(tagged, ncol = if (length(tagged) > 1L) 2L else 1L)
+      )
+    } else {
+      do.call(gridExtra::arrangeGrob,
+              c(tagged, list(ncol = if (length(tagged) > 1L) 2L else 1L)))
+    }
+
+    g <- gridExtra::arrangeGrob(
+      body, ncol = 1,
+      top = grid::textGrob(
+        "Sensitivity of SEQUENCE results to the leading-edge cutoff",
+        gp = grid::gpar(
+          fontface = "bold",
+          fontsize = 7 + 2,
+          fontfamily = ""
+        )
+      )
+    )
+
+    sens_save(g, file.path(out_dir, "Figure_Cutoff_Sensitivity"),
+              width_mm = FIG_DOUBLE_COL_MM, height_mm = 200)
+
+    message("Cutoff sensitivity analysis written to: ", out_dir)
+    invisible(TRUE)
+  }
+}
+
+
+# =============================================================================
 # MULTI-CUTOFF ORCHESTRATION
 # Runs this script once for each cutoff method in isolated output folders, then creates one
 # final ZIP containing all figures, tables, audit files, and TWAS results.
@@ -2209,6 +2636,16 @@ if (!SEQUENCE_CHILD_RUN) {
            "). Full log: ", log_path)
     }
   }
+
+  # Cross-cutoff sensitivity: every child has now written its tables, so the
+  # three runs can be compared against each other.
+  tryCatch(
+    run_cutoff_sensitivity_module(multi_root, methods, cutoff_manifest),
+    error = function(e) {
+      warning("Cutoff sensitivity analysis failed: ", conditionMessage(e))
+    }
+  )
+
 
   final_zip <- file.path(dirname(multi_root), "SEQUENCE_FINAL_ALL_CUTOFF_METHODS.zip")
   if (file.exists(final_zip)) unlink(final_zip, force = TRUE)
@@ -7333,6 +7770,38 @@ save_csv(
   empirical_cutoff_export,
   file.path(summary_table_dir, "Table_EVS_Cutoffs.csv")
 )
+# Per-PAS leading-edge membership, consumed by the master's cross-cutoff
+# sensitivity stage to identify PASs that every cutoff admitted and tested.
+build_leading_edge_membership_table <- function() {
+  rows <- list()
+  for (comparison_name in as.character(comparison_table$comparison_name)) {
+    for (track_key in active_evs_track_keys()) {
+      obj <- paper_registry[[registry_key(comparison_name, track_key)]]
+      if (is.null(obj) || is.null(obj$evs)) next
+      ids <- obj$evs$leading_edge_ids
+      if (!length(ids)) next
+      rows[[length(rows) + 1L]] <- data.frame(
+        Comparison = comparison_name,
+        Track = unname(track_short[track_key]),
+        EVS_k_per_condition = obj$evs$empirical_evs_k,
+        PAS = as.character(ids),
+        stringsAsFactors = FALSE
+      )
+    }
+  }
+  if (!length(rows)) return(data.frame())
+  dplyr::bind_rows(rows)
+}
+
+leading_edge_membership <- build_leading_edge_membership_table()
+if (nrow(leading_edge_membership) > 0L) {
+  save_csv(
+    leading_edge_membership,
+    file.path(summary_table_dir, "Table_EVS_Leading_Edge_Membership.csv")
+  )
+}
+
+
 evs_split_audit <- build_evs_split_audit_table()
 if (nrow(evs_split_audit) > 0L) {
   save_csv(
