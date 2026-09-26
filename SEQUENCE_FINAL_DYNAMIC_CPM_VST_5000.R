@@ -2579,6 +2579,62 @@ if (!SEQUENCE_CHILD_RUN) {
   message("Empirical cutoff manuscript figures written to: ", cutoff_fit$figure_dir)
   message("Empirical cutoff manuscript tables written to: ", cutoff_fit$table_dir)
 
+  # Cutoff derivation package. The derivation is complete at this point: it
+  # depends only on the count matrix, not on any downstream DESeq2 run, so its
+  # figures and tables are archived now rather than waiting for the child runs.
+  create_cutoff_derivation_package <- function(multi_root, emp_root) {
+    if (!dir.exists(emp_root)) {
+      warning("Cutoff derivation package skipped: ", emp_root, " does not exist.")
+      return(invisible(NULL))
+    }
+
+    # The three derivation CSVs written beside the tree belong with it.
+    for (f in c("Cutoff_Method_Manifest.csv",
+                "Empirical_Cutoff_Derivation_Audit.csv",
+                "Empirical_Cutoff_Manuscript_Summary.csv")) {
+      src <- file.path(multi_root, f)
+      if (file.exists(src)) {
+        file.copy(src, file.path(emp_root, f), overwrite = TRUE)
+      }
+    }
+
+    n_fig <- length(list.files(file.path(emp_root, "Figures"),
+                               pattern = "\\.(pdf|png|tif|tiff)$", ignore.case = TRUE))
+    n_tab <- length(list.files(file.path(emp_root, "Tables"),
+                               pattern = "\\.csv$", ignore.case = TRUE))
+    cat(sprintf("\n  cutoff derivation: %d figure file(s), %d table file(s)\n",
+                n_fig, n_tab))
+    if (n_fig == 0L) {
+      warning("Cutoff derivation produced no figure files in ",
+              file.path(emp_root, "Figures"))
+    }
+
+    zip_path <- file.path(dirname(multi_root), "SEQUENCE_CUTOFF_DERIVATION.zip")
+    if (file.exists(zip_path)) unlink(zip_path, force = TRUE)
+
+    oldwd <- getwd()
+    tryCatch({
+      setwd(multi_root)
+      rel <- list.files(basename(emp_root), recursive = TRUE, all.files = FALSE)
+      items <- file.path(basename(emp_root), rel)
+      items <- items[file.exists(items)]
+      if (length(items)) {
+        utils::zip(zipfile = zip_path, files = items, flags = "-q")
+      }
+    }, finally = {
+      setwd(oldwd)
+    })
+
+    if (file.exists(zip_path)) {
+      cat("  cutoff derivation ZIP: ",
+          normalizePath(zip_path, winslash = "/", mustWork = FALSE), "\n\n", sep = "")
+    } else {
+      warning("Cutoff derivation ZIP creation failed: ", zip_path)
+    }
+    invisible(zip_path)
+  }
+  create_cutoff_derivation_package(multi_root, empirical_output_root)
+
   log_dir <- file.path(multi_root, "Logs")
   dir.create(log_dir, recursive = TRUE, showWarnings = FALSE)
 
@@ -2674,6 +2730,8 @@ if (!SEQUENCE_CHILD_RUN) {
     add("Figure_4_CPM_vs_VST_EVS_Summary",  file.path(emp, "Figure_4_CPM_vs_VST_EVS_Summary.pdf"))
     add("Figure_Cutoff_Sensitivity",
         file.path(multi_root, "Cutoff_Sensitivity", "Figure_Cutoff_Sensitivity.pdf"))
+    add("SEQUENCE_CUTOFF_DERIVATION.zip",
+        file.path(dirname(multi_root), "SEQUENCE_CUTOFF_DERIVATION.zip"))
     for (m in methods) {
       add(paste0(m, ": Figure_Dispersion_Tradeoff"),
           file.path(multi_root, m, "Combined_Figures", "Figure_Dispersion_Tradeoff_*.pdf"))
@@ -2773,7 +2831,7 @@ if (!SEQUENCE_CHILD_RUN) {
   tryCatch({
     setwd(dirname(multi_root))
     zip_rel <- list.files(multi_root, recursive = TRUE, all.files = FALSE)
-    zip_rel <- zip_rel[!grepl("SEQUENCE_(ALL_(FIGURES|TABLES)|MANUSCRIPT_FIGURES)\\.zip$", zip_rel)]
+    zip_rel <- zip_rel[!grepl("SEQUENCE_(ALL_(FIGURES|TABLES)|MANUSCRIPT_FIGURES|CUTOFF_DERIVATION)\\.zip$", zip_rel)]
     zip_items <- file.path(basename(multi_root), zip_rel)
     zip_items <- zip_items[file.exists(zip_items)]
     utils::zip(zipfile = basename(final_zip), files = zip_items, flags = "-q")
@@ -2785,6 +2843,10 @@ if (!SEQUENCE_CHILD_RUN) {
   cat("\n=====================================================\n")
   cat("All three cutoff-method runs complete (Fixed 5,000, CPM-EVS empirical, VST-EVS empirical).\n")
   cat("Final combined ZIP:\n", normalizePath(final_zip, winslash = "/", mustWork = TRUE), "\n", sep = "")
+  cut_zip <- file.path(dirname(multi_root), "SEQUENCE_CUTOFF_DERIVATION.zip")
+  if (file.exists(cut_zip)) {
+    cat("Cutoff derivation ZIP:\n", normalizePath(cut_zip, winslash = "/", mustWork = FALSE), "\n", sep = "")
+  }
   man_zip <- file.path(dirname(multi_root), "SEQUENCE_MANUSCRIPT_FIGURES.zip")
   if (file.exists(man_zip)) {
     cat("Manuscript figures ZIP:\n", normalizePath(man_zip, winslash = "/", mustWork = FALSE), "\n", sep = "")
