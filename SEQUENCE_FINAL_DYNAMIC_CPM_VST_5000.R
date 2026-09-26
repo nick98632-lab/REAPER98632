@@ -2536,6 +2536,15 @@ if (!SEQUENCE_CHILD_RUN) {
   # Provenance for the run as a whole.
   write_sequence_provenance(multi_root, scope = "master")
 
+  # Build banner. Each entry is detected from this file, so a stripped or older
+  # script reports FALSE here rather than silently producing fewer figures.
+  cat("\n--- SEQUENCE build ---\n")
+  cat(sprintf("  script                : %s\n", this_script))
+  cat(sprintf("  cutoff figures 1-4    : %s\n", exists("run_sequence_empirical_cutoff_module")))
+  cat(sprintf("  dispersion trade-off  : %s\n", exists("save_dispersion_tradeoff_panels")))
+  cat(sprintf("  cutoff sensitivity    : %s\n", exists("run_cutoff_sensitivity_module")))
+  cat("----------------------\n\n")
+
   count_path <- if (file.exists(file.path(repo_guess, "WTTS-Seq_2022.2_DE_raw_read_numbers.csv"))) {
     file.path(repo_guess, "WTTS-Seq_2022.2_DE_raw_read_numbers.csv")
   } else {
@@ -2647,13 +2656,124 @@ if (!SEQUENCE_CHILD_RUN) {
   )
 
 
+  # Verify the expected figure set actually reached disk. A missing entry means
+  # the stage failed or is absent from this build; either way it is reported
+  # here rather than discovered later in the archive.
+  verify_expected_outputs <- function(multi_root, methods) {
+    checks <- list()
+    add <- function(label, path) {
+      hit <- length(Sys.glob(path)) > 0L
+      checks[[length(checks) + 1L]] <<- data.frame(
+        Output = label, Found = hit, stringsAsFactors = FALSE
+      )
+    }
+    emp <- file.path(multi_root, "Empirical_Cutoff_Manuscript", "Figures")
+    add("Figure_1_Regime_Definition",       file.path(emp, "Figure_1_Regime_Definition.pdf"))
+    add("Figure_2_CPM_EVS_Pareto_Cutoffs",  file.path(emp, "Figure_2_CPM_EVS_Pareto_Cutoffs.pdf"))
+    add("Figure_3_VST_EVS_Pareto_Cutoffs",  file.path(emp, "Figure_3_VST_EVS_Pareto_Cutoffs.pdf"))
+    add("Figure_4_CPM_vs_VST_EVS_Summary",  file.path(emp, "Figure_4_CPM_vs_VST_EVS_Summary.pdf"))
+    add("Figure_Cutoff_Sensitivity",
+        file.path(multi_root, "Cutoff_Sensitivity", "Figure_Cutoff_Sensitivity.pdf"))
+    for (m in methods) {
+      add(paste0(m, ": Figure_Dispersion_Tradeoff"),
+          file.path(multi_root, m, "Combined_Figures", "Figure_Dispersion_Tradeoff_*.pdf"))
+    }
+    out <- do.call(rbind, checks)
+    cat("\n--- expected figure outputs ---\n")
+    for (i in seq_len(nrow(out))) {
+      cat(sprintf("  [%s] %s\n", if (out$Found[i]) "ok " else "MISS", out$Output[i]))
+    }
+    cat("-------------------------------\n\n")
+    if (any(!out$Found)) {
+      warning("Some expected figures were not produced: ",
+              paste(out$Output[!out$Found], collapse = "; "))
+    }
+    utils::write.csv(out, file.path(multi_root, "Figure_Output_Check.csv"),
+                     row.names = FALSE)
+    invisible(out)
+  }
+  verify_expected_outputs(multi_root, methods)
+
+  # Manuscript figure package: the derivation figures, the cross-cutoff
+  # sensitivity figure and the per-cutoff dispersion figures collected into one
+  # archive, so the figures that go into the paper are not scattered across
+  # three run trees.
+  create_manuscript_figure_package <- function(multi_root, methods) {
+    stage <- file.path(multi_root, "Manuscript_Figures")
+    unlink(stage, recursive = TRUE, force = TRUE)
+    dir.create(file.path(stage, "Cutoff_Derivation"), recursive = TRUE, showWarnings = FALSE)
+    dir.create(file.path(stage, "Cutoff_Sensitivity"), recursive = TRUE, showWarnings = FALSE)
+    dir.create(file.path(stage, "Dispersion_Tradeoff"), recursive = TRUE, showWarnings = FALSE)
+
+    copy_glob <- function(pattern, dest, prefix = "") {
+      hits <- Sys.glob(pattern)
+      if (!length(hits)) return(0L)
+      ok <- vapply(hits, function(f) {
+        file.copy(f, file.path(dest, paste0(prefix, basename(f))), overwrite = TRUE)
+      }, logical(1))
+      sum(ok)
+    }
+
+    emp <- file.path(multi_root, "Empirical_Cutoff_Manuscript")
+    copy_glob(file.path(emp, "Figures", "Figure_*.pdf"), file.path(stage, "Cutoff_Derivation"))
+    copy_glob(file.path(emp, "Figures", "Figure_*.png"), file.path(stage, "Cutoff_Derivation"))
+    copy_glob(file.path(emp, "Figure_Legends.md"),       file.path(stage, "Cutoff_Derivation"))
+    copy_glob(file.path(emp, "Methods_Manuscript.md"),   file.path(stage, "Cutoff_Derivation"))
+
+    sens <- file.path(multi_root, "Cutoff_Sensitivity")
+    copy_glob(file.path(sens, "Figure_*.pdf"), file.path(stage, "Cutoff_Sensitivity"))
+    copy_glob(file.path(sens, "Figure_*.png"), file.path(stage, "Cutoff_Sensitivity"))
+    copy_glob(file.path(sens, "Table_*.csv"),  file.path(stage, "Cutoff_Sensitivity"))
+
+    # Dispersion figures carry the cutoff method in their name, since one
+    # exists per run and the file names are otherwise identical.
+    for (m in methods) {
+      copy_glob(
+        file.path(multi_root, m, "Combined_Figures", "Figure_Dispersion_Tradeoff_*"),
+        file.path(stage, "Dispersion_Tradeoff"),
+        prefix = paste0(m, "_")
+      )
+    }
+
+    copy_glob(file.path(multi_root, "Cutoff_Method_Manifest.csv"), stage)
+    copy_glob(file.path(multi_root, "Figure_Output_Check.csv"),    stage)
+
+    n_files <- length(list.files(stage, recursive = TRUE))
+    if (!n_files) {
+      warning("Manuscript figure package is empty; nothing was copied.")
+      return(invisible(NULL))
+    }
+
+    fig_zip <- file.path(dirname(multi_root), "SEQUENCE_MANUSCRIPT_FIGURES.zip")
+    if (file.exists(fig_zip)) unlink(fig_zip, force = TRUE)
+    oldwd <- getwd()
+    tryCatch({
+      setwd(dirname(multi_root))
+      rel <- list.files(stage, recursive = TRUE)
+      items <- file.path(basename(multi_root), "Manuscript_Figures", rel)
+      items <- items[file.exists(items)]
+      utils::zip(zipfile = basename(fig_zip), files = items, flags = "-q")
+    }, finally = {
+      setwd(oldwd)
+    })
+
+    if (file.exists(fig_zip)) {
+      cat(sprintf("Manuscript figure package: %s (%d files)\n",
+                  normalizePath(fig_zip, winslash = "/", mustWork = FALSE), n_files))
+    } else {
+      warning("Manuscript figure ZIP creation failed: ", fig_zip)
+    }
+    invisible(fig_zip)
+  }
+  create_manuscript_figure_package(multi_root, methods)
+
   final_zip <- file.path(dirname(multi_root), "SEQUENCE_FINAL_ALL_CUTOFF_METHODS.zip")
   if (file.exists(final_zip)) unlink(final_zip, force = TRUE)
   oldwd <- getwd()
   tryCatch({
     setwd(dirname(multi_root))
     zip_rel <- list.files(multi_root, recursive = TRUE, all.files = FALSE)
-    zip_rel <- zip_rel[!grepl("SEQUENCE_ALL_(FIGURES|TABLES)\\.zip$", zip_rel)]
+    zip_rel <- zip_rel[!grepl("SEQUENCE_(ALL_(FIGURES|TABLES)|MANUSCRIPT_FIGURES)\\.zip$", zip_rel)]
     zip_items <- file.path(basename(multi_root), zip_rel)
     zip_items <- zip_items[file.exists(zip_items)]
     utils::zip(zipfile = basename(final_zip), files = zip_items, flags = "-q")
@@ -2665,6 +2785,10 @@ if (!SEQUENCE_CHILD_RUN) {
   cat("\n=====================================================\n")
   cat("All three cutoff-method runs complete (Fixed 5,000, CPM-EVS empirical, VST-EVS empirical).\n")
   cat("Final combined ZIP:\n", normalizePath(final_zip, winslash = "/", mustWork = TRUE), "\n", sep = "")
+  man_zip <- file.path(dirname(multi_root), "SEQUENCE_MANUSCRIPT_FIGURES.zip")
+  if (file.exists(man_zip)) {
+    cat("Manuscript figures ZIP:\n", normalizePath(man_zip, winslash = "/", mustWork = FALSE), "\n", sep = "")
+  }
   cat("=====================================================\n\n")
   quit(save = "no", status = 0L)
 }
