@@ -2463,6 +2463,13 @@ run_cutoff_sensitivity_module <- function(multi_root, methods, cutoff_manifest) 
     message("Cutoff sensitivity analysis written to: ", out_dir)
     invisible(TRUE)
   }
+
+  # Execute the sensitivity-analysis driver when the module is invoked.
+  run_cutoff_sensitivity_analysis(
+    multi_root = multi_root,
+    methods = methods,
+    cutoff_manifest = cutoff_manifest
+  )
 }
 
 
