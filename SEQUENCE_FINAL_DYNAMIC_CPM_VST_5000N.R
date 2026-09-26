@@ -2507,7 +2507,7 @@ if (!SEQUENCE_CHILD_RUN) {
 
   multi_root <- Sys.getenv(
     "SEQUENCE_MULTI_ROOT",
-    unset = file.path(repo_guess, "exports", "sequence_final_three_cutoffs")
+    unset = file.path(repo_guess, "exports", "sequence_final_three_cutoffsN")
   )
   # Output roots are deleted only when marked by this pipeline's sentinel file.
   multi_root_sentinel <- ".sequence_output_root"
@@ -2616,7 +2616,7 @@ if (!SEQUENCE_CHILD_RUN) {
               file.path(emp_root, "Figures"))
     }
 
-    zip_path <- file.path(dirname(multi_root), "SEQUENCE_CUTOFF_DERIVATION.zip")
+    zip_path <- file.path(dirname(multi_root), "SEQUENCE_CUTOFF_DERIVATION_N.zip")
     if (file.exists(zip_path)) unlink(zip_path, force = TRUE)
 
     oldwd <- getwd()
@@ -2737,8 +2737,8 @@ if (!SEQUENCE_CHILD_RUN) {
     add("Figure_4_CPM_vs_VST_EVS_Summary",  file.path(emp, "Figure_4_CPM_vs_VST_EVS_Summary.pdf"))
     add("Figure_Cutoff_Sensitivity",
         file.path(multi_root, "Cutoff_Sensitivity", "Figure_Cutoff_Sensitivity.pdf"))
-    add("SEQUENCE_CUTOFF_DERIVATION.zip",
-        file.path(dirname(multi_root), "SEQUENCE_CUTOFF_DERIVATION.zip"))
+    add("SEQUENCE_CUTOFF_DERIVATION_N.zip",
+        file.path(dirname(multi_root), "SEQUENCE_CUTOFF_DERIVATION_N.zip"))
     for (m in methods) {
       add(paste0(m, ": Figure_Dispersion_Tradeoff"),
           file.path(multi_root, m, "Combined_Figures", "Figure_Dispersion_Tradeoff_*.pdf"))
@@ -2809,7 +2809,7 @@ if (!SEQUENCE_CHILD_RUN) {
       return(invisible(NULL))
     }
 
-    fig_zip <- file.path(dirname(multi_root), "SEQUENCE_MANUSCRIPT_FIGURES.zip")
+    fig_zip <- file.path(dirname(multi_root), "SEQUENCE_MANUSCRIPT_FIGURES_N.zip")
     if (file.exists(fig_zip)) unlink(fig_zip, force = TRUE)
     oldwd <- getwd()
     tryCatch({
@@ -2832,7 +2832,7 @@ if (!SEQUENCE_CHILD_RUN) {
   }
   create_manuscript_figure_package(multi_root, methods)
 
-  final_zip <- file.path(dirname(multi_root), "SEQUENCE_FINAL_ALL_CUTOFF_METHODS.zip")
+  final_zip <- file.path(dirname(multi_root), "SEQUENCE_FINAL_ALL_CUTOFF_METHODS_N.zip")
   if (file.exists(final_zip)) unlink(final_zip, force = TRUE)
   oldwd <- getwd()
   tryCatch({
@@ -2850,11 +2850,11 @@ if (!SEQUENCE_CHILD_RUN) {
   cat("\n=====================================================\n")
   cat("All three cutoff-method runs complete (Fixed 5,000, CPM-EVS empirical, VST-EVS empirical).\n")
   cat("Final combined ZIP:\n", normalizePath(final_zip, winslash = "/", mustWork = TRUE), "\n", sep = "")
-  cut_zip <- file.path(dirname(multi_root), "SEQUENCE_CUTOFF_DERIVATION.zip")
+  cut_zip <- file.path(dirname(multi_root), "SEQUENCE_CUTOFF_DERIVATION_N.zip")
   if (file.exists(cut_zip)) {
     cat("Cutoff derivation ZIP:\n", normalizePath(cut_zip, winslash = "/", mustWork = FALSE), "\n", sep = "")
   }
-  man_zip <- file.path(dirname(multi_root), "SEQUENCE_MANUSCRIPT_FIGURES.zip")
+  man_zip <- file.path(dirname(multi_root), "SEQUENCE_MANUSCRIPT_FIGURES_N.zip")
   if (file.exists(man_zip)) {
     cat("Manuscript figures ZIP:\n", normalizePath(man_zip, winslash = "/", mustWork = FALSE), "\n", sep = "")
   }
@@ -3265,7 +3265,7 @@ repo_root <- find_repo_root()
 
 multi_output_root <- Sys.getenv(
   "SEQUENCE_MULTI_ROOT",
-  unset = file.path(repo_root, "exports", "sequence_final_three_cutoffs")
+  unset = file.path(repo_root, "exports", "sequence_final_three_cutoffsN")
 )
 output_dir <- file.path(multi_output_root, CUTOFF_METHOD_SLUG)
 
