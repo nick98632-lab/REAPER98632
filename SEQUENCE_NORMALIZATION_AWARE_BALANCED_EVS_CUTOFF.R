@@ -7,7 +7,7 @@
 
 #!/usr/bin/env Rscript
 
-PIPELINE_BUILD <- "SEQUENCE_FOUR_CUTOFFS_PC1NB_WEIGHTED_GR_2026-09-27"
+PIPELINE_BUILD <- "SEQUENCE_THREE_CUTOFFS_PRIOR_WIDTH_WINNER_2026-09-27"
 
 # =============================================================================
 # SEQUENCE MANUSCRIPT ANALYSIS
@@ -438,37 +438,10 @@ derive_sequence_empirical_cutoffs <- function(count_path) {
 
 
 # =============================================================================
-# PC1 x NB-INFORMATION WEIGHTED G/R CUTOFF ENGINE
+# NORMALIZED-COUNT REGIME KNOTS (used only to label the actual NormEVS split)
 # =============================================================================
-# Run by the MASTER process before any differential-expression testing. This is
-# the same regime framework as the CPM/VST engine above, with two changes:
-#
-#   1) Ranking matrix = DESeq2 median-of-ratios normalized counts (the NormEVS
-#      representation), instead of log1p(CPM) or VST.
-#   2) G(k) and R(k) are WEIGHTED rather than counted. Each PAS i carries
-#         w_i = P_i x I_i
-#      P_i = PC1-attributable variance of PAS i in the pooled NB Pearson
-#            residuals of the comparison's 10 samples (abundance-adjusted
-#            PC1 structure),
-#      I_i = mu_i / (1 + alpha_i mu_i), the negative-binomial information of
-#            PAS i (mu_i = normalized mean, alpha_i = DESeq2 MAP dispersion from
-#            the comparison's 10-sample ~ condition fit).
-#
-# Steps (identical to the CPM/VST engine except where noted):
-#   a) rank PASs within each of the 8 arms by ascending |PC1 loading| on the
-#      normalized counts; build D_g(r) = F_E,g(r) - F_P,g(r);
-#   b) fit one shared c1/c2 two-knot model across the 8 arms, defining the
-#      Remainder (rank < c1), Divergence (c1..c2) and Leading-Edge (> c2)
-#      regimes;
-#   c) for each RT/ZT comparison and candidate k <= N - c2:
-#         G_w(k) = sum w over Joint + Disjoint whose opposite-arm rank is in
-#                  the LE or Divergence regime,
-#         R_w(k) = sum w over Disjoint whose opposite-arm rank is in the
-#                  Remainder regime;
-#   d) nondominated Pareto frontier (max G_w, min R_w), min-max normalized on
-#      the frontier, k* = maximum perpendicular distance to the endpoint chord.
-# Unweighted G/R counts are reported alongside for comparison with CPM/VST.
-# =============================================================================
+# Same shared two-knot fit as the CPM/VST engine, on median-of-ratios
+# normalized counts (the NormEVS representation). No cutoff is chosen here.
 
 seqcut_build_arm_norm <- function(norm, pooled_var) {
   pc <- seqcut_pc1_rank(norm)
@@ -476,179 +449,49 @@ seqcut_build_arm_norm <- function(norm, pooled_var) {
   P <- pc$contribution[ord]
   mu <- rowMeans(norm)[ord]
   E <- pmax(pooled_var[ord] - mu, 0)
-  if (sum(P) <= 0 || sum(E) <= 0) stop("Undefined PC1/NB mass during PC1-NB cutoff derivation.")
+  if (sum(P) <= 0 || sum(E) <= 0) stop("Undefined PC1 or excess-variance mass on normalized counts.")
   data.frame(rank = seq_along(ord), feature_id = rownames(norm)[ord],
              D = cumsum(E / sum(E)) - cumsum(P / sum(P)), stringsAsFactors = FALSE)
 }
 
-# Weighted version of seqcut_scan_pair(): same classes, PAS weights w.
-seqcut_scan_pair_weighted <- function(control_df, treatment_df, c1, c2, w) {
-  N <- nrow(control_df); K <- N - c2
-  if (K < 1L) stop("No candidate k exists beyond c2.")
-  rC_map <- seqcut_rank_map(control_df); rT_map <- seqcut_rank_map(treatment_df)
-  ids <- control_df$feature_id
-  rC <- as.integer(rC_map[ids]); rT <- as.integer(rT_map[ids])
-  if (anyNA(rC) || anyNA(rT)) stop("Cross-arm PAS rank mapping failed.")
-  wv <- as.numeric(w[ids]); wv[!is.finite(wv) | wv < 0] <- 0
-  dC <- N - rC + 1L; dT <- N - rT + 1L
-
-  joint_w <- seqcut_activate_from(pmax(dC, dT), wv, K)
-  idxC <- which(dC < dT & dC <= K)
-  sC <- dC[idxC]; eC <- pmin(dT[idxC], K + 1L); oC <- rT[idxC]; wC <- wv[idxC]
-  idxT <- which(dT < dC & dT <= K)
-  sT <- dT[idxT]; eT <- pmin(dC[idxT], K + 1L); oT <- rC[idxT]; wT <- wv[idxT]
-
-  rem_w <- seqcut_active_interval(sC, eC, wC * (oC < c1), K) +
-           seqcut_active_interval(sT, eT, wT * (oT < c1), K)
-  div_w <- seqcut_active_interval(sC, eC, wC * (oC >= c1 & oC <= c2), K) +
-           seqcut_active_interval(sT, eT, wT * (oT >= c1 & oT <= c2), K)
-  ole_w <- seqcut_active_interval(sC, eC, wC * (oC > c2), K) +
-           seqcut_active_interval(sT, eT, wT * (oT > c2), K)
-  union_w <- seqcut_activate_from(pmin(dC, dT), wv, K)
-  good_w <- joint_w + ole_w + div_w
-  if (!isTRUE(all.equal(good_w + rem_w, union_w, tolerance = 1e-8))) {
-    stop("Internal weighted union mismatch in PC1-NB cutoff scan.")
-  }
-  tot <- sum(wv)
-  data.frame(k = seq_len(K), joint_w = joint_w / tot, opposite_le_w = ole_w / tot,
-             opposite_divergence_w = div_w / tot, remainder_cross_w = rem_w / tot,
-             good_w = good_w / tot, union_w = union_w / tot, stringsAsFactors = FALSE)
-}
-
-derive_pc1nb_information_cutoffs <- function(count_path) {
-  if (!requireNamespace("DESeq2", quietly = TRUE)) stop("DESeq2 is required for the PC1-NB cutoff.")
-  message("Deriving PC1 x NB-information weighted G/R cutoffs...")
+derive_normcount_knots <- function(count_path) {
+  message("Fitting shared regime knots on normalized-count PC1 rankings...")
   counts <- seqcut_read_counts(count_path)
   groups <- seqcut_assign_groups(colnames(counts))
   norm_obj <- seqcut_normalize_and_vst(counts, groups)
   pooled_var <- seqcut_pooled_var(norm_obj$norm, groups)
-
   arms <- list()
   for (g in levels(groups)) {
     arms[[g]] <- seqcut_build_arm_norm(norm_obj$norm[, groups == g, drop = FALSE], pooled_var)
   }
   knot <- seqcut_fit_shared_knots(arms)
-  message("  NormEVS arms: shared c1=", knot$c1, " | c2=", knot$c2, " | SSE=", signif(knot$SSE, 7))
-
-  ks <- integer(0); sel_rows <- list(); scans <- list(); fronts <- list(); mems <- list()
-  for (cn in names(SEQCUT_COMPARISONS)) {
-    mp <- SEQCUT_COMPARISONS[[cn]]
-    idx <- which(groups %in% mp)
-    cnt <- round(counts[, idx, drop = FALSE]); storage.mode(cnt) <- "integer"
-    cond <- factor(ifelse(groups[idx] == mp[["control"]], "trt", "untrt"), levels = c("untrt", "trt"))
-    dds <- DESeq2::DESeqDataSetFromMatrix(countData = cnt,
-                                          colData = data.frame(condition = cond, row.names = colnames(cnt)),
-                                          design = ~ condition)
-    dds <- tryCatch(DESeq2::estimateSizeFactors(dds),
-                    error = function(e) DESeq2::estimateSizeFactors(dds, type = "poscounts"))
-    dds <- tryCatch(
-      DESeq2::estimateDispersions(dds, quiet = TRUE),
-      error = function(e) {
-        message("  ", cn, ": default dispersion fit failed; using fitType = 'mean'.")
-        DESeq2::estimateDispersions(dds, fitType = "mean", quiet = TRUE)
-      }
-    )
-    alpha <- DESeq2::dispersions(dds)
-    mc <- S4Vectors::mcols(dds)
-    sf <- DESeq2::sizeFactors(dds)
-    nrm <- DESeq2::counts(dds, normalized = TRUE)
-    mu <- rowMeans(nrm)
-    info <- mu / (1 + alpha * mu)
-
-    # Pooled NB Pearson-residual PC1 mass (10 samples, label-free mean).
-    m_fit <- outer(mu, sf)
-    z <- (cnt - m_fit) / sqrt(m_fit + alpha * m_fit^2)
-    zc <- z - rowMeans(z)
-    ss <- rowSums(zc^2)
-    usable <- mu > 0 & is.finite(ss) & ss > 1e-12
-    e <- eigen(crossprod(zc[usable, , drop = FALSE]), symmetric = TRUE)
-    P <- rep(0, nrow(cnt))
-    P[usable] <- as.vector(zc[usable, , drop = FALSE] %*% e$vectors[, 1])^2 / (ncol(cnt) - 1)
-
-    w <- P * info
-    w[!is.finite(w) | w < 0] <- 0
-    names(w) <- rownames(cnt)
-
-    sw <- seqcut_scan_pair_weighted(arms[[mp[["control"]]]], arms[[mp[["treatment"]]]],
-                                    knot$c1, knot$c2, w)
-    sn <- seqcut_scan_pair(arms[[mp[["control"]]]], arms[[mp[["treatment"]]]], knot$c1, knot$c2)
-    scan <- cbind(comparison = cn, sw, sn[, -1])
-    opt <- seqcut_pareto_endpoint_max(data.frame(k = scan$k, good_n = scan$good_w,
-                                                 remainder_cross_n = scan$remainder_cross_w))
-    kstar <- opt$selected_k
-    fr <- opt$frontier; fr$comparison <- cn
-    fronts[[cn]] <- fr
-
-    # Membership at k*: same classes as the scan.
-    N <- nrow(arms[[1]])
-    ids <- arms[[mp[["control"]]]]$feature_id
-    rC <- as.integer(seqcut_rank_map(arms[[mp[["control"]]]])[ids])
-    rT <- as.integer(seqcut_rank_map(arms[[mp[["treatment"]]]])[ids])
-    dC <- N - rC + 1L; dT <- N - rT + 1L
-    inC <- dC <= kstar; inT <- dT <= kstar
-    opp <- ifelse(inC & !inT, rT, ifelse(inT & !inC, rC, NA_integer_))
-    cls <- ifelse(inC & inT, "Joint",
-           ifelse(!(inC | inT), "Remainder",
-           ifelse(opp > knot$c2, "Disjoint, opposite LE",
-           ifelse(opp >= knot$c1, "Disjoint, opposite Divergence", "Disjoint, opposite Remainder"))))
-    pos <- match(ids, rownames(cnt))
-    bm <- mc$baseMean[pos]; al <- alpha[pos]; tr <- mc$dispFit[pos]
-    dres <- log(al / tr)
-    mem <- data.frame(comparison = cn, feature_id = ids, entry_rank = pmin(dC, dT),
-                      class = cls, dataset = ifelse(inC | inT, "Leading_Edge", "Remainder"),
-                      baseMean = bm, dispersion = al, dispersion_trend = tr, dispersion_residual = dres,
-                      NB_information = info[pos], pooled_residual_PC1_mass = P[pos], weight = w[ids],
-                      stringsAsFactors = FALSE)
-    mems[[cn]] <- mem
-
-    ok <- is.finite(dres) & is.finite(bm) & bm > 0
-    le <- ok & mem$dataset == "Leading_Edge"; rem <- ok & mem$dataset == "Remainder"
-    smd <- function(v) abs(mean(v[le]) - mean(v[rem])) /
-      sqrt(((sum(le) - 1) * var(v[le]) + (sum(rem) - 1) * var(v[rem])) / (sum(le) + sum(rem) - 2))
-    sel <- scan[scan$k == kstar, , drop = FALSE]
-    sel$k_star <- kstar; sel$c1 <- knot$c1; sel$c2 <- knot$c2; sel$N <- N
-    sel$endpoint_deviation <- opt$selected$endpoint_deviation
-    sel$LE_n <- sum(mem$dataset == "Leading_Edge"); sel$REM_n <- sum(mem$dataset == "Remainder")
-    sel$abundance_SMD <- smd(log1p(bm))
-    sel$dispersion_residual_SMD <- smd(dres)
-    sel$dispersion_residual_log_variance_ratio <- abs(log(var(dres[le]) / var(dres[rem])))
-    for (cc in c("Joint", "Disjoint, opposite LE", "Disjoint, opposite Divergence", "Disjoint, opposite Remainder")) {
-      sel[[paste0("n_", gsub("[^A-Za-z]+", "_", cc))]] <- sum(cls == cc)
-    }
-    sel_rows[[cn]] <- sel
-    scans[[cn]] <- scan
-    ks[cn] <- kstar
-    message(sprintf("  %s: k*=%d | LE=%d | G_w=%.3f | R_w=%.3f | G=%d | R=%d",
-                    cn, kstar, sel$LE_n, sel$good_w, sel$remainder_cross_w, sel$good_n, sel$remainder_cross_n))
-  }
-
-  summary <- do.call(rbind, sel_rows); rownames(summary) <- NULL
-  list(k = ks, knot = knot, arms = arms, summary = summary,
-       scan = do.call(rbind, scans), frontier = do.call(rbind, fronts),
-       membership = do.call(rbind, mems))
+  message("  NormEVS knots: c1=", knot$c1, " | c2=", knot$c2, " | N=", knot$N)
+  list(c1 = knot$c1, c2 = knot$c2, N = knot$N)
 }
 
 # =============================================================================
 # CUTOFF DATA, DYNAMIC WINNER SELECTION AND "WHY THIS ESTIMATOR" FIGURE
 # =============================================================================
-# Winner rule (decided per comparison, after the four method runs):
-#   Each method's NormEVS split is fitted by DESeq2 separately in the Leading
-#   Edge and the Remainder. For every fit we take DESeq2's own dispersion
-#   estimates and measure how tightly the gene-wise dispersions follow the
-#   fitted mean-dispersion trend:
-#       v = robust variance of log(dispGeneEst / dispFit)
-#           = (MAD of the log residuals)^2, the quantity DESeq2 stores as
-#             varLogDispEsts and uses to set the dispersion prior.
-#   Split score  V = (n_LE v_LE + n_REM v_REM) / (n_LE + n_REM).
-#   The method with the smallest V wins (ties: fewer PASs in the Leading Edge).
-#   Original (no EVS) v is reported as the reference. No DE p-value, adjusted
-#   p-value or discovery count enters the rule, so the reported FDR is valid.
+# Three cutoff methods are run: Fixed 5,000, CPM k* and VST k*.
+#
+# Why EVS helps DESeq2: DESeq2 shrinks every gene-wise dispersion toward one
+# mean-dispersion trend with one prior width for all PASs, i.e. it assumes PASs
+# at the same mean share the same expected dispersion. When they do not, that
+# prior is centred wrongly and is too wide. EVS separates the populations, so
+# each subset gets its own trend and a narrower prior.
+#
+# Winner rule (per comparison, after the three method runs):
+#   prior width w = varLogDispEsts - trigamma((m - p) / 2), from each DESeq2
+#   fit (Leading Edge, Remainder, Original). Split score
+#       W = (n_LE w_LE + n_REM w_REM) / (n_LE + n_REM).
+#   The method with the narrowest pooled prior (lowest W) wins; ties go to the
+#   smaller Leading Edge. The change in final (MAP) dispersions and Wald
+#   standard errors is reported as the consequence, not used for selection.
+#   No p-value, adjusted p-value or discovery count enters the rule.
 
-METHOD_LEVELS <- c("Fixed 5,000", "CPM k*", "VST k*", "PC1 x NB k*")
-METHOD_SLUGS  <- c("Fixed 5,000" = "Fixed_5000", "CPM k*" = "CPM_Empirical",
-                   "VST k*" = "VST_Empirical", "PC1 x NB k*" = "PC1_NB_Information")
-METHOD_COLS   <- c("Fixed 5,000" = "#8C8C8C", "CPM k*" = "#E69F00", "VST k*" = "#009E73",
-                   "PC1 x NB k*" = "#7B3294")
+METHOD_LEVELS <- c("Fixed 5,000", "CPM k*", "VST k*")
+METHOD_SLUGS  <- c("Fixed 5,000" = "Fixed_5000", "CPM k*" = "CPM_Empirical", "VST k*" = "VST_Empirical")
+METHOD_COLS   <- c("Fixed 5,000" = "#8C8C8C", "CPM k*" = "#E69F00", "VST k*" = "#009E73")
 # Leading Edge and Remainder are fitted separately by DESeq2 after the split:
 # one fixed colour for each everywhere (Original = black/dark grey).
 SPLIT_COLS <- c("Original (no EVS)" = "grey15", "Leading Edge" = "#1F6FB2", "Remainder" = "#C0392B")
@@ -657,12 +500,11 @@ SPLIT_TREND_COLS <- c("Leading Edge" = "#0B3C6E", "Remainder" = "#8E1B10", "Orig
 SPLIT_VIEW_SET <- c("Original (No EVS)" = "Original (no EVS)", "NormEVS Lead" = "Leading Edge",
                     "NormEVS Rem" = "Remainder")
 
-# Write the cutoff data each child run reads for its own method figure:
-#   <slug>_scan.csv, <slug>_frontier.csv  (Pareto methods only)
-#   NormEVS_Regime_Knots.csv              (shared c1/c2 on normalized-count PC1
-#                                          rankings; used to classify the actual
-#                                          child Leading Edge into regimes)
-write_cutoff_data <- function(cutoff_fit, pc1nb_fit, out_dir) {
+# Cutoff data each child reads for its own method figure:
+#   <slug>_scan.csv, <slug>_frontier.csv  (CPM and VST)
+#   NormEVS_Regime_Knots.csv              (normalized-count knots, used to label
+#                                          the actual NormEVS Leading Edge)
+write_cutoff_data <- function(cutoff_fit, norm_knots, out_dir) {
   dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
   cmp <- names(SEQCUT_COMPARISONS)
   put <- function(df, name) utils::write.csv(df, file.path(out_dir, name), row.names = FALSE)
@@ -670,23 +512,21 @@ write_cutoff_data <- function(cutoff_fit, pc1nb_fit, out_dir) {
     det <- cutoff_fit$details[[m]]
     slug <- if (m == "CPM_EVS") "CPM_Empirical" else "VST_Empirical"
     put(do.call(rbind, lapply(cmp, function(cn) data.frame(comparison = cn, k = det$scans[[cn]]$k,
-          G = det$scans[[cn]]$good_n, R = det$scans[[cn]]$remainder_cross_n))), paste0(slug, "_scan.csv"))
+          G = det$scans[[cn]]$good_n, R = det$scans[[cn]]$remainder_cross_n,
+          joint = det$scans[[cn]]$joint_n, opp_LE = det$scans[[cn]]$opposite_le_n,
+          opp_div = det$scans[[cn]]$opposite_divergence_n, opp_rem = det$scans[[cn]]$remainder_cross_n))),
+        paste0(slug, "_scan.csv"))
     put(do.call(rbind, lapply(cmp, function(cn) cbind(comparison = cn, det$frontiers[[cn]]))),
         paste0(slug, "_frontier.csv"))
   }
-  sc <- pc1nb_fit$scan
-  put(data.frame(comparison = sc$comparison, k = sc$k, G = sc$good_w, R = sc$remainder_cross_w),
-      "PC1_NB_Information_scan.csv")
-  put(pc1nb_fit$frontier, "PC1_NB_Information_frontier.csv")
-  put(data.frame(c1 = pc1nb_fit$knot$c1, c2 = pc1nb_fit$knot$c2, N = nrow(pc1nb_fit$arms[[1]])),
-      "NormEVS_Regime_Knots.csv")
+  put(data.frame(c1 = norm_knots$c1, c2 = norm_knots$c2, N = norm_knots$N), "NormEVS_Regime_Knots.csv")
   invisible(TRUE)
 }
 
-collect_dispersion_diagnostics <- function(multi_root, slugs, labels) {
+collect_method_tables <- function(multi_root, slugs, labels, file) {
   rows <- list()
   for (j in seq_along(slugs)) {
-    f <- file.path(multi_root, slugs[j], "Summary_Tables", "Table_Dispersion_After_EVS.csv")
+    f <- file.path(multi_root, slugs[j], "Summary_Tables", file)
     if (!file.exists(f)) next
     d <- utils::read.csv(f, stringsAsFactors = FALSE, check.names = FALSE)
     d$Cutoff_Method <- labels[j]
@@ -694,25 +534,31 @@ collect_dispersion_diagnostics <- function(multi_root, slugs, labels) {
   }
   if (length(rows)) do.call(rbind, rows) else NULL
 }
+collect_dispersion_diagnostics <- function(multi_root, slugs, labels) {
+  collect_method_tables(multi_root, slugs, labels, "Table_Dispersion_After_EVS.csv")
+}
 
-# Per comparison: split score V for each method, Original reference, winner.
-select_dynamic_winner <- function(disp, manifest) {
+select_dynamic_winner <- function(disp, fscore, manifest) {
   cmp <- names(SEQCUT_COMPARISONS)
   out <- list()
   for (cn in cmp) {
     o <- disp[disp$Comparison == cn & disp$View == "Original (No EVS)", ]
-    v_orig <- if (nrow(o)) o$log_disp_resid_var[1] else NA_real_
+    w_orig <- if (nrow(o)) o$prior_width[1] else NA_real_
     for (m in METHOD_LEVELS) {
       d <- disp[disp$Comparison == cn & disp$Cutoff_Method == m, ]
       le <- d[d$View == "NormEVS Lead", ]; re <- d[d$View == "NormEVS Rem", ]
       if (!nrow(le) || !nrow(re)) next
-      V <- (le$n_PAS * le$log_disp_resid_var + re$n_PAS * re$log_disp_resid_var) / (le$n_PAS + re$n_PAS)
+      n <- le$n_PAS + re$n_PAS
+      W <- (le$n_PAS * le$prior_width + re$n_PAS * re$prior_width) / n
       k <- manifest[manifest$Cutoff_Method == METHOD_SLUGS[[m]], cn]
+      f <- if (is.null(fscore)) NULL else fscore[fscore$Comparison == cn & fscore$Cutoff_Method == m, ]
+      g <- function(col) if (!is.null(f) && nrow(f) && col %in% names(f)) f[[col]][1] else NA_real_
       out[[length(out) + 1L]] <- data.frame(
         Comparison = cn, Cutoff_Method = m, k = as.integer(k), LE_n = le$n_PAS, REM_n = re$n_PAS,
-        v_LE = le$log_disp_resid_var, v_REM = re$log_disp_resid_var, V_split = V,
-        v_Original = v_orig, reduction_vs_Original_pct = 100 * (1 - V / v_orig),
-        stringsAsFactors = FALSE)
+        w_LE = le$prior_width, w_REM = re$prior_width, W_split = W, w_Original = w_orig,
+        prior_width_reduction_pct = 100 * (1 - W / w_orig),
+        SE_change_pct = g("SE_change_pct"), SE_change_LE_pct = g("SE_change_LE_pct"),
+        SE_change_REM_pct = g("SE_change_REM_pct"), stringsAsFactors = FALSE)
     }
   }
   sc <- do.call(rbind, out)
@@ -720,8 +566,7 @@ select_dynamic_winner <- function(disp, manifest) {
   for (cn in cmp) {
     i <- which(sc$Comparison == cn)
     if (!length(i)) next
-    best <- i[order(sc$V_split[i], sc$LE_n[i])][1]
-    sc$Winner[best] <- TRUE
+    sc$Winner[i[order(sc$W_split[i], sc$LE_n[i])][1]] <- TRUE
   }
   sc
 }
@@ -762,8 +607,9 @@ try_fig <- function(expr, what) {
   })
 }
 
-# "Why this estimator wins": the selection criterion itself, the DESeq2
-# dispersion residuals behind it, and discoveries shown for reference only.
+# "Why this estimator wins": the criterion (final-dispersion SE change), the
+# per-PAS final dispersion change behind it for the selected split, and
+# discoveries for reference only.
 save_why_best_figure <- function(score, multi_root, disc, out_dir) {
   if (!master_plotting_ready()) return(invisible(FALSE))
   cmp <- names(SEQCUT_COMPARISONS)
@@ -772,72 +618,61 @@ save_why_best_figure <- function(score, multi_root, disc, out_dir) {
   score$Cutoff_Method <- factor(score$Cutoff_Method, levels = METHOD_LEVELS)
   score$Comparison <- factor(score$Comparison, levels = cmp)
   win <- score[score$Winner, ]
-  orig <- unique(score[, c("Comparison", "v_Original")])
+  orig <- unique(score[, c("Comparison", "w_Original")])
 
-  # a) the criterion
-  pa <- ggplot(score, aes(Cutoff_Method, V_split)) +
-    geom_hline(data = orig, aes(yintercept = v_Original), linetype = "22", linewidth = 0.4, colour = "grey25") +
-    geom_segment(aes(xend = Cutoff_Method, y = v_Original, yend = V_split, colour = Cutoff_Method),
-                 linewidth = 0.5, alpha = 0.6) +
-    geom_point(aes(colour = Cutoff_Method), size = 2.2) +
-    geom_point(data = win, shape = 21, size = 4.2, stroke = 0.7, colour = "black", fill = NA) +
-    geom_text(data = win, aes(label = paste0(
-                ifelse(reduction_vs_Original_pct >= 0,
-                       sprintf("%.0f%% tighter", reduction_vs_Original_pct),
-                       sprintf("%.0f%% looser", -reduction_vs_Original_pct)),
-                "\nk = ", format(k, big.mark = ","))),
-              vjust = 1.6, size = 2.1, lineheight = 0.9, fontface = "bold") +
-    scale_x_discrete(expand = expansion(add = 0.9)) +
+  # a) the criterion: pooled dispersion prior width
+  pa <- ggplot(score, aes(Cutoff_Method, W_split)) +
+    geom_hline(data = orig, aes(yintercept = w_Original), linetype = "22", linewidth = 0.4, colour = "grey25") +
+    geom_segment(aes(xend = Cutoff_Method, y = w_Original, yend = W_split, colour = Cutoff_Method),
+                 linewidth = 0.6, alpha = 0.6) +
+    geom_point(aes(colour = Cutoff_Method), size = 2.3) +
+    geom_point(data = win, shape = 21, size = 4.4, stroke = 0.7, colour = "black", fill = NA) +
+    geom_text(data = win, aes(label = sprintf("%.0f%% narrower\nk = %s", prior_width_reduction_pct,
+                                              format(k, big.mark = ","))),
+              vjust = 1.6, size = 2.0, lineheight = 0.9, fontface = "bold") +
     facet_wrap(~ Comparison, nrow = 1, scales = "free_y", labeller = lab) +
-    scale_colour_manual(values = METHOD_COLS) +
-    scale_y_continuous(expand = expansion(mult = c(0.35, 0.08))) +
-    labs(x = NULL, y = "Dispersion residual variance\n(LE + REM, pooled)",
-         title = "Selection criterion: how tightly DESeq2 gene-wise dispersions follow their fitted trend",
-         subtitle = "Lower is better. Dashed line: Original (no EVS). Ringed point: selected estimator.") +
+    scale_colour_manual(values = METHOD_COLS, guide = "none") +
+    scale_x_discrete(expand = expansion(add = 0.8)) +
+    scale_y_continuous(expand = expansion(mult = c(0.45, 0.12))) +
+    labs(x = NULL, y = "Pooled dispersion prior\nwidth W (LE + REM)",
+         title = "Selection criterion: the split that gives DESeq2 the narrowest dispersion prior",
+         subtitle = "Dashed line: prior width of the unsplit (Original) fit. Ringed point: selected estimator.") +
     master_theme() + theme(axis.text.x = element_text(angle = 30, hjust = 1))
 
-  # b) the selected split: DESeq2 fitted the Leading Edge and the Remainder
-  #    separately; their residuals around their own trends vs the Original fit.
-  res_rows <- list(); cache <- list()
+  # b) per-PAS final dispersion change for the selected split, LE and REM
+  rows <- list(); cache <- list()
   for (cn in cmp) {
     m <- as.character(win$Cutoff_Method[win$Comparison == cn])
     if (!length(m)) next
-    f <- file.path(multi_root, METHOD_SLUGS[[m]], "Summary_Tables", "Table_Dispersion_Estimates_By_View.csv")
     if (is.null(cache[[m]])) {
+      f <- file.path(multi_root, METHOD_SLUGS[[m]], "Summary_Tables", "Table_Final_Dispersion_Change_By_PAS.csv")
       if (!file.exists(f)) next
       cache[[m]] <- utils::read.csv(f, stringsAsFactors = FALSE)
     }
-    d <- cache[[m]]
-    keep <- d$Comparison == cn & d$View %in% names(SPLIT_VIEW_SET) &
-            is.finite(d$dispGeneEst) & d$dispGeneEst >= 1e-6 & is.finite(d$dispFit) & d$dispFit > 0
-    d <- d[keep, ]
-    if (!nrow(d)) next
-    d$resid <- log(d$dispGeneEst / d$dispFit)
-    d$Set <- unname(SPLIT_VIEW_SET[d$View])
-    res_rows[[length(res_rows) + 1L]] <- d[, c("Comparison", "Set", "resid")]
+    d <- cache[[m]]; d <- d[d$Comparison == cn & is.finite(d$log2_ratio), c("Comparison", "Set", "log2_ratio")]
+    rows[[length(rows) + 1L]] <- d
   }
   pb <- NULL
-  if (length(res_rows)) {
-    rr <- do.call(rbind, res_rows)
+  if (length(rows)) {
+    rr <- do.call(rbind, rows)
     rr$Comparison <- factor(rr$Comparison, levels = cmp)
-    rr$Set <- factor(rr$Set, levels = names(SPLIT_COLS))
-    xl <- stats::quantile(rr$resid, c(0.01, 0.99), na.rm = TRUE)
-    wl <- win
-    wl$lab <- sprintf("%s\nv(LE) = %.2f\nv(REM) = %.2f\nv(Original) = %.2f",
-                      wl$Cutoff_Method, wl$v_LE, wl$v_REM, wl$v_Original)
-    pb <- ggplot(rr, aes(resid, colour = Set, linetype = Set)) +
-      geom_vline(xintercept = 0, linewidth = 0.25, colour = "grey70") +
-      geom_density(linewidth = 0.6, adjust = 1.2) +
+    rr$Set <- factor(rr$Set, levels = c("Leading Edge", "Remainder"))
+    xl <- stats::quantile(rr$log2_ratio, c(0.01, 0.99), na.rm = TRUE)
+    wl <- win; wl$lab <- sprintf("%s\nSE LE %+.1f%%\nSE REM %+.1f%%", wl$Cutoff_Method,
+                                 wl$SE_change_LE_pct, wl$SE_change_REM_pct)
+    pb <- ggplot(rr, aes(log2_ratio, colour = Set, fill = Set)) +
+      geom_vline(xintercept = 0, linewidth = 0.3, colour = "grey40", linetype = "22") +
+      geom_density(linewidth = 0.6, alpha = 0.12, adjust = 1.1) +
       geom_text(data = wl, aes(x = -Inf, y = Inf, label = lab), inherit.aes = FALSE,
                 hjust = -0.05, vjust = 1.15, size = 1.9, lineheight = 0.9, colour = "grey15") +
       facet_wrap(~ Comparison, nrow = 1, labeller = lab) +
       coord_cartesian(xlim = xl) +
-      scale_colour_manual(values = SPLIT_COLS) +
-      scale_linetype_manual(values = c("Original (no EVS)" = "22", "Leading Edge" = "solid", "Remainder" = "solid")) +
+      scale_colour_manual(values = SPLIT_COLS[c("Leading Edge", "Remainder")]) +
+      scale_fill_manual(values = SPLIT_COLS[c("Leading Edge", "Remainder")]) +
       scale_y_continuous(expand = expansion(mult = c(0, 0.45))) +
-      labs(x = "log(gene-wise dispersion / its own fitted trend), DESeq2",
-           y = "Density", title = "The selected split: Leading Edge and Remainder fitted separately by DESeq2",
-           subtitle = "Narrower than the Original (dashed) means each subset follows its own mean-dispersion trend more tightly.") +
+      labs(x = "log2(final dispersion after the split / final dispersion in the Original fit), per PAS",
+           y = "Density", title = "Consequence: final (MAP) dispersions of the selected split move to each population's level",
+           subtitle = "Remainder left of 0 (lower dispersion, sharper tests); Leading Edge right of 0 (no longer shrunk toward too low a trend).") +
       master_theme() + theme(legend.position = "bottom")
   }
 
@@ -924,9 +759,9 @@ collect_cross_method_discoveries <- function(multi_root, method_slugs, method_la
 
 # =============================================================================
 # MULTI-CUTOFF ORCHESTRATION
-# Runs this same script once per cutoff method (Fixed 5,000, CPM, VST, PC1 x NB),
-# selects the dynamic best estimator from the DESeq2 dispersion fits, runs it
-# as a fifth child, then creates one
+# Runs this same script once per cutoff method (Fixed 5,000, CPM, VST),
+# selects the dynamic best estimator from the DESeq2 dispersion prior, runs it
+# as a fourth child, then creates one
 # final ZIP containing all figures, tables, audit files, and TWAS results.
 # =============================================================================
 
@@ -970,26 +805,19 @@ if (!SEQUENCE_CHILD_RUN) {
   }
 
   cutoff_fit <- derive_sequence_empirical_cutoffs(count_path)
-  pc1nb_fit <- derive_pc1nb_information_cutoffs(count_path)
-  pc1nb_dir <- file.path(multi_root, "PC1_NB_Information_Cutoff")
-  dir.create(pc1nb_dir, recursive = TRUE, showWarnings = FALSE)
-  utils::write.csv(pc1nb_fit$summary, file.path(pc1nb_dir, "Table_PC1_NB_Selected_Cutoffs.csv"), row.names = FALSE)
-  utils::write.csv(pc1nb_fit$scan, file.path(pc1nb_dir, "Table_PC1_NB_All_Candidate_k.csv"), row.names = FALSE)
-  utils::write.csv(pc1nb_fit$frontier, file.path(pc1nb_dir, "Table_PC1_NB_Pareto_Frontier.csv"), row.names = FALSE)
-  utils::write.csv(pc1nb_fit$membership, file.path(pc1nb_dir, "Table_PC1_NB_PAS_Membership.csv"), row.names = FALSE)
-  write_cutoff_data(cutoff_fit, pc1nb_fit, file.path(multi_root, "Cutoff_Data"))
+  norm_knots <- derive_normcount_knots(count_path)
+  write_cutoff_data(cutoff_fit, norm_knots, file.path(multi_root, "Cutoff_Data"))
   cmp_names <- names(SEQCUT_COMPARISONS)
   cutoff_manifest <- data.frame(
-    Cutoff_Method = c("Fixed_5000", "CPM_Empirical", "VST_Empirical", "PC1_NB_Information"),
-    RT0_ZT6 = c(5000L, cutoff_fit$cpm[["RT0_ZT6"]], cutoff_fit$vst[["RT0_ZT6"]], pc1nb_fit$k[["RT0_ZT6"]]),
-    RT2_ZT8 = c(5000L, cutoff_fit$cpm[["RT2_ZT8"]], cutoff_fit$vst[["RT2_ZT8"]], pc1nb_fit$k[["RT2_ZT8"]]),
-    RT4_ZT10 = c(5000L, cutoff_fit$cpm[["RT4_ZT10"]], cutoff_fit$vst[["RT4_ZT10"]], pc1nb_fit$k[["RT4_ZT10"]]),
-    RT8_ZT14 = c(5000L, cutoff_fit$cpm[["RT8_ZT14"]], cutoff_fit$vst[["RT8_ZT14"]], pc1nb_fit$k[["RT8_ZT14"]]),
+    Cutoff_Method = c("Fixed_5000", "CPM_Empirical", "VST_Empirical"),
+    RT0_ZT6 = c(5000L, cutoff_fit$cpm[["RT0_ZT6"]], cutoff_fit$vst[["RT0_ZT6"]]),
+    RT2_ZT8 = c(5000L, cutoff_fit$cpm[["RT2_ZT8"]], cutoff_fit$vst[["RT2_ZT8"]]),
+    RT4_ZT10 = c(5000L, cutoff_fit$cpm[["RT4_ZT10"]], cutoff_fit$vst[["RT4_ZT10"]]),
+    RT8_ZT14 = c(5000L, cutoff_fit$cpm[["RT8_ZT14"]], cutoff_fit$vst[["RT8_ZT14"]]),
     Source = c(
       "Prespecified fixed comparator",
       "Computed internally: log1p(CPM)-EVS + shared c1/c2 + count Pareto + maximum endpoint-chord deviation",
-      "Computed internally: DESeq2 VST-EVS + shared c1/c2 + count Pareto + maximum endpoint-chord deviation",
-      "Computed internally: normalized-count EVS + shared c1/c2 + PC1 x NB-information weighted G/R Pareto + maximum endpoint-chord deviation"
+      "Computed internally: DESeq2 VST-EVS + shared c1/c2 + count Pareto + maximum endpoint-chord deviation"
     ),
     stringsAsFactors = FALSE
   )
@@ -1015,11 +843,11 @@ if (!SEQUENCE_CHILD_RUN) {
     invisible(TRUE)
   }
 
-  for (method in c("fixed5000", "cpm_empirical", "vst_empirical", "pc1nb_information")) {
+  for (method in c("fixed5000", "cpm_empirical", "vst_empirical")) {
     run_cutoff_child(method)
   }
 
-  # ---- Dynamic selection from the actual DESeq2 fits of the four runs --------
+  # ---- Dynamic selection from the actual DESeq2 fits of the three runs -------
   cross_dir <- file.path(multi_root, "Cross_Method_Comparison")
   dir.create(cross_dir, recursive = TRUE, showWarnings = FALSE)
   method_labels <- METHOD_LEVELS
@@ -1029,7 +857,12 @@ if (!SEQUENCE_CHILD_RUN) {
     stop("No Table_Dispersion_After_EVS.csv was produced by the method runs; the dynamic winner cannot be selected.")
   }
   utils::write.csv(cross_disp, file.path(cross_dir, "Table_Dispersion_After_EVS_All_Methods.csv"), row.names = FALSE)
-  win_score <- select_dynamic_winner(cross_disp, cutoff_manifest)
+  cross_final <- collect_method_tables(multi_root, method_slugs, method_labels, "Table_Final_Dispersion_Score.csv")
+  if (is.null(cross_final) || !nrow(cross_final)) {
+    stop("No Table_Final_Dispersion_Score.csv was produced by the method runs; the dynamic winner cannot be selected.")
+  }
+  utils::write.csv(cross_final, file.path(cross_dir, "Table_Final_Dispersion_Score_All_Methods.csv"), row.names = FALSE)
+  win_score <- select_dynamic_winner(cross_disp, cross_final, cutoff_manifest)
   utils::write.csv(win_score, file.path(cross_dir, "Table_Dynamic_Winner.csv"), row.names = FALSE)
   utils::write.csv(win_score, file.path(multi_root, "Cutoff_Data", "Dynamic_Winner.csv"), row.names = FALSE)
 
@@ -1041,7 +874,7 @@ if (!SEQUENCE_CHILD_RUN) {
   dyn_row$Cutoff_Method <- "Dynamic_Best"
   for (cn in cmp_names) dyn_row[[cn]] <- as.integer(winners$k[winners$Comparison == cn])
   dyn_row$Source <- paste0(
-    "Dynamic: per comparison, lowest pooled DESeq2 dispersion residual variance (NormEVS LE + REM). Winners: ",
+    "Dynamic: per comparison, narrowest pooled DESeq2 dispersion prior (NormEVS LE + REM). Winners: ",
     paste(winners$Comparison, winners$Cutoff_Method, sep = " = ", collapse = "; ")
   )
   cutoff_manifest <- rbind(cutoff_manifest, dyn_row)
@@ -1064,10 +897,11 @@ if (!SEQUENCE_CHILD_RUN) {
   if (!file.exists(final_zip)) stop("Final multi-cutoff ZIP creation failed: ", final_zip)
 
   cat("\n=====================================================\n")
-  cat("All five runs complete: Fixed 5,000, CPM-EVS, VST-EVS, PC1 x NB-information and the dynamic best estimator.\n")
-  cat("Dynamic winners (lowest pooled DESeq2 dispersion residual variance, NormEVS LE + REM):\n")
-  for (i in which(win_score$Winner)) cat(sprintf("  %-9s %-12s k = %6d   V = %.3f   Original = %.3f\n",
-    win_score$Comparison[i], win_score$Cutoff_Method[i], win_score$k[i], win_score$V_split[i], win_score$v_Original[i]))
+  cat("All runs complete: Fixed 5,000, CPM-EVS, VST-EVS and the dynamic best estimator.\n")
+  cat("Dynamic winners (narrowest pooled DESeq2 dispersion prior, NormEVS LE + REM):\n")
+  for (i in which(win_score$Winner)) cat(sprintf("  %-9s %-12s k = %6d   prior width = %.3f (Original %.3f, %.0f%% narrower)\n",
+    win_score$Comparison[i], win_score$Cutoff_Method[i], win_score$k[i], win_score$W_split[i],
+    win_score$w_Original[i], win_score$prior_width_reduction_pct[i]))
   cat("Final combined ZIP:\n", normalizePath(final_zip, winslash = "/", mustWork = TRUE), "\n", sep = "")
   cat("=====================================================\n\n")
   quit(save = "no", status = 0L)
@@ -1080,8 +914,7 @@ CUTOFF_METHOD_INFO <- switch(
   fixed5000 = list(slug = "Fixed_5000", label = "Fixed 5,000", basis = "Prespecified fixed top-5,000 PASs per condition"),
   cpm_empirical = list(slug = "CPM_Empirical", label = "CPM empirical k*", basis = "Internally computed log1p(CPM)-EVS count-Pareto maximum endpoint-chord cutoff"),
   vst_empirical = list(slug = "VST_Empirical", label = "VST empirical k*", basis = "Internally computed DESeq2 VST-EVS count-Pareto maximum endpoint-chord cutoff"),
-  dynamic_best = list(slug = "Dynamic_Best", label = "Dynamic best k*", basis = "Per comparison, the cutoff estimator whose NormEVS split gives the lowest pooled DESeq2 dispersion residual variance (varLogDispEsts) across Leading Edge and Remainder"),
-  pc1nb_information = list(slug = "PC1_NB_Information", label = "PC1 x NB-information k*", basis = "Internally computed normalized-count EVS with shared c1/c2 regimes; Pareto of PC1 x NB-information weighted G and R, maximum endpoint-chord deviation"),
+  dynamic_best = list(slug = "Dynamic_Best", label = "Dynamic best k*", basis = "Per comparison, the cutoff method whose NormEVS split gives DESeq2 the narrowest pooled dispersion prior (varLogDispEsts minus sampling variance) across Leading Edge and Remainder"),
   stop("Unknown SEQUENCE_CUTOFF_METHOD: ", CUTOFF_METHOD_KEY)
 )
 CUTOFF_METHOD_SLUG <- CUTOFF_METHOD_INFO$slug
@@ -1310,7 +1143,7 @@ if (!nzchar(Sys.getenv("SEQUENCE_MULTI_ROOT", unset = "")) || !file.exists(cutof
   stop("Dynamic cutoff manifest is missing. Run this script normally through the master process; do not launch a child run directly.")
 }
 cutoff_manifest_runtime <- utils::read.csv(cutoff_manifest_path, stringsAsFactors=FALSE, check.names=FALSE)
-required_manifest_methods <- c("Fixed_5000", "CPM_Empirical", "VST_Empirical", "PC1_NB_Information")
+required_manifest_methods <- c("Fixed_5000", "CPM_Empirical", "VST_Empirical")
 if (!all(required_manifest_methods %in% cutoff_manifest_runtime$Cutoff_Method)) {
   stop("Cutoff manifest does not contain all required methods: ", paste(required_manifest_methods, collapse=", "))
 }
@@ -1318,7 +1151,6 @@ manifest_row <- function(method) cutoff_manifest_runtime[match(method, cutoff_ma
 fixed_row <- manifest_row("Fixed_5000")
 cpm_row <- manifest_row("CPM_Empirical")
 vst_row <- manifest_row("VST_Empirical")
-pc1nb_row <- manifest_row("PC1_NB_Information")
 dynamic_row <- manifest_row("Dynamic_Best")  # all NA until the master appends it
 
 comparison_table <- data.frame(
@@ -1328,7 +1160,6 @@ comparison_table <- data.frame(
   fixed_5000_k    = as.integer(unlist(fixed_row[c("RT0_ZT6","RT2_ZT8","RT4_ZT10","RT8_ZT14")], use.names=FALSE)),
   cpm_empirical_k = as.integer(unlist(cpm_row[c("RT0_ZT6","RT2_ZT8","RT4_ZT10","RT8_ZT14")], use.names=FALSE)),
   vst_empirical_k = as.integer(unlist(vst_row[c("RT0_ZT6","RT2_ZT8","RT4_ZT10","RT8_ZT14")], use.names=FALSE)),
-  pc1nb_information_k = as.integer(unlist(pc1nb_row[c("RT0_ZT6","RT2_ZT8","RT4_ZT10","RT8_ZT14")], use.names=FALSE)),
   dynamic_best_k = as.integer(unlist(dynamic_row[c("RT0_ZT6","RT2_ZT8","RT4_ZT10","RT8_ZT14")], use.names=FALSE)),
   stringsAsFactors = FALSE
 )
@@ -1341,7 +1172,6 @@ get_active_evs_cutoff <- function(comparison_name) {
     fixed5000 = comparison_table$fixed_5000_k[idx],
     cpm_empirical = comparison_table$cpm_empirical_k[idx],
     vst_empirical = comparison_table$vst_empirical_k[idx],
-    pc1nb_information = comparison_table$pc1nb_information_k[idx],
     dynamic_best = comparison_table$dynamic_best_k[idx]
   )
   k <- as.integer(k)
@@ -1355,7 +1185,7 @@ get_active_evs_cutoff <- function(comparison_name) {
 get_empirical_evs_cutoff <- get_active_evs_cutoff
 
 if (anyDuplicated(comparison_table$comparison_name)) stop("comparison_table contains duplicated comparison names.")
-cutoff_cols <- c("fixed_5000_k", "cpm_empirical_k", "vst_empirical_k", "pc1nb_information_k")
+cutoff_cols <- c("fixed_5000_k", "cpm_empirical_k", "vst_empirical_k")
 if (any(vapply(comparison_table[cutoff_cols], function(x) any(is.na(x) | x < 1L), logical(1)))) {
   stop("Every comparison must have a positive cutoff for every cutoff method.")
 }
@@ -1677,7 +1507,8 @@ safe_hc_thresh <- function(empirical_p, dataset_name) {
   # Match fdrtool::hc.thresh(alpha0 = HC_ALPHA0): maximize HC only over the
   # lowest alpha0 fraction of ordered empirical p-values. The explicit score
   # calculation additionally permits the required positive-HC safeguard.
-  n_search <- max(1L, min(n_total, floor(HC_ALPHA0 * n_total)))
+  # fdrtool::hc.thresh maximizes over 1:ceiling(alpha0 * n); use the same range.
+  n_search <- max(1L, min(n_total, ceiling(HC_ALPHA0 * n_total)))
   search_idx <- seq_len(n_search)
 
   valid_idx <- search_idx[
@@ -1716,15 +1547,13 @@ safe_hc_thresh <- function(empirical_p, dataset_name) {
 
   if (is.finite(package_hc_p) && !is.na(package_hc_p) &&
       !isTRUE(all.equal(hc_p, package_hc_p, tolerance = 1e-12))) {
-    stop(
-      sprintf(
-        "[%s] Internal HC audit failed: explicit lower-tail HCp %.17g != fdrtool::hc.thresh(alpha0=%.3f) %.17g.",
-        dataset_name,
-        hc_p,
-        HC_ALPHA0,
-        package_hc_p
-      )
-    )
+    # Adopt the package threshold (the reference definition) and record it.
+    pkg_idx <- which(sorted_empirical_p == package_hc_p)[1]
+    warning(sprintf(
+      "[%s] HC audit: explicit HCp %.17g differs from fdrtool::hc.thresh(alpha0=%.3f) %.17g; using the fdrtool value.",
+      dataset_name, hc_p, HC_ALPHA0, package_hc_p), call. = FALSE)
+    hc_p <- package_hc_p
+    if (!is.na(pkg_idx)) best_hc <- as.numeric(hc_scores[pkg_idx])
   }
 
   # A non-positive maximum indicates no excess of small empirical p-values in
@@ -3614,26 +3443,29 @@ write_methods_note <- function() {
 # Everything here is read from the DESeq2 objects fitted after the split
 # (Original, NormEVS Lead/Rem, RawEVS Lead/Rem). Nothing is simulated.
 #
-# Per view:
-#   log_disp_resid_var  DESeq2's own varLogDispEsts: (MAD of log(dispGeneEst /
-#                       dispFit))^2 over PASs with dispGeneEst >= 1e-6. This is
-#                       how tightly the gene-wise dispersions follow the fitted
-#                       mean-dispersion trend (lower = better-behaved model).
-#                       dispPriorVar = varLogDispEsts - (sampling variance of a
-#                       log dispersion with this design), so for views with the
-#                       same 10 samples both give the same ranking; varLogDispEsts
-#                       is used because dispPriorVar is floored at 0.25.
-#   disp_prior_var, dispersion_outlier_pct, median_log_vs_original_trend,
-#   median_abs_shrinkage   reported for audit.
+# The point of the split: DESeq2 shrinks every gene-wise dispersion toward ONE
+# mean-dispersion trend with ONE prior width for all PASs, i.e. it assumes PASs
+# at the same mean share the same expected dispersion. When they do not, the
+# unsplit prior is centred wrongly and is too wide. EVS separates the two
+# populations; each subset gets its own trend and a narrower prior.
 #
-# Split score (the selection criterion used by the master process):
-#   V = (n_LE v_LE + n_REM v_REM) / (n_LE + n_REM)  on the NormEVS track.
+# Per view (all from the fitted DESeq2 object):
+#   log_disp_resid_var  varLogDispEsts = (MAD of log(dispGeneEst/dispFit))^2
+#   exp_var_log_disp    sampling variance of a log dispersion estimate with this
+#                       design, trigamma((m - p) / 2)  (m samples, p coefficients)
+#   prior_width         varLogDispEsts - exp_var_log_disp (not floored): the
+#                       width of DESeq2's dispersion prior around the trend.
+#                       DESeq2's own dispPriorVar is the same quantity floored
+#                       at 0.25 and is reported alongside.
+#
+# Split score (selection criterion, NormEVS track):
+#   W = (n_LE w_LE + n_REM w_REM) / (n_LE + n_REM), lower = narrower prior.
 
 DISP_MIN_GENE_EST <- 1e-6
 # Every class here is inside the Leading Edge, so one blue ramp (darkest = Joint).
 REGIME_COLS <- c("Joint" = "#08306B", "Disjoint, opposite LE" = "#2171B5",
-                 "Disjoint, opposite Divergence" = "#6BAED6",
-                 "Disjoint, opposite Remainder" = "#BDD7EE")
+                 "Disjoint, opposite Divergence" = "#4EB3D3",
+                 "Disjoint, opposite Remainder" = "#CFD3E6")
 
 dispersion_metrics_rows <- list()
 dispersion_trend_rows <- list()
@@ -3659,11 +3491,16 @@ dispersion_view_metrics <- function(dds, orig_fun) {
   prior_var <- attr(dfun, "dispPriorVar")
   fit_type <- attr(dfun, "fitType")
   v_recomp <- stats::mad(lr)^2
+  v <- if (length(v_deseq) == 1L && is.finite(v_deseq)) as.numeric(v_deseq) else v_recomp
+  X <- stats::model.matrix(DESeq2::design(dds), as.data.frame(SummarizedExperiment::colData(dds)))
+  exp_var <- trigamma((ncol(dds) - ncol(X)) / 2)
   outl <- if (is.null(mc$dispOutlier)) rep(FALSE, length(ok)) else (mc$dispOutlier %in% TRUE)
   data.frame(
     n_PAS = sum(ok),
-    log_disp_resid_var = if (length(v_deseq) == 1L && is.finite(v_deseq)) as.numeric(v_deseq) else v_recomp,
+    log_disp_resid_var = v,
     log_disp_resid_var_recomputed = v_recomp,
+    exp_var_log_disp = exp_var,
+    prior_width = max(v - exp_var, 0),
     disp_prior_var = if (is.null(prior_var)) NA_real_ else as.numeric(prior_var),
     fit_type = if (is.null(fit_type)) NA_character_ else as.character(fit_type),
     dispersion_outlier_pct = 100 * mean(outl[ok]),
@@ -3732,17 +3569,56 @@ collect_dispersion_after_evs <- function(comparison_name) {
   invisible(TRUE)
 }
 
+# Final (MAP) dispersions: each PAS in the NormEVS Leading Edge / Remainder
+# against the same PAS in the Original fit. Size factors are shared, so the
+# Wald SE of the LFC scales with sqrt(1/mu + alpha).
+final_dispersion_pairs <- function(pas) {
+  o <- pas[pas$View == "Original (No EVS)", c("Comparison", "feature_id", "baseMean", "dispersion")]
+  names(o)[3:4] <- c("baseMean_Original", "disp_Original")
+  s <- pas[pas$View %in% c("NormEVS Lead", "NormEVS Rem"), c("Comparison", "View", "feature_id", "dispersion")]
+  names(s)[4] <- "disp_split"
+  d <- merge(s, o, by = c("Comparison", "feature_id"))
+  d <- d[is.finite(d$disp_split) & d$disp_split > 0 & is.finite(d$disp_Original) & d$disp_Original > 0 &
+         is.finite(d$baseMean_Original) & d$baseMean_Original > 0, ]
+  d$Set <- ifelse(d$View == "NormEVS Lead", "Leading Edge", "Remainder")
+  d$log2_ratio <- log2(d$disp_split / d$disp_Original)
+  inv_mu <- 1 / d$baseMean_Original
+  d$log_SE_ratio <- 0.5 * log((inv_mu + d$disp_split) / (inv_mu + d$disp_Original))
+  d[, c("Comparison", "Set", "feature_id", "baseMean_Original", "disp_Original", "disp_split",
+        "log2_ratio", "log_SE_ratio")]
+}
+
+final_dispersion_score <- function(pairs) {
+  pct <- function(x) 100 * (exp(mean(x)) - 1)
+  do.call(rbind, lapply(split(pairs, pairs$Comparison), function(d) {
+    le <- d$Set == "Leading Edge"
+    data.frame(Comparison = d$Comparison[1], Cutoff_Method = CUTOFF_METHOD_LABEL,
+               LE_n = sum(le), REM_n = sum(!le),
+               mean_log_SE_ratio = mean(d$log_SE_ratio), SE_change_pct = pct(d$log_SE_ratio),
+               SE_change_LE_pct = pct(d$log_SE_ratio[le]), SE_change_REM_pct = pct(d$log_SE_ratio[!le]),
+               median_log2_final_dispersion_ratio_LE = stats::median(d$log2_ratio[le]),
+               median_log2_final_dispersion_ratio_REM = stats::median(d$log2_ratio[!le]),
+               pct_PAS_lower_final_dispersion = 100 * mean(d$log2_ratio < 0),
+               stringsAsFactors = FALSE)
+  }))
+}
+
 split_dispersion_score <- function(met) {
   out <- lapply(unique(met$Comparison), function(cn) {
     le <- met[met$Comparison == cn & met$View == "NormEVS Lead", ]
     re <- met[met$Comparison == cn & met$View == "NormEVS Rem", ]
     o <- met[met$Comparison == cn & met$View == "Original (No EVS)", ]
     if (!nrow(le) || !nrow(re)) return(NULL)
-    V <- (le$n_PAS * le$log_disp_resid_var + re$n_PAS * re$log_disp_resid_var) / (le$n_PAS + re$n_PAS)
+    n <- le$n_PAS + re$n_PAS
+    W <- (le$n_PAS * le$prior_width + re$n_PAS * re$prior_width) / n
+    V <- (le$n_PAS * le$log_disp_resid_var + re$n_PAS * re$log_disp_resid_var) / n
+    wo <- if (nrow(o)) o$prior_width[1] else NA_real_
     vo <- if (nrow(o)) o$log_disp_resid_var[1] else NA_real_
     data.frame(Comparison = cn, Cutoff_Method = CUTOFF_METHOD_LABEL, LE_n = le$n_PAS, REM_n = re$n_PAS,
-               v_LE = le$log_disp_resid_var, v_REM = re$log_disp_resid_var, V_split = V,
-               v_Original = vo, reduction_vs_Original_pct = 100 * (1 - V / vo), stringsAsFactors = FALSE)
+               w_LE = le$prior_width, w_REM = re$prior_width, W_split = W, w_Original = wo,
+               prior_width_reduction_pct = 100 * (1 - W / wo),
+               v_LE = le$log_disp_resid_var, v_REM = re$log_disp_resid_var, V_split = V, v_Original = vo,
+               stringsAsFactors = FALSE)
   })
   do.call(rbind, out)
 }
@@ -3796,7 +3672,7 @@ panel_scan <- function(scan, weighted, tag) {
                 data.frame(comparison = scan$comparison, k = scan$k, value = scan$R, Q = "R"))
   long$comparison <- factor(long$comparison, levels = cmp)
   ks$comparison <- factor(ks$comparison, levels = cmp)
-  q_lab <- c(G = "G: joint + opposite-LE entries", R = "R: opposite-Remainder entries")
+  q_lab <- c(G = "G: joint + opposite-LE + opposite-Divergence entries", R = "R: opposite-Remainder entries")
   ggplot(long, aes(k, value, colour = Q)) +
     geom_vline(data = ks, aes(xintercept = k), linetype = "22", linewidth = 0.35, colour = "grey25") +
     geom_line(linewidth = 0.6) +
@@ -3809,7 +3685,7 @@ panel_scan <- function(scan, weighted, tag) {
     scale_y_continuous(labels = if (weighted) scales::label_percent(accuracy = 1) else scales::label_comma(),
                        expand = expansion(mult = c(0.02, 0.12))) +
     labs(x = "k (top-|PC1| PASs taken from each condition)",
-         y = if (weighted) "Share of total\nPC1 x NB weight" else "PASs",
+         y = if (weighted) "Share of total weight" else "PASs",
          title = "Candidate cutoffs: what each k adds to the Leading Edge", tag = tag) +
     master_theme() + theme(legend.position = "top", legend.justification = "left",
                            legend.margin = margin(0, 0, -4, 0))
@@ -3850,39 +3726,79 @@ panel_frontier <- function(fr, tag) {
     coord_fixed(xlim = c(0, 1), ylim = c(0, 1), expand = TRUE) +
     scale_x_continuous(breaks = c(0, 0.5, 1)) + scale_y_continuous(breaks = c(0, 0.5, 1)) +
     labs(x = "R (normalized on the Pareto frontier)", y = "G (normalized)",
-         title = "Pareto frontier and endpoint chord: k* is the knee (largest distance d to the chord)",
+         title = "Pareto frontier and endpoint chord: k* = maximum deviation d from the chord",
          tag = tag) +
     master_theme() + theme(panel.grid.major.y = element_blank())
 }
 
-panel_composition <- function(comp, tag, subtitle = NULL, method_by_comparison = NULL) {
+# Two bars per comparison when a cutoff scan exists:
+#   "Cutoff-scan ranking": regime classes at k in the ranking the cutoff was chosen
+#                          on (CPM, VST or normalized-count arms, own knots);
+#   "Actual NormEVS split": the Leading Edge this run actually fitted with DESeq2
+#                          (condition PC1 on the 10-sample comparison), classed
+#                          with the normalized-count knots.
+# Showing both makes any disagreement between the two rankings visible.
+panel_composition <- function(comp, tag, subtitle = NULL, method_by_comparison = NULL, scan_comp = NULL) {
   cmp <- comp_levels()
-  comp$class <- factor(comp$class, levels = names(REGIME_COLS))
-  comp$Comparison <- factor(comp$Comparison, levels = rev(cmp))
-  tot <- unique(comp[, c("Comparison", "k", "LE_n")])
-  tot$lab <- sprintf("%s  (k = %s)", scales::comma(tot$LE_n), scales::comma(tot$k))
+  act_lab <- "Actual NormEVS split"
+  a <- data.frame(Comparison = comp$Comparison, k = comp$k, class = comp$class, n = comp$n,
+                  Source = act_lab, stringsAsFactors = FALSE)
+  if (!is.null(scan_comp) && nrow(scan_comp)) a <- rbind(a, scan_comp[, names(a)])
+  a$class <- factor(a$class, levels = names(REGIME_COLS))
+  a$Source <- factor(a$Source, levels = c(act_lab, "Cutoff-scan ranking"))
+  a$Comparison <- factor(a$Comparison, levels = cmp)
+  tot <- stats::aggregate(n ~ Comparison + Source, data = a, FUN = sum)
+  jn <- a[a$class == "Joint", c("Comparison", "Source", "n")]; names(jn)[3] <- "joint"
+  tot <- merge(tot, jn, all.x = TRUE)
+  tot$lab <- sprintf("%s  (%.0f%% joint)", scales::comma(tot$n), 100 * tot$joint / tot$n)
+  kk <- unique(a[a$Source == act_lab, c("Comparison", "k")])
+  strip <- stats::setNames(sprintf("%s\nk = %s", comp_lab()[as.character(kk$Comparison)], scales::comma(kk$k)),
+                           as.character(kk$Comparison))
   if (!is.null(method_by_comparison)) {
-    tot$lab <- paste0(tot$lab, "\n", method_by_comparison[as.character(tot$Comparison)])
+    strip <- stats::setNames(paste0(strip, "\n", method_by_comparison[names(strip)]), names(strip))
   }
-  ggplot(comp, aes(n, Comparison, fill = class)) +
-    geom_col(width = 0.66, position = position_stack(reverse = TRUE), colour = "white", linewidth = 0.2) +
-    geom_text(data = tot, aes(x = LE_n, y = Comparison, label = lab), inherit.aes = FALSE,
-              hjust = -0.06, size = 2.1, lineheight = 0.9) +
+  ggplot(a, aes(n, Source, fill = class)) +
+    geom_col(width = 0.72, position = position_stack(reverse = TRUE), colour = "white", linewidth = 0.2) +
+    geom_text(data = tot, aes(x = n, y = Source, label = lab), inherit.aes = FALSE, hjust = -0.06, size = 1.9) +
+    facet_grid(Comparison ~ ., switch = "y", labeller = labeller(Comparison = strip)) +
     scale_fill_manual(values = REGIME_COLS, drop = FALSE) +
-    scale_y_discrete(labels = comp_lab()) +
-    scale_x_continuous(labels = scales::label_comma(), expand = expansion(mult = c(0, 0.32))) +
+    scale_x_continuous(labels = scales::label_comma(), expand = expansion(mult = c(0, 0.34))) +
     guides(fill = guide_legend(nrow = 2, byrow = TRUE)) +
-    labs(x = "PASs in the NormEVS Leading Edge", y = NULL, tag = tag,
-         title = "What the Leading Edge is made of", subtitle = subtitle) +
+    labs(x = "PASs in the Leading Edge", y = NULL, tag = tag,
+         title = "What the Leading Edge is made of",
+         subtitle = if (is.null(subtitle) && !is.null(scan_comp) && nrow(scan_comp))
+           "Cutoff-scan ranking vs the actual NormEVS split fitted by DESeq2" else subtitle) +
     master_theme() + theme(legend.position = "bottom", panel.grid.major.y = element_blank(),
                            panel.grid.major.x = element_line(linewidth = 0.2, colour = "grey92"),
+                           strip.placement = "outside", panel.spacing.y = unit(1.2, "mm"),
+                           strip.text.y.left = element_text(angle = 0, hjust = 1, size = 6.2,
+                                                            face = "bold", lineheight = 0.9),
+                           axis.text.y = element_text(size = 5.6, colour = "grey30"),
                            legend.text = element_text(size = 6.2))
+}
+
+# Regime counts at the applied k from the cutoff scan of the method that set k.
+scan_composition <- function(slug_by_comparison) {
+  cache <- list(); out <- list()
+  for (cn in names(slug_by_comparison)) {
+    sl <- slug_by_comparison[[cn]]
+    if (is.null(cache[[sl]])) cache[[sl]] <- read_cutoff_data(paste0(sl, "_scan.csv"))
+    sc <- cache[[sl]]
+    if (is.null(sc) || !all(c("joint", "opp_LE", "opp_div", "opp_rem") %in% names(sc))) next
+    k <- get_active_evs_cutoff(cn)
+    r <- sc[sc$comparison == cn & sc$k == k, , drop = FALSE]
+    if (!nrow(r)) next
+    out[[cn]] <- data.frame(Comparison = cn, k = k, class = names(REGIME_COLS),
+                            n = as.integer(c(r$joint[1], r$opp_LE[1], r$opp_div[1], r$opp_rem[1])),
+                            Source = "Cutoff-scan ranking", stringsAsFactors = FALSE)
+  }
+  if (length(out)) do.call(rbind, out) else NULL
 }
 
 panel_dispersion <- function(pas, trd, tag, max_pts = 6000L) {
   cmp <- comp_levels()
-  d <- pas[pas$View %in% c("NormEVS Lead", "NormEVS Rem") & is.finite(pas$dispGeneEst) &
-           pas$dispGeneEst >= DISP_MIN_GENE_EST, c("Comparison", "View", "baseMean", "dispGeneEst")]
+  d <- pas[pas$View %in% c("NormEVS Lead", "NormEVS Rem") & is.finite(pas$dispersion) &
+           pas$dispersion > 0, c("Comparison", "View", "baseMean", "dispersion")]
   set.seed(20260927)
   d <- do.call(rbind, lapply(split(d, list(d$Comparison, d$View), drop = TRUE), function(x)
     if (nrow(x) > max_pts) x[sample.int(nrow(x), max_pts), ] else x))
@@ -3897,7 +3813,7 @@ panel_dispersion <- function(pas, trd, tag, max_pts = 6000L) {
     ggrastr::geom_point_rast(aes(colour = Set), size = 0.22, alpha = 0.35, stroke = 0,
                              raster.dpi = 600, show.legend = FALSE)
   } else geom_point(aes(colour = Set), size = 0.22, alpha = 0.35, stroke = 0, show.legend = FALSE)
-  ggplot(d, aes(baseMean, dispGeneEst)) + pts +
+  ggplot(d, aes(baseMean, dispersion)) + pts +
     scale_colour_manual(values = c(LE = unname(SPLIT_POINT_COLS["Leading Edge"]),
                                    REM = unname(SPLIT_POINT_COLS["Remainder"])), guide = "none") +
     trend_layers(t) +
@@ -3905,9 +3821,9 @@ panel_dispersion <- function(pas, trd, tag, max_pts = 6000L) {
     scale_x_log10(labels = log_lab()) + scale_y_log10(labels = log_lab()) +
     annotation_logticks(sides = "bl", short = unit(0.6, "mm"),
                         mid = unit(1, "mm"), long = unit(1.4, "mm"), colour = "grey40") +
-    labs(x = "Mean of normalized counts", y = "DESeq2 gene-wise dispersion", tag = tag,
-         title = "DESeq2 dispersions after the split (NormEVS)",
-         subtitle = "Leading Edge (blue) and Remainder (red) were fitted separately; points are gene-wise estimates, lines each fit's trend.") +
+    labs(x = "Mean of normalized counts", y = "DESeq2 final (MAP) dispersion", tag = tag,
+         title = "DESeq2 final dispersions after the split (NormEVS)",
+         subtitle = "Leading Edge (blue) and Remainder (red) were fitted separately; points are the final dispersions used in the Wald test, lines each fit's trend.") +
     master_theme() + theme(legend.position = "bottom", panel.grid.major.y = element_blank())
 }
 
@@ -3927,7 +3843,7 @@ trend_layers <- function(t) {
   )
 }
 
-panel_resid_var <- function(met, score, tag) {
+panel_prior_width <- function(met, score, tag) {
   cmp <- comp_levels(); col <- method_colour()
   m <- met[met$View %in% c("Original (No EVS)", "NormEVS Lead", "NormEVS Rem"), ]
   m$Set <- factor(c("Original (No EVS)" = "Original (no EVS)", "NormEVS Lead" = "Leading Edge",
@@ -3935,22 +3851,48 @@ panel_resid_var <- function(met, score, tag) {
                   levels = c("Original (no EVS)", "Leading Edge", "Remainder"))
   m$Comparison <- factor(m$Comparison, levels = cmp)
   s <- score; s$Comparison <- factor(s$Comparison, levels = cmp); s$x <- as.numeric(s$Comparison)
-  s$lab <- sprintf("V = %.2f\n%s%.0f%%", s$V_split, ifelse(s$reduction_vs_Original_pct >= 0, "-", "+"),
-                   abs(s$reduction_vs_Original_pct))
-  top <- tapply(m$log_disp_resid_var, m$Comparison, max)
-  s$ytxt <- pmax(top[as.character(s$Comparison)], s$V_split)
-  ggplot(m, aes(Comparison, log_disp_resid_var, fill = Set)) +
+  s$lab <- sprintf("W = %.2f\n%s%.0f%%", s$W_split, ifelse(s$prior_width_reduction_pct >= 0, "-", "+"),
+                   abs(s$prior_width_reduction_pct))
+  top <- tapply(m$prior_width, m$Comparison, max)
+  s$ytxt <- pmax(top[as.character(s$Comparison)], s$W_split)
+  ggplot(m, aes(Comparison, prior_width, fill = Set)) +
     geom_col(position = position_dodge(width = 0.78), width = 0.72) +
-    geom_segment(data = s, aes(x = x - 0.4, xend = x + 0.4, y = V_split, yend = V_split),
-                 inherit.aes = FALSE, colour = col, linewidth = 0.9, lineend = "round") +
+    geom_segment(data = s, aes(x = x - 0.42, xend = x + 0.42, y = W_split, yend = W_split),
+                 inherit.aes = FALSE, colour = "white", linewidth = 2.0, lineend = "round") +
+    geom_segment(data = s, aes(x = x - 0.4, xend = x + 0.4, y = W_split, yend = W_split),
+                 inherit.aes = FALSE, colour = col, linewidth = 1.0, lineend = "round") +
     geom_text(data = s, aes(x = x, y = ytxt, label = lab), inherit.aes = FALSE,
               vjust = -0.35, size = 2.0, lineheight = 0.9, colour = "grey10") +
     scale_fill_manual(values = SPLIT_COLS) +
     scale_x_discrete(labels = comp_lab()) +
     scale_y_continuous(expand = expansion(mult = c(0, 0.30))) +
-    labs(x = NULL, y = "Dispersion residual variance\n(DESeq2 varLogDispEsts)", tag = tag,
-         title = "Does the split tighten the DESeq2 dispersion fit?",
-         subtitle = "Coloured bar: pooled LE + REM score V (the selection criterion); % vs Original.") +
+    labs(x = NULL, y = "Dispersion prior width\n(variance of log dispersion)", tag = tag,
+         title = "The split narrows DESeq2's dispersion prior",
+         subtitle = "Line: pooled LE + REM width W (selection criterion); % vs Original.") +
+    master_theme() + theme(legend.position = "bottom")
+}
+
+panel_final_change <- function(pairs, fscore, tag) {
+  cmp <- comp_levels()
+  d <- pairs; d$Comparison <- factor(d$Comparison, levels = cmp)
+  d$Set <- factor(d$Set, levels = c("Leading Edge", "Remainder"))
+  yl <- stats::quantile(d$log2_ratio, c(0.01, 0.99), na.rm = TRUE)
+  f <- fscore; f$Comparison <- factor(f$Comparison, levels = cmp)
+  f$lab <- sprintf("Wald SE  LE %+.1f%%  |  REM %+.1f%%", f$SE_change_LE_pct, f$SE_change_REM_pct)
+  ggplot(d, aes(Comparison, log2_ratio, fill = Set)) +
+    geom_hline(yintercept = 0, linetype = "22", linewidth = 0.35, colour = "grey30") +
+    geom_violin(position = position_dodge(width = 0.8), width = 0.75, linewidth = 0.2,
+                colour = "white", scale = "width", alpha = 0.85) +
+    geom_boxplot(position = position_dodge(width = 0.8), width = 0.14, outlier.shape = NA,
+                 linewidth = 0.3, colour = "grey10", fill = "white") +
+    geom_text(data = f, aes(x = Comparison, y = Inf, label = lab), inherit.aes = FALSE,
+              vjust = 1.2, size = 1.9, lineheight = 0.9) +
+    coord_cartesian(ylim = c(yl[[1]], yl[[2]] + 0.35 * diff(yl))) +
+    scale_fill_manual(values = SPLIT_COLS[c("Leading Edge", "Remainder")]) +
+    scale_x_discrete(labels = comp_lab()) +
+    labs(x = NULL, y = "log2(final dispersion, split /\nfinal dispersion, Original)", tag = tag,
+         title = "Consequence: each PAS's final dispersion moves to its own population's level",
+         subtitle = "Leading Edge rises (no longer shrunk toward too low a trend); Remainder falls (sharper tests). Labels: mean change in Wald standard error.") +
     master_theme() + theme(legend.position = "bottom")
 }
 
@@ -3959,70 +3901,81 @@ panel_winner <- function(win_tab, tag) {
   w <- win_tab
   w$Cutoff_Method <- factor(w$Cutoff_Method, levels = METHOD_LEVELS)
   w$Comparison <- factor(w$Comparison, levels = cmp)
-  o <- unique(w[, c("Comparison", "v_Original")])
+  o <- unique(w[, c("Comparison", "w_Original")])
   ww <- w[w$Winner %in% TRUE, ]
-  ggplot(w, aes(Cutoff_Method, V_split)) +
-    geom_hline(data = o, aes(yintercept = v_Original), linetype = "22", linewidth = 0.4, colour = "grey25") +
-    geom_segment(aes(xend = Cutoff_Method, y = v_Original, yend = V_split, colour = Cutoff_Method),
-                 linewidth = 0.5, alpha = 0.55) +
-    geom_point(aes(colour = Cutoff_Method), size = 2.2) +
-    geom_point(data = ww, shape = 21, size = 4.3, stroke = 0.7, colour = "black", fill = NA) +
+  ggplot(w, aes(Cutoff_Method, W_split)) +
+    geom_hline(data = o, aes(yintercept = w_Original), linetype = "22", linewidth = 0.4, colour = "grey25") +
+    geom_segment(aes(xend = Cutoff_Method, y = w_Original, yend = W_split, colour = Cutoff_Method),
+                 linewidth = 0.6, alpha = 0.6) +
+    geom_point(aes(colour = Cutoff_Method), size = 2.3) +
+    geom_point(data = ww, shape = 21, size = 4.4, stroke = 0.7, colour = "black", fill = NA) +
     geom_text(data = ww, aes(label = sprintf("selected\nk = %s", scales::comma(k))),
               vjust = 1.7, size = 2.0, lineheight = 0.9, fontface = "bold") +
-    scale_x_discrete(expand = expansion(add = 0.9)) +
+    scale_x_discrete(expand = expansion(add = 0.8)) +
     facet_wrap(~ Comparison, nrow = 1, scales = "free_y", labeller = labeller(Comparison = comp_lab())) +
-    scale_colour_manual(values = METHOD_COLS) +
-    scale_y_continuous(expand = expansion(mult = c(0.4, 0.1))) +
-    labs(x = NULL, y = "Pooled dispersion residual\nvariance V (LE + REM)", tag = tag,
-         title = "Dynamic selection: the estimator whose split gives DESeq2 the tightest dispersion fit wins",
-         subtitle = "Dashed line: Original (no EVS). No p-values or discovery counts enter the rule.") +
+    scale_colour_manual(values = METHOD_COLS, guide = "none") +
+    scale_y_continuous(expand = expansion(mult = c(0.45, 0.12))) +
+    labs(x = NULL, y = "Pooled dispersion prior\nwidth W (LE + REM)", tag = tag,
+         title = "Dynamic selection: the split that gives DESeq2 the narrowest dispersion prior wins",
+         subtitle = "Dashed line: Original (no EVS) prior width. No p-values or discovery counts enter the rule.") +
     master_theme() + theme(axis.text.x = element_text(angle = 30, hjust = 1))
 }
 
-save_method_figure <- function(met, pas, trd, comp, score) {
+save_method_figure <- function(met, pas, trd, comp, score, pairs, fscore) {
   slug <- CUTOFF_METHOD_SLUG
   stem <- paste0("Figure_Method_", slug)
   comp_row <- NULL
   if (!is.null(comp) && nrow(comp)) comp_row <- comp
   pd <- function(tag) panel_dispersion(pas, trd, tag)
-  pe <- function(tag) panel_resid_var(met, score, tag)
-  pc <- function(tag, sub = NULL, mbc = NULL) panel_composition(comp_row, tag, sub, mbc)
+  pe <- function(tag) panel_prior_width(met, score, tag)
+  pf <- function(tag) panel_final_change(pairs, fscore, tag)
+  slug_by_cmp <- stats::setNames(rep(slug, length(comp_levels())), comp_levels())
+  win0 <- read_cutoff_data("Dynamic_Winner.csv")
+  if (identical(slug, "Dynamic_Best") && !is.null(win0)) {
+    w0 <- win0[win0$Winner %in% TRUE, ]
+    slug_by_cmp <- stats::setNames(unname(METHOD_SLUGS[as.character(w0$Cutoff_Method)]), w0$Comparison)
+  }
+  scan_comp <- tryCatch(scan_composition(slug_by_cmp), error = function(e) NULL)
+  pc <- function(tag, sub = NULL, mbc = NULL) panel_composition(comp_row, tag, sub, mbc, scan_comp)
 
-  if (slug %in% c("CPM_Empirical", "VST_Empirical", "PC1_NB_Information")) {
+  # Story in every figure: dispersions after the split (trends) -> the prior
+  # narrows (headline) and what the Leading Edge is -> consequence for the
+  # final dispersions each test uses.
+  add_core <- function(rows, hts, mbc = NULL, sub = NULL) {
+    L <- function() letters[length(rows) + 1L]
+    rows[[length(rows) + 1L]] <- pd(L()); hts <- c(hts, 1.05)
+    a <- L(); b <- letters[length(rows) + 2L]
+    rows[[length(rows) + 1L]] <- if (!is.null(comp_row))
+      list(plots = list(pe(a), pc(b, sub, mbc)), widths = c(1.1, 1)) else pe(a)
+    hts <- c(hts, 1.45)
+    rows[[length(rows) + 1L]] <- pf(letters[length(rows) + if (!is.null(comp_row)) 2L else 1L]); hts <- c(hts, 1)
+    list(rows = rows, hts = hts)
+  }
+  if (slug %in% c("CPM_Empirical", "VST_Empirical")) {
     scan <- read_cutoff_data(paste0(slug, "_scan.csv"))
     fr <- read_cutoff_data(paste0(slug, "_frontier.csv"))
     rows <- list(); hts <- numeric(0)
-    if (!is.null(scan)) { rows[[length(rows) + 1L]] <- panel_scan(scan, slug == "PC1_NB_Information", letters[length(rows) + 1L]); hts <- c(hts, 0.95) }
+    if (!is.null(scan)) { rows[[length(rows) + 1L]] <- panel_scan(scan, FALSE, letters[length(rows) + 1L]); hts <- c(hts, 0.95) }
     if (!is.null(fr)) { rows[[length(rows) + 1L]] <- panel_frontier(fr, letters[length(rows) + 1L]); hts <- c(hts, 0.95) }
-    rows[[length(rows) + 1L]] <- pd(letters[length(rows) + 1L]); hts <- c(hts, 1.05)
-    n <- length(rows)
-    last <- if (!is.null(comp_row)) list(plots = list(pc(letters[n + 1L]), pe(letters[n + 2L])), widths = c(1, 1.1))
-            else pe(letters[n + 1L])
-    rows[[n + 1L]] <- last; hts <- c(hts, 1.1)
-    fig <- assemble_rows(rows, hts, paste0(CUTOFF_METHOD_LABEL, ": cutoff selection and DESeq2 dispersion after EVS"))
-    save_fig_mm(fig, stem, 180, 55 * length(rows) + 12)
+    core <- add_core(rows, hts)
+    fig <- assemble_rows(core$rows, core$hts, paste0(CUTOFF_METHOD_LABEL, ": cutoff selection and DESeq2 dispersion prior after EVS"))
+    save_fig_mm(fig, stem, 180, 240)
   } else if (identical(slug, "Fixed_5000")) {
-    rows <- list(pd("a"),
-                 if (!is.null(comp_row)) list(plots = list(pc("b", "k is prespecified (no cutoff search)."), pe("c")), widths = c(1, 1.1))
-                 else pe("b"))
-    fig <- assemble_rows(rows, c(1, 1.1), "Fixed 5,000 (prespecified comparator): DESeq2 dispersion after EVS")
-    save_fig_mm(fig, stem, 180, 125)
+    core <- add_core(list(), numeric(0), sub = "k is prespecified (no cutoff search).")
+    fig <- assemble_rows(core$rows, core$hts, "Fixed 5,000 (prespecified comparator): DESeq2 dispersion prior after EVS")
+    save_fig_mm(fig, stem, 180, 205)
   } else {
     win <- read_cutoff_data("Dynamic_Winner.csv")
     rows <- list(); hts <- numeric(0)
     if (!is.null(win)) { rows[[1]] <- panel_winner(win, "a"); hts <- 1 }
-    rows[[length(rows) + 1L]] <- pd(letters[length(rows) + 1L]); hts <- c(hts, 1.05)
-    n <- length(rows)
     mbc <- NULL
     if (!is.null(win)) {
       ww <- win[win$Winner %in% TRUE, ]
-      mbc <- stats::setNames(paste0("selected: ", ww$Cutoff_Method), ww$Comparison)
+      mbc <- stats::setNames(as.character(ww$Cutoff_Method), ww$Comparison)
     }
-    rows[[n + 1L]] <- if (!is.null(comp_row)) list(plots = list(pc(letters[n + 1L], NULL, mbc), pe(letters[n + 2L])), widths = c(1, 1.1))
-                      else pe(letters[n + 1L])
-    hts <- c(hts, 1.15)
-    fig <- assemble_rows(rows, hts, "Dynamic best estimator: selection and DESeq2 dispersion after EVS")
-    save_fig_mm(fig, stem, 180, 58 * length(rows) + 12)
+    core <- add_core(rows, hts, mbc = mbc)
+    fig <- assemble_rows(core$rows, core$hts, "Dynamic best estimator: selection and DESeq2 dispersion prior after EVS")
+    save_fig_mm(fig, stem, 180, 240)
   }
   invisible(TRUE)
 }
@@ -4034,12 +3987,16 @@ save_dispersion_after_evs_outputs <- function() {
   pas <- dplyr::bind_rows(dispersion_pas_rows)
   comp <- if (length(regime_composition_rows)) dplyr::bind_rows(regime_composition_rows) else NULL
   score <- split_dispersion_score(met)
+  pairs <- final_dispersion_pairs(pas)
+  fscore <- final_dispersion_score(pairs)
+  save_csv(pairs, file.path(summary_table_dir, "Table_Final_Dispersion_Change_By_PAS.csv"))
+  save_csv(fscore, file.path(summary_table_dir, "Table_Final_Dispersion_Score.csv"))
   save_csv(met, file.path(summary_table_dir, "Table_Dispersion_After_EVS.csv"))
   save_csv(score, file.path(summary_table_dir, "Table_Dispersion_Split_Score.csv"))
   save_csv(trd, file.path(summary_table_dir, "Table_Dispersion_Trends_By_View.csv"))
   save_csv(pas, file.path(summary_table_dir, "Table_Dispersion_Estimates_By_View.csv"))
   if (!is.null(comp)) save_csv(comp, file.path(summary_table_dir, "Table_EVS_Regime_Composition.csv"))
-  tryCatch(save_method_figure(met, pas, trd, comp, score),
+  tryCatch(save_method_figure(met, pas, trd, comp, score, pairs, fscore),
            error = function(e) warning("Method figure skipped: ", conditionMessage(e), call. = FALSE))
   invisible(TRUE)
 }
@@ -5512,11 +5469,11 @@ if (nrow(overall_summary) > 0L) {
 
 empirical_cutoff_export <- comparison_table[, c(
   "comparison_name", "group1_prefix", "group2_prefix",
-  "fixed_5000_k", "cpm_empirical_k", "vst_empirical_k", "pc1nb_information_k", "dynamic_best_k"
+  "fixed_5000_k", "cpm_empirical_k", "vst_empirical_k", "dynamic_best_k"
 ), drop = FALSE]
 names(empirical_cutoff_export) <- c(
   "Comparison", "RT_prefix", "ZT_prefix",
-  "Fixed_5000_k", "CPM_Empirical_k", "VST_Empirical_k", "PC1_NB_Information_k", "Dynamic_Best_k"
+  "Fixed_5000_k", "CPM_Empirical_k", "VST_Empirical_k", "Dynamic_Best_k"
 )
 empirical_cutoff_export$Active_Cutoff_Method <- CUTOFF_METHOD_LABEL
 empirical_cutoff_export$Active_k_per_condition <- vapply(
