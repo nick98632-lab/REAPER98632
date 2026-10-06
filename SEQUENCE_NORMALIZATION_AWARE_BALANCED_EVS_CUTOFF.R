@@ -49,9 +49,7 @@ PIPELINE_BUILD <- "SEQUENCE_LIKELIHOOD_CUTOFF_2026-10-04"
 # present in both condition-specific top-k* sets are Joint; PASs present in only
 # one set are Disjoint. Joint plus both Disjoint sets form the Leading Edge. All
 # other PASs form the Remainder. Downstream DESeq2 always receives raw counts for
-# the selected PAS subset. Size factors are estimated once per comparison on all
-# 10 RT/ZT samples and passed to every view's DESeq2 fit (Original, Lead, Rem),
-# so all views share one normalization; dispersions are re-estimated per view.
+# the selected PAS subset and estimates its own size factors and dispersions.
 #
 # DIFFERENTIAL EXPRESSION AND EFFECT TESTS
 # DESeq2 uses design ~ condition with trt relative to untrt. The ordinary Wald
@@ -2973,8 +2971,7 @@ run_one_evs_track <- function(comparison_name, track_key, count_matrix, coldata,
       count_mat = analysis_dataset_list[[nm]],
       coldata = coldata,
       dataset_name = dataset_name,
-      annot_df = annot_df,
-      size_factors = evs$size_factors
+      annot_df = annot_df
     )
 
     analysis_results[[nm]] <- list(
@@ -3263,7 +3260,7 @@ write_methods_note <- function() {
     "PASs present in both condition-specific top-k* sets were classified as Joint; PASs present in only one set were classified as Disjoint for that condition. Joint plus both Disjoint sets formed the Leading Edge, and all other PASs formed the Remainder. EVS defined PAS membership only. Downstream DESeq2 analyses received the corresponding raw-count subset and estimated normalization and dispersion parameters within that analysis view. The five reported views were Original (No EVS), NormEVS Lead, NormEVS Rem, RawEVS Lead, and RawEVS Rem.",
     "",
     "## DESeq2 model and log2 fold-change shrinkage",
-    "Each analysis view was modeled independently with DESeq2 using a negative-binomial generalized linear model with design ~ condition and ZT/untrt as the reference. Median-of-ratios size factors were estimated once per comparison on all ten RT and ZT samples and supplied to every view; within each view DESeq2 estimated gene-wise dispersions, the mean-dispersion relationship, final dispersions, and Wald statistics for the RT/trt coefficient. Log2 fold changes were then shrunken with apeglm. The apeglm-shrunken log2 fold change was the reported effect estimate, the effect term in HBFSS, the direction indicator, and the x-coordinate for all significance figures.",
+    "Each analysis view was modeled independently with DESeq2 using a negative-binomial generalized linear model with design ~ condition and ZT/untrt as the reference. DESeq2 estimated median-of-ratios size factors, gene-wise dispersions, the mean-dispersion relationship, final dispersions, and Wald statistics for the RT/trt coefficient. Log2 fold changes were then shrunken with apeglm. The apeglm-shrunken log2 fold change was the reported effect estimate, the effect term in HBFSS, the direction indicator, and the x-coordinate for all significance figures.",
     "",
     "## Standard effect",
     sprintf("The Standard effect used the ordinary two-sided DESeq2 Wald p-value with Benjamini-Hochberg adjustment at FDR %.2f and the prespecified manuscript effect boundary on the apeglm-shrunken estimate. A PAS was reported as Standard when padj < %.2f and |apeglm LFC| >= %.1f. The ordinary DESeq2 Wald p-value/padj were retained separately from the empirical-null p-value used for HBFSS.", BH_FDR_STANDARD, BH_FDR_STANDARD, lfc_boundary),
@@ -3893,9 +3890,10 @@ save_dispersion_after_evs_outputs <- function() {
 #   log alphahat_i = log alpha_i + e_i,       e_i ~ N(0, s^2),  s^2 = trigamma((m-p)/2)
 #
 # alpha_g is DESeq2's own trend fitted separately in each group; alphahat_i is
-# DESeq2's gene-wise estimate. Gene-wise estimates depend only on each PAS's own
-# counts, the design and the shared size factors, so they are computed ONCE per
-# comparison; only the two trends change with k. With the variance profiled out
+# DESeq2's gene-wise estimate. As in the downstream analysis, the Leading Edge and
+# the Remainder are separate datasets: at every k each gets its own median-of-ratios
+# size factors, gene-wise dispersions and trend, exactly as DESeq() fits them later.
+# With the variance profiled out
 # (robust scale, as DESeq2 itself uses: sigma_g^2 = MAD^2 of the log residuals),
 #
 #   l(k) = -1/2 * sum_g n_g * [ log(2*pi*sigma_g^2) + 1 ],   sigma_g^2 = tau_g^2 + s^2
@@ -3922,26 +3920,30 @@ likelihood_cutoff_scan <- function(comparison_name, count_matrix, coldata) {
                 stats::setNames(lu$rank, lu$feature_id)[rownames(raw)])
   names(depth) <- rownames(raw)
 
-  dds <- DESeq2::DESeqDataSetFromMatrix(countData = raw, colData = coldata, design = make_design_formula(coldata))
-  dds <- dds[rowSums(DESeq2::counts(dds)) > 0, ]
-  DESeq2::sizeFactors(dds) <- rank_obj$size_factors[colnames(dds)]
-  dds <- DESeq2::estimateDispersionsGeneEst(dds, quiet = TRUE)
-  d <- as.numeric(depth[rownames(dds)])
-  X <- stats::model.matrix(DESeq2::design(dds), as.data.frame(SummarizedExperiment::colData(dds)))
-  s2 <- trigamma((ncol(dds) - ncol(X)) / 2)
+  raw <- raw[rowSums(raw) > 0, , drop = FALSE]
+  d <- as.numeric(depth[rownames(raw)])
+  design_formula <- make_design_formula(coldata)
+  X <- stats::model.matrix(design_formula, as.data.frame(coldata))
+  s2 <- trigamma((ncol(raw) - ncol(X)) / 2)
 
+  # One subset = one dataset: its own size factors, gene-wise dispersions and trend
+  # (the same steps DESeq() runs on it downstream, without the Wald test).
   group_scale <- function(sel) {
-    g <- dds[sel, ]
+    g <- DESeq2::DESeqDataSetFromMatrix(countData = raw[sel, , drop = FALSE], colData = coldata, design = design_formula)
+    g <- g[rowSums(DESeq2::counts(g)) > 0, ]
+    g <- DESeq2::estimateSizeFactors(g)
+    g <- DESeq2::estimateDispersionsGeneEst(g, quiet = TRUE)
     g <- tryCatch(suppressMessages(DESeq2::estimateDispersionsFit(g, quiet = TRUE)),
                   error = function(e) suppressMessages(DESeq2::estimateDispersionsFit(g, fitType = "local", quiet = TRUE)))
+    ft <- attr(DESeq2::dispersionFunction(g), "fitType")
     mc <- S4Vectors::mcols(g)
     ok <- !mc$allZero & is.finite(mc$dispGeneEst) & mc$dispGeneEst >= 1e-6 & is.finite(mc$dispFit) & mc$dispFit > 0
     r <- log(mc$dispGeneEst[ok] / mc$dispFit[ok])
-    c(n = sum(ok), sigma2 = stats::mad(r)^2)
+    list(n = sum(ok), sigma2 = stats::mad(r)^2, fit_type = if (is.null(ft)) NA_character_ else as.character(ft))
   }
   loglik <- function(parts) -0.5 * sum(vapply(parts, function(p) p[["n"]] * (log(2 * pi * p[["sigma2"]]) + 1), numeric(1)))
 
-  orig <- group_scale(rep(TRUE, nrow(dds)))
+  orig <- group_scale(rep(TRUE, nrow(raw)))
   l0 <- loglik(list(orig))
   eval_k <- function(k) {
     le <- d <= k
@@ -3952,14 +3954,17 @@ likelihood_cutoff_scan <- function(comparison_name, count_matrix, coldata) {
                sigma2_LE = a[["sigma2"]], sigma2_REM = b[["sigma2"]],
                tau2_LE = max(a[["sigma2"]] - s2, 0), tau2_REM = max(b[["sigma2"]] - s2, 0),
                tau2_Original = max(orig[["sigma2"]] - s2, 0), sampling_var = s2,
-               loglik = l, delta_loglik_vs_Original = l - l0, stringsAsFactors = FALSE)
+               loglik = l, delta_loglik_vs_Original = l - l0,
+               fit_type_LE = a[["fit_type"]], fit_type_REM = b[["fit_type"]], stringsAsFactors = FALSE)
   }
 
-  k_max <- min(15000L, as.integer(floor(0.6 * nrow(dds))))
-  coarse <- sort(unique(c(seq(250L, k_max, by = 250L), 5000L)))
+  k_max <- min(15000L, as.integer(floor(0.6 * nrow(raw))))
+  # Each k refits both subsets from scratch (size factors + dispersions), so the
+  # grid is coarse (every 500) and then refined (every 50) around the best k.
+  coarse <- sort(unique(c(seq(500L, k_max, by = 500L), 250L, 5000L)))
   rows <- do.call(rbind, lapply(coarse, eval_k))
   kb <- rows$k[which.max(rows$loglik)]
-  fine <- setdiff(seq(max(25L, kb - 250L), min(k_max, kb + 250L), by = 25L), rows$k)
+  fine <- setdiff(seq(max(50L, kb - 500L), min(k_max, kb + 500L), by = 50L), rows$k)
   if (length(fine)) rows <- rbind(rows, do.call(rbind, lapply(fine, eval_k)))
   rows <- rows[order(rows$k), ]
   rows$W_split <- (rows$LE_n * rows$tau2_LE + rows$REM_n * rows$tau2_REM) / (rows$LE_n + rows$REM_n)
