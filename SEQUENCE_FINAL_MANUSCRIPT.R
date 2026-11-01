@@ -3042,7 +3042,7 @@ fit_split_model <- function(raw, condition, depth, k, keep_fits = FALSE) {
 }
 
 admissible_k_range <- function(depth) {
-  sd <- sort(depth); N <- length(sd)
+  sd <- unname(sort(depth)); N <- length(sd)
   if (N < 2L * LIK_MIN_GROUP) stop("Too few PASs for a Leading Edge / Remainder split.")
   c(lo = sd[LIK_MIN_GROUP], hi = sd[N - LIK_MIN_GROUP + 1L] - 1L)
 }
