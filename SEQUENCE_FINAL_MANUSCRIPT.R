@@ -201,7 +201,7 @@ save_figure_S3 <- function(multi_root, out_dir, discoveries) {
     pb <- ggplot(b, aes(Comparison, W, fill = Series)) +
       geom_col(position = position_dodge(width = 0.8), width = 0.74) +
       scale_fill_manual(values = c("Original (No EVS)" = unname(SET_COLS[ORIGINAL_LABEL]), METHOD_COLS)) +
-      scale_x_discrete(labels = function(x) sub("_", "/", x)) +
+      scale_x_discrete(labels = function(x) sub("_", "\n", x)) +
       scale_y_continuous(limits = c(0, NA), expand = expansion(mult = c(0, 0.08))) +
       labs(x = NULL, y = "Pooled prior width W", tag = "b", title = "Prior width (lower is better)",
            subtitle = "Pooled Leading Edge + Remainder width; Original (No EVS) for reference.") +
@@ -2811,7 +2811,7 @@ write_methods_note <- function() {
     "PASs present in both condition-specific top-k* sets were classified as Joint; PASs present in only one set were classified as Disjoint for that condition. Joint plus both Disjoint sets formed the Leading Edge, and all other PASs formed the Remainder. EVS defined PAS membership only. Downstream DESeq2 analyses received the corresponding raw-count subset and estimated normalization and dispersion parameters within that analysis view. The five reported views were Original (No EVS), NormEVS Lead, NormEVS Rem, RawEVS Lead, and RawEVS Rem.",
     "",
     "## Choice of the EVS cutoff k (likelihood-stratified moderation)",
-    "Two cutoffs were analyzed: a prespecified k = 5,000 and a likelihood cutoff k*. For each comparison, k* was the k that maximized the marginal negative-binomial likelihood of the counts under DESeq2's empirical-Bayes dispersion model with the dispersion prior allowed to differ between the Leading Edge and the Remainder, a varying-dispersion regression in the sense of Tzougas (2020) fitted by EM. For PAS i in group g (Leading Edge or Remainder at cutoff k), y_ij | alpha_i ~ NB(mu_ij, alpha_i) and log alpha_i ~ N(f_g(log mean_i), tau_g^2), where f_g is a natural cubic spline in log mean (4 df) and tau_g^2 is the prior width. Each group was treated as its own dataset with its own median-of-ratios size factors, and mu_ij = s_j q_i,c(j) with q the per-condition normalized mean. The per-PAS likelihood of alpha was the Cox-Reid adjusted profile likelihood used by DESeq2 for gene-wise dispersions; alpha_i was integrated over a grid of 121 log-dispersion values from 1e-4 to 100. The E-step computed the posterior mean and second moment of log alpha_i; the M-step refitted f_g by least squares and set tau_g^2 to the mean posterior squared deviation, iterating until the log-likelihood changed by less than 0.001. The log-likelihood l(k) = l_LE(k) + l_REM(k) was compared with the Original (No EVS) model (one trend and one prior width for all PASs). All admissible k (both groups with at least 300 PASs) were scanned every 250 and then every 10 within 250 of the best value; k* = argmax l(k), with support interval {k : l(k) >= l(k*) - 2}. The cutoff was fixed before any differential test and no p-value or discovery count entered its choice. The pooled prior width W = (n_LE tau_LE^2 + n_REM tau_REM^2) / (n_LE + n_REM) was compared with the Original prior width. Stability was assessed by refitting DESeq2 dispersions at k* - 100, -25, -5, -1, +1, +5, +25 and +100 and comparing final dispersions with those at k*.",
+    "Two cutoffs were analyzed: a prespecified k = 5,000 and a likelihood cutoff k*. For each comparison, k* was the k that maximized the marginal negative-binomial likelihood of the counts under DESeq2's empirical-Bayes dispersion model with the dispersion prior allowed to differ between the Leading Edge and the Remainder, a varying-dispersion regression in the sense of Tzougas (2020) fitted by EM. For PAS i in group g (Leading Edge or Remainder at cutoff k), y_ij | alpha_i ~ NB(mu_ij, alpha_i) and log alpha_i ~ N(f_g(log mean_i), tau_g^2), where f_g is a natural cubic spline in log mean (4 df) and tau_g^2 is the prior width. Each group was treated as its own dataset with its own median-of-ratios size factors, and mu_ij = s_j q_i,c(j) with q the per-condition normalized mean. The per-PAS likelihood of alpha was the Cox-Reid adjusted profile likelihood used by DESeq2 for gene-wise dispersions; alpha_i was integrated over a grid of 121 log-dispersion values from 1e-4 to 100. The E-step computed the posterior mean and second moment of log alpha_i; the M-step refitted f_g by least squares and set tau_g^2 to the mean posterior squared deviation, iterating until the log-likelihood changed by less than 0.001. The log-likelihood l(k) = l_LE(k) + l_REM(k) was compared with the Original (No EVS) model (one trend and one prior width for all PASs). All admissible k (both groups with at least 300 PASs) were scanned every 250, then every 10 within 250 of the best value, then at every single k within 10 of the best value; k* = argmax l(k), with support interval {k : l(k) >= l(k*) - 2}. The cutoff was fixed before any differential test and no p-value or discovery count entered its choice. The pooled prior width W = (n_LE tau_LE^2 + n_REM tau_REM^2) / (n_LE + n_REM) was compared with the Original prior width. Stability was assessed by refitting DESeq2 dispersions at k* - 100, -25, -5, -1, +1, +5, +25 and +100 and comparing final dispersions with those at k*.",
     "",
     "## DESeq2 model and log2 fold-change shrinkage",
     "Each analysis view was modeled independently with DESeq2 using a negative-binomial generalized linear model with design ~ condition and ZT/untrt as the reference. DESeq2 estimated median-of-ratios size factors, gene-wise dispersions, the mean-dispersion relationship, final dispersions, and Wald statistics for the RT/trt coefficient. Log2 fold changes were then shrunken with apeglm. The apeglm-shrunken log2 fold change was the reported effect estimate, the effect term in HBFSS, the direction indicator, and the x-coordinate for all significance figures.",
@@ -2894,10 +2894,12 @@ write_methods_note <- function() {
 # Original (No EVS) model (one trend, one width, all PASs) gives l_0. Every k
 # uses the same counts and the same number of parameters, so
 #   k* = argmax_k l(k).
-# Search: every LIK_COARSE_STEP over all admissible k (both groups keep at
-# least LIK_MIN_GROUP PASs), then every LIK_FINE_STEP within
-# +/- LIK_FINE_HALF_WIDTH of the best coarse k. Support interval: the k with
-# l(k) >= l(k*) - 2. No p-value or discovery count enters the choice.
+# Search, three stages: every LIK_COARSE_STEP (250) over all admissible k (both
+# groups keep at least LIK_MIN_GROUP PASs); every LIK_FINE_STEP (10) within
+# +/- LIK_FINE_HALF_WIDTH (250) of the best coarse k; then every single k
+# within +/- LIK_EXACT_HALF_WIDTH (10) of the best k so far, so k* is exact.
+# Support interval: the k with l(k) >= l(k*) - 2. No p-value or discovery
+# count enters the choice.
 
 LIK_LOG_ALPHA_GRID <- seq(log(1e-4), log(100), length.out = 121L)
 LIK_SPLINE_DF <- 4L
@@ -2905,6 +2907,7 @@ LIK_MIN_GROUP <- 300L
 LIK_COARSE_STEP <- 250L
 LIK_FINE_STEP <- 10L
 LIK_FINE_HALF_WIDTH <- 250L
+LIK_EXACT_HALF_WIDTH <- 10L
 LIK_EM_TOL <- 1e-3
 LIK_EM_MAX_ITER <- 500L
 LIK_STABILITY_STEPS <- c(-100L, -25L, -5L, -1L, 1L, 5L, 25L, 100L)
@@ -3071,6 +3074,12 @@ likelihood_k_scan <- function(raw, coldata, label, cores = analysis_cores()) {
   fine_k <- setdiff(fine_k, rows$k)
   if (length(fine_k)) {
     rows <- rbind(rows, do.call(rbind, parallel_map(fine_k, eval_k, cores, paste(label, "fine scan"))))
+  }
+  kb <- rows$k[which.max(rows$loglik)]
+  exact_k <- setdiff(seq(max(rng[["lo"]], kb - LIK_EXACT_HALF_WIDTH), min(rng[["hi"]], kb + LIK_EXACT_HALF_WIDTH)),
+                     rows$k)
+  if (length(exact_k)) {
+    rows <- rbind(rows, do.call(rbind, parallel_map(exact_k, eval_k, cores, paste(label, "exact scan"))))
   }
   rows <- rows[order(rows$k), ]
   rows$loglik_Original <- orig$loglik
@@ -3400,8 +3409,8 @@ panel_varying_dispersion_fit <- function(pas, trends, sel, tag, max_pts = 2500L)
                      format(round(lab$delta_BIC_vs_Original), big.mark = ","))
   yl <- stats::quantile(d$dispGeneEst, c(0.002, 0.998), names = FALSE)
   ggplot(d, aes(baseMean, dispGeneEst)) +
-    geom_point(aes(fill = Set), shape = 21, size = 0.45, alpha = 0.35, stroke = 0, colour = NA, show.legend = FALSE) +
-    scale_fill_manual(values = SET_COLS[c("Leading Edge", "Remainder")]) +
+    geom_point(data = d[d$Set == "Remainder", ], colour = "#E8836F", size = 0.35, alpha = 0.35, stroke = 0) +
+    geom_point(data = d[d$Set == "Leading Edge", ], colour = "#5B9BD5", size = 0.35, alpha = 0.35, stroke = 0) +
     geom_line(data = t, aes(baseMean, trend, group = Set), colour = "white", linewidth = 1.5) +
     geom_line(data = t, aes(baseMean, trend, linetype = Set, colour = Set), linewidth = 0.75) +
     geom_label(data = lab, aes(x = Inf, y = Inf, label = txt), inherit.aes = FALSE, hjust = 1.04, vjust = 1.08,
@@ -3425,7 +3434,7 @@ panel_varying_dispersion_fit <- function(pas, trends, sel, tag, max_pts = 2500L)
 
 # ---- Figure 2: what the split does to DESeq2 ---------------------------------
 
-panel_shrinkage_arrows <- function(pas, trd, tag, n_per_group = 160L, n_outliers = 30L) {
+panel_shrinkage_arrows <- function(pas, trd, met, tag, n_per_group = 160L, n_outliers = 30L) {
   d <- pas[pas$View %in% c("NormEVS Lead", "NormEVS Rem") & is.finite(pas$dispGeneEst) &
            pas$dispGeneEst >= DISP_MIN_GENE_EST & is.finite(pas$dispersion) & pas$dispersion > 0, ]
   pick <- function(x) {
@@ -3438,12 +3447,19 @@ panel_shrinkage_arrows <- function(pas, trd, tag, n_per_group = 160L, n_outliers
   pulled <- d[!d$dispOutlier, ]; outl <- d[d$dispOutlier, ]
   t <- trd[trd$View %in% c("NormEVS Lead", "NormEVS Rem"), ]
   t$Set <- unname(VIEW_SET[t$View]); t$Comparison <- as_comp(t$Comparison)
+  # DESeq2 outlier rule: log(gene-wise) > log(trend) + 2 * sqrt(varLogDispEsts), per group
+  v <- met[met$View %in% c("NormEVS Lead", "NormEVS Rem"), c("Comparison", "View", "var_log_disp_residuals")]
+  t$threshold <- t$trend * exp(2 * sqrt(v$var_log_disp_residuals[match(paste(t$Comparison, t$View),
+                                                                        paste(v$Comparison, v$View))]))
   ggplot() +
     geom_line(data = t, aes(baseMean, trend, colour = Set), linewidth = 0.7, show.legend = FALSE) +
+    geom_line(data = t[is.finite(t$threshold), ], aes(baseMean, threshold, colour = Set), linewidth = 0.4,
+              linetype = "22", show.legend = FALSE) +
     geom_segment(data = pulled, aes(x = baseMean, xend = baseMean, y = dispGeneEst, yend = dispersion, colour = Set),
                  linewidth = 0.25, alpha = 0.75, arrow = arrow(length = unit(0.6, "mm"), type = "closed")) +
-    geom_point(data = outl, aes(baseMean, dispGeneEst, shape = "Outlier: kept at its gene-wise estimate"),
-               size = 1.3, stroke = 0.45, colour = "black", fill = NA) +
+    geom_point(data = outl, aes(baseMean, dispGeneEst, colour = Set,
+                                shape = "Outlier: above its group's dashed 2-SD line, kept at its gene-wise estimate"),
+               size = 1.3, stroke = 0.5, fill = NA) +
     facet_wrap(~ Comparison, nrow = 1, labeller = labeller(Comparison = comp_lab())) +
     scale_colour_manual(values = c("Leading Edge" = unname(SET_COLS["Leading Edge"]),
                                    "Remainder" = unname(SET_COLS["Remainder"])),
@@ -3453,7 +3469,8 @@ panel_shrinkage_arrows <- function(pas, trd, tag, n_per_group = 160L, n_outliers
     scale_x_log10(labels = log_lab()) + scale_y_log10(labels = log_lab()) +
     labs(x = "Mean of normalized counts", y = "Dispersion", tag = tag,
          title = "Which PASs are pulled toward their trend, and which are not",
-         subtitle = "Each arrow: DESeq2 gene-wise estimate → final (MAP) dispersion. Open circles: dispersion outliers (> 2 prior SDs above the trend), which DESeq2 does not shrink.") +
+         subtitle = "Arrows: DESeq2 gene-wise estimate to final (MAP) dispersion, pulled to the group's own trend (solid). Open circles: outliers above the group's 2-SD line (dashed), not shrunk.") +
+    guides(shape = guide_legend(order = 2, override.aes = list(colour = "grey20")), colour = guide_legend(order = 1)) +
     fig_theme()
 }
 
@@ -3468,12 +3485,12 @@ panel_shrinkage <- function(shr, tag) {
     geom_text(aes(label = sprintf("%.1f%%", outlier_pct), y = mean_pull_toward_trend + 0.015),
               position = position_dodge(width = 0.8), angle = 90, hjust = 0, size = 1.8, colour = "grey30") +
     set_bars_scale() +
-    scale_x_discrete(labels = function(x) sub("_", "/", x)) +
+    scale_x_discrete(labels = function(x) sub("_", "\n", x)) +
     scale_y_continuous(limits = c(0, NA), expand = expansion(mult = c(0, 0.22))) +
     labs(x = NULL, y = "Mean pull toward trend\n(1 = fully shrunk)", tag = tag,
          title = "How much each group is shrunk",
          subtitle = "Above bars: % dispersion outliers left unshrunk.") +
-    fig_theme() + theme(panel.grid.major.x = element_blank())
+    fig_theme() + theme(panel.grid.major.x = element_blank(), legend.position = "none")
 }
 
 panel_prior_width <- function(pw, tag) {
@@ -3492,7 +3509,7 @@ panel_prior_width <- function(pw, tag) {
     geom_text(data = s, aes(x = x, y = top, label = lab), inherit.aes = FALSE, vjust = -0.3, size = 2.0,
               lineheight = 0.9, fontface = "bold", colour = METHOD_COLS[["Likelihood k*"]]) +
     set_bars_scale() +
-    scale_x_discrete(labels = function(x) sub("_", "/", x)) +
+    scale_x_discrete(labels = function(x) sub("_", "\n", x)) +
     scale_y_continuous(limits = c(0, NA), expand = expansion(mult = c(0, 0.3))) +
     labs(x = NULL, y = "Prior width \u03c4\u00b2", tag = tag,
          title = "The split narrows the prior",
@@ -3512,6 +3529,7 @@ panel_composition <- function(comp, tag) {
     geom_text(data = tot, aes(n, Comparison, label = format(n, big.mark = ",")), inherit.aes = FALSE,
               hjust = -0.12, size = 2.0, fontface = "bold") +
     scale_fill_manual(values = COMPOSITION_COLS, breaks = names(COMPOSITION_COLS)) +
+    guides(fill = guide_legend(nrow = 2)) +
     scale_y_discrete(labels = function(x) unname(ylab[x])) +
     scale_x_continuous(labels = scales::label_comma(), expand = expansion(mult = c(0, 0.2))) +
     labs(x = "PASs in the Leading Edge", y = NULL, tag = tag,
@@ -3642,16 +3660,16 @@ save_likelihood_and_dispersion_outputs <- function() {
     save_figure(fig1, paper_fig_dir, "Figure_1_Choosing_k", 180, 190)
   }, "Figure 1")
 
-  if (!is.null(pas) && !is.null(pw) && !is.null(comp)) try_fig({
+  if (!is.null(pas) && !is.null(pw) && !is.null(comp) && !is.null(met)) try_fig({
     fig2 <- assemble_rows(
-      list(panel_shrinkage_arrows(pas, trd, "a"),
+      list(panel_shrinkage_arrows(pas, trd, met, "a"),
            list(plots = list(panel_shrinkage(shr, "b"), panel_prior_width(pw, "c"), panel_composition(comp, "d")),
                 widths = c(1, 1, 1)),
            panel_final_change(pairs, fscore, "e")),
-      heights = c(1.15, 1.1, 0.95),
+      heights = c(1.35, 1.1, 0.95),
       title = paste0("Figure 2. What likelihood-stratified moderation does to DESeq2's dispersion estimates (",
                      CUTOFF_METHOD_LABEL, ")"))
-    save_figure(fig2, paper_fig_dir, paste0("Figure_2_Dispersion_After_EVS_", CUTOFF_METHOD_SLUG), 180, 200)
+    save_figure(fig2, paper_fig_dir, paste0("Figure_2_Dispersion_After_EVS_", CUTOFF_METHOD_SLUG), 180, 215)
   }, "Figure 2")
 
   if (!is.null(scan) && !is.null(stab)) try_fig({
