@@ -2811,7 +2811,7 @@ write_methods_note <- function() {
     "PASs present in both condition-specific top-k* sets were classified as Joint; PASs present in only one set were classified as Disjoint for that condition. Joint plus both Disjoint sets formed the Leading Edge, and all other PASs formed the Remainder. EVS defined PAS membership only. Downstream DESeq2 analyses received the corresponding raw-count subset and estimated normalization and dispersion parameters within that analysis view. The five reported views were Original (No EVS), NormEVS Lead, NormEVS Rem, RawEVS Lead, and RawEVS Rem.",
     "",
     "## Choice of the EVS cutoff k (likelihood-stratified moderation)",
-    "Two cutoffs were analyzed: a prespecified k = 5,000 and a likelihood cutoff k*. For each comparison, k* was the k that maximized the marginal negative-binomial likelihood of the counts under DESeq2's empirical-Bayes dispersion model with the dispersion prior allowed to differ between the Leading Edge and the Remainder, a varying-dispersion regression in the sense of Tzougas (2020) fitted by EM. For PAS i in group g (Leading Edge or Remainder at cutoff k), y_ij | alpha_i ~ NB(mu_ij, alpha_i) and log alpha_i ~ N(f_g(log mean_i), tau_g^2), where f_g is a natural cubic spline in log mean (4 df) and tau_g^2 is the prior width. Each group was treated as its own dataset with its own median-of-ratios size factors, and mu_ij = s_j q_i,c(j) with q the per-condition normalized mean. The per-PAS likelihood of alpha was the Cox-Reid adjusted profile likelihood used by DESeq2 for gene-wise dispersions; alpha_i was integrated over a grid of 121 log-dispersion values from 1e-4 to 100. The E-step computed the posterior mean and second moment of log alpha_i; the M-step refitted f_g by least squares and set tau_g^2 to the mean posterior squared deviation, iterating until the log-likelihood changed by less than 0.001. The log-likelihood l(k) = l_LE(k) + l_REM(k) was compared with the Original (No EVS) model (one trend and one prior width for all PASs). All admissible k (both groups with at least 300 PASs) were scanned every 250, then every 10 within 250 of the best value, then at every single k within 10 of the best value; k* = argmax l(k), with support interval {k : l(k) >= l(k*) - 2}. The cutoff was fixed before any differential test and no p-value or discovery count entered its choice. The pooled prior width W = (n_LE tau_LE^2 + n_REM tau_REM^2) / (n_LE + n_REM) was compared with the Original prior width. Stability was assessed by refitting DESeq2 dispersions at k* - 100, -25, -5, -1, +1, +5, +25 and +100 and comparing final dispersions with those at k*.",
+    "Two cutoffs were analyzed: a prespecified k = 5,000 and a likelihood cutoff k*. For each comparison, k* was the k that maximized the marginal negative-binomial likelihood of the counts under DESeq2's empirical-Bayes dispersion model with the dispersion prior allowed to differ between the Leading Edge and the Remainder, a varying-dispersion regression in the sense of Tzougas (2020) fitted by EM. For PAS i in group g (Leading Edge or Remainder at cutoff k), y_ij | alpha_i ~ NB(mu_ij, alpha_i) and log alpha_i ~ N(f_g(log mean_i), tau_g^2), where f_g is DESeq2's own parametric mean-dispersion trend (a0 + a1/mean) fitted to that group with estimateDispersionsFit, and tau_g^2 is the prior width. Each group was treated as its own dataset: DESeq2 estimated its median-of-ratios size factors, gene-wise dispersions, fitted means mu_ij and trend, exactly as in the downstream analysis. The per-PAS likelihood of alpha was the Cox-Reid adjusted profile likelihood used by DESeq2 for gene-wise dispersions; alpha_i was integrated over a grid of 121 log-dispersion values from 1e-4 to 100. With the trend fixed at DESeq2's fit, tau_g^2 was estimated by EM: the E-step computed the posterior of log alpha_i on the grid and the M-step set tau_g^2 to the mean posterior squared deviation from the trend, iterating until the log-likelihood changed by less than 0.001. The log-likelihood l(k) = l_LE(k) + l_REM(k) was compared with the Original (No EVS) model (one trend and one prior width for all PASs). All admissible k (both groups with at least 300 PASs) were scanned every 250, then every 10 within 250 of the best value, then at every single k within 10 of the best value; k* = argmax l(k), with support interval {k : l(k) >= l(k*) - 2}. The cutoff was fixed before any differential test and no p-value or discovery count entered its choice. The pooled prior width W = (n_LE tau_LE^2 + n_REM tau_REM^2) / (n_LE + n_REM) was compared with the Original prior width. Stability was assessed by refitting DESeq2 dispersions at k* - 100, -25, -5, -1, +1, +5, +25 and +100 and comparing final dispersions with those at k*.",
     "",
     "## DESeq2 model and log2 fold-change shrinkage",
     "Each analysis view was modeled independently with DESeq2 using a negative-binomial generalized linear model with design ~ condition and ZT/untrt as the reference. DESeq2 estimated median-of-ratios size factors, gene-wise dispersions, the mean-dispersion relationship, final dispersions, and Wald statistics for the RT/trt coefficient. Log2 fold changes were then shrunken with apeglm. The apeglm-shrunken log2 fold change was the reported effect estimate, the effect term in HBFSS, the direction indicator, and the x-coordinate for all significance figures.",
@@ -2878,17 +2878,19 @@ write_methods_note <- function() {
 #
 #   PAS i is in the LE at cutoff k when it is among the top k by |PC1 loading|
 #   in either condition (NormEVS ranking), i.e. depth_i <= k.
-#   f_g      natural cubic spline in log mean (LIK_SPLINE_DF df): group trend
-#   tau_g^2  group prior width
-#   mu_ij    s_j * q_i,cond(j), with the group's own median-of-ratios size
-#            factors s_j (each group is its own dataset, as downstream)
+#   f_g      DESeq2's own parametric trend for the group, a0 + a1 / mean, from
+#            estimateDispersionsFit(fitType = "parametric") on that group
+#            (DESeq2's own fallback to a local fit is kept if it fails): the
+#            exact trend DESeq2 uses for the group downstream
+#   tau_g^2  group prior width, estimated by maximum likelihood
+#   mu_ij    DESeq2's fitted means for the group (its own median-of-ratios
+#            size factors; each group is its own dataset, as downstream)
 #
 # The per-PAS likelihood of alpha is the Cox-Reid adjusted profile likelihood
 # that DESeq2 uses for its gene-wise estimates. alpha_i is integrated out on a
-# fixed grid of log alpha, and (f_g, tau_g^2) are estimated by EM:
+# fixed grid of log alpha, and tau_g^2 is estimated by EM with the trend fixed:
 #   E-step  posterior of log alpha_i on the grid: E[log alpha_i], E[(log alpha_i)^2]
-#   M-step  f_g = least-squares spline fit to E[log alpha_i]
-#           tau_g^2 = mean of E[(log alpha_i - f_g(log mubar_i))^2]
+#   M-step  tau_g^2 = mean of E[(log alpha_i - log f_g(mubar_i))^2]
 #
 # l(k) = l_LE(k) + l_REM(k) is the marginal log-likelihood of all counts. The
 # Original (No EVS) model (one trend, one width, all PASs) gives l_0. Every k
@@ -2902,7 +2904,6 @@ write_methods_note <- function() {
 # count enters the choice.
 
 LIK_LOG_ALPHA_GRID <- seq(log(1e-4), log(100), length.out = 121L)
-LIK_SPLINE_DF <- 4L
 LIK_MIN_GROUP <- 300L
 LIK_COARSE_STEP <- 250L
 LIK_FINE_STEP <- 10L
@@ -2954,20 +2955,6 @@ evs_depth <- function(raw, coldata) {
   stats::setNames(as.integer(d), rownames(raw))
 }
 
-# One group = one dataset: its own size factors, per-condition means, and log mean.
-nb_group_data <- function(raw_sub, condition) {
-  condition <- factor(condition)
-  sf <- DESeq2::estimateSizeFactorsForMatrix(raw_sub)
-  nrm <- sweep(raw_sub, 2, sf, "/")
-  q <- vapply(levels(condition), function(l) rowMeans(nrm[, condition == l, drop = FALSE]),
-              numeric(nrow(raw_sub)))
-  q <- matrix(q, nrow = nrow(raw_sub))
-  mu <- sweep(q[, as.integer(condition), drop = FALSE], 2, sf, "*")
-  y <- raw_sub
-  storage.mode(y) <- "double"
-  list(y = y, mu = mu, cond = as.integer(condition), log_mean = log(rowMeans(nrm)))
-}
-
 # Cox-Reid adjusted NB log-likelihood of every PAS at every grid value of log alpha.
 nb_cr_loglik_grid <- function(gd, grid = LIK_LOG_ALPHA_GRID) {
   y <- gd$y; mu <- gd$mu; m <- ncol(y)
@@ -2986,50 +2973,58 @@ nb_cr_loglik_grid <- function(gd, grid = LIK_LOG_ALPHA_GRID) {
   L
 }
 
-# EM for the log-normal dispersion prior with a spline trend in log mean.
-em_dispersion_prior <- function(L, log_mean, grid = LIK_LOG_ALPHA_GRID, df = LIK_SPLINE_DF,
-                                tol = LIK_EM_TOL, max_iter = LIK_EM_MAX_ITER) {
+# EM for the prior width tau^2 around a fixed trend (centre = log trend per PAS).
+em_prior_width <- function(L, centre, grid = LIK_LOG_ALPHA_GRID, tol = LIK_EM_TOL, max_iter = LIK_EM_MAX_ITER) {
   n <- nrow(L)
-  spline_basis <- splines::ns(log_mean, df = df)
-  qrB <- qr(cbind(1, spline_basis))
   dgrid <- grid[2] - grid[1]
+  d2 <- outer(-centre, grid, "+")^2
   theta0 <- grid[max.col(L, ties.method = "first")]
-  centre <- qr.fitted(qrB, theta0)
   tau2 <- max(stats::var(theta0 - centre) - 0.3, 0.05)
   ll_old <- -Inf
   it <- 0L
   repeat {
     it <- it + 1L
-    lp <- L - outer(-centre, grid, "+")^2 / (2 * tau2)
+    lp <- L - d2 / (2 * tau2)
     mx <- lp[cbind(seq_len(n), max.col(lp, ties.method = "first"))]
     w <- exp(lp - mx)
     s <- rowSums(w)
     ll <- sum(mx + log(s)) + n * (log(dgrid) - 0.5 * log(2 * pi * tau2))
-    w <- w / s
-    e1 <- drop(w %*% grid)
-    e2 <- drop(w %*% (grid^2))
     if (ll - ll_old < tol || it >= max_iter) break
     ll_old <- ll
-    centre <- qr.fitted(qrB, e1)
-    tau2 <- max(mean(e2 - 2 * e1 * centre + centre^2), 1e-4)
+    tau2 <- max(sum((w / s) * d2) / n, 1e-4)
   }
-  list(loglik = ll, tau2 = tau2, coef = qr.coef(qrB, centre), spline = spline_basis,
-       log_mean = log_mean, posterior_mean = e1, iterations = it, converged = it < max_iter)
+  list(loglik = ll, tau2 = tau2, iterations = it, converged = it < max_iter)
 }
 
+# One group = one dataset, fitted with DESeq2's own steps: size factors,
+# gene-wise dispersions (and fitted means), and the parametric trend.
 fit_dispersion_group <- function(raw_sub, condition) {
-  gd <- nb_group_data(raw_sub, condition)
-  fit <- em_dispersion_prior(nb_cr_loglik_grid(gd), gd$log_mean)
+  cd <- data.frame(condition = factor(condition), row.names = colnames(raw_sub))
+  dds <- DESeq2::DESeqDataSetFromMatrix(countData = raw_sub, colData = cd, design = ~ condition)
+  dds <- DESeq2::estimateSizeFactors(dds)
+  dds <- suppressMessages(DESeq2::estimateDispersionsGeneEst(dds, quiet = TRUE))
+  dds <- tryCatch(suppressMessages(DESeq2::estimateDispersionsFit(dds, fitType = "parametric", quiet = TRUE)),
+                  error = function(e) suppressMessages(DESeq2::estimateDispersionsFit(dds, fitType = "local", quiet = TRUE)))
+  mc <- S4Vectors::mcols(dds)
+  y <- DESeq2::counts(dds)
+  storage.mode(y) <- "double"
+  centre <- log(pmax(mc$dispFit, 1e-8))
+  gd <- list(y = y, mu = SummarizedExperiment::assay(dds, "mu"), cond = as.integer(cd$condition))
+  fit <- em_prior_width(nb_cr_loglik_grid(gd), centre)
+  dfun <- DESeq2::dispersionFunction(dds)
+  fit$centre <- centre
+  fit$dispersion_function <- dfun
+  fit$fit_type <- as.character(attr(dfun, "fitType") %||% NA_character_)
+  fit$log_mean <- log(mc$baseMean)
   fit$n <- nrow(raw_sub)
   fit
 }
 
-# Fitted trend exp(f_g) on a grid of means, for plotting.
+# The group's DESeq2 trend on a grid of means, for plotting.
 dispersion_trend_curve <- function(fit, n_points = 100L) {
   rng <- stats::quantile(fit$log_mean, c(0.005, 0.995), names = FALSE)
   x <- seq(rng[1], rng[2], length.out = n_points)
-  B <- cbind(1, stats::predict(fit$spline, x))
-  data.frame(baseMean = exp(x), trend = exp(drop(B %*% fit$coef)))
+  data.frame(baseMean = exp(x), trend = fit$dispersion_function(exp(x)))
 }
 
 fit_split_model <- function(raw, condition, depth, k, keep_fits = FALSE) {
@@ -3040,7 +3035,8 @@ fit_split_model <- function(raw, condition, depth, k, keep_fits = FALSE) {
   row <- data.frame(k = as.integer(k), LE_n = a$n, REM_n = b$n, loglik = a$loglik + b$loglik,
                     tau2_LE = a$tau2, tau2_REM = b$tau2,
                     em_iterations_LE = a$iterations, em_iterations_REM = b$iterations,
-                    em_converged = a$converged && b$converged)
+                    em_converged = a$converged && b$converged,
+                    trend_type_LE = a$fit_type, trend_type_REM = b$fit_type)
   if (keep_fits) list(row = row, LE = a, REM = b) else list(row = row)
 }
 
@@ -3092,7 +3088,7 @@ likelihood_k_scan <- function(raw, coldata, label, cores = analysis_cores()) {
   support <- near$k[near$loglik >= best$loglik - 2]
   at5k <- rows[rows$k == 5000L, ]
   n_obs <- nrow(raw) * ncol(raw)
-  p_extra <- LIK_SPLINE_DF + 2L  # one more spline trend (df + intercept) and one more prior width
+  p_extra <- 3L  # one more parametric trend (a0, a1) and one more prior width
   selected <- data.frame(
     k_star = best$k, support_lo = min(support), support_hi = max(support),
     LE_n = best$LE_n, REM_n = best$REM_n,
@@ -3428,7 +3424,7 @@ panel_varying_dispersion_fit <- function(pas, trends, sel, tag, max_pts = 2500L)
     coord_cartesian(ylim = yl) +
     labs(x = "Mean of normalized counts", y = "Gene-wise dispersion", tag = tag,
          title = "The fitted varying-dispersion model at k*",
-         subtitle = "log \u03b1 = f_g(log mean) + u,  u ~ N(0, \u03c4\u00b2_g), one f_g and \u03c4\u00b2_g per group. Points: DESeq2 gene-wise estimates (blue LE, red REM). Original (No EVS): one trend for all PASs.") +
+         subtitle = "Lines: DESeq2's parametric trend fitted to each group (dotted: one trend for all PASs). Points: DESeq2 gene-wise estimates (blue LE, red REM). Box: gain of the two-group model.") +
     fig_theme()
 }
 
@@ -3467,9 +3463,10 @@ panel_shrinkage_arrows <- function(pas, trd, met, tag, n_per_group = 160L, n_out
                         labels = c("Leading Edge: pulled to its own trend", "Remainder: pulled to its own trend")) +
     scale_shape_manual(values = 21) +
     scale_x_log10(labels = log_lab()) + scale_y_log10(labels = log_lab()) +
+    coord_cartesian(ylim = c(1e-2, 1.3 * max(c(d$dispGeneEst, t$threshold), na.rm = TRUE))) +
     labs(x = "Mean of normalized counts", y = "Dispersion", tag = tag,
          title = "Which PASs are pulled toward their trend, and which are not",
-         subtitle = "Arrows: DESeq2 gene-wise estimate to final (MAP) dispersion, pulled to the group's own trend (solid). Open circles: outliers above the group's 2-SD line (dashed), not shrunk.") +
+         subtitle = "Arrows: gene-wise to final (MAP) dispersion, toward the group's own trend (solid). Circles: outliers above the dashed 2-SD line, not shrunk.") +
     guides(shape = guide_legend(order = 2, override.aes = list(colour = "grey20")), colour = guide_legend(order = 1)) +
     fig_theme()
 }
