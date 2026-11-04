@@ -135,7 +135,6 @@ make_coldata <- function(ids) {
   cd
 }
 
-trend_at <- function(fit, log_mean) drop(cbind(1, stats::predict(fit$spline, log_mean)) %*% fit$coef)
 
 # Real sample structure: within each condition, the rank-1 (PC1) component of
 # centred log normalized counts, as a multiplier with mean 1 per PAS and
@@ -169,11 +168,11 @@ fit_truth <- function(raw, coldata, label) {
   split <- fit_split_model(raw, cond, scan$depth[rownames(raw)], scan$k_star, keep_fits = TRUE)
   le <- scan$depth[rownames(raw)] <= scan$k_star
   centre_two <- numeric(nrow(raw)); names(centre_two) <- rownames(raw)
-  centre_two[le] <- trend_at(split$LE, split$LE$log_mean)
-  centre_two[!le] <- trend_at(split$REM, split$REM$log_mean)
+  centre_two[le] <- split$LE$centre
+  centre_two[!le] <- split$REM$centre
   st <- structure_multipliers(raw, sf, cond)
   list(sf = sf, q = q, in_le = le, M = st$M, v = st$v,
-       one = list(centre = trend_at(orig, orig$log_mean), tau2 = rep(orig$tau2, nrow(raw))),
+       one = list(centre = orig$centre, tau2 = rep(orig$tau2, nrow(raw))),
        two = list(centre = centre_two, tau2 = ifelse(le, split$LE$tau2, split$REM$tau2)),
        k_star_real = scan$k_star, tau2 = c(Original = orig$tau2, LE = split$LE$tau2, REM = split$REM$tau2))
 }
