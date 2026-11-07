@@ -46,9 +46,9 @@
 #                  any differential test; no p-value or discovery count is used.
 #
 # DISPERSION TREND
-# Every DESeq2 fit uses DESeq2's parametric trend with the exponent estimated,
-# a0 + a1 x mean^(-b) (b = 1 is DESeq2's default, which cannot be fitted to the
-# Remainder). See the section DESeq2 DISPERSION TREND below.
+# Every DESeq2 fit uses a0 + a1 x mean^(-b): DESeq2's parametric form (b = 1)
+# with the exponent estimated, fitted on the log scale to match DESeq2's
+# log-normal dispersion prior. See the section DESeq2 DISPERSION TREND below.
 #
 # DIFFERENTIAL EXPRESSION
 # DESeq2 design ~ condition (trt = RT relative to untrt = ZT).
@@ -1825,86 +1825,110 @@ build_eigenvector_split <- function(comparison_name, count_matrix, coldata, trac
 }
 
 # =============================================================================
-# DESeq2 DISPERSION TREND: PARAMETRIC, WITH THE EXPONENT ESTIMATED
+# DESeq2 DISPERSION TREND: PARAMETRIC FORM, EXPONENT ESTIMATED, FITTED ON THE
+# LOG SCALE
 # =============================================================================
 # DESeq2 shrinks each PAS's gene-wise dispersion toward a trend in the mean
-# count. Its default ("parametric") trend is
+# count, using the prior
+#     log alpha_i ~ N( log alpha_tr(mean_i), sigma_d^2 ).
+# Its default ("parametric") trend is
 #     alpha_tr(mean) = a0 + a1 / mean                       (Love et al. 2014)
-# fitted by an iterative gamma-family GLM (identity link) of the gene-wise
-# estimates on 1/mean. Each iteration drops PASs whose estimate is outside
-# 1e-4 to 15 times the current fit, and the fit is rejected unless both
-# coefficients are positive.
+# fitted by an iterative gamma-family GLM of the gene-wise estimates on 1/mean.
+# Two problems with that default appear in these data:
 #
-# That fit fails for the Remainder. Nearly all well-expressed PASs have large
-# |PC1| loadings and move to the Leading Edge; the PASs left behind have
-# dispersions that fall faster than 1/mean with no plateau, the fit returns
-# a0 < 0, and DESeq2 silently switches that group to a local-regression trend.
-# The Original and the Leading Edge would then be shrunk toward the parametric
-# trend and the Remainder toward a different kind of trend.
+# 1. Shape. Nearly all well-expressed PASs have large |PC1| loadings and move
+#    to the Leading Edge. The Remainder's dispersions fall faster than 1/mean
+#    with no plateau, the fit returns a0 < 0, and DESeq2 silently switches that
+#    group alone to a local-regression trend.
+# 2. Height. The gamma GLM puts the curve through the arithmetic mean of the
+#    dispersions at each count, which a minority of very noisy PASs pulls up.
+#    About 64% of PASs then lie below their trend, in every view including the
+#    Original, and are shrunk upward. The prior above is a normal distribution
+#    for LOG dispersions, so its centre is the mean of the log dispersions.
 #
 # Every DESeq2 fit in this pipeline (Original, Leading Edge, Remainder, RawEVS
-# views, likelihood scan, stability refits, calibration) therefore uses the
-# same parametric family with the exponent estimated instead of fixed at 1:
+# views, likelihood scan, stability refits, calibration) therefore uses
 #     alpha_tr(mean) = a0 + a1 * mean^(-b)
-# b = 1 is DESeq2's own trend; dispersion as a power of the mean is the NB-P
-# model (Di et al. 2011). For each candidate b, a0 and a1 come from DESeq2's
-# own iterative gamma GLM with x = mean^(-b) in place of 1/mean. Only b giving
-# a0 > 0 and a1 > 0 is admissible, so every trend levels off at a positive
-# floor and never predicts a negative dispersion. Among admissible b, the one
-# chosen minimizes the median absolute residual of log(gene-wise estimate) -
-# log(trend), the criterion DESeq2's authors recommend for comparing trend fits.
-# b is searched every TREND_B_COARSE_STEP over TREND_B_RANGE, then every
-# TREND_B_FINE_STEP within one coarse step of the best value.
+# with the exponent b estimated (b = 1 is DESeq2's form; dispersion as a power
+# of the mean is the NB-P model, Di et al. 2011), and a0, a1 fitted on the log
+# scale, consistent with DESeq2's prior:
+#   * For a given b, a0 and a1 minimize the sum of squared log residuals,
+#     sum_i [ log(dispGeneEst_i) - log(a0 + a1 * mean_i^(-b)) ]^2,
+#     with a0, a1 >= TREND_MIN_COEF (so the trend is always positive). As in
+#     DESeq2's own fit, PASs whose estimate is outside 1e-4 to 15 times the
+#     current curve are set aside and the fit is repeated until the
+#     coefficients stop changing (at most TREND_MAX_ITER + 1 passes).
+#   * b minimizes the median absolute log residual, the criterion DESeq2's
+#     authors recommend for comparing trend fits: every TREND_B_COARSE_STEP
+#     over TREND_B_RANGE, then every TREND_B_FINE_STEP within one coarse step
+#     of the best value.
+# With this fit about half of the PASs lie on each side of their trend.
 #
-# The fitted trend is handed to DESeq2 with dispersionFunction(), which computes
-# the fitted dispersions, the residual variance of log dispersions and the
-# prior variance exactly as it does for its built-in trends. MAP shrinkage,
-# dispersion-outlier handling and the Wald test then run unchanged.
+# The trend is handed to DESeq2 with dispersionFunction(), which computes the
+# fitted dispersions, the residual variance of log dispersions and the prior
+# variance as it does for its built-in trends. MAP shrinkage, the
+# dispersion-outlier rule and the Wald test then run unchanged.
 TREND_MIN_GENE_DISP <- 1e-6          # PASs used for the fit: dispGeneEst >= 100 x DESeq2's minDisp
 TREND_B_RANGE <- c(0.5, 3.5)
 TREND_B_COARSE_STEP <- 0.1
 TREND_B_FINE_STEP <- 0.01
-TREND_MAX_ITER <- 10L                 # DESeq2's limit on gamma-GLM iterations
+TREND_MIN_COEF <- 1e-8               # lower bound for a0 and a1
+TREND_MAX_COEF <- c(a0 = 1e3, a1 = 1e8)
+TREND_MAX_ITER <- 10L                 # refits after setting aside extreme PASs, as in DESeq2
 
 # The trend as a function of the mean, holding only its three coefficients.
 make_trend_function <- function(a0, a1, b) {
   force(a0); force(a1); force(b)
   trend <- function(means) a0 + a1 * means^(-b)
-  attr(trend, "fitType") <- "parametric (estimated exponent)"
+  attr(trend, "fitType") <- "parametric power trend, log-scale fit"
   attr(trend, "coefficients") <- c(a0 = a0, a1 = a1, b = b)
   trend
 }
 
-# a0 and a1 for one exponent b by DESeq2's iterative gamma-GLM fit. Returns the
-# coefficients and the median absolute log residual, or NULL if the fit fails
-# or a coefficient is not positive.
+# a0 and a1 for one exponent b: least squares on the log scale, refitted after
+# setting aside PASs outside 1e-4 to 15 times the current curve until the
+# coefficients settle. Coefficients are optimized as log(a0), log(a1) so they
+# stay positive. Returns the coefficients and the median absolute log residual
+# over all PASs, or NULL if the fit does not settle.
 fit_trend_at_exponent <- function(means, disps, b) {
   x <- means^(-b)
-  coefs <- c(0.1, 1)
+  y <- log(disps)
+  lower <- rep(log(TREND_MIN_COEF), 2)
+  upper <- log(TREND_MAX_COEF)
+  theta <- log(c(0.1, 1))
   for (iter in seq_len(TREND_MAX_ITER + 1L)) {
-    ratio <- disps / (coefs[1] + coefs[2] * x)
+    ratio <- disps / (exp(theta[1]) + exp(theta[2]) * x)
     good <- ratio > 1e-4 & ratio < 15
-    fit <- tryCatch(suppressWarnings(stats::glm.fit(
-      x = cbind(1, x[good]), y = disps[good], family = stats::Gamma(link = "identity"), start = coefs)),
-      error = function(e) NULL)
-    if (is.null(fit)) return(NULL)
-    old <- coefs
-    coefs <- unname(fit$coefficients)
-    if (any(!is.finite(coefs)) || any(coefs <= 0)) return(NULL)
-    if (sum(log(coefs / old)^2) < 1e-6 && isTRUE(fit$converged)) {
-      return(c(a0 = coefs[1], a1 = coefs[2], b = b,
-               mar = stats::median(abs(log(disps) - log(coefs[1] + coefs[2] * x)))))
+    if (sum(good) < 3L) return(NULL)
+    xg <- x[good]
+    yg <- y[good]
+    sse <- function(t) sum((yg - log(exp(t[1]) + exp(t[2]) * xg))^2)
+    grad <- function(t) {
+      a <- exp(t)
+      f <- a[1] + a[2] * xg
+      r <- yg - log(f)
+      c(-2 * sum(r / f) * a[1], -2 * sum(r * xg / f) * a[2])
+    }
+    opt <- tryCatch(stats::optim(theta, sse, grad, method = "L-BFGS-B", lower = lower, upper = upper),
+                    error = function(e) NULL)
+    if (is.null(opt) || any(!is.finite(opt$par))) return(NULL)
+    old <- theta
+    theta <- opt$par
+    if (sum((theta - old)^2) < 1e-6) {
+      a <- exp(theta)
+      return(c(a0 = a[1], a1 = a[2], b = b,
+               mar = stats::median(abs(y - log(a[1] + a[2] * x)))))
     }
   }
   NULL
 }
 
-# Best admissible exponent: coarse grid, then a fine grid around the best value.
+# Best exponent: coarse grid, then a fine grid around the best value.
 fit_dispersion_trend <- function(means, disps) {
   fits_for <- function(bs) Filter(Negate(is.null), lapply(bs, function(b) fit_trend_at_exponent(means, disps, b)))
   best_of <- function(fits) fits[[which.min(vapply(fits, function(f) f[["mar"]], numeric(1)))]]
   fits <- fits_for(seq(TREND_B_RANGE[1], TREND_B_RANGE[2], by = TREND_B_COARSE_STEP))
-  if (!length(fits)) stop("the parametric dispersion trend has no admissible exponent (a0 > 0, a1 > 0).")
+  if (!length(fits)) stop("the dispersion trend could not be fitted at any exponent.")
   best <- best_of(fits)
   fine <- seq(best[["b"]] - TREND_B_COARSE_STEP, best[["b"]] + TREND_B_COARSE_STEP, by = TREND_B_FINE_STEP)
   best <- best_of(c(list(best), fits_for(fine[fine > 0])))
@@ -1946,7 +1970,7 @@ run_core_analysis <- function(count_mat, coldata, dataset_name, annot_df) {
 
   dds <- dds[rowSums(DESeq2::counts(dds)) > 0, ]
 
-  # DESeq2 with the estimated-exponent trend, then the Wald test (no beta prior;
+  # DESeq2 with the power trend fitted above, then the Wald test (no beta prior;
   # with 5 replicates per group DESeq() would not replace outliers either).
   dds <- estimate_dispersions_with_trend(dds)
   dds <- DESeq2::nbinomWaldTest(dds, quiet = TRUE)
@@ -2928,7 +2952,7 @@ write_methods_note <- function() {
     "Two cutoffs were analyzed: a prespecified k = 5,000 and a likelihood cutoff k*. For each comparison, k* was the k that maximized the marginal negative-binomial likelihood of the counts under DESeq2's empirical-Bayes dispersion model with the dispersion prior allowed to differ between the Leading Edge and the Remainder, a varying-dispersion regression in the sense of Tzougas (2020) fitted by EM. For PAS i in group g (Leading Edge or Remainder at cutoff k), y_ij | alpha_i ~ NB(mu_ij, alpha_i) and log alpha_i ~ N(f_g(log mean_i), tau_g^2), where f_g is the group's mean-dispersion trend, fitted exactly as in the downstream analysis (parametric, a0 + a1 mean^(-b); see the DESeq2 model section), and tau_g^2 is the prior width. Every group at every k, and the Original model, was scored under the same parametric family. Each group was treated as its own dataset: DESeq2 estimated its median-of-ratios size factors, gene-wise dispersions and fitted means mu_ij, and its trend was fitted, exactly as in the downstream analysis. The per-PAS likelihood of alpha was the Cox-Reid adjusted profile likelihood used by DESeq2 for gene-wise dispersions; alpha_i was integrated over a grid of 121 log-dispersion values from 1e-4 to 100. With the trend fixed at DESeq2's fit, tau_g^2 was estimated by EM: the E-step computed the posterior of log alpha_i on the grid and the M-step set tau_g^2 to the mean posterior squared deviation from the trend, iterating until the log-likelihood changed by less than 0.001. The log-likelihood l(k) = l_LE(k) + l_REM(k) was compared with the Original (No EVS) model (one trend and one prior width for all PASs). Moving k by one moves one or two PASs between groups and refits both groups, so l(k) carries fit-to-fit noise of a few log-likelihood units; k* was therefore taken as the maximum of a smoothed profile. All admissible k (both groups with at least 300 PASs) were scored every 250; the profile was smoothed by robust local-quadratic regression on k (Gaussian kernel, bandwidth 250, three bisquare robustness iterations); k was then scored every 10 within 250 of the smoothed peak, widening the window while the peak lay near its edge. k* was the integer k maximizing the smoothed profile, with support interval the contiguous k around k* whose smoothed log-likelihood was within 2 units of the maximum. The fit-to-fit noise was reported as the median absolute deviation of the raw log-likelihoods about the smoothed profile. The cutoff was fixed before any differential test and no p-value or discovery count entered its choice. The pooled prior width W = (n_LE tau_LE^2 + n_REM tau_REM^2) / (n_LE + n_REM) was compared with the Original prior width. Stability was assessed by refitting DESeq2 dispersions at k* - 100, -25, -5, -1, +1, +5, +25 and +100 and comparing final dispersions with those at k*.",
     "",
     "## DESeq2 model and log2 fold-change shrinkage",
-    "Each analysis view was modeled independently with DESeq2 using a negative-binomial generalized linear model with design ~ condition and ZT/untrt as the reference. DESeq2 estimated median-of-ratios size factors, gene-wise dispersions, the mean-dispersion trend, final dispersions, and Wald statistics for the RT/trt coefficient. The mean-dispersion trend was DESeq2's parametric trend with its exponent estimated, alpha_tr(mean) = a0 + a1 mean^(-b), in every view including the Original. DESeq2's default fixes b = 1 (Love et al. 2014); with b = 1 the fit failed for the Remainder (a0 < 0), because nearly all well-expressed PASs fall in the Leading Edge and the Remainder's dispersions decline faster than 1/mean without a plateau, and DESeq2 would then have substituted a local-regression trend for that group only. Dispersion as a power of the mean is the NB-P model (Di et al. 2011). For each candidate b, a0 and a1 were fitted with DESeq2's iterative gamma-family GLM (identity link, excluding PASs outside 1e-4 to 15 times the current fit) using mean^(-b) as the covariate; only b with a0 > 0 and a1 > 0 was admissible; and b was chosen, every 0.1 from 0.5 to 3.5 and then every 0.01 around the best value, to minimize the median absolute residual of log gene-wise dispersion about log trend. The trend was supplied to DESeq2 through dispersionFunction(), and DESeq2's prior-variance estimate, MAP shrinkage, dispersion-outlier rule and Wald test were applied unchanged. Size factors, gene-wise dispersions, MAP dispersions and Wald tests were computed with estimateSizeFactors, estimateDispersionsGeneEst, estimateDispersionsMAP and nbinomWaldTest, the steps DESeq() runs. Log2 fold changes were then shrunken with apeglm. The apeglm-shrunken log2 fold change was the reported effect estimate, the effect term in HBFSS, the direction indicator, and the x-coordinate for all significance figures.",
+    "Each analysis view was modeled independently with DESeq2 using a negative-binomial generalized linear model with design ~ condition and ZT/untrt as the reference. DESeq2 estimated median-of-ratios size factors, gene-wise dispersions, the mean-dispersion trend, final dispersions, and Wald statistics for the RT/trt coefficient. The mean-dispersion trend in every view, including the Original, was alpha_tr(mean) = a0 + a1 mean^(-b), DESeq2's parametric form (b = 1; Love et al. 2014) with the exponent estimated, and was fitted on the log scale. DESeq2's default fit failed for the Remainder (a0 < 0), because nearly all well-expressed PASs fall in the Leading Edge and the Remainder's dispersions decline faster than 1/mean without a plateau; DESeq2 would then have substituted a local-regression trend for that group only. DESeq2's gamma-GLM fit also places the trend at the arithmetic mean of the dispersions, above about two thirds of PASs, whereas its prior is normal on the log scale (log alpha_i ~ N(log alpha_tr, sigma_d^2)), whose centre is the mean of the log dispersions. Dispersion as a power of the mean is the NB-P model (Di et al. 2011). For each candidate b, a0 and a1 (both constrained to be at least 1e-8) minimized the sum of squared differences between log gene-wise dispersions and log trend; as in DESeq2's fit, PASs outside 1e-4 to 15 times the current curve were set aside and the fit repeated until the coefficients converged. b was chosen, every 0.1 from 0.5 to 3.5 and then every 0.01 around the best value, to minimize the median absolute residual of log gene-wise dispersion about log trend. With this fit about half of the PASs lay on each side of their trend. The trend was supplied to DESeq2 through dispersionFunction(), and DESeq2's prior-variance estimate, MAP shrinkage, dispersion-outlier rule and Wald test were applied unchanged. Size factors, gene-wise dispersions, MAP dispersions and Wald tests were computed with estimateSizeFactors, estimateDispersionsGeneEst, estimateDispersionsMAP and nbinomWaldTest, the steps DESeq() runs. Log2 fold changes were then shrunken with apeglm. The apeglm-shrunken log2 fold change was the reported effect estimate, the effect term in HBFSS, the direction indicator, and the x-coordinate for all significance figures.",
     "",
     "## Standard effect",
     sprintf("The Standard effect used the ordinary two-sided DESeq2 Wald p-value with Benjamini-Hochberg adjustment at FDR %.2f and the prespecified manuscript effect boundary on the apeglm-shrunken estimate. A PAS was reported as Standard when padj < %.2f and |apeglm LFC| >= %.1f. The ordinary DESeq2 Wald p-value/padj were retained separately from the empirical-null p-value used for HBFSS.", BH_FDR_STANDARD, BH_FDR_STANDARD, lfc_boundary),
@@ -3144,7 +3168,7 @@ fit_dispersion_group <- function(raw_sub, condition) {
 dispersion_trend_curve <- function(fit, n_points = 100L) {
   rng <- stats::quantile(fit$log_mean, c(0.005, 0.995), names = FALSE)
   x <- seq(rng[1], rng[2], length.out = n_points)
-  data.frame(baseMean = exp(x), trend = fit$dispersion_function(exp(x)))
+  data.frame(baseMean = exp(x), trend = pmin(fit$dispersion_function(exp(x)), 10))  # DESeq2's dispersion ceiling (10 samples)
 }
 
 fit_split_model <- function(raw, condition, depth, k, keep_fits = FALSE) {
@@ -3431,7 +3455,7 @@ collect_dispersion_after_evs <- function(comparison_name) {
     grid_bm <- 10^seq(log10(rng[1]), log10(rng[2]), length.out = 100)
     dispersion_trend_rows[[length(dispersion_trend_rows) + 1L]] <<- data.frame(
       Comparison = comparison_name, View = label, baseMean = grid_bm,
-      trend = DESeq2::dispersionFunction(dds)(grid_bm))
+      trend = pmin(DESeq2::dispersionFunction(dds)(grid_bm), max(10, ncol(dds))))  # DESeq2's dispersion ceiling
   }
   evs <- norm_reg$evs
   if (!is.null(evs)) {
