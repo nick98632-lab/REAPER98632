@@ -9,13 +9,15 @@
 #   Original (No EVS)    one DESeq2 fit on all PASs
 #   EVS, Fixed 5,000     Leading Edge / Remainder at the fixed cutoff
 #   EVS, Likelihood k*   Leading Edge / Remainder at k* re-chosen on the simulated data
-# Standard and HBFSS calls come from run_core_analysis() (DESeq2, apeglm,
-# fdrtool empirical null, higher criticism), exactly as in the manuscript.
+# Standard and HBFSS calls come from run_core_analysis() (DESeq2 with the
+# estimated-exponent parametric trend, apeglm, fdrtool empirical null, higher
+# criticism), exactly as in the manuscript. The truth's dispersion trends are
+# fitted the same way.
 #
 # Truth scenarios (means, size factors and dispersion model fitted on the real
 # comparison; 5 RT vs 5 ZT samples):
 #   one_population   one dispersion trend and prior width for all PASs
-#                    (DESeq2's own assumption holds)
+#                    (DESeq2's one-population assumption holds)
 #   two_populations  the Leading Edge / Remainder trends and prior widths
 #                    fitted on the real data at its k*
 #   null             one population and no true differences
