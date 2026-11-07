@@ -10,8 +10,8 @@
 #   EVS, Fixed 5,000     Leading Edge / Remainder at the fixed cutoff
 #   EVS, Likelihood k*   Leading Edge / Remainder at k* re-chosen on the simulated data
 # Standard and HBFSS calls come from run_core_analysis() (DESeq2 with the
-# estimated-exponent parametric trend, apeglm, fdrtool empirical null, higher
-# criticism), exactly as in the manuscript. The truth's dispersion trends are
+# log-scale power trend a0 + a1 x mean^(-b), apeglm, fdrtool empirical null,
+# higher criticism), exactly as in the manuscript. The truth's dispersion trends are
 # fitted the same way.
 #
 # Truth scenarios (means, size factors and dispersion model fitted on the real
