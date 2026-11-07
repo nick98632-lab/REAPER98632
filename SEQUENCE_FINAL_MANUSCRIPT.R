@@ -169,12 +169,13 @@ save_figure_S3 <- function(multi_root, out_dir, discoveries) {
   scan$Comparison <- factor(scan$Comparison, levels = cmp)
   marks <- rbind(data.frame(Comparison = sel$Comparison, k = sel$k_star, Method = "Likelihood k*"),
                  data.frame(Comparison = sel$Comparison, k = 5000L, Method = "Fixed 5,000"))
-  marks$y <- scan$delta_loglik_vs_Original[match(paste(marks$Comparison, marks$k), paste(scan$Comparison, scan$k))]
+  marks$y <- scan$delta_loglik_smooth_vs_Original[match(paste(marks$Comparison, marks$k), paste(scan$Comparison, scan$k))]
   marks <- marks[is.finite(marks$y), ]
   marks$Comparison <- factor(marks$Comparison, levels = cmp)
   marks$Method <- factor(marks$Method, levels = METHOD_LEVELS)
-  pa <- ggplot(scan, aes(k, delta_loglik_vs_Original)) +
+  pa <- ggplot(scan, aes(k, delta_loglik_smooth_vs_Original)) +
     geom_hline(yintercept = 0, linetype = "22", linewidth = 0.3, colour = "grey45") +
+    geom_point(aes(y = delta_loglik_vs_Original), size = 0.35, colour = "grey60") +
     geom_line(linewidth = 0.55, colour = "grey15") +
     geom_point(data = marks, aes(y = y, colour = Method, shape = Method), size = 2.4) +
     facet_wrap(~ Comparison, nrow = 1, scales = "free_y", labeller = labeller(Comparison = comp_lab())) +
@@ -1834,6 +1835,7 @@ run_core_analysis <- function(count_mat, coldata, dataset_name, annot_df) {
 
   dds <- DESeq2::DESeq(
     dds,
+    fitType = DESEQ2_FIT_TYPE,
     betaPrior = FALSE
   )
 
@@ -2811,10 +2813,10 @@ write_methods_note <- function() {
     "PASs present in both condition-specific top-k* sets were classified as Joint; PASs present in only one set were classified as Disjoint for that condition. Joint plus both Disjoint sets formed the Leading Edge, and all other PASs formed the Remainder. EVS defined PAS membership only. Downstream DESeq2 analyses received the corresponding raw-count subset and estimated normalization and dispersion parameters within that analysis view. The five reported views were Original (No EVS), NormEVS Lead, NormEVS Rem, RawEVS Lead, and RawEVS Rem.",
     "",
     "## Choice of the EVS cutoff k (likelihood-stratified moderation)",
-    "Two cutoffs were analyzed: a prespecified k = 5,000 and a likelihood cutoff k*. For each comparison, k* was the k that maximized the marginal negative-binomial likelihood of the counts under DESeq2's empirical-Bayes dispersion model with the dispersion prior allowed to differ between the Leading Edge and the Remainder, a varying-dispersion regression in the sense of Tzougas (2020) fitted by EM. For PAS i in group g (Leading Edge or Remainder at cutoff k), y_ij | alpha_i ~ NB(mu_ij, alpha_i) and log alpha_i ~ N(f_g(log mean_i), tau_g^2), where f_g is DESeq2's own parametric mean-dispersion trend (a0 + a1/mean) fitted to that group with estimateDispersionsFit, and tau_g^2 is the prior width. Each group was treated as its own dataset: DESeq2 estimated its median-of-ratios size factors, gene-wise dispersions, fitted means mu_ij and trend, exactly as in the downstream analysis. The per-PAS likelihood of alpha was the Cox-Reid adjusted profile likelihood used by DESeq2 for gene-wise dispersions; alpha_i was integrated over a grid of 121 log-dispersion values from 1e-4 to 100. With the trend fixed at DESeq2's fit, tau_g^2 was estimated by EM: the E-step computed the posterior of log alpha_i on the grid and the M-step set tau_g^2 to the mean posterior squared deviation from the trend, iterating until the log-likelihood changed by less than 0.001. The log-likelihood l(k) = l_LE(k) + l_REM(k) was compared with the Original (No EVS) model (one trend and one prior width for all PASs). All admissible k (both groups with at least 300 PASs) were scanned every 250, then every 10 within 250 of the best value, then at every single k within 10 of the best value; k* = argmax l(k), with support interval {k : l(k) >= l(k*) - 2}. The cutoff was fixed before any differential test and no p-value or discovery count entered its choice. The pooled prior width W = (n_LE tau_LE^2 + n_REM tau_REM^2) / (n_LE + n_REM) was compared with the Original prior width. Stability was assessed by refitting DESeq2 dispersions at k* - 100, -25, -5, -1, +1, +5, +25 and +100 and comparing final dispersions with those at k*.",
+    "Two cutoffs were analyzed: a prespecified k = 5,000 and a likelihood cutoff k*. For each comparison, k* was the k that maximized the marginal negative-binomial likelihood of the counts under DESeq2's empirical-Bayes dispersion model with the dispersion prior allowed to differ between the Leading Edge and the Remainder, a varying-dispersion regression in the sense of Tzougas (2020) fitted by EM. For PAS i in group g (Leading Edge or Remainder at cutoff k), y_ij | alpha_i ~ NB(mu_ij, alpha_i) and log alpha_i ~ N(f_g(log mean_i), tau_g^2), where f_g is DESeq2's own mean-dispersion trend fitted to that group with estimateDispersionsFit(fitType = 'local'), and tau_g^2 is the prior width. The same trend type was used for both groups at every k and for the Original model, because DESeq2's parametric trend failed to fit the Remainder at most k and scoring cutoffs under different trend models would confound the choice of k with the change of trend. Each group was treated as its own dataset: DESeq2 estimated its median-of-ratios size factors, gene-wise dispersions, fitted means mu_ij and trend, exactly as in the downstream analysis. The per-PAS likelihood of alpha was the Cox-Reid adjusted profile likelihood used by DESeq2 for gene-wise dispersions; alpha_i was integrated over a grid of 121 log-dispersion values from 1e-4 to 100. With the trend fixed at DESeq2's fit, tau_g^2 was estimated by EM: the E-step computed the posterior of log alpha_i on the grid and the M-step set tau_g^2 to the mean posterior squared deviation from the trend, iterating until the log-likelihood changed by less than 0.001. The log-likelihood l(k) = l_LE(k) + l_REM(k) was compared with the Original (No EVS) model (one trend and one prior width for all PASs). Moving k by one moves one or two PASs between groups and refits both groups, so l(k) carries fit-to-fit noise of a few log-likelihood units; k* was therefore taken as the maximum of a smoothed profile. All admissible k (both groups with at least 300 PASs) were scored every 250; the profile was smoothed by robust local-quadratic regression on k (Gaussian kernel, bandwidth 250, three bisquare robustness iterations); k was then scored every 10 within 250 of the smoothed peak, widening the window while the peak lay near its edge. k* was the integer k maximizing the smoothed profile, with support interval the contiguous k around k* whose smoothed log-likelihood was within 2 units of the maximum. The fit-to-fit noise was reported as the median absolute deviation of the raw log-likelihoods about the smoothed profile. The cutoff was fixed before any differential test and no p-value or discovery count entered its choice. The pooled prior width W = (n_LE tau_LE^2 + n_REM tau_REM^2) / (n_LE + n_REM) was compared with the Original prior width. Stability was assessed by refitting DESeq2 dispersions at k* - 100, -25, -5, -1, +1, +5, +25 and +100 and comparing final dispersions with those at k*.",
     "",
     "## DESeq2 model and log2 fold-change shrinkage",
-    "Each analysis view was modeled independently with DESeq2 using a negative-binomial generalized linear model with design ~ condition and ZT/untrt as the reference. DESeq2 estimated median-of-ratios size factors, gene-wise dispersions, the mean-dispersion relationship, final dispersions, and Wald statistics for the RT/trt coefficient. Log2 fold changes were then shrunken with apeglm. The apeglm-shrunken log2 fold change was the reported effect estimate, the effect term in HBFSS, the direction indicator, and the x-coordinate for all significance figures.",
+    "Each analysis view was modeled independently with DESeq2 using a negative-binomial generalized linear model with design ~ condition and ZT/untrt as the reference. DESeq2 estimated median-of-ratios size factors, gene-wise dispersions, the mean-dispersion trend, final dispersions, and Wald statistics for the RT/trt coefficient. The mean-dispersion trend was DESeq2's local regression fit (fitType = 'local') in every view, including the Original: DESeq2's parametric trend (a0 + a1/mean) could not be fitted to the Remainder, whose dispersions keep falling with the mean without the plateau that trend assumes (fitted a0 < 0), and one trend type was used throughout so that views differ only in which PASs they contain. Log2 fold changes were then shrunken with apeglm. The apeglm-shrunken log2 fold change was the reported effect estimate, the effect term in HBFSS, the direction indicator, and the x-coordinate for all significance figures.",
     "",
     "## Standard effect",
     sprintf("The Standard effect used the ordinary two-sided DESeq2 Wald p-value with Benjamini-Hochberg adjustment at FDR %.2f and the prespecified manuscript effect boundary on the apeglm-shrunken estimate. A PAS was reported as Standard when padj < %.2f and |apeglm LFC| >= %.1f. The ordinary DESeq2 Wald p-value/padj were retained separately from the empirical-null p-value used for HBFSS.", BH_FDR_STANDARD, BH_FDR_STANDARD, lfc_boundary),
@@ -2878,10 +2880,13 @@ write_methods_note <- function() {
 #
 #   PAS i is in the LE at cutoff k when it is among the top k by |PC1 loading|
 #   in either condition (NormEVS ranking), i.e. depth_i <= k.
-#   f_g      DESeq2's own parametric trend for the group, a0 + a1 / mean, from
-#            estimateDispersionsFit(fitType = "parametric") on that group
-#            (DESeq2's own fallback to a local fit is kept if it fails): the
-#            exact trend DESeq2 uses for the group downstream
+#   f_g      DESeq2's own mean-dispersion trend for the group, from
+#            estimateDispersionsFit(fitType = LIK_TREND_FIT_TYPE). One trend
+#            type is used for every group at every k and for the Original:
+#            DESeq2's parametric fit fails on the Remainder at most k and
+#            falls back to its local fit, and scoring some k under one trend
+#            type and other k under another confounds the choice of k with
+#            the change of trend model.
 #   tau_g^2  group prior width, estimated by maximum likelihood
 #   mu_ij    DESeq2's fitted means for the group (its own median-of-ratios
 #            size factors; each group is its own dataset, as downstream)
@@ -2893,22 +2898,35 @@ write_methods_note <- function() {
 #   M-step  tau_g^2 = mean of E[(log alpha_i - log f_g(mubar_i))^2]
 #
 # l(k) = l_LE(k) + l_REM(k) is the marginal log-likelihood of all counts. The
-# Original (No EVS) model (one trend, one width, all PASs) gives l_0. Every k
-# uses the same counts and the same number of parameters, so
-#   k* = argmax_k l(k).
-# Search, three stages: every LIK_COARSE_STEP (250) over all admissible k (both
-# groups keep at least LIK_MIN_GROUP PASs); every LIK_FINE_STEP (10) within
-# +/- LIK_FINE_HALF_WIDTH (250) of the best coarse k; then every single k
-# within +/- LIK_EXACT_HALF_WIDTH (10) of the best k so far, so k* is exact.
-# Support interval: the k with l(k) >= l(k*) - 2. No p-value or discovery
+# Original (No EVS) model (one trend, one width, all PASs) gives l_0.
+# Moving k by one moves one or two PASs between groups and refits both groups'
+# size factors and trends, so l(k) carries a few units of fit-to-fit noise and
+# occasional jumps where DESeq2's local trend changes shape. k* is therefore
+# the maximum of a smoothed profile, not of the raw points:
+#   l~(k) = robust local-quadratic regression of l on k (Gaussian kernel,
+#           bandwidth LIK_SMOOTH_BANDWIDTH; bisquare robustness iterations)
+#   k*    = argmax over integer k of l~(k)
+# Search: every LIK_COARSE_STEP (250) over all admissible k (both groups keep
+# at least LIK_MIN_GROUP PASs); then every LIK_FINE_STEP (10) within
+# +/- LIK_FINE_HALF_WIDTH (250) of the smoothed peak, widened while the peak
+# sits near the edge of the evaluated window. Support interval: the
+# contiguous k around k* with l~(k) >= l~(k*) - 2. No p-value or discovery
 # count enters the choice.
 
+# One DESeq2 mean-dispersion trend type for every fit in the pipeline (Original,
+# Leading Edge, Remainder, RawEVS views, likelihood scan, stability refits,
+# calibration). DESeq2's parametric trend (a0 + a1/mean) cannot be fitted to the
+# Remainder (a0 < 0), so DESeq2's local regression trend is used throughout.
+DESEQ2_FIT_TYPE <- "local"
 LIK_LOG_ALPHA_GRID <- seq(log(1e-4), log(100), length.out = 121L)
 LIK_MIN_GROUP <- 300L
 LIK_COARSE_STEP <- 250L
 LIK_FINE_STEP <- 10L
 LIK_FINE_HALF_WIDTH <- 250L
-LIK_EXACT_HALF_WIDTH <- 10L
+LIK_TREND_FIT_TYPE <- DESEQ2_FIT_TYPE
+LIK_SMOOTH_BANDWIDTH <- 250
+LIK_SMOOTH_ROBUST_ITER <- 3L
+LIK_FINE_MAX_ROUNDS <- 4L
 LIK_EM_TOL <- 1e-3
 LIK_EM_MAX_ITER <- 500L
 LIK_STABILITY_STEPS <- c(-100L, -25L, -5L, -1L, 1L, 5L, 25L, 100L)
@@ -2997,14 +3015,14 @@ em_prior_width <- function(L, centre, grid = LIK_LOG_ALPHA_GRID, tol = LIK_EM_TO
 }
 
 # One group = one dataset, fitted with DESeq2's own steps: size factors,
-# gene-wise dispersions (and fitted means), and the parametric trend.
+# gene-wise dispersions (and fitted means), and the trend (LIK_TREND_FIT_TYPE
+# for every group, so all k are scored under the same trend model).
 fit_dispersion_group <- function(raw_sub, condition) {
   cd <- data.frame(condition = factor(condition), row.names = colnames(raw_sub))
   dds <- DESeq2::DESeqDataSetFromMatrix(countData = raw_sub, colData = cd, design = ~ condition)
   dds <- DESeq2::estimateSizeFactors(dds)
   dds <- suppressMessages(DESeq2::estimateDispersionsGeneEst(dds, quiet = TRUE))
-  dds <- tryCatch(suppressMessages(DESeq2::estimateDispersionsFit(dds, fitType = "parametric", quiet = TRUE)),
-                  error = function(e) suppressMessages(DESeq2::estimateDispersionsFit(dds, fitType = "local", quiet = TRUE)))
+  dds <- suppressMessages(DESeq2::estimateDispersionsFit(dds, fitType = LIK_TREND_FIT_TYPE, quiet = TRUE))
   mc <- S4Vectors::mcols(dds)
   y <- DESeq2::counts(dds)
   storage.mode(y) <- "double"
@@ -3046,70 +3064,117 @@ admissible_k_range <- function(depth) {
   c(lo = sd[LIK_MIN_GROUP], hi = sd[N - LIK_MIN_GROUP + 1L] - 1L)
 }
 
-# Full scan for one comparison. Returns the scan table, the selected k*,
-# fitted trends at k*, and the EVS depth used.
+# Robust local-quadratic smoother of the log-likelihood profile: Gaussian kernel
+# in k with bandwidth h, then bisquare robustness weights (as in lowess) so
+# isolated jumps do not move the curve. Returns the smoothed value at each `at`.
+smooth_loglik_profile <- function(k, ll, at, h = LIK_SMOOTH_BANDWIDTH, iter = LIK_SMOOTH_ROBUST_ITER) {
+  k <- as.numeric(k); ll <- as.numeric(ll); at <- as.numeric(at)
+  fit_at <- function(x0, rw) {
+    w <- rw * exp(-0.5 * ((k - x0) / h)^2)
+    use <- w > 1e-10
+    if (sum(use) < 3L) return(if (any(use)) stats::weighted.mean(ll[use], w[use]) else NA_real_)
+    u <- (k[use] - x0) / h
+    b <- stats::lm.wfit(cbind(1, u, u^2), ll[use], w[use])$coefficients
+    if (is.finite(b[1])) unname(b[1]) else stats::weighted.mean(ll[use], w[use])
+  }
+  rw <- rep(1, length(k))
+  for (r in seq_len(iter)) {
+    res <- ll - vapply(k, fit_at, numeric(1), rw = rw)
+    sc <- 6 * stats::median(abs(res), na.rm = TRUE)
+    if (!is.finite(sc) || sc <= 0) break
+    rw <- ifelse(is.finite(res) & abs(res) < sc, (1 - (res / sc)^2)^2, 0)
+  }
+  vapply(at, fit_at, numeric(1), rw = rw)
+}
+
+# Full scan for one comparison. Returns the scan table (raw and smoothed
+# log-likelihood), the smoothed profile, the selected k*, fitted trends at k*,
+# and the EVS depth used.
 likelihood_k_scan <- function(raw, coldata, label, cores = analysis_cores()) {
   raw <- raw[rowSums(raw) > 0, , drop = FALSE]
   cond <- as.character(coldata$condition)
   depth <- evs_depth(raw, coldata)
   orig <- fit_dispersion_group(raw, cond)
   rng <- admissible_k_range(depth)
+  lo <- as.integer(rng[["lo"]]); hi <- as.integer(rng[["hi"]])
   eval_k <- function(k) tryCatch(fit_split_model(raw, cond, depth, k)$row, error = function(e) {
     message("    ", label, " k = ", k, " skipped: ", conditionMessage(e)); NULL })
+  run_k <- function(ks, stage) {
+    ks <- setdiff(as.integer(ks), rows$k)
+    if (!length(ks)) return(rows)
+    rbind(rows, do.call(rbind, parallel_map(ks, eval_k, cores, paste(label, stage))))
+  }
+  peak_in <- function(a, b, step = 1L) {
+    at <- seq(a, b, by = step)
+    sm <- smooth_loglik_profile(rows$k, rows$loglik, at)
+    at[which.max(sm)]
+  }
 
-  coarse_k <- seq(LIK_COARSE_STEP, rng[["hi"]], by = LIK_COARSE_STEP)
-  coarse_k <- coarse_k[coarse_k >= rng[["lo"]]]
-  message(sprintf("  %s: likelihood scan over k = %s-%s (%d coarse cutoffs, %d core%s)",
+  coarse_k <- seq(LIK_COARSE_STEP, hi, by = LIK_COARSE_STEP)
+  coarse_k <- coarse_k[coarse_k >= lo]
+  message(sprintf("  %s: likelihood scan over k = %s-%s (%d coarse cutoffs, %s trend, %d core%s)",
                   label, format(min(coarse_k), big.mark = ","), format(max(coarse_k), big.mark = ","),
-                  length(coarse_k), cores, if (cores > 1L) "s" else ""))
+                  length(coarse_k), LIK_TREND_FIT_TYPE, cores, if (cores > 1L) "s" else ""))
+  rows <- NULL
   rows <- do.call(rbind, parallel_map(coarse_k, eval_k, cores, paste(label, "coarse scan")))
-  if (is.null(rows) || !nrow(rows)) stop(label, ": likelihood scan produced no admissible cutoffs.")
-  kb <- rows$k[which.max(rows$loglik)]
-  fine_k <- seq(max(rng[["lo"]], kb - LIK_FINE_HALF_WIDTH), min(rng[["hi"]], kb + LIK_FINE_HALF_WIDTH),
-                by = LIK_FINE_STEP)
-  fine_k <- setdiff(fine_k, rows$k)
-  if (length(fine_k)) {
-    rows <- rbind(rows, do.call(rbind, parallel_map(fine_k, eval_k, cores, paste(label, "fine scan"))))
+  if (is.null(rows) || nrow(rows) < 5L) stop(label, ": likelihood scan produced too few admissible cutoffs.")
+
+  kb <- peak_in(min(rows$k), max(rows$k), 10L)
+  win <- c(max(lo, kb - LIK_FINE_HALF_WIDTH), min(hi, kb + LIK_FINE_HALF_WIDTH))
+  for (round in seq_len(LIK_FINE_MAX_ROUNDS)) {
+    rows <- run_k(seq(win[1], win[2], by = LIK_FINE_STEP), "fine scan")
+    kb <- peak_in(win[1], win[2])
+    near_lo <- kb - win[1] < LIK_FINE_HALF_WIDTH / 2 && win[1] > lo
+    near_hi <- win[2] - kb < LIK_FINE_HALF_WIDTH / 2 && win[2] < hi
+    if (!near_lo && !near_hi) break
+    win <- c(max(lo, min(win[1], kb - LIK_FINE_HALF_WIDTH)), min(hi, max(win[2], kb + LIK_FINE_HALF_WIDTH)))
   }
-  kb <- rows$k[which.max(rows$loglik)]
-  exact_k <- setdiff(seq(max(rng[["lo"]], kb - LIK_EXACT_HALF_WIDTH), min(rng[["hi"]], kb + LIK_EXACT_HALF_WIDTH)),
-                     rows$k)
-  if (length(exact_k)) {
-    rows <- rbind(rows, do.call(rbind, parallel_map(exact_k, eval_k, cores, paste(label, "exact scan"))))
-  }
+  k_star <- as.integer(kb)
+
+  final <- fit_split_model(raw, cond, depth, k_star, keep_fits = TRUE)
+  if (is.null(final)) stop(label, ": k* = ", k_star, " is not admissible.")
+  if (!k_star %in% rows$k) rows <- rbind(rows, final$row)
   rows <- rows[order(rows$k), ]
+  rows$loglik_smooth <- smooth_loglik_profile(rows$k, rows$loglik, rows$k)
   rows$loglik_Original <- orig$loglik
   rows$delta_loglik_vs_Original <- rows$loglik - orig$loglik
+  rows$delta_loglik_smooth_vs_Original <- rows$loglik_smooth - orig$loglik
   rows$tau2_Original <- orig$tau2
   rows$W_split <- (rows$LE_n * rows$tau2_LE + rows$REM_n * rows$tau2_REM) / (rows$LE_n + rows$REM_n)
 
-  best <- rows[which.max(rows$loglik), ]
-  near <- rows[abs(rows$k - best$k) <= LIK_FINE_HALF_WIDTH, ]
-  support <- near$k[near$loglik >= best$loglik - 2]
-  at5k <- rows[rows$k == 5000L, ]
-  n_obs <- nrow(raw) * ncol(raw)
-  p_extra <- 3L  # one more parametric trend (a0, a1) and one more prior width
+  # smoothed profile over the evaluated range; support = contiguous run around k*
+  prof_k <- seq(min(rows$k), max(rows$k))
+  prof <- smooth_loglik_profile(rows$k, rows$loglik, prof_k)
+  top <- prof[prof_k == k_star]
+  ok <- prof >= top - 2
+  i0 <- which(prof_k == k_star)
+  a <- i0; while (a > 1L && ok[a - 1L]) a <- a - 1L
+  b <- i0; while (b < length(ok) && ok[b + 1L]) b <- b + 1L
+  noise_sd <- stats::mad(rows$loglik - rows$loglik_smooth)
+  sm_5000 <- if (5000L >= min(rows$k) && 5000L <= max(rows$k)) prof[prof_k == 5000L] else NA_real_
+
+  best <- final$row
+  W <- (best$LE_n * best$tau2_LE + best$REM_n * best$tau2_REM) / (best$LE_n + best$REM_n)
   selected <- data.frame(
-    k_star = best$k, support_lo = min(support), support_hi = max(support),
+    k_star = k_star, support_lo = prof_k[a], support_hi = prof_k[b],
     LE_n = best$LE_n, REM_n = best$REM_n,
-    loglik_k_star = best$loglik, loglik_Original = orig$loglik,
-    delta_loglik_vs_Original = best$delta_loglik_vs_Original,
-    delta_BIC_vs_Original = -2 * best$delta_loglik_vs_Original + p_extra * log(n_obs),
-    delta_loglik_k_star_vs_5000 = if (nrow(at5k)) best$loglik - at5k$loglik else NA_real_,
+    loglik_k_star = best$loglik, loglik_smooth_k_star = top, loglik_Original = orig$loglik,
+    delta_loglik_vs_Original = top - orig$loglik,
+    delta_loglik_k_star_vs_5000 = top - sm_5000,
+    loglik_noise_sd = noise_sd,
     tau2_Original = orig$tau2, tau2_LE = best$tau2_LE, tau2_REM = best$tau2_REM,
-    W_split = best$W_split, prior_width_reduction_pct = 100 * (1 - best$W_split / orig$tau2),
+    W_split = W, prior_width_reduction_pct = 100 * (1 - W / orig$tau2),
+    trend_type = LIK_TREND_FIT_TYPE, smoothing_bandwidth = LIK_SMOOTH_BANDWIDTH,
     n_cutoffs_evaluated = nrow(rows))
 
-  final <- fit_split_model(raw, cond, depth, best$k, keep_fits = TRUE)
   trends <- rbind(
     cbind(Set = ORIGINAL_LABEL, dispersion_trend_curve(orig)),
     cbind(Set = "Leading Edge", dispersion_trend_curve(final$LE)),
     cbind(Set = "Remainder", dispersion_trend_curve(final$REM)))
-  message(sprintf("  %s: k* = %s (support %s-%s); log-likelihood gain over Original = %s; vs k = 5,000 = %s",
-                  label, format(best$k, big.mark = ","), format(min(support), big.mark = ","),
-                  format(max(support), big.mark = ","), format(round(best$delta_loglik_vs_Original), big.mark = ","),
-                  if (nrow(at5k)) format(round(best$loglik - at5k$loglik, 1)) else "NA"))
-  list(scan = rows, selected = selected, trends = trends, depth = depth, k_star = as.integer(best$k))
+  message(sprintf("  %s: k* = %s (support %s-%s); smoothed log-likelihood gain over Original = %s; fit-to-fit noise SD = %.1f",
+                  label, format(k_star, big.mark = ","), format(prof_k[a], big.mark = ","),
+                  format(prof_k[b], big.mark = ","), format(round(top - orig$loglik), big.mark = ","), noise_sd))
+  list(scan = rows, selected = selected, trends = trends, depth = depth, k_star = k_star)
 }
 
 # Prior widths (ML, same model) at a given k, used for the Fixed 5,000 run.
@@ -3132,7 +3197,7 @@ deseq2_final_dispersions <- function(raw_sub, coldata) {
   dds <- DESeq2::DESeqDataSetFromMatrix(countData = raw_sub, colData = coldata,
                                         design = make_design_formula(coldata))
   dds <- DESeq2::estimateSizeFactors(dds)
-  dds <- suppressMessages(DESeq2::estimateDispersions(dds, quiet = TRUE))
+  dds <- suppressMessages(DESeq2::estimateDispersions(dds, fitType = DESEQ2_FIT_TYPE, quiet = TRUE))
   stats::setNames(DESeq2::dispersions(dds), rownames(dds))
 }
 
@@ -3344,12 +3409,13 @@ panel_loglik <- function(scan, sel, tag) {
   scan$Comparison <- as_comp(scan$Comparison); sel$Comparison <- as_comp(sel$Comparison)
   pk <- data.frame(Comparison = sel$Comparison, k = sel$k_star, y = sel$delta_loglik_vs_Original,
                    lab = paste0("k* = ", format(sel$k_star, big.mark = ",")))
-  p5 <- scan[scan$k == 5000L, c("Comparison", "k", "delta_loglik_vs_Original")]
-  ggplot(scan, aes(k, delta_loglik_vs_Original)) +
+  p5 <- scan[scan$k == 5000L, c("Comparison", "k", "delta_loglik_smooth_vs_Original")]
+  ggplot(scan, aes(k, delta_loglik_smooth_vs_Original)) +
     geom_area(fill = METHOD_COLS[["Likelihood k*"]], alpha = 0.07) +
     geom_hline(yintercept = 0, linetype = "22", linewidth = 0.3, colour = "grey45") +
     geom_vline(xintercept = 5000, linetype = "22", linewidth = 0.3, colour = METHOD_COLS[["Fixed 5,000"]]) +
-    geom_line(linewidth = 0.55, colour = "grey15") +
+    geom_point(aes(y = delta_loglik_vs_Original), size = 0.35, colour = "grey60") +
+    geom_line(linewidth = 0.6, colour = "grey15") +
     geom_point(data = p5, shape = 15, size = 1.9, colour = METHOD_COLS[["Fixed 5,000"]]) +
     geom_point(data = pk, aes(k, y), shape = 21, size = 2.8, stroke = 0.7, colour = "white",
                fill = METHOD_COLS[["Likelihood k*"]]) +
@@ -3361,7 +3427,7 @@ panel_loglik <- function(scan, sel, tag) {
     scale_y_continuous(labels = scales::label_comma()) +
     labs(x = "k (top-|PC1| PASs per condition)", y = "Log-likelihood gain\nover Original (No EVS)", tag = tag,
          title = "Choosing k by maximum likelihood",
-         subtitle = "Negative-binomial likelihood of the counts under the varying-dispersion model. Green: k*; grey square and dashed line: Fixed 5,000.") +
+         subtitle = "Grey dots: each cutoff; black line: smoothed profile. Green: k* (smoothed peak); square and dashed line: k = 5,000.") +
     fig_theme()
 }
 
@@ -3400,9 +3466,8 @@ panel_varying_dispersion_fit <- function(pas, trends, sel, tag, max_pts = 2500L)
   t <- trends; t$Comparison <- as_comp(t$Comparison)
   t$Set <- factor(t$Set, levels = c("Leading Edge", "Remainder", ORIGINAL_LABEL))
   lab <- sel; lab$Comparison <- as_comp(lab$Comparison)
-  lab$txt <- sprintf("Gain over one trend:\n%s log-lik units\nΔBIC = %s",
-                     format(round(lab$delta_loglik_vs_Original), big.mark = ","),
-                     format(round(lab$delta_BIC_vs_Original), big.mark = ","))
+  lab$txt <- sprintf("Gain over one trend:\n%s log-lik units",
+                     format(round(lab$delta_loglik_vs_Original), big.mark = ","))
   yl <- stats::quantile(d$dispGeneEst, c(0.002, 0.998), names = FALSE)
   ggplot(d, aes(baseMean, dispGeneEst)) +
     geom_point(data = d[d$Set == "Remainder", ], colour = "#E8836F", size = 0.35, alpha = 0.35, stroke = 0) +
@@ -3424,7 +3489,7 @@ panel_varying_dispersion_fit <- function(pas, trends, sel, tag, max_pts = 2500L)
     coord_cartesian(ylim = yl) +
     labs(x = "Mean of normalized counts", y = "Gene-wise dispersion", tag = tag,
          title = "The fitted varying-dispersion model at k*",
-         subtitle = "Lines: DESeq2's parametric trend fitted to each group (dotted: one trend for all PASs). Points: DESeq2 gene-wise estimates (blue LE, red REM). Box: gain of the two-group model.") +
+         subtitle = "Lines: DESeq2's local trend fitted to each group (dotted: one trend for all PASs). Points: DESeq2 gene-wise estimates (blue LE, red REM). Box: gain of the two-group model.") +
     fig_theme()
 }
 
@@ -3562,14 +3627,17 @@ panel_final_change <- function(pairs, fscore, tag) {
 # ---- Supplementary S1: precision and stability of k* ------------------------
 
 panel_zoom <- function(scan, sel, tag) {
-  s <- sel; s$Comparison <- as_comp(s$Comparison)
+  s <- sel
   z <- do.call(rbind, lapply(split(scan, scan$Comparison), function(x) {
     ks <- s$k_star[s$Comparison == x$Comparison[1]]
     x <- x[abs(x$k - ks) <= LIK_FINE_HALF_WIDTH, ]
-    x$rel <- x$loglik - max(x$loglik)
+    top <- s$loglik_smooth_k_star[s$Comparison == x$Comparison[1]]
+    x$rel <- x$loglik - top
+    x$rel_smooth <- x$loglik_smooth - top
     x
   }))
   z$Comparison <- as_comp(z$Comparison)
+  s$Comparison <- as_comp(s$Comparison)
   s$lab <- sprintf("k* = %s\nsupport %s–%s", format(s$k_star, big.mark = ","),
                    format(s$support_lo, big.mark = ","), format(s$support_hi, big.mark = ","))
   ggplot(z, aes(k, rel)) +
@@ -3577,7 +3645,8 @@ panel_zoom <- function(scan, sel, tag) {
                             ymin = -Inf, ymax = Inf), inherit.aes = FALSE,
               fill = METHOD_COLS[["Likelihood k*"]], alpha = 0.15) +
     geom_hline(yintercept = -2, linetype = "22", linewidth = 0.3, colour = "grey45") +
-    geom_line(linewidth = 0.4, colour = "grey20") + geom_point(size = 0.5, colour = "grey20") +
+    geom_point(size = 0.5, colour = "grey55") +
+    geom_line(aes(y = rel_smooth), linewidth = 0.6, colour = "grey10") +
     geom_point(data = s, aes(k_star, 0), inherit.aes = FALSE, shape = 21, size = 2.6, stroke = 0.7,
                colour = "white", fill = METHOD_COLS[["Likelihood k*"]]) +
     geom_text(data = s, aes(x = Inf, y = -Inf, label = lab), inherit.aes = FALSE, hjust = 1.05, vjust = -0.3,
@@ -3586,7 +3655,7 @@ panel_zoom <- function(scan, sel, tag) {
     scale_x_continuous(labels = scales::label_comma(), breaks = scales::breaks_pretty(3)) +
     labs(x = "k", y = "Log-likelihood − maximum", tag = tag,
          title = "Zoom on the peak: how sharply the data pin down k",
-         subtitle = sprintf("Every %d within ±%d of k*. Shaded: support interval (within 2 log-likelihood units of the maximum).",
+         subtitle = sprintf("Dots: every %d within ±%d of k*; line: smoothed profile. Shaded: within 2 units of the smoothed maximum.",
                             LIK_FINE_STEP, LIK_FINE_HALF_WIDTH)) +
     fig_theme()
 }
