@@ -11,22 +11,17 @@
 #     COMPOSITION_PERMUTATIONS  permutations for the null (default 99)
 #     COMPOSITION_SEED          random seed (default 20261108)
 #   Output: <repo>/exports/sequence_evs_composition
-#     SEQUENCE_PIPELINE_PATH    SEQUENCE_EVS_MANUSCRIPT.R (default: <repo>/SEQUENCE_EVS_MANUSCRIPT.R)
-#   It does not change the manuscript runs. The CPM k* is recomputed here with
-#   the manuscript script's own CPM functions (loaded from it, not copied), so
-#   the two cutoffs are compared on the same counts and the same rankings.
+#   Standalone: needs only the count file. It does not use or change the
+#   manuscript script or its runs.
 #
 # FIGURES
-#   Figure_C1  how the CPM method chooses k: knots c1, c2 from all 40 samples
-#              (8 arms); then, per comparison, the Pareto frontier of its two
-#              arms (10 samples) and k* at the maximum endpoint deviation
 #   Figure_C2  how the composition method chooses k: f observed vs the
 #              permutation null, per comparison and condition
 #   Figure_C3  per comparison: (a) estimated Leading Edge size at each lambda,
 #              (b) the union curve U(k) and the single k where it reaches the
-#              estimated Leading Edge, with CPM k* and 5,000 marked, (c) the
+#              estimated Leading Edge, with 5,000 marked for reference, (c) the
 #              Joint / Disjoint / Remainder composition estimated vs realized
-#   Figure_C4  the k of each method side by side
+#   Figure_C4  the four k values (majority and dominant-mode rules), with 5,000 for reference
 #
 # WHAT IT DOES
 # For each comparison (RT0/ZT6, RT2/ZT8, RT4/ZT10, RT8/ZT14) it estimates how
@@ -55,7 +50,7 @@
 #       S_RT = N - A_RT / F,   S_ZT = N - A_ZT / F,   M = B / F^2,
 #       J    = S_RT + S_ZT - (N - M)      (inclusion-exclusion),
 #       D_R  = S_RT - J,       D_Z = S_ZT - J.
-#   Each estimator is unbiased. As in the CPM method, k is one value per
+#   Each estimator is unbiased. k is one value per
 #   comparison, set by both conditions together (all 10 samples): the
 #   Leading Edge is N - M (every PAS structured in at least one condition),
 #   and k is the smallest k whose union of the two top-k sets (by |PC1
@@ -239,19 +234,6 @@ mixture_em <- function(fR, fZ, max_iter = 500L, tol = 1e-8) {
 
 counts <- read_counts(count_path)
 
-# ---- CPM k*: the manuscript's own functions, loaded from its script ----------
-# Only the CPM cutoff functions and constants are evaluated (names starting
-# cpm_ / CPM_ and derive_cpm_cutoffs); nothing else in that script is run.
-pipeline_path <- Sys.getenv("SEQUENCE_PIPELINE_PATH", file.path(repo, "SEQUENCE_EVS_MANUSCRIPT.R"))
-if (!file.exists(pipeline_path)) stop("Cannot find SEQUENCE_EVS_MANUSCRIPT.R. Set SEQUENCE_PIPELINE_PATH.")
-cpm_env <- new.env()
-for (e in parse(pipeline_path, keep.source = FALSE)) {
-  if (is.call(e) && identical(e[[1]], as.name("<-")) && is.name(e[[2]]) &&
-      grepl("^(cpm_|CPM_|derive_cpm_cutoffs$)", as.character(e[[2]]))) eval(e, cpm_env)
-}
-cpm <- cpm_env$derive_cpm_cutoffs(count_path)
-cpm_k <- cpm$k_star
-
 set.seed(SEED)
 summary_rows <- list(); lambda_rows <- list(); posterior_rows <- list(); density_rows <- list(); null_rows <- list()
 union_rows <- list(); composition_rows <- list()
@@ -325,8 +307,8 @@ for (cn in names(COMPARISONS)) {
   est <- count_composition(dR$f, dZ$f, bin, FR, FZ)
   est$Comparison <- cn
 
-  # ONE k per comparison, from both conditions together (all 10 samples), as
-  # in the CPM method. The Remainder (strays in both conditions) is the one
+  # ONE k per comparison, from both conditions together (all 10 samples).
+  # The Remainder (strays in both conditions) is the one
   # quantity estimated jointly; the Leading Edge is N - Remainder. With the
   # same k in both conditions, the Leading Edge is the union of the two top-k
   # sets by |PC1 loading|: U(k) = 2k - Joint(k). k is the smallest k whose
@@ -372,7 +354,6 @@ for (cn in names(COMPARISONS)) {
     data.frame(Source = "Estimated (composition)", Comparison = cn, k = k_single,
                Joint = med[["Joint"]], Disjoint = med[["Disjoint_RT"]] + med[["Disjoint_ZT"]], Remainder = med[["Remainder"]]),
     cbind(Source = "Realized at composition k", realized_at(k_single)),
-    cbind(Source = "Realized at CPM k*", realized_at(as.integer(cpm_k[[cn]]))),
     cbind(Source = "Realized at 5,000", realized_at(5000L)))
 
   summary_rows[[cn]] <- data.frame(
@@ -393,9 +374,7 @@ for (cn in names(COMPARISONS)) {
     Realized_Leading_Edge = sum(inR | inZ), Realized_Joint = sum(inR & inZ), Realized_Disjoint = sum(xor(inR, inZ)),
     Mixture_S_RT = round(fit$S_RT), Mixture_S_ZT = round(fit$S_ZT), Mixture_Joint = round(fit$Joint),
     Likelihood_ratio = fit$LR, Permutation_LR_max = max(lr_perm), Permutation_p = p_value,
-    Permutations = N_PERM,
-    CPM_k_star = as.integer(cpm_k[[cn]]),
-    CPM_c1 = cpm$knots[["c1"]], CPM_c2 = cpm$knots[["c2"]])
+    Permutations = N_PERM)
   posterior_rows[[cn]] <- data.frame(Comparison = cn, feature_id = rownames(zR), f_RT = dR$f, f_ZT = dZ$f,
                                      mean_bin = bin, round(fit$posterior, 4), check.names = FALSE)
   density_rows[[cn]] <- rbind(
@@ -403,9 +382,8 @@ for (cn in names(COMPARISONS)) {
     cbind(Comparison = cn, Source = "Permutation null", do.call(rbind, null_f_sample)))
 
   s <- summary_rows[[cn]]
-  message(sprintf("  k = %d by majority (f1 > 1/2; Leading Edge %d), %d by dominant mode; eigen gap p RT %.3f, ZT %.3f; permutation p = %.3f%s",
-                  s$k_single, s$Leading_Edge, s$k_dominant, s$eigen_gap_p_RT, s$eigen_gap_p_ZT, s$Permutation_p,
-                  sprintf("; CPM k* = %d", s$CPM_k_star)))
+  message(sprintf("  k = %d by majority (f1 > 1/2; Leading Edge %d), %d by dominant mode; eigen gap p RT %.3f, ZT %.3f; permutation p = %.3f",
+                  s$k_single, s$Leading_Edge, s$k_dominant, s$eigen_gap_p_RT, s$eigen_gap_p_ZT, s$Permutation_p))
 }
 
 # ---- outputs --------------------------------------------------------------------
@@ -416,13 +394,12 @@ utils::write.csv(do.call(rbind, posterior_rows), file.path(out_dir, "Table_PAS_C
 utils::write.csv(do.call(rbind, null_rows), file.path(out_dir, "Table_Null_F_By_Bin.csv"), row.names = FALSE)
 
 utils::write.csv(do.call(rbind, composition_rows), file.path(out_dir, "Table_Composition_Estimated_vs_Realized.csv"), row.names = FALSE)
-utils::write.csv(cpm$audit, file.path(out_dir, "Table_CPM_Cutoff_Selection.csv"), row.names = FALSE)
 
 # ---- figures --------------------------------------------------------------------
 
 CMP_LEVELS <- sub("_", " / ", names(COMPARISONS))
 as_cmp <- function(x) factor(sub("_", " / ", x), levels = CMP_LEVELS)
-COL_COMP <- "#1F6FB2"; COL_CPM <- "#2E7D5B"; COL_FIX <- "#8C8C8C"
+COL_COMP <- "#1F6FB2"; COL_FIX <- "#8C8C8C"
 fig_theme <- function() theme_bw(base_size = 8) +
   theme(legend.position = "bottom", panel.grid.minor = element_blank(),
         strip.background = element_rect(fill = "grey94", colour = NA), strip.text = element_text(face = "bold"),
@@ -432,54 +409,6 @@ save_both <- function(p, name, w, h) {
   ggsave(file.path(out_dir, paste0(name, ".pdf")), p, width = w, height = h, units = "mm")
 }
 k_labels <- function(x) ifelse(is.na(x), NA_character_, paste0(x / 1000, "k"))
-
-# Figure C1: how the CPM method chooses k.
-cv <- cpm$curves
-arm_cmp <- c(RT0 = "RT0_ZT6", ZT6 = "RT0_ZT6", RT2 = "RT2_ZT8", ZT8 = "RT2_ZT8",
-             RT4 = "RT4_ZT10", ZT10 = "RT4_ZT10", RT8 = "RT8_ZT14", ZT14 = "RT8_ZT14")
-cv$Comparison <- as_cmp(arm_cmp[cv$Arm]); cv$Condition <- ifelse(grepl("^RT", cv$Arm), "RT arm", "ZT arm")
-kn <- cpm$knots
-zones <- data.frame(xmin = c(0, kn[["c1"]], kn[["c2"]]), xmax = c(kn[["c1"]], kn[["c2"]], kn[["N"]]),
-                    Zone = factor(c("Remainder regime", "Meeting zone", "Leading Edge regime"),
-                                  levels = c("Remainder regime", "Meeting zone", "Leading Edge regime")))
-c1a <- ggplot(cv) +
-  geom_rect(data = zones, aes(xmin = xmin, xmax = xmax, ymin = -Inf, ymax = Inf, fill = Zone), inherit.aes = FALSE) +
-  geom_hline(yintercept = 0, linewidth = 0.25, colour = "grey55") +
-  geom_line(aes(rank, D, linetype = Condition), linewidth = 0.45, colour = "grey15") +
-  geom_line(aes(rank, fitted, linetype = Condition), linewidth = 0.35, colour = "#B8860B") +
-  facet_wrap(~ Comparison, nrow = 1) +
-  scale_fill_manual(values = c("Remainder regime" = "#F6DCD8", "Meeting zone" = "#EEEEEE", "Leading Edge regime" = "#D7E5F3")) +
-  scale_linetype_manual(values = c("RT arm" = "solid", "ZT arm" = "22")) +
-  scale_x_continuous(labels = k_labels) +
-  labs(x = "Rank by |PC1 loading| of log1p(CPM) (ascending)", y = "D = cum. overdispersion share\n- cum. PC1 share",
-       fill = NULL, linetype = NULL, tag = "a",
-       title = "Step 1 (all 40 samples): the two regimes",
-       subtitle = sprintf("Black: D curve of each arm; gold: one two-knot fit shared by all 8 arms. c1 = %s, c2 = %s of %s PASs.",
-                          format(kn[["c1"]], big.mark = ","), format(kn[["c2"]], big.mark = ","), format(kn[["N"]], big.mark = ","))) +
-  fig_theme()
-fr <- cpm$frontiers; fr$Comparison <- as_cmp(fr$Comparison)
-ends <- do.call(rbind, lapply(split(fr, fr$Comparison, drop = TRUE), function(x)
-  data.frame(Comparison = x$Comparison[1], x1 = x$cost_norm[1], y1 = x$good_norm[1],
-             x2 = x$cost_norm[nrow(x)], y2 = x$good_norm[nrow(x)])))
-sel <- fr[fr$selected, ]; sel$lab <- paste0("k* = ", format(sel$k, big.mark = ","))
-c1b <- ggplot(fr, aes(cost_norm, good_norm)) +
-  geom_segment(data = ends, aes(x = x1, y = y1, xend = x2, yend = y2), linetype = "22", linewidth = 0.3,
-               colour = "grey45", inherit.aes = FALSE) +
-  geom_line(linewidth = 0.45, colour = "grey20") +
-  geom_point(data = sel, shape = 21, size = 2.6, stroke = 0.7, colour = "white", fill = COL_CPM) +
-  geom_text(data = sel, aes(label = lab), hjust = -0.15, vjust = 1.4, size = 2.3, colour = COL_CPM, fontface = "bold") +
-  facet_wrap(~ Comparison, nrow = 1) +
-  scale_x_continuous(labels = scales::label_percent(), breaks = c(0, 0.5, 1)) +
-  scale_y_continuous(labels = scales::label_percent(), breaks = c(0, 0.5, 1)) +
-  labs(x = "Cost R(k): Disjoint PASs whose rank in the other arm is in the Remainder regime (scaled)",
-       y = "Good G(k): consistent\nLeading Edge PASs (scaled)", tag = "b",
-       title = "Step 2 (the comparison's 10 samples): one k per comparison",
-       subtitle = "Pareto frontier of G vs R over k; dashed: chord between its ends; k* = maximum endpoint deviation.") +
-  fig_theme()
-fig_c1 <- if (requireNamespace("patchwork", quietly = TRUE)) patchwork::wrap_plots(c1a, c1b, ncol = 1) +
-  patchwork::plot_annotation(title = "Figure C1. How the CPM method chooses k",
-                             theme = theme(plot.title = element_text(face = "bold", size = 10))) else c1b
-save_both(fig_c1, "Figure_C1_CPM_Choosing_k", 180, 130)
 
 # Figure C2: f observed vs permutation null.
 dens <- do.call(rbind, density_rows); dens$Comparison <- as_cmp(dens$Comparison)
@@ -503,7 +432,6 @@ lam <- do.call(rbind, lambda_rows); lam$Comparison <- as_cmp(lam$Comparison)
 st <- summary_tab; st$Comparison <- as_cmp(st$Comparison)
 lam_sel <- lam[lam$selected, ]
 c3a <- ggplot(lam, aes(lambda, k_single)) +
-  geom_hline(data = st, aes(yintercept = CPM_k_star), colour = COL_CPM, linewidth = 0.5, linetype = "22") +
   geom_hline(yintercept = 5000, colour = COL_FIX, linewidth = 0.4, linetype = "22") +
   geom_line(colour = COL_COMP, linewidth = 0.5) + geom_point(colour = COL_COMP, size = 1.3) +
   geom_point(data = lam_sel, shape = 23, size = 2.8, fill = COL_COMP, colour = "white") +
@@ -514,7 +442,7 @@ c3a <- ggplot(lam, aes(lambda, k_single)) +
   scale_x_continuous(breaks = c(0.1, 0.3, 0.5)) +
   labs(x = "lambda (cutoff on f used for counting)", y = "k", tag = "a",
        title = "The single k at each counting cutoff, and the cutoff chosen",
-       subtitle = "Diamond: lambda = 1/2, where structure outweighs residual (the decomposition's rule). Other lambdas: sensitivity. Dashed green: CPM k*; grey: 5,000.") +
+       subtitle = "Diamond: lambda = 1/2, where structure outweighs residual (the decomposition's rule). Other lambdas: sensitivity. Dashed grey: 5,000.") +
   fig_theme()
 c3z <- ggplot(lam, aes(lambda, z)) +
   geom_line(colour = "grey25", linewidth = 0.5) + geom_point(colour = "grey25", size = 1.3) +
@@ -530,7 +458,6 @@ c3b <- ggplot(un, aes(k, union)) +
   geom_line(colour = "grey20", linewidth = 0.5) +
   geom_hline(data = st, aes(yintercept = Leading_Edge), colour = COL_COMP, linewidth = 0.4) +
   geom_vline(data = st, aes(xintercept = k_single), colour = COL_COMP, linewidth = 0.5) +
-  geom_vline(data = st, aes(xintercept = CPM_k_star), colour = COL_CPM, linewidth = 0.5, linetype = "22") +
   geom_vline(xintercept = 5000, colour = COL_FIX, linewidth = 0.4, linetype = "22") +
   geom_text(data = st, aes(x = k_single, y = Leading_Edge, label = paste0("k = ", format(k_single, big.mark = ","))),
             hjust = -0.1, vjust = 1.5, size = 2.3, colour = COL_COMP, fontface = "bold") +
@@ -547,7 +474,7 @@ cpl <- rbind(data.frame(cp[, c("Source", "Comparison", "k")], Class = "Joint", n
              data.frame(cp[, c("Source", "Comparison", "k")], Class = "Remainder", n = cp$Remainder))
 cpl$Comparison <- as_cmp(cpl$Comparison)
 cpl$Source <- factor(cpl$Source, levels = rev(c("Estimated (composition)", "Realized at composition k",
-                                                "Realized at CPM k*", "Realized at 5,000")))
+                                                "Realized at 5,000")))
 cpl$Class <- factor(cpl$Class, levels = c("Remainder", "Disjoint", "Joint"))
 c3c <- ggplot(cpl, aes(n, Source, fill = Class)) +
   geom_col(width = 0.7) +
@@ -563,12 +490,11 @@ fig_c3 <- if (requireNamespace("patchwork", quietly = TRUE)) patchwork::wrap_plo
                              theme = theme(plot.title = element_text(face = "bold", size = 10))) else c3b
 save_both(fig_c3, "Figure_C3_Composition_Choosing_k", 180, 245)
 
-# Figure C4: the three cutoffs side by side.
+# Figure C4: the four k values, with 5,000 for reference.
 kk <- rbind(data.frame(Comparison = st$Comparison, Method = "Fixed 5,000", k = 5000, lo = NA, hi = NA),
-            data.frame(Comparison = st$Comparison, Method = "CPM k*", k = st$CPM_k_star, lo = NA, hi = NA),
             data.frame(Comparison = st$Comparison, Method = "Decomposition k", k = st$k_single,
                        lo = as.numeric(sub(" to .*", "", st$k_single_range)), hi = as.numeric(sub(".* to ", "", st$k_single_range))))
-kk$Method <- factor(kk$Method, levels = c("Fixed 5,000", "CPM k*", "Decomposition k"))
+kk$Method <- factor(kk$Method, levels = c("Fixed 5,000", "Decomposition k"))
 kk$Comparison <- factor(kk$Comparison, levels = rev(CMP_LEVELS))
 dom <- data.frame(Comparison = factor(st$Comparison, levels = rev(CMP_LEVELS)), k = st$k_dominant)
 fig_c4 <- ggplot(kk, aes(k, Comparison, colour = Method)) +
@@ -579,16 +505,16 @@ fig_c4 <- ggplot(kk, aes(k, Comparison, colour = Method)) +
   geom_point(size = 2.4, position = position_dodge(width = 0.6)) +
   geom_text(aes(label = format(k, big.mark = ",")), position = position_dodge(width = 0.6), vjust = -0.9, size = 2.1,
             show.legend = FALSE) +
-  scale_colour_manual(values = c("Fixed 5,000" = COL_FIX, "CPM k*" = COL_CPM, "Decomposition k" = COL_COMP)) +
+  scale_colour_manual(values = c("Fixed 5,000" = COL_FIX, "Decomposition k" = COL_COMP)) +
   scale_x_continuous(labels = scales::label_comma()) +
   labs(x = "k (one per comparison)", y = NULL, colour = NULL,
-       title = "Figure C4. The cutoff chosen by each method",
+       title = "Figure C4. The k for each comparison from the decomposition",
        subtitle = "Decomposition k (majority rule, f1 > 1/2); bar = its range over lambda = 0.05 to 0.50; triangle = dominant-mode rule.") +
   fig_theme()
 save_both(fig_c4, "Figure_C4_k_By_Method", 150, 90)
 
 cat("\nOne k per comparison from the decomposition (majority rule f1 > 1/2; dominant-mode rule alongside)\n")
 print(summary_tab[, c("Comparison", "N_PAS", "k_single", "k_dominant", "k_single_range", "Leading_Edge", "eigen_gap_p_RT", "eigen_gap_p_ZT", "Joint", "Disjoint",
-                      "Realized_Joint", "Realized_Disjoint", "Likelihood_ratio", "Permutation_p", "CPM_k_star")],
+                      "Realized_Joint", "Realized_Disjoint", "Likelihood_ratio", "Permutation_p")],
       row.names = FALSE)
 cat("\nOutputs written to", out_dir, "\n")
