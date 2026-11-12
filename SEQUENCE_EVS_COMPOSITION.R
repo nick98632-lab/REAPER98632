@@ -17,11 +17,11 @@
 # FIGURES
 #   Figure_C2  how the composition method chooses k: f observed vs the
 #              permutation null, per comparison and condition
-#   Figure_C3  per comparison: (a) estimated Leading Edge size at each lambda,
-#              (b) the union curve U(k) and the single k where it reaches the
-#              estimated Leading Edge, with 5,000 marked for reference, (c) the
-#              Joint / Disjoint / Remainder composition estimated vs realized
-#   Figure_C4  the four k values (majority and dominant-mode rules), with 5,000 for reference
+#   Figure_C3  per comparison: (a) the union curve U(k) and the single k where
+#              it reaches the estimated Leading Edge, with 5,000 marked for
+#              reference, (b) the Joint / Disjoint / Remainder composition
+#              estimated vs realized
+#   Figure_C4  the four k values, with 5,000 for reference
 #
 # WHAT IT DOES
 # For each comparison (RT0/ZT6, RT2/ZT8, RT4/ZT10, RT8/ZT14) it estimates how
@@ -430,29 +430,6 @@ save_both(fig_c2, "Figure_C2_f_Observed_vs_Null", 180, 105)
 # Figure C3: from the composition to k, per comparison.
 lam <- do.call(rbind, lambda_rows); lam$Comparison <- as_cmp(lam$Comparison)
 st <- summary_tab; st$Comparison <- as_cmp(st$Comparison)
-lam_sel <- lam[lam$selected, ]
-c3a <- ggplot(lam, aes(lambda, k_single)) +
-  geom_hline(yintercept = 5000, colour = COL_FIX, linewidth = 0.4, linetype = "22") +
-  geom_line(colour = COL_COMP, linewidth = 0.5) + geom_point(colour = COL_COMP, size = 1.3) +
-  geom_point(data = lam_sel, shape = 23, size = 2.8, fill = COL_COMP, colour = "white") +
-  geom_text(data = lam_sel, aes(label = paste0("k = ", format(k_single, big.mark = ","))), vjust = -1.1, size = 2.3,
-            colour = COL_COMP, fontface = "bold") +
-  facet_wrap(~ Comparison, nrow = 1) +
-  scale_y_continuous(labels = scales::label_comma(), limits = c(0, NA)) +
-  scale_x_continuous(breaks = c(0.1, 0.3, 0.5)) +
-  labs(x = "lambda (cutoff on f used for counting)", y = "k", tag = "a",
-       title = "The single k at each counting cutoff, and the cutoff chosen",
-       subtitle = "Diamond: lambda = 1/2, where structure outweighs residual (the decomposition's rule). Other lambdas: sensitivity. Dashed grey: 5,000.") +
-  fig_theme()
-c3z <- ggplot(lam, aes(lambda, z)) +
-  geom_line(colour = "grey25", linewidth = 0.5) + geom_point(colour = "grey25", size = 1.3) +
-  geom_point(data = lam_sel, shape = 23, size = 2.8, fill = COL_COMP, colour = "white") +
-  facet_wrap(~ Comparison, nrow = 1) +
-  scale_x_continuous(breaks = c(0.1, 0.3, 0.5)) +
-  labs(x = "lambda", y = "z (estimated Leading Edge\nvs permuted data)", tag = "b",
-       title = "How clearly the estimated Leading Edge stands out from noise at each cutoff",
-       subtitle = "z = (observed - permuted mean) / permuted SD, for reference.") +
-  fig_theme()
 un <- do.call(rbind, union_rows); un$Comparison <- as_cmp(un$Comparison)
 c3b <- ggplot(un, aes(k, union)) +
   geom_line(colour = "grey20", linewidth = 0.5) +
@@ -464,9 +441,9 @@ c3b <- ggplot(un, aes(k, union)) +
   facet_wrap(~ Comparison, nrow = 1) +
   coord_cartesian(xlim = c(0, 15000), ylim = c(0, 25000)) +
   scale_x_continuous(labels = k_labels) + scale_y_continuous(labels = scales::label_comma()) +
-  labs(x = "k (top-|PC1| PASs per condition)", y = "Leading Edge size\n(union of the two top-k sets)", tag = "c",
+  labs(x = "k (top-|PC1| PASs per condition)", y = "Leading Edge size\n(union of the two top-k sets)", tag = "a",
        title = "From the estimated Leading Edge to k",
-       subtitle = "Black: Leading Edge size at each k. Blue line: estimated Leading Edge (N - Remainder); k where they meet.") +
+       subtitle = "Black: Leading Edge size at each k. Blue line: estimated Leading Edge (PASs governed by PC1, f1 > 1/2, in either condition); k where they meet.") +
   fig_theme()
 cp <- do.call(rbind, composition_rows)
 cpl <- rbind(data.frame(cp[, c("Source", "Comparison", "k")], Class = "Joint", n = cp$Joint),
@@ -481,27 +458,21 @@ c3c <- ggplot(cpl, aes(n, Source, fill = Class)) +
   facet_wrap(~ Comparison, nrow = 1) +
   scale_fill_manual(values = c(Joint = "#0B3C6E", Disjoint = "#9DBCD9", Remainder = "#E9E9E9"), breaks = c("Joint", "Disjoint", "Remainder")) +
   scale_x_continuous(labels = k_labels) +
-  labs(x = "PASs", y = NULL, fill = NULL, tag = "d",
+  labs(x = "PASs", y = NULL, fill = NULL, tag = "b",
        title = "Composition: estimated vs what each k actually produces",
        subtitle = "Realized splits use the top-|PC1| sets; their extra Joint and Disjoint PASs are noise PASs the ranking lets in.") +
   fig_theme()
-fig_c3 <- if (requireNamespace("patchwork", quietly = TRUE)) patchwork::wrap_plots(c3a, c3z, c3b, c3c, ncol = 1, heights = c(1, 0.8, 1, 0.9)) +
+fig_c3 <- if (requireNamespace("patchwork", quietly = TRUE)) patchwork::wrap_plots(c3b, c3c, ncol = 1, heights = c(1, 0.9)) +
   patchwork::plot_annotation(title = "Figure C3. How the composition method chooses one k per comparison",
                              theme = theme(plot.title = element_text(face = "bold", size = 10))) else c3b
-save_both(fig_c3, "Figure_C3_Composition_Choosing_k", 180, 245)
+save_both(fig_c3, "Figure_C3_Composition_Choosing_k", 180, 125)
 
 # Figure C4: the four k values, with 5,000 for reference.
-kk <- rbind(data.frame(Comparison = st$Comparison, Method = "Fixed 5,000", k = 5000, lo = NA, hi = NA),
-            data.frame(Comparison = st$Comparison, Method = "Decomposition k", k = st$k_single,
-                       lo = as.numeric(sub(" to .*", "", st$k_single_range)), hi = as.numeric(sub(".* to ", "", st$k_single_range))))
+kk <- rbind(data.frame(Comparison = st$Comparison, Method = "Fixed 5,000", k = 5000),
+            data.frame(Comparison = st$Comparison, Method = "Decomposition k", k = st$k_single))
 kk$Method <- factor(kk$Method, levels = c("Fixed 5,000", "Decomposition k"))
 kk$Comparison <- factor(kk$Comparison, levels = rev(CMP_LEVELS))
-dom <- data.frame(Comparison = factor(st$Comparison, levels = rev(CMP_LEVELS)), k = st$k_dominant)
 fig_c4 <- ggplot(kk, aes(k, Comparison, colour = Method)) +
-  geom_point(data = dom, aes(k, Comparison), inherit.aes = FALSE, shape = 17, size = 2.2, colour = COL_COMP,
-             position = position_nudge(y = -0.2)) +
-  geom_errorbarh(aes(xmin = lo, xmax = hi), height = 0.25, linewidth = 0.5, na.rm = TRUE,
-                 position = position_dodge(width = 0.6)) +
   geom_point(size = 2.4, position = position_dodge(width = 0.6)) +
   geom_text(aes(label = format(k, big.mark = ",")), position = position_dodge(width = 0.6), vjust = -0.9, size = 2.1,
             show.legend = FALSE) +
@@ -509,12 +480,12 @@ fig_c4 <- ggplot(kk, aes(k, Comparison, colour = Method)) +
   scale_x_continuous(labels = scales::label_comma()) +
   labs(x = "k (one per comparison)", y = NULL, colour = NULL,
        title = "Figure C4. The k for each comparison from the decomposition",
-       subtitle = "Decomposition k (majority rule, f1 > 1/2); bar = its range over lambda = 0.05 to 0.50; triangle = dominant-mode rule.") +
+       subtitle = "k: PASs governed by PC1 (f1 > 1/2) in either condition, after removing chance members.") +
   fig_theme()
 save_both(fig_c4, "Figure_C4_k_By_Method", 150, 90)
 
 cat("\nOne k per comparison from the decomposition (majority rule f1 > 1/2; dominant-mode rule alongside)\n")
-print(summary_tab[, c("Comparison", "N_PAS", "k_single", "k_dominant", "k_single_range", "Leading_Edge", "eigen_gap_p_RT", "eigen_gap_p_ZT", "Joint", "Disjoint",
+print(summary_tab[, c("Comparison", "N_PAS", "k_single", "Leading_Edge", "eigen_gap_p_RT", "eigen_gap_p_ZT", "Joint", "Disjoint",
                       "Realized_Joint", "Realized_Disjoint", "Likelihood_ratio", "Permutation_p")],
       row.names = FALSE)
 cat("\nOutputs written to", out_dir, "\n")
