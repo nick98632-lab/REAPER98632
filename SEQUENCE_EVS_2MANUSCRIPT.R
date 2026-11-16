@@ -325,12 +325,13 @@ DECOMP_COMPARISONS <- list(RT0_ZT6 = c(RT = "R0", ZT = "ZT6"), RT2_ZT8 = c(RT = 
 
 decomp_read_counts <- function(path) {
   x <- utils::read.csv(path, check.names = FALSE, stringsAsFactors = FALSE)
-  ids <- unlist(lapply(DECOMP_COMPARISONS, function(p) c(paste0(p[["RT"]], "_", 1:5), paste0(p[["ZT"]], "_", 1:5))))
+  ids <- unname(unlist(lapply(DECOMP_COMPARISONS, function(p) c(paste0(p[["RT"]], "_", 1:5), paste0(p[["ZT"]], "_", 1:5)))))
   miss <- setdiff(c("OrigID", ids), names(x))
   if (length(miss)) stop("Count file is missing columns: ", paste(miss, collapse = ", "))
   m <- sapply(ids, function(s) suppressWarnings(as.numeric(gsub(",", "", trimws(as.character(x[[s]]))))))
   keep <- !is.na(x$OrigID) & nzchar(trimws(x$OrigID)) & stats::complete.cases(m)
   m <- round(m[keep, , drop = FALSE])
+  colnames(m) <- ids
   rownames(m) <- make.unique(as.character(x$OrigID[keep]), sep = "_dup")
   m
 }
