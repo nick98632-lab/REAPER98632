@@ -3,7 +3,7 @@
 # SEQUENCE MANUSCRIPT PIPELINE
 # Eigenvector splitting (EVS) of WTTS-Seq polyadenylation sites (PASs) into a
 # Leading Edge and a Remainder, each moderated by DESeq2 as its own dataset,
-# with the EVS cutoff set by a decomposition of all 10 samples; apeglm, empirical-null
+# with the EVS cutoff set by a decomposition within each condition; apeglm, empirical-null
 # calibration, higher criticism, HBFSS, and 3'aTWAS overlap.
 # =============================================================================
 #
@@ -40,9 +40,9 @@
 #
 # CHOICE OF k (fixed before any differential test; no DE p-value is used)
 #   Fixed 5,000      the prespecified k of the paper.
-#   Decomposition k  per comparison: one SVD of all 10 samples (condition means
-#                    removed) counts the PASs governed by PC1 (f > 1/2, after
-#                    removing chance members by permutation); k is the one
+#   Decomposition k  per comparison: an SVD within each condition counts the
+#                    PASs governed by PC1 (f > 1/2) in RT, ZT or both, after
+#                    removing chance members by permutation; k is the one
 #                    value whose NormEVS union of RT and ZT top-k sets reaches
 #                    that Leading Edge size. See CHOOSING THE EVS CUTOFF k below.
 #
@@ -68,7 +68,7 @@
 #
 # FIGURES (per cutoff method in <method>/Combined_Figures; master figures in
 # Cross_Method_Comparison)
-#   Figure 1   choosing k by decomposition of all 10 samples (master)
+#   Figure 1   choosing k by decomposition within each condition (master)
 #   Figure 2   DESeq2 dispersions (gene-wise, trend, final) and prior width:
 #              Original vs Leading Edge and Remainder        (each run)
 #   Figure S3  Fixed 5,000 vs Decomposition k                (master)
@@ -282,39 +282,42 @@ collect_cross_method_discoveries <- function(multi_root) {
 }
 
 # =============================================================================
-# CHOOSING THE EVS CUTOFF k: DECOMPOSITION OF ALL 10 SAMPLES
+# CHOOSING THE EVS CUTOFF k: DECOMPOSITION WITHIN EACH CONDITION
 # =============================================================================
 # Run once per comparison by the master process, from the raw counts, before
-# any split or differential test.
+# any split or differential test. It counts the PASs that belong in the
+# Leading Edge, defined the way the split builds it: by PC1 within each
+# condition, RT and ZT separately, and the union of the two.
 #
-# 1. Values. log1p(CPM) of the comparison's 10 samples; each PAS's RT mean is
-#    subtracted from its RT values and its ZT mean from its ZT values, so the
-#    RT-vs-ZT difference tested later cannot enter the split.
-# 2. Decomposition. One singular value decomposition of this PAS x 10 matrix
-#    (8 modes after removing the two condition means). PC1 is the pattern of
-#    variation across the 10 animals shared by the most PASs. Each PAS's
-#    variation splits exactly across the modes,
-#        ||x_i||^2 = (x_i . u_1)^2 + ... + (x_i . u_8)^2,
-#    and f_i = (x_i . u_1)^2 / ||x_i||^2 is its share on PC1.
-# 3. Regimes. A PAS is governed by PC1 when f_i > 1/2: PC1 carries more of its
-#    variation than all other modes together (Leading Edge regime). Otherwise
-#    its variation is mostly residual (Remainder regime).
-# 4. Null. Each PAS's values are shuffled among the animals within each
-#    condition (keeping its mean and variance, removing any shared pattern)
-#    and the decomposition is repeated DECOMP_PERMUTATIONS times. Within each
-#    of DECOMP_BINS bins of mean expression, F_b = share of shuffled PASs with
-#    f <= 1/2.
-# 5. Count. Only PASs not governed by PC1 fall at or below 1/2, with
-#    probability F_b, so their number is sum_b #{f_i <= 1/2 in bin b} / F_b
-#    (Storey 2002). The Leading Edge size is the remainder:
-#        LE = N - sum_b #{f_i <= 1/2 in bin b} / F_b.
-# 6. Evidence. PC1 must be a distinct mode: lambda_1 / lambda_2 is compared
-#    with the same ratio in the shuffled data; LE is compared with the same
+# 1. Values. Within each condition (5 samples), log1p(CPM), centred per PAS.
+# 2. Decomposition. One singular value decomposition per condition (4 modes).
+#    Each PAS's variation splits exactly across the modes,
+#        ||x_i||^2 = (x_i . u_1)^2 + ... + (x_i . u_4)^2,
+#    and f_i = (x_i . u_1)^2 / ||x_i||^2 is its share on that condition's PC1.
+# 3. Governed by PC1. f_i > 1/2: PC1 carries more of the PAS's variation than
+#    all other modes together. A PAS governed by PC1 in RT, in ZT or in both
+#    belongs to the Leading Edge (the union, as in the split); a PAS governed
+#    in neither belongs to the Remainder.
+# 4. Null. Each PAS's values are shuffled among the condition's animals
+#    (keeping its mean and variance, removing any shared pattern) and the
+#    decomposition is repeated DECOMP_PERMUTATIONS times. Within each of
+#    DECOMP_BINS bins of mean expression, F_c,b = share of shuffled PASs with
+#    f <= 1/2 in condition c.
+# 5. Count. A Remainder PAS falls at or below 1/2 in both conditions with
+#    probability F_RT,b x F_ZT,b (the conditions are different animals), and
+#    PASs governed by PC1 in a condition do not fall there, so
+#        Remainder = sum_b #{f_RT <= 1/2 and f_ZT <= 1/2 in bin b} / (F_RT,b F_ZT,b)
+#        Leading Edge = N - Remainder
+#    (Storey 2002, applied to both conditions). The PASs governed in each
+#    condition, S_c = N - sum_b #{f_c <= 1/2 in bin b} / F_c,b, and those
+#    governed in both, Joint = S_RT + S_ZT - Leading Edge, are reported.
+# 6. Evidence. Each condition's PC1 must be a distinct mode (lambda_1/lambda_2
+#    vs the shuffled data), and the Leading Edge is compared with the same
 #    count in the shuffled data. p = (1 + #{null >= observed}) / (1 + perms).
-# 7. k. The run then uses the paper's split (top-k PASs by |PC1 loading| in
-#    RT and in ZT; Leading Edge = their union) with the one k per comparison
-#    whose NormEVS union first reaches the Leading Edge size. The same k is
-#    used for the RawEVS track, exactly as k = 5,000 is.
+# 7. k. The run uses the paper's split (top-k PASs by |PC1 loading| in RT and
+#    in ZT; Leading Edge = their union) with the one k per comparison whose
+#    NormEVS union first reaches the Leading Edge size. The same k is used for
+#    the RawEVS track, exactly as k = 5,000 is.
 
 DECOMP_PERMUTATIONS <- as.integer(Sys.getenv("SEQUENCE_PERMUTATIONS", "199"))
 DECOMP_BINS <- 10L
@@ -336,138 +339,147 @@ decomp_read_counts <- function(path) {
   m
 }
 
-# log1p(CPM) with each condition's mean removed per PAS.
-decomp_centred_values <- function(y, cond) {
+# log1p(CPM) of one condition's samples, centred per PAS.
+decomp_centred_values <- function(y) {
   z <- log1p(sweep(y, 2, colSums(y) / 1e6, "/"))
-  for (g in unique(cond)) z[, cond == g] <- z[, cond == g, drop = FALSE] - rowMeans(z[, cond == g, drop = FALSE])
-  z
+  z - rowMeans(z)
 }
 
-# One SVD: each PAS's share f on PC1, and the eigenvalues of the 8 modes.
+# One SVD of one condition: each PAS's share f on PC1 (0 for a PAS with no
+# variation), and the eigenvalues of its modes.
 decomp_svd <- function(z) {
   s <- svd(z, nu = 0, nv = 1)
   total <- rowSums(z^2)
   score <- as.vector(z %*% s$v[, 1])
-  list(f = ifelse(total > 0, score^2 / total, 0), eigen = (s$d^2)[seq_len(ncol(z) - 2L)])
+  list(f = ifelse(total > 0, score^2 / total, 0), eigen = (s$d^2)[seq_len(ncol(z) - 1L)])
 }
 
-decomp_shuffle <- function(z, cond) {
-  out <- z
-  for (g in unique(cond)) {
-    j <- which(cond == g)
-    ord <- t(apply(matrix(stats::runif(nrow(z) * length(j)), nrow(z)), 1, order))
-    out[, j] <- matrix(z[, j, drop = FALSE][cbind(rep(seq_len(nrow(z)), length(j)), as.vector(ord))], nrow(z))
-  }
-  out
+# Shuffle each PAS's values among the condition's samples.
+decomp_shuffle <- function(z) {
+  ord <- t(apply(matrix(stats::runif(length(z)), nrow(z)), 1, order))
+  matrix(z[cbind(rep(seq_len(nrow(z)), ncol(z)), as.vector(ord))], nrow(z))
 }
 
 decomp_one <- function(y, name) {
   y <- y[rowSums(y) > 0, , drop = FALSE]
-  cond <- rep(c("RT", "ZT"), each = 5)
-  z_all <- decomp_centred_values(y, cond)
-  varying <- rowSums(z_all^2) > 0       # PASs with no variation within either condition are Remainder
-  z <- z_all[varying, , drop = FALSE]
-  mean_expr <- rowMeans(log1p(sweep(y[varying, , drop = FALSE], 2, colSums(y) / 1e6, "/")))
+  N <- nrow(y)
+  z <- list(RT = decomp_centred_values(y[, 1:5, drop = FALSE]), ZT = decomp_centred_values(y[, 6:10, drop = FALSE]))
+  mean_expr <- rowMeans(log1p(sweep(y, 2, colSums(y) / 1e6, "/")))
   bin <- as.integer(cut(mean_expr, unique(stats::quantile(mean_expr, seq(0, 1, length.out = DECOMP_BINS + 1L))),
                         include.lowest = TRUE))
   if (length(unique(bin)) != DECOMP_BINS) stop(name, ": could not form ", DECOMP_BINS, " mean-expression bins.")
   n_bin <- tabulate(bin, DECOMP_BINS)
-  obs <- decomp_svd(z)
-  below <- numeric(DECOMP_BINS)
-  perm_eigen <- matrix(NA_real_, DECOMP_PERMUTATIONS, length(obs$eigen))
-  perm_f <- vector("list", DECOMP_PERMUTATIONS)
+  obs <- lapply(z, decomp_svd)
+  below <- list(RT = numeric(DECOMP_BINS), ZT = numeric(DECOMP_BINS))
+  both_perm <- matrix(0, DECOMP_PERMUTATIONS, DECOMP_BINS)
+  perm_eigen <- list(RT = matrix(NA_real_, DECOMP_PERMUTATIONS, 4L), ZT = matrix(NA_real_, DECOMP_PERMUTATIONS, 4L))
+  f_null <- list(RT = list(), ZT = list())
   for (p in seq_len(DECOMP_PERMUTATIONS)) {
-    d <- decomp_svd(decomp_shuffle(z, cond))
-    below <- below + tabulate(bin[d$f <= DECOMP_F_CUT], DECOMP_BINS)
-    perm_eigen[p, ] <- d$eigen
-    perm_f[[p]] <- d$f
+    d <- lapply(z, function(m) decomp_svd(decomp_shuffle(m)))
+    for (c in c("RT", "ZT")) {
+      below[[c]] <- below[[c]] + tabulate(bin[d[[c]]$f <= DECOMP_F_CUT], DECOMP_BINS)
+      perm_eigen[[c]][p, ] <- d[[c]]$eigen
+      if (p <= 10L) f_null[[c]][[p]] <- d[[c]]$f
+    }
+    both_perm[p, ] <- tabulate(bin[d$RT$f <= DECOMP_F_CUT & d$ZT$f <= DECOMP_F_CUT], DECOMP_BINS)
   }
-  F_b <- below / (DECOMP_PERMUTATIONS * n_bin)
-  if (any(F_b <= 0)) stop(name, ": null probability is zero in a mean bin.")
-  le_size <- function(f) nrow(z) - sum(tabulate(bin[f <= DECOMP_F_CUT], DECOMP_BINS) / F_b)
-  le <- le_size(obs$f)
-  le_null <- vapply(perm_f, le_size, numeric(1))
-  gap <- obs$eigen[1] / obs$eigen[2]
-  gap_null <- perm_eigen[, 1] / perm_eigen[, 2]
+  F_b <- lapply(below, function(b) b / (DECOMP_PERMUTATIONS * n_bin))
+  if (any(unlist(F_b) <= 0)) stop(name, ": null probability is zero in a mean bin.")
+  inv_both <- 1 / (F_b$RT * F_b$ZT)
+  both_obs <- tabulate(bin[obs$RT$f <= DECOMP_F_CUT & obs$ZT$f <= DECOMP_F_CUT], DECOMP_BINS)
+  le <- N - sum(both_obs * inv_both)
+  le_null <- N - as.vector(both_perm %*% inv_both)
+  S <- vapply(c("RT", "ZT"), function(c) N - sum(tabulate(bin[obs[[c]]$f <= DECOMP_F_CUT], DECOMP_BINS) / F_b[[c]]), numeric(1))
+  gap <- vapply(obs, function(o) o$eigen[1] / o$eigen[2], numeric(1))
+  p_gap <- vapply(c("RT", "ZT"), function(c) {
+    g <- perm_eigen[[c]][, 1] / perm_eigen[[c]][, 2]
+    (1 + sum(g >= gap[[c]])) / (1 + DECOMP_PERMUTATIONS)
+  }, numeric(1))
   if (round(le) < 1) stop(name, ": no PASs are governed by PC1 beyond chance; no split is defined.")
-  list(name = name, N = nrow(y), N_varying = nrow(z), leading_edge = as.integer(round(le)),
-       n_above = sum(obs$f > DECOMP_F_CUT), f = obs$f, f_null = unlist(perm_f[seq_len(min(10L, DECOMP_PERMUTATIONS))]),
-       eigen = obs$eigen, perm_eigen = perm_eigen, eigen_ratio = gap, eigen_ratio_null_max = max(gap_null),
-       p_eigen = (1 + sum(gap_null >= gap)) / (1 + DECOMP_PERMUTATIONS),
-       p_leading_edge = (1 + sum(le_null >= le)) / (1 + DECOMP_PERMUTATIONS),
-       pc1_share = obs$eigen[1] / sum(obs$eigen))
+  list(name = name, N = N, leading_edge = as.integer(round(le)), S = S, joint = S[["RT"]] + S[["ZT"]] - le,
+       n_above = vapply(obs, function(o) sum(o$f > DECOMP_F_CUT), integer(1)),
+       f = lapply(obs, `[[`, "f"), f_null = lapply(f_null, unlist),
+       eigen = lapply(obs, `[[`, "eigen"), perm_eigen = perm_eigen, eigen_ratio = gap, p_eigen = p_gap,
+       p_leading_edge = (1 + sum(le_null >= le)) / (1 + DECOMP_PERMUTATIONS))
 }
 
 derive_decomposition_cutoffs <- function(count_path) {
-  message("Choosing the EVS cutoff by decomposition of all 10 samples (", DECOMP_PERMUTATIONS, " permutations)...")
+  message("Choosing the EVS cutoff by decomposition within each condition (", DECOMP_PERMUTATIONS, " permutations)...")
   counts <- decomp_read_counts(count_path)
   set.seed(DECOMP_SEED)
   res <- lapply(names(DECOMP_COMPARISONS), function(cn) {
     p <- DECOMP_COMPARISONS[[cn]]
     ids <- c(paste0(p[["RT"]], "_", 1:5), paste0(p[["ZT"]], "_", 1:5))
     r <- decomp_one(counts[, ids, drop = FALSE], cn)
-    message(sprintf("  %s: Leading Edge %d PASs governed by PC1 (lambda1/lambda2 = %.2f, p = %.3f)",
-                    cn, r$leading_edge, r$eigen_ratio, r$p_eigen))
+    message(sprintf("  %s: Leading Edge %d (governed by PC1 in RT %.0f, ZT %.0f, both %.0f); lambda1/lambda2 RT %.2f (p %.3f), ZT %.2f (p %.3f)",
+                    cn, r$leading_edge, r$S[["RT"]], r$S[["ZT"]], r$joint,
+                    r$eigen_ratio[["RT"]], r$p_eigen[["RT"]], r$eigen_ratio[["ZT"]], r$p_eigen[["ZT"]]))
     r
   })
   names(res) <- names(DECOMP_COMPARISONS)
   audit <- do.call(rbind, lapply(res, function(r) data.frame(
-    Comparison = r$name, N_PAS = r$N, N_varying = r$N_varying, PAS_f_above_half = r$n_above,
-    Chance_members = r$n_above - r$leading_edge, Leading_Edge_size = r$leading_edge,
-    PC1_variance_share = r$pc1_share, Eigen_ratio_1_2 = r$eigen_ratio, Eigen_ratio_null_max = r$eigen_ratio_null_max,
-    p_PC1_distinct = r$p_eigen, p_Leading_Edge_vs_null = r$p_leading_edge, Permutations = DECOMP_PERMUTATIONS)))
+    Comparison = r$name, N_PAS = r$N, Leading_Edge_size = r$leading_edge,
+    Governed_RT = round(r$S[["RT"]]), Governed_ZT = round(r$S[["ZT"]]), Governed_both = round(r$joint),
+    PAS_f_above_half_RT = r$n_above[["RT"]], PAS_f_above_half_ZT = r$n_above[["ZT"]],
+    Eigen_ratio_RT = r$eigen_ratio[["RT"]], p_PC1_distinct_RT = r$p_eigen[["RT"]],
+    Eigen_ratio_ZT = r$eigen_ratio[["ZT"]], p_PC1_distinct_ZT = r$p_eigen[["ZT"]],
+    p_Leading_Edge_vs_null = r$p_leading_edge, Permutations = DECOMP_PERMUTATIONS)))
   list(results = res, audit = audit,
        leading_edge = stats::setNames(vapply(res, function(r) r$leading_edge, integer(1)), names(res)))
 }
 
-# Figure 1: (a) PC1 is a distinct mode; (b) f and the Leading Edge count.
+# Figure 1: (a) each condition's PC1 is a distinct mode; (b) f within each
+# condition and the Leading Edge count.
 save_figure_1_decomposition <- function(dc, out_dir) {
   if (!master_plotting_ready()) return(invisible(FALSE))
   share <- function(e) e / sum(e)
-  eig <- do.call(rbind, lapply(dc$results, function(o) {
-    pe <- t(apply(o$perm_eigen, 1, share))
-    data.frame(Comparison = o$name, Mode = seq_along(o$eigen), observed = share(o$eigen),
+  cond_lab <- c(RT = "RT", ZT = "ZT")
+  eig <- do.call(rbind, lapply(dc$results, function(o) do.call(rbind, lapply(c("RT", "ZT"), function(c) {
+    pe <- t(apply(o$perm_eigen[[c]], 1, share))
+    data.frame(Comparison = o$name, Condition = c, Mode = seq_along(o$eigen[[c]]), observed = share(o$eigen[[c]]),
                null_lo = apply(pe, 2, min), null_hi = apply(pe, 2, max))
-  }))
+  }))))
   eig$Comparison <- factor(eig$Comparison, levels = COMPARISON_NAMES)
-  eig_lab <- data.frame(Comparison = factor(names(dc$results), levels = COMPARISON_NAMES),
-                        label = vapply(dc$results, function(o) sprintf("lambda1/lambda2 = %.2f\np = %.3f", o$eigen_ratio, o$p_eigen), ""))
+  eig_lab <- do.call(rbind, lapply(dc$results, function(o) data.frame(
+    Comparison = factor(o$name, levels = COMPARISON_NAMES), Condition = c("RT", "ZT"),
+    label = sprintf("lambda1/lambda2 = %.2f\np = %.3f", o$eigen_ratio, o$p_eigen))))
   pa <- ggplot(eig, aes(Mode)) +
     geom_ribbon(aes(ymin = null_lo, ymax = null_hi), fill = "grey82") +
     geom_line(aes(y = observed), colour = METHOD_COLS[["Decomposition k"]], linewidth = 0.5) +
     geom_point(aes(y = observed), colour = METHOD_COLS[["Decomposition k"]], size = 1.2) +
-    geom_text(data = eig_lab, aes(x = Inf, y = Inf, label = label), hjust = 1.05, vjust = 1.3, size = 2.2, fontface = "bold") +
-    facet_wrap(~ Comparison, nrow = 1, labeller = labeller(Comparison = comp_lab())) +
-    scale_x_continuous(breaks = 1:8) +
+    geom_text(data = eig_lab, aes(x = Inf, y = Inf, label = label), hjust = 1.05, vjust = 1.3, size = 2.0, fontface = "bold") +
+    facet_grid(Condition ~ Comparison, labeller = labeller(Comparison = comp_lab())) +
+    scale_x_continuous(breaks = 1:4) +
     labs(x = "Mode", y = "Share of variance", tag = "a",
-         title = "PC1 is a distinct pattern shared across the 10 animals",
-         subtitle = "Eigenvalues of each comparison (condition means removed): observed vs shuffled data (grey range).") +
+         title = "PC1 within each condition is a distinct pattern",
+         subtitle = "Eigenvalues of each condition's 5 samples: observed vs shuffled data (grey range).") +
     fig_theme()
-  fd <- do.call(rbind, lapply(dc$results, function(o) rbind(
-    data.frame(Comparison = o$name, Source = "Observed", f = o$f),
-    data.frame(Comparison = o$name, Source = "Shuffled", f = o$f_null))))
+  fd <- do.call(rbind, lapply(dc$results, function(o) do.call(rbind, lapply(c("RT", "ZT"), function(c) rbind(
+    data.frame(Comparison = o$name, Condition = c, Source = "Observed", f = o$f[[c]]),
+    data.frame(Comparison = o$name, Condition = c, Source = "Shuffled", f = o$f_null[[c]]))))))
   fd$Comparison <- factor(fd$Comparison, levels = COMPARISON_NAMES)
-  k_lab <- data.frame(Comparison = factor(names(dc$results), levels = COMPARISON_NAMES),
-                      label = vapply(dc$results, function(o) sprintf("Leading Edge = %s\n(%s above 1/2 - %s by chance)",
-                        format(o$leading_edge, big.mark = ","), format(o$n_above, big.mark = ","),
-                        format(o$n_above - o$leading_edge, big.mark = ",")), ""))
+  k_lab <- do.call(rbind, lapply(dc$results, function(o) data.frame(
+    Comparison = factor(o$name, levels = COMPARISON_NAMES), Condition = c("RT", "ZT"),
+    label = c(sprintf("governed in RT %s", format(round(o$S[["RT"]]), big.mark = ",")),
+              sprintf("governed in ZT %s\nLeading Edge %s", format(round(o$S[["ZT"]]), big.mark = ","),
+                      format(o$leading_edge, big.mark = ","))))))
   pb <- ggplot(fd, aes(f, colour = Source, linetype = Source)) +
     annotate("rect", xmin = DECOMP_F_CUT, xmax = 1, ymin = -Inf, ymax = Inf, fill = "#D7E5F3") +
     geom_density(linewidth = 0.5, adjust = 0.6) +
-    geom_text(data = k_lab, aes(x = 0.75, y = Inf, label = label), inherit.aes = FALSE, vjust = 1.3, size = 2.1,
+    geom_text(data = k_lab, aes(x = 0.75, y = Inf, label = label), inherit.aes = FALSE, vjust = 1.3, size = 2.0,
               colour = METHOD_COLS[["Decomposition k"]], fontface = "bold") +
-    facet_wrap(~ Comparison, nrow = 1, labeller = labeller(Comparison = comp_lab())) +
+    facet_grid(Condition ~ Comparison, labeller = labeller(Comparison = comp_lab())) +
     coord_cartesian(xlim = c(0, 1)) +
     scale_colour_manual(values = c(Observed = unname(METHOD_COLS[["Decomposition k"]]), Shuffled = "grey45")) +
     scale_linetype_manual(values = c(Observed = "solid", Shuffled = "22")) +
     scale_x_continuous(breaks = c(0, 0.5, 1)) +
-    labs(x = "f = share of a PAS's variation on PC1", y = "Density", tag = "b", colour = NULL, linetype = NULL,
-         title = "Leading Edge = the PASs governed by PC1 (f > 1/2), after removing chance members",
-         subtitle = "Shaded: f > 1/2, where PC1 outweighs all other modes. The run sets k so the paper's split holds this many PASs.") +
+    labs(x = "f = share of a PAS's variation on its condition's PC1", y = "Density", tag = "b", colour = NULL, linetype = NULL,
+         title = "Leading Edge = PASs governed by PC1 (f > 1/2) in RT, ZT or both, after removing chance members",
+         subtitle = "Shaded: f > 1/2. The run sets k so that the union of the RT and ZT top-k sets holds the Leading Edge.") +
     fig_theme()
   fig <- assemble_rows(list(pa, pb), heights = c(1, 1),
-                       title = "Figure 1. Choosing the eigenvector split from one decomposition of all 10 samples")
-  save_figure(fig, out_dir, "Figure_1_Choosing_k_Decomposition", 180, 125)
+                       title = "Figure 1. Choosing the eigenvector split from the decomposition within each condition")
+  save_figure(fig, out_dir, "Figure_1_Choosing_k_Decomposition", 180, 170)
   invisible(TRUE)
 }
 
@@ -520,7 +532,7 @@ if (!SEQUENCE_CHILD_RUN) {
     RT4_ZT10 = c(5000L, dc$leading_edge[["RT4_ZT10"]]), RT8_ZT14 = c(5000L, dc$leading_edge[["RT8_ZT14"]]),
     Value = c("k per condition", "Leading Edge size"),
     Source = c("Prespecified k of the paper",
-               "PASs governed by PC1 (f > 1/2) in one decomposition of all 10 samples, after removing chance members"))
+               "PASs governed by PC1 (f > 1/2) in RT, ZT or both, from an SVD within each condition, after removing chance members"))
   utils::write.csv(cutoff_manifest, file.path(multi_root, "Cutoff_Method_Manifest.csv"), row.names = FALSE)
 
   for (m in METHOD_LEVELS) {
@@ -569,7 +581,7 @@ if (is.na(CUTOFF_METHOD_LABEL)) stop("Unknown SEQUENCE_CUTOFF_METHOD: ", CUTOFF_
 CUTOFF_METHOD_SLUG <- METHOD_SLUGS[[CUTOFF_METHOD_LABEL]]
 CUTOFF_METHOD_BASIS <- c(
   "Fixed 5,000" = "Prespecified fixed top-5,000 PASs per condition",
-  "Decomposition k" = "Per comparison, the Leading Edge size is the number of PASs governed by PC1 (f > 1/2) in one decomposition of all 10 samples, after removing chance members by permutation; k is the smallest k whose NormEVS union of RT and ZT top-k sets reaches it; no DE p-values used"
+  "Decomposition k" = "Per comparison, the Leading Edge size is the number of PASs governed by PC1 (f > 1/2) in RT, ZT or both, from an SVD within each condition, after removing chance members by permutation; k is the smallest k whose NormEVS union of RT and ZT top-k sets reaches it; no DE p-values used"
 )[[CUTOFF_METHOD_LABEL]]
 
 
@@ -664,7 +676,7 @@ if (!is.numeric(HC_ALPHA0) || length(HC_ALPHA0) != 1L ||
 }
 
 # EVS selection size k is comparison-specific: prespecified (Fixed 5,000) or
-# set by the decomposition of all 10 samples before any test (Decomposition k).
+# set by the decomposition within each condition before any test (Decomposition k).
 EMPIRICAL_EVS_CUTOFF_BASIS <- paste0(
   CUTOFF_METHOD_BASIS,
   "; locked before downstream DE significance testing"
@@ -3110,7 +3122,7 @@ write_methods_note <- function() {
     "PASs present in both condition-specific top-k sets were classified as Joint; PASs present in only one set were classified as Disjoint for that condition. Joint plus both Disjoint sets formed the Leading Edge, and all other PASs formed the Remainder. EVS defined PAS membership only. Downstream DESeq2 analyses received the corresponding raw-count subset and estimated normalization and dispersion parameters within that analysis view. The five reported views were Original (No EVS), NormEVS Lead, NormEVS Rem, RawEVS Lead, and RawEVS Rem.",
     "",
     "## Choice of the EVS cutoff k",
-    sprintf("Two cutoffs were analyzed: k = 5,000, the prespecified cutoff of the original study, and a data-derived Decomposition k. For each comparison, log1p(counts per million) of all ten samples were computed, and each PAS's RT mean was subtracted from its RT values and its ZT mean from its ZT values so that the RT-ZT difference tested later could not influence the split. A single singular value decomposition of this PAS-by-sample matrix gave eight modes; PC1 is the pattern of variation across the ten animals shared by the most PASs. Each PAS's variation was partitioned exactly across the modes, and f, its fraction on PC1, was computed. A PAS was taken to be governed by PC1 when f > 1/2, that is, when PC1 carried more of its variation than all other modes combined. To remove PASs exceeding 1/2 by chance, each PAS's values were permuted among animals within each condition, which preserves its mean and variance but removes any shared pattern, and the decomposition was repeated (%d permutations). Within each of %d bins of mean expression, F_b was the fraction of permuted PASs with f <= 1/2. Because PASs not governed by PC1 fall at or below 1/2 with probability F_b, their number is the observed count at or below 1/2 divided by F_b, summed over bins (Storey 2002), and the Leading Edge size is the number of remaining PASs. PC1 was required to be a distinct mode: the ratio of its eigenvalue to the second was compared with that in the permuted data, and the Leading Edge size with the same count in the permuted data (p = (1 + permutations at least as large) / (1 + permutations)). The split itself used the same procedure as for k = 5,000 (top-k PASs by absolute PC1 loading in each condition; Leading Edge = their union), with k the smallest value whose NormEVS union reached the Leading Edge size; the same k was used for the RawEVS track. The cutoff was fixed before any differential test.", DECOMP_PERMUTATIONS, DECOMP_BINS),
+    sprintf("Two cutoffs were analyzed: k = 5,000, the prespecified cutoff of the original study, and a data-derived Decomposition k. For each comparison and each condition separately (5 samples), log1p(counts per million) were centred per PAS and decomposed by singular value decomposition into four modes. Each PAS's variation was partitioned exactly across the modes, and f, its fraction on that condition's PC1, was computed. A PAS was governed by PC1 in a condition when f > 1/2, that is, when PC1 carried more of its variation than all other modes combined; a PAS governed by PC1 in RT, in ZT or in both belonged to the Leading Edge, matching the union used by the split. To remove PASs exceeding 1/2 by chance, each PAS's values were permuted among the condition's animals, which preserves its mean and variance but removes any shared pattern, and the decomposition was repeated (%d permutations). Within each of %d bins of mean expression, F was the fraction of permuted PASs with f <= 1/2 in each condition. A PAS governed in neither condition falls at or below 1/2 in both with probability F_RT x F_ZT, so the Remainder was the number of PASs at or below 1/2 in both conditions divided by F_RT x F_ZT, summed over bins (Storey 2002), and the Leading Edge size was the number of remaining PASs. Each condition's PC1 was required to be a distinct mode (ratio of first to second eigenvalue against the permuted data), and the Leading Edge size was compared with the same count in the permuted data (p = (1 + permutations at least as large) / (1 + permutations)). The split itself used the same procedure as for k = 5,000 (top-k PASs by absolute PC1 loading in each condition; Leading Edge = their union), with k the smallest value whose NormEVS union reached the Leading Edge size; the same k was used for the RawEVS track. The cutoff was fixed before any differential test.", DECOMP_PERMUTATIONS, DECOMP_BINS),
     "",
     "## DESeq2 model and log2 fold-change shrinkage",
     "Each analysis view was modeled independently with DESeq2 using a negative-binomial generalized linear model with design ~ condition and ZT/untrt as the reference. DESeq2 estimated median-of-ratios size factors, gene-wise dispersions, the mean-dispersion trend, final dispersions, and Wald statistics for the RT/trt coefficient. The mean-dispersion trend in every view, including the Original, was alpha_tr(mean) = a0 + a1 mean^(-b), DESeq2's parametric form (b = 1; Love et al. 2014) with the exponent estimated, and was fitted on the log scale. DESeq2's default fit failed for the Remainder (a0 < 0), because nearly all well-expressed PASs fall in the Leading Edge and the Remainder's dispersions decline faster than 1/mean without a plateau; DESeq2 would then have substituted a local-regression trend for that group only. DESeq2's gamma-GLM fit also places the trend at the arithmetic mean of the dispersions, above about two thirds of PASs, whereas its prior is normal on the log scale (log alpha_i ~ N(log alpha_tr, sigma_d^2)), whose centre is the mean of the log dispersions. Dispersion as a power of the mean is the NB-P model (Di et al. 2011). For each candidate b, a0 and a1 (both constrained to be at least 1e-8) minimized the sum of squared differences between log gene-wise dispersions and log trend; as in DESeq2's fit, PASs outside 1e-4 to 15 times the current curve were set aside and the fit repeated until the coefficients converged. b was chosen, every 0.1 from 0.5 to 3.5 and then every 0.01 around the best value, to minimize the median absolute residual of log gene-wise dispersion about log trend. With this fit about half of the PASs lay on each side of their trend. The trend was supplied to DESeq2 through dispersionFunction(), and DESeq2's prior-variance estimate, MAP shrinkage, dispersion-outlier rule and Wald test were applied unchanged. Size factors, gene-wise dispersions, MAP dispersions and Wald tests were computed with estimateSizeFactors, estimateDispersionsGeneEst, estimateDispersionsMAP and nbinomWaldTest, the steps DESeq() runs. Log2 fold changes were then shrunken with apeglm. The apeglm-shrunken log2 fold change was the reported effect estimate, the effect term in HBFSS, the direction indicator, and the x-coordinate for all significance figures.",
@@ -3153,7 +3165,7 @@ write_methods_note <- function() {
     "Human 3'aTWAS gene symbols were mapped to rat gene symbols by combining database-supported babelgene human-to-rat ortholog mappings (top=FALSE) with direct case-insensitive symbol-equivalent matches present in the WTTS annotation. For every comparison and analysis view, mapped TWAS orthologs were intersected with Standard, Strong, Weak, and HBFSS WTTS discoveries. Concise TWAS tables reported the human TWAS symbol, rat ortholog, total TWAS records, distinct TWAS transcript count, TWAS multi-transcript/APA status, total WTTS PAS count, WTTS multi-PAS/APA status, significant WTTS PAS identifiers, significant multi-PAS status, and the method(s) and analysis view in which significance was observed.",
     "",
     "## Output organization",
-    "Original (No EVS), NormEVS Lead, NormEVS Rem, RawEVS Lead, and RawEVS Rem were written to separate folders within each comparison for view-specific tables. The decomposition cutoff (Leading Edge size, eigenvalue gap and permutation p-values per comparison), Figure 1 and Figure S3 were written to Cross_Method_Comparison by the master process. Manuscript figures were organized as comparison-level panels so related volcano, PCA/EVS, and 3'aTWAS results could be reviewed side by side without redundant individual images. The curated figure archive SEQUENCE_ALL_FIGURES.zip contained manuscript PNG panels only. The separate archive SEQUENCE_ALL_TABLES.zip contained the locked EVS cutoff table, the empirical-null table for every analysis, the dispersion-after-EVS tables, the EVS split audit table, overall differential-expression method-count table, quantitative EVS/PCA evidence table, one all-view significant-PAS table and method-count table for each comparison, and the combined 3'aTWAS PAS-, gene-, and method-summary tables."
+    "Original (No EVS), NormEVS Lead, NormEVS Rem, RawEVS Lead, and RawEVS Rem were written to separate folders within each comparison for view-specific tables. The decomposition cutoff (Leading Edge size, PASs governed in each condition, eigenvalue gaps and permutation p-values per comparison), Figure 1 and Figure S3 were written to Cross_Method_Comparison by the master process. Manuscript figures were organized as comparison-level panels so related volcano, PCA/EVS, and 3'aTWAS results could be reviewed side by side without redundant individual images. The curated figure archive SEQUENCE_ALL_FIGURES.zip contained manuscript PNG panels only. The separate archive SEQUENCE_ALL_TABLES.zip contained the locked EVS cutoff table, the empirical-null table for every analysis, the dispersion-after-EVS tables, the EVS split audit table, overall differential-expression method-count table, quantitative EVS/PCA evidence table, one all-view significant-PAS table and method-count table for each comparison, and the combined 3'aTWAS PAS-, gene-, and method-summary tables."
   )
 
   writeLines(methods_text, file.path(output_dir, "Methods_Manuscript.md"), useBytes = TRUE)
