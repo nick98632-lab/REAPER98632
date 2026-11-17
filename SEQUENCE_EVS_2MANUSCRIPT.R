@@ -56,11 +56,10 @@
 #   HBFSS     |apeglm LFC| x [-log10(empirical p)] > Htau
 # BH adjustment is DESeq2's own, within each view (with its independent
 # filtering). Empirical p-values come from fdrtool (normal empirical null,
-# cutoff 'fndr') applied to the Wald statistics, with ONE null per analysis:
-# the Original's own statistics, or the pooled Leading Edge + Remainder
-# statistics of an EVS analysis. Higher criticism is maximized over the lowest
-# 10% of the analysis' ordered empirical p-values (alpha0 = 0.10) and must be
-# positive; Htau = -log10(HCp) x 1, shared by the Leading Edge and Remainder.
+# cutoff 'fndr') applied to the Wald statistics of each view separately: the
+# Original, the Leading Edge and the Remainder each have their own null. Higher
+# criticism is maximized over the lowest 10% of each view's ordered empirical
+# p-values (alpha0 = 0.10) and must be positive; Htau = -log10(HCp) x 1 per view.
 # See the section DIFFERENTIAL EXPRESSION: MODEL STAGE AND SIGNIFICANCE STAGE.
 #
 # FIGURES (per cutoff method in <method>/Combined_Figures; master figures in
@@ -1870,6 +1869,17 @@ build_eigenvector_split <- function(comparison_name, count_matrix, coldata, trac
 #     of the best value.
 # With this fit about half of the PASs lie on each side of their trend.
 #
+# Sampling-bias correction. The log-scale fit estimates the average LOG
+# gene-wise dispersion at each mean, and a log gene-wise estimate is biased low:
+# with nu = m - p residual degrees of freedom (m samples, p coefficients),
+# alpha_hat ~ alpha * chi^2_nu / nu, the same sampling model DESeq2 uses for the
+# prior variance (trigamma(nu/2)), so
+#     E[log alpha_hat] = log alpha + psi(nu/2) - log(nu/2)
+# (psi = digamma; -0.130 for nu = 8). The prior must be centred on the true log
+# dispersion, so a0 and a1 are multiplied by exp(-(psi(nu/2) - log(nu/2)))
+# (1.139 for nu = 8). b and the prior variance (a squared MAD of log
+# residuals, which a constant shift does not change) are unaffected.
+#
 # The trend is handed to DESeq2 with dispersionFunction(), which computes the
 # fitted dispersions, the residual variance of log dispersions and the prior
 # variance as it does for its built-in trends. MAP shrinkage, the
@@ -1948,7 +1958,13 @@ set_dispersion_trend <- function(dds) {
   mc <- S4Vectors::mcols(dds)
   if (any(mc$allZero)) stop("remove PASs with no counts before fitting the dispersion trend.")
   use <- !mc$allZero & is.finite(mc$dispGeneEst) & mc$dispGeneEst >= TREND_MIN_GENE_DISP
-  trend <- fit_dispersion_trend(mc$baseMean[use], mc$dispGeneEst[use])
+  log_fit <- attr(fit_dispersion_trend(mc$baseMean[use], mc$dispGeneEst[use]), "coefficients")
+  X <- stats::model.matrix(DESeq2::design(dds), as.data.frame(SummarizedExperiment::colData(dds)))
+  nu <- ncol(dds) - ncol(X)
+  if (nu < 1) stop("the dispersion trend needs more samples than model coefficients.")
+  log_bias <- digamma(nu / 2) - log(nu / 2)
+  trend <- make_trend_function(log_fit[["a0"]] * exp(-log_bias), log_fit[["a1"]] * exp(-log_bias), log_fit[["b"]])
+  attr(trend, "log_sampling_bias") <- log_bias
   DESeq2::`dispersionFunction<-`(dds, value = trend)
 }
 
@@ -1964,22 +1980,18 @@ estimate_dispersions_with_trend <- function(dds) {
 
 # =============================================================================
 # DIFFERENTIAL EXPRESSION: MODEL STAGE (per analysis view) AND SIGNIFICANCE
-# STAGE (per analysis)
+# STAGE (per analysis view)
 # =============================================================================
 # Each analysis view (Original; Leading Edge; Remainder) is its own DESeq2
 # dataset with its own size factors, dispersion trend, prior and shrinkage
-# (model stage, fit_view_model). Significance is then called once per
-# ANALYSIS (significance stage, call_significance):
-#   Original (No EVS)      one view  -> one empirical null
-#   NormEVS (LE + REM)     two views -> one empirical null for the pair
-#   RawEVS  (LE + REM)     two views -> one empirical null for the pair
-# The Wald statistics of all views in an analysis are pooled, fdrtool fits one
-# empirical null to the pool, and higher criticism sets one HBFSS threshold
-# from the pooled empirical p-values. EVS therefore changes how dispersions are
-# estimated, and the Original and EVS analyses are each judged against a null
-# fitted to all of their PASs. (Fitting a separate null within the Leading Edge
-# gave it a wider null than the Original's and set its HBFSS threshold above the
-# Standard criterion for borderline sites.)
+# (model stage, fit_view_model), and its own significance calibration
+# (significance stage, call_significance): fdrtool fits an empirical null to
+# the view's own Wald statistics, and higher criticism sets the view's own HBFSS
+# threshold from its own empirical p-values. The Leading Edge and Remainder are
+# different populations (different expression ranges, dispersion laws and
+# fractions of changed PASs), and a null shared by the two would be too strict
+# for one and too loose for the other (Efron 2008, "Simultaneous inference:
+# when should hypothesis testing problems be combined?").
 
 # Model stage: DESeq2 with the power trend, the three Wald tests, apeglm.
 fit_view_model <- function(count_mat, coldata, dataset_name) {
@@ -2025,46 +2037,43 @@ fit_view_model <- function(count_mat, coldata, dataset_name) {
   list(dds = dds, res_df = res_df, dataset_name = dataset_name)
 }
 
-# Significance stage for one analysis (a named list of model-stage fits): one
-# fdrtool empirical null fitted to the pooled Wald statistics, one higher-
-# criticism threshold from the pooled empirical p-values, then each view's
-# HBFSS scores and calls. Returns the per-view results and a one-row summary of
-# the shared null.
+# Significance stage for one analysis (a named list of model-stage fits): for
+# each view, one fdrtool empirical null fitted to that view's Wald statistics,
+# one higher-criticism threshold from that view's empirical p-values, then the
+# view's HBFSS scores and calls. Returns the per-view results and one summary
+# row per view.
 call_significance <- function(fits, analysis_label, annot_df) {
-  valid <- lapply(fits, function(f) is.finite(f$res_df$stat))
-  n_view <- vapply(valid, sum, integer(1))
-  pooled <- unlist(Map(function(f, v) f$res_df$stat[v], fits, valid), use.names = FALSE)
-  if (length(pooled) < 5L) {
-    stop(sprintf("[%s] Fewer than 5 finite Wald statistics were available for fdrtool.", analysis_label))
-  }
-  fdr_fit <- run_empirical_null_fdrtool(pooled, dataset_name = analysis_label)
-  if (length(fdr_fit$pval) != length(pooled)) {
-    stop(sprintf("[%s] fdrtool empirical-p output length mismatch.", analysis_label))
-  }
-  emp_by_view <- split(as.numeric(fdr_fit$pval), factor(rep(seq_along(fits), n_view), levels = seq_along(fits)))
-
-  hc_p <- safe_hc_thresh(fdr_fit$pval, dataset_name = analysis_label)
-  hc_ok <- !is.na(hc_p) && is.finite(hc_p) && hc_p > 0 && hc_p <= 1
-  htau <- if (hc_ok) abs(log10(hc_p)) * lfc_boundary else NA_real_
-  param <- fdr_fit$param
-  null_summary <- data.frame(
-    n_wald_statistics = length(pooled),
-    null_sd = if ("sd" %in% colnames(param)) unname(param[1, "sd"]) else NA_real_,
-    null_fraction_eta0 = if ("eta0" %in% colnames(param)) unname(param[1, "eta0"]) else NA_real_,
-    hc_p_threshold = hc_p,
-    hbfss_threshold = htau)
-
   views <- list()
+  null_rows <- list()
   for (i in seq_along(fits)) {
     f <- fits[[i]]
+    view_label <- paste(analysis_label, names(fits)[i])
+    valid <- is.finite(f$res_df$stat)
+    if (sum(valid) < 5L) {
+      stop(sprintf("[%s] Fewer than 5 finite Wald statistics were available for fdrtool.", view_label))
+    }
+    fdr_fit <- run_empirical_null_fdrtool(f$res_df$stat[valid], dataset_name = view_label)
+    if (length(fdr_fit$pval) != sum(valid)) {
+      stop(sprintf("[%s] fdrtool empirical-p output length mismatch.", view_label))
+    }
+    hc_p <- safe_hc_thresh(fdr_fit$pval, dataset_name = view_label)
+    hc_ok <- !is.na(hc_p) && is.finite(hc_p) && hc_p > 0 && hc_p <= 1
+    htau <- if (hc_ok) abs(log10(hc_p)) * lfc_boundary else NA_real_
+    param <- fdr_fit$param
+    null_rows[[i]] <- data.frame(
+      View = names(fits)[i],
+      n_wald_statistics = sum(valid),
+      null_sd = if ("sd" %in% colnames(param)) unname(param[1, "sd"]) else NA_real_,
+      null_fraction_eta0 = if ("eta0" %in% colnames(param)) unname(param[1, "eta0"]) else NA_real_,
+      hc_p_threshold = hc_p,
+      hbfss_threshold = htau)
     f$res_df$empirical_p <- NA_real_
-    f$res_df$empirical_p[valid[[i]]] <- emp_by_view[[i]]
+    f$res_df$empirical_p[valid] <- as.numeric(fdr_fit$pval)
     views[[names(fits)[i]]] <- classify_view(f, hc_p, htau, annot_df)
   }
-  list(views = views, null = null_summary)
+  list(views = views, null = do.call(rbind, null_rows))
 }
 
-# Model stage for every view of one analysis, then the shared significance stage.
 run_core_analysis <- function(count_mats, coldata, dataset_names, annot_df, analysis_label) {
   fits <- Map(function(m, nm) fit_view_model(m, coldata, nm), count_mats, dataset_names)
   names(fits) <- names(count_mats)
@@ -2072,7 +2081,7 @@ run_core_analysis <- function(count_mats, coldata, dataset_names, annot_df, anal
 }
 
 # HBFSS scores and the Standard / Strong / Weak / HBFSS calls for one view,
-# given its empirical p-values and the analysis' shared HC threshold.
+# given its empirical p-values and the view's own HC threshold.
 classify_view <- function(fit, hc_p_threshold, hbfss_threshold, annot_df) {
   dds <- fit$dds
   res_df <- fit$res_df
@@ -2610,8 +2619,8 @@ run_one_evs_track <- function(comparison_name, track_key, count_matrix, coldata,
   analysis_dataset_list <- dataset_list
   if (identical(track_key, "raw_evs")) analysis_dataset_list$raw_dataset <- NULL
 
-  # One analysis = the views that share one empirical null: the Original on
-  # its own, and the Leading Edge with the Remainder.
+  # Two analyses: the Original, and the Leading Edge with the Remainder. Each
+  # view gets its own empirical null and HBFSS threshold (call_significance).
   analyses <- list(split = c("leading_edge_dataset", "remainder_dataset"))
   if (!is.null(analysis_dataset_list$raw_dataset)) analyses <- c(list(original = "raw_dataset"), analyses)
 
@@ -2630,8 +2639,10 @@ run_one_evs_track <- function(comparison_name, track_key, count_matrix, coldata,
       analysis_results[[nm]] <- list(dds = out$views[[nm]]$dds, results = out$views[[nm]]$results,
                                      dataset_mat = analysis_dataset_list[[nm]])
     }
+    null_tab <- out$null
+    null_tab$View <- vapply(null_tab$View, function(k) analysis_view_label(track_key, k), character(1))
     empirical_null_rows[[length(empirical_null_rows) + 1L]] <<- cbind(
-      data.frame(Comparison = comparison_name, Analysis = analysis_label), out$null)
+      data.frame(Comparison = comparison_name, Analysis = analysis_label), null_tab)
   }
 
   reg <- paper_registry[[registry_key(comparison_name, track_key)]]
@@ -2916,7 +2927,7 @@ write_methods_note <- function() {
     sprintf("Two cutoffs were analyzed: k = 5,000, the prespecified cutoff of the original study, and an Optimal k chosen for each comparison before any differential test. EVS increases detection power through dispersion estimation: the Leading Edge and Remainder each receive their own mean-dispersion trend, and DESeq2 shrinks each PAS's gene-wise dispersion toward its own set's trend under a log-normal prior, log alpha_i ~ N(log alpha_tr(mean_i), sigma_d^2). The narrower this prior, the more information each PAS borrows and the more precise its final dispersion and Wald statistic. DESeq2 estimates sigma_d^2 as the squared median absolute deviation of log gene-wise dispersions about the trend minus their sampling variance, trigamma((m - p)/2) for m samples and p coefficients (Love et al. 2014). For a candidate k, the split was built exactly as in the analysis (NormEVS ranking; top-k PASs by absolute PC1 loading in each condition; Leading Edge = their union; Remainder = all other PASs), and each set was processed with the analysis' own DESeq2 steps (size factors, gene-wise dispersions and the power trend described below). The pooled prior variance W(k) = (n_LE sigma_LE^2 + n_REM sigma_REM^2)/(n_LE + n_REM) was computed before DESeq2's lower bound of 0.25, which would otherwise mask differences between splits, and the Optimal k was the value minimizing W(k). Too small a k leaves structured PASs in the Remainder and widens its prior; too large a k places unstructured PASs in the Leading Edge and widens its prior; the minimum lies where the two dispersion laws separate. To locate the global minimum, W(k) was evaluated at %d values of k evenly spaced on the logarithmic scale from %d to %.0f%% of the PASs in the comparison (or less, so that at least %.0f%% of the PASs remained in the Remainder), and the minimum was then refined between the neighbours of the best value by Brent's method (stats::optimize, tolerance %d). Only counts and dispersion estimates entered W(k); no condition effect, p-value or significance call was used. The same k was used for the NormEVS and RawEVS tracks.", OPTIMAL_K_GRID_POINTS, OPTIMAL_K_MIN, 100 * OPTIMAL_K_MAX_FRACTION, 100 * OPTIMAL_K_MIN_REMAINDER_FRACTION, as.integer(OPTIMAL_K_TOL)),
     "",
     "## DESeq2 model and log2 fold-change shrinkage",
-    "Each analysis view was modeled independently with DESeq2 using a negative-binomial generalized linear model with design ~ condition and ZT/untrt as the reference. DESeq2 estimated median-of-ratios size factors, gene-wise dispersions, the mean-dispersion trend, final dispersions, and Wald statistics for the RT/trt coefficient. The mean-dispersion trend in every view, including the Original, was alpha_tr(mean) = a0 + a1 mean^(-b), DESeq2's parametric form (b = 1; Love et al. 2014) with the exponent estimated, and was fitted on the log scale. DESeq2's default fit failed for the Remainder (a0 < 0), because nearly all well-expressed PASs fall in the Leading Edge and the Remainder's dispersions decline faster than 1/mean without a plateau; DESeq2 would then have substituted a local-regression trend for that group only. DESeq2's gamma-GLM fit also places the trend at the arithmetic mean of the dispersions, above about two thirds of PASs, whereas its prior is normal on the log scale (log alpha_i ~ N(log alpha_tr, sigma_d^2)), whose centre is the mean of the log dispersions. Dispersion as a power of the mean is the NB-P model (Di et al. 2011). For each candidate b, a0 and a1 (both constrained to be at least 1e-8) minimized the sum of squared differences between log gene-wise dispersions and log trend; as in DESeq2's fit, PASs outside 1e-4 to 15 times the current curve were set aside and the fit repeated until the coefficients converged. b was chosen, every 0.1 from 0.5 to 3.5 and then every 0.01 around the best value, to minimize the median absolute residual of log gene-wise dispersion about log trend. With this fit about half of the PASs lay on each side of their trend. The trend was supplied to DESeq2 through dispersionFunction(), and DESeq2's prior-variance estimate, MAP shrinkage, dispersion-outlier rule and Wald test were applied unchanged. Size factors, gene-wise dispersions, MAP dispersions and Wald tests were computed with estimateSizeFactors, estimateDispersionsGeneEst, estimateDispersionsMAP and nbinomWaldTest, the steps DESeq() runs. Log2 fold changes were then shrunken with apeglm. The apeglm-shrunken log2 fold change was the reported effect estimate, the effect term in HBFSS, the direction indicator, and the x-coordinate for all significance figures.",
+    "Each analysis view was modeled independently with DESeq2 using a negative-binomial generalized linear model with design ~ condition and ZT/untrt as the reference. DESeq2 estimated median-of-ratios size factors, gene-wise dispersions, the mean-dispersion trend, final dispersions, and Wald statistics for the RT/trt coefficient. The mean-dispersion trend in every view, including the Original, was alpha_tr(mean) = a0 + a1 mean^(-b), DESeq2's parametric form (b = 1; Love et al. 2014) with the exponent estimated, and was fitted on the log scale. DESeq2's default fit failed for the Remainder (a0 < 0), because nearly all well-expressed PASs fall in the Leading Edge and the Remainder's dispersions decline faster than 1/mean without a plateau; DESeq2 would then have substituted a local-regression trend for that group only. DESeq2's gamma-GLM fit also places the trend at the arithmetic mean of the dispersions, above about two thirds of PASs, whereas its prior is normal on the log scale (log alpha_i ~ N(log alpha_tr, sigma_d^2)), whose centre is the mean of the log dispersions. Dispersion as a power of the mean is the NB-P model (Di et al. 2011). For each candidate b, a0 and a1 (both constrained to be at least 1e-8) minimized the sum of squared differences between log gene-wise dispersions and log trend; as in DESeq2's fit, PASs outside 1e-4 to 15 times the current curve were set aside and the fit repeated until the coefficients converged. b was chosen, every 0.1 from 0.5 to 3.5 and then every 0.01 around the best value, to minimize the median absolute residual of log gene-wise dispersion about log trend. Because a log gene-wise dispersion estimate is biased low by psi(nu/2) - log(nu/2) under the chi-square sampling model DESeq2 uses for its prior variance (nu = m - p residual degrees of freedom; -0.130 for 10 samples and 2 coefficients), a0 and a1 were then multiplied by exp(-(psi(nu/2) - log(nu/2))) (1.139), so that the prior was centred on the true rather than the estimated log dispersion; b and the prior variance were unchanged by this correction. The trend was supplied to DESeq2 through dispersionFunction(), and DESeq2's prior-variance estimate, MAP shrinkage, dispersion-outlier rule and Wald test were applied unchanged. Size factors, gene-wise dispersions, MAP dispersions and Wald tests were computed with estimateSizeFactors, estimateDispersionsGeneEst, estimateDispersionsMAP and nbinomWaldTest, the steps DESeq() runs. Log2 fold changes were then shrunken with apeglm. The apeglm-shrunken log2 fold change was the reported effect estimate, the effect term in HBFSS, the direction indicator, and the x-coordinate for all significance figures.",
     "",
     "## Standard effect",
     sprintf("The Standard effect used the ordinary two-sided DESeq2 Wald p-value with Benjamini-Hochberg adjustment at FDR %.2f and the prespecified manuscript effect boundary on the apeglm-shrunken estimate. A PAS was reported as Standard when padj < %.2f and |apeglm LFC| >= %.1f. The ordinary DESeq2 Wald p-value/padj were retained separately from the empirical-null p-value used for HBFSS.", BH_FDR_STANDARD, BH_FDR_STANDARD, lfc_boundary),
@@ -2930,12 +2941,12 @@ write_methods_note <- function() {
     "## Empirical-null calibration, higher criticism, and HBFSS",
     sprintf(
       paste0(
-        "The empirical null was estimated once per analysis: once for the Original (No EVS) from its Wald statistics, and once for each EVS analysis from the pooled Wald statistics of its Leading Edge and Remainder, which were fitted as separate DESeq2 datasets. EVS therefore changed how dispersions were estimated, while the Original and each EVS analysis were judged against a null fitted to all of their PASs; a null fitted within the Leading Edge alone was wider than the Original's and made HBFSS stricter than the Standard criterion for borderline sites. ",
-        "The finite ordinary DESeq2 Wald statistics of the analysis were supplied to fdrtool with statistic='normal' and cutoff.method='fndr' to estimate a zero-centered normal empirical null and the corresponding empirical-null p-values. The fitted null standard deviation and null fraction (eta0) were reported for every analysis. ",
+        "The empirical null was estimated separately for each analysis view: the Original (No EVS), and the Leading Edge and the Remainder of each EVS track, each from its own Wald statistics. The Leading Edge and Remainder are different populations, differing in expression range, dispersion law and fraction of changed PASs, and a null shared between them would be too strict for one and too loose for the other (Efron 2008). ",
+        "The finite ordinary DESeq2 Wald statistics of each view were supplied to fdrtool with statistic='normal' and cutoff.method='fndr' to estimate a zero-centered normal empirical null and the corresponding empirical-null p-values. The fitted null standard deviation and null fraction (eta0) were reported for every view. ",
         "These empirical p-values were distinct from the ordinary DESeq2 Wald p-values and from the greaterAbs/lessAbs p-values. ",
-        "Higher-Criticism scores were then calculated from the analysis' ordered empirical-null p-values (pooled over Leading Edge and Remainder for EVS) with fdrtool::hc.score, giving one HCp and one Htau per analysis. ",
+        "Higher-Criticism scores were then calculated from each view's ordered empirical-null p-values with fdrtool::hc.score, giving one HCp and one Htau per view. ",
         "The HC maximization region was prespecified as the lowest %.0f%% of ordered empirical p-values (alpha0=%.2f), matching the lower-tail restriction provided by fdrtool::hc.thresh(alpha0=...). ",
-        "Within that region, HCp was the empirical p-value at the maximum HC score. An analysis was assigned an HCp threshold only when that maximum HC score was strictly positive; if the maximum HC score was non-positive or no valid search point existed, HCp and Htau were left undefined and no PAS in that analysis was called HBFSS-significant."
+        "Within that region, HCp was the empirical p-value at the maximum HC score. A view was assigned an HCp threshold only when that maximum HC score was strictly positive; if the maximum HC score was non-positive or no valid search point existed, HCp and Htau were left undefined and no PAS in that view was called HBFSS-significant."
       ),
       100 * HC_ALPHA0,
       HC_ALPHA0
