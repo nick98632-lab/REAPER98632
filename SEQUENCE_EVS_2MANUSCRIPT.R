@@ -3,7 +3,7 @@
 # SEQUENCE MANUSCRIPT PIPELINE
 # Eigenvector splitting (EVS) of WTTS-Seq polyadenylation sites (PASs) into a
 # Leading Edge and a Remainder, each moderated by DESeq2 as its own dataset,
-# with the EVS cutoff set by a decomposition within each condition; apeglm, empirical-null
+# with the EVS cutoff k chosen to give DESeq2 the tightest dispersion prior; apeglm, empirical-null
 # calibration, higher criticism, HBFSS, and 3'aTWAS overlap.
 # =============================================================================
 #
@@ -13,10 +13,9 @@
 #     SEQUENCE_REPO_ROOT  folder holding WTTS-Seq_2022.2_DE_raw_read_numbers.csv
 #     SEQUENCE_MULTI_ROOT output folder (default <repo>/exports/sequence_evs_manuscript)
 #
-# The script runs as a master process. The master sets the decomposition's
-# Leading Edge size for each comparison from the raw counts (Figure 1),
-# relaunches itself once per cutoff method (Fixed 5,000, then Decomposition k),
-# then writes the cross-method comparison (Figure S3) and one ZIP of everything.
+# The script runs as a master process. The master relaunches itself once per
+# cutoff method (Fixed 5,000, then Optimal k), then writes the cross-method
+# comparison (Figure S3) and one ZIP of everything.
 #
 # ANALYSIS UNIT
 # Each OrigID is analyzed as an individual PAS. Gene symbols are annotation
@@ -40,11 +39,9 @@
 #
 # CHOICE OF k (fixed before any differential test; no DE p-value is used)
 #   Fixed 5,000      the prespecified k of the paper.
-#   Decomposition k  per comparison: an SVD within each condition counts the
-#                    PASs governed by PC1 (f > 1/2) in RT, ZT or both, after
-#                    removing chance members by permutation; k is the one
-#                    value whose NormEVS union of RT and ZT top-k sets reaches
-#                    that Leading Edge size. See CHOOSING THE EVS CUTOFF k below.
+#   Optimal k        per comparison: the k whose split gives DESeq2 the
+#                    narrowest dispersion prior, pooled over Leading Edge and
+#                    Remainder (minimum of W(k)). See OPTIMAL k below.
 #
 # DISPERSION TREND
 # Every DESeq2 fit uses a0 + a1 x mean^(-b): DESeq2's parametric form (b = 1)
@@ -68,15 +65,15 @@
 #
 # FIGURES (per cutoff method in <method>/Combined_Figures; master figures in
 # Cross_Method_Comparison)
-#   Figure 1   choosing k by decomposition within each condition (master)
-#   Figure 2   DESeq2 dispersions (gene-wise, trend, final) and prior width:
-#              Original vs Leading Edge and Remainder        (each run)
-#   Figure S3  Fixed 5,000 vs Decomposition k                (master)
+#   Figure 1   choosing k: W(k) and its minimum              (Optimal k run)
+#   Figure 2   DESeq2 dispersions (gene-wise, trend, final), trend exponent b
+#              and prior width: Original vs Leading Edge and Remainder (each run)
+#   Figure S3  Fixed 5,000 vs Optimal k                      (master)
 #   Figure S2  FDR / FNDR calibration: SEQUENCE_EVS_CALIBRATION.R
 # Plus volcano, PCA/EVS evidence, HBFSS support and 3'aTWAS figures.
 # =============================================================================
 
-PIPELINE_BUILD <- "SEQUENCE_EVS_MANUSCRIPT_2026-11-07"
+PIPELINE_BUILD <- "SEQUENCE_EVS_MANUSCRIPT_2026-11-17"
 
 
 # =============================================================================
@@ -84,10 +81,10 @@ PIPELINE_BUILD <- "SEQUENCE_EVS_MANUSCRIPT_2026-11-07"
 # =============================================================================
 
 COMPARISON_NAMES <- c("RT0_ZT6", "RT2_ZT8", "RT4_ZT10", "RT8_ZT14")
-METHOD_LEVELS <- c("Fixed 5,000", "Decomposition k")
-METHOD_SLUGS <- c("Fixed 5,000" = "Fixed_5000", "Decomposition k" = "Decomposition_k")
-METHOD_KEYS <- c("Fixed 5,000" = "fixed5000", "Decomposition k" = "decomp")
-METHOD_COLS <- c("Fixed 5,000" = "#9A9A9A", "Decomposition k" = "#1F6FB2")
+METHOD_LEVELS <- c("Fixed 5,000", "Optimal k")
+METHOD_SLUGS <- c("Fixed 5,000" = "Fixed_5000", "Optimal k" = "Optimal_k")
+METHOD_KEYS <- c("Fixed 5,000" = "fixed5000", "Optimal k" = "optimal")
+METHOD_COLS <- c("Fixed 5,000" = "#9A9A9A", "Optimal k" = "#1F6FB2")
 ORIGINAL_LABEL <- "Original (No EVS)"
 SET_COLS <- c("Original (No EVS)" = "#2B2B2B", "Leading Edge" = "#1F6FB2", "Remainder" = "#C0392B")
 
@@ -183,11 +180,11 @@ save_figure_S3 <- function(multi_root, out_dir, manifest, discoveries) {
     geom_point(size = 2.4) +
     geom_text(aes(label = format(k, big.mark = ",")), vjust = -1.1, size = 2.0, show.legend = FALSE) +
     scale_colour_manual(values = METHOD_COLS) +
-    scale_shape_manual(values = c("Fixed 5,000" = 15, "Decomposition k" = 16)) +
+    scale_shape_manual(values = c("Fixed 5,000" = 15, "Optimal k" = 16)) +
     scale_y_discrete(labels = function(x) sub("_", " / ", x), expand = expansion(add = c(0.5, 0.9))) +
     scale_x_continuous(labels = scales::label_comma(), expand = expansion(mult = 0.12)) +
     labs(x = "k (top-|PC1| PASs per condition)", y = NULL, tag = "a", title = "The cutoff chosen",
-         subtitle = "k per condition: decomposition (one per comparison) and the paper's 5,000.") +
+         subtitle = "k per condition: Optimal k (minimum pooled prior variance) and the paper's 5,000.") +
     fig_theme() + theme(panel.grid.major.y = element_blank())
 
   pw <- do.call(rbind, lapply(METHOD_LEVELS, function(m) {
@@ -198,8 +195,8 @@ save_figure_S3 <- function(multi_root, out_dir, manifest, discoveries) {
       o <- x[x$View == ORIGINAL_LABEL, , drop = FALSE]
       sp <- x[x$View %in% c("NormEVS Lead", "NormEVS Rem"), , drop = FALSE]
       if (!nrow(o) || nrow(sp) != 2L) return(NULL)
-      data.frame(Comparison = cn, Series = m, W = sum(sp$n_PAS * sp$deseq2_disp_prior_var) / sum(sp$n_PAS),
-                 W0 = o$deseq2_disp_prior_var[1])
+      data.frame(Comparison = cn, Series = m, W = sum(sp$n_PAS * sp$prior_var_before_floor) / sum(sp$n_PAS),
+                 W0 = o$prior_var_before_floor[1])
     }))
   }))
   pb <- NULL
@@ -216,7 +213,7 @@ save_figure_S3 <- function(multi_root, out_dir, manifest, discoveries) {
       scale_y_continuous(limits = c(0, NA), expand = expansion(mult = c(0, 0.08))) +
       labs(x = NULL, y = "DESeq2 prior variance\n(pooled LE + REM)", tag = "b",
            title = "Dispersion prior width",
-           subtitle = "NormEVS, n-weighted over LE and REM; Original (No EVS) for reference.") +
+           subtitle = "Before DESeq2's 0.25 floor; NormEVS, n-weighted over LE and REM; Original for reference.") +
       fig_theme() + theme(panel.grid.major.x = element_blank())
   }
 
@@ -244,8 +241,8 @@ save_figure_S3 <- function(multi_root, out_dir, manifest, discoveries) {
   rows <- list(pa)
   if (length(bottom)) rows[[2]] <- list(plots = bottom, widths = rep(1, length(bottom)))
   fig <- assemble_rows(rows, heights = c(0.8, 1.1)[seq_along(rows)],
-                       title = "Supplementary Figure S3. Fixed 5,000 vs Decomposition k")
-  save_figure(fig, out_dir, "Figure_S3_Fixed_vs_Decomposition", 180, 135)
+                       title = "Supplementary Figure S3. Fixed 5,000 vs Optimal k")
+  save_figure(fig, out_dir, "Figure_S3_Fixed_vs_Optimal", 180, 135)
   invisible(TRUE)
 }
 
@@ -282,209 +279,7 @@ collect_cross_method_discoveries <- function(multi_root) {
 }
 
 # =============================================================================
-# CHOOSING THE EVS CUTOFF k: DECOMPOSITION WITHIN EACH CONDITION
-# =============================================================================
-# Run once per comparison by the master process, from the raw counts, before
-# any split or differential test. It counts the PASs that belong in the
-# Leading Edge, defined the way the split builds it: by PC1 within each
-# condition, RT and ZT separately, and the union of the two.
-#
-# 1. Values. Within each condition (5 samples), log1p(CPM), centred per PAS.
-# 2. Decomposition. One singular value decomposition per condition (4 modes).
-#    Each PAS's variation splits exactly across the modes,
-#        ||x_i||^2 = (x_i . u_1)^2 + ... + (x_i . u_4)^2,
-#    and f_i = (x_i . u_1)^2 / ||x_i||^2 is its share on that condition's PC1.
-# 3. Governed by PC1. f_i > 1/2: PC1 carries more of the PAS's variation than
-#    all other modes together. A PAS governed by PC1 in RT, in ZT or in both
-#    belongs to the Leading Edge (the union, as in the split); a PAS governed
-#    in neither belongs to the Remainder.
-# 4. Null. Each PAS's values are shuffled among the condition's animals
-#    (keeping its mean and variance, removing any shared pattern) and the
-#    decomposition is repeated DECOMP_PERMUTATIONS times. Within each of
-#    DECOMP_BINS bins of mean expression, F_c,b = share of shuffled PASs with
-#    f <= 1/2 in condition c.
-# 5. Count. A Remainder PAS falls at or below 1/2 in both conditions with
-#    probability F_RT,b x F_ZT,b (the conditions are different animals), and
-#    PASs governed by PC1 in a condition do not fall there, so
-#        Remainder = sum_b #{f_RT <= 1/2 and f_ZT <= 1/2 in bin b} / (F_RT,b F_ZT,b)
-#        Leading Edge = N - Remainder
-#    (Storey 2002, applied to both conditions). The PASs governed in each
-#    condition, S_c = N - sum_b #{f_c <= 1/2 in bin b} / F_c,b, and those
-#    governed in both, Joint = S_RT + S_ZT - Leading Edge, are reported.
-# 6. Evidence. Each condition's PC1 must be a distinct mode (lambda_1/lambda_2
-#    vs the shuffled data), and the Leading Edge is compared with the same
-#    count in the shuffled data. p = (1 + #{null >= observed}) / (1 + perms).
-# 7. k. The run uses the paper's split (top-k PASs by |PC1 loading| in RT and
-#    in ZT; Leading Edge = their union) with the one k per comparison whose
-#    NormEVS union first reaches the Leading Edge size. The same k is used for
-#    the RawEVS track, exactly as k = 5,000 is.
-
-DECOMP_PERMUTATIONS <- as.integer(Sys.getenv("SEQUENCE_PERMUTATIONS", "199"))
-DECOMP_BINS <- 10L
-DECOMP_F_CUT <- 0.5
-DECOMP_SEED <- 20261115L
-DECOMP_COMPARISONS <- list(RT0_ZT6 = c(RT = "R0", ZT = "ZT6"), RT2_ZT8 = c(RT = "R2", ZT = "ZT8"),
-                           RT4_ZT10 = c(RT = "R4", ZT = "ZT10"), RT8_ZT14 = c(RT = "R8", ZT = "ZT14"))
-
-decomp_read_counts <- function(path) {
-  x <- utils::read.csv(path, check.names = FALSE, stringsAsFactors = FALSE)
-  ids <- unname(unlist(lapply(DECOMP_COMPARISONS, function(p) c(paste0(p[["RT"]], "_", 1:5), paste0(p[["ZT"]], "_", 1:5)))))
-  miss <- setdiff(c("OrigID", ids), names(x))
-  if (length(miss)) stop("Count file is missing columns: ", paste(miss, collapse = ", "))
-  m <- sapply(ids, function(s) suppressWarnings(as.numeric(gsub(",", "", trimws(as.character(x[[s]]))))))
-  keep <- !is.na(x$OrigID) & nzchar(trimws(x$OrigID)) & stats::complete.cases(m)
-  m <- round(m[keep, , drop = FALSE])
-  colnames(m) <- ids
-  rownames(m) <- make.unique(as.character(x$OrigID[keep]), sep = "_dup")
-  m
-}
-
-# log1p(CPM) of one condition's samples, centred per PAS.
-decomp_centred_values <- function(y) {
-  z <- log1p(sweep(y, 2, colSums(y) / 1e6, "/"))
-  z - rowMeans(z)
-}
-
-# One SVD of one condition: each PAS's share f on PC1 (0 for a PAS with no
-# variation), and the eigenvalues of its modes.
-decomp_svd <- function(z) {
-  s <- svd(z, nu = 0, nv = 1)
-  total <- rowSums(z^2)
-  score <- as.vector(z %*% s$v[, 1])
-  list(f = ifelse(total > 0, score^2 / total, 0), eigen = (s$d^2)[seq_len(ncol(z) - 1L)])
-}
-
-# Shuffle each PAS's values among the condition's samples.
-decomp_shuffle <- function(z) {
-  ord <- t(apply(matrix(stats::runif(length(z)), nrow(z)), 1, order))
-  matrix(z[cbind(rep(seq_len(nrow(z)), ncol(z)), as.vector(ord))], nrow(z))
-}
-
-decomp_one <- function(y, name) {
-  y <- y[rowSums(y) > 0, , drop = FALSE]
-  N <- nrow(y)
-  z <- list(RT = decomp_centred_values(y[, 1:5, drop = FALSE]), ZT = decomp_centred_values(y[, 6:10, drop = FALSE]))
-  mean_expr <- rowMeans(log1p(sweep(y, 2, colSums(y) / 1e6, "/")))
-  bin <- as.integer(cut(mean_expr, unique(stats::quantile(mean_expr, seq(0, 1, length.out = DECOMP_BINS + 1L))),
-                        include.lowest = TRUE))
-  if (length(unique(bin)) != DECOMP_BINS) stop(name, ": could not form ", DECOMP_BINS, " mean-expression bins.")
-  n_bin <- tabulate(bin, DECOMP_BINS)
-  obs <- lapply(z, decomp_svd)
-  below <- list(RT = numeric(DECOMP_BINS), ZT = numeric(DECOMP_BINS))
-  both_perm <- matrix(0, DECOMP_PERMUTATIONS, DECOMP_BINS)
-  perm_eigen <- list(RT = matrix(NA_real_, DECOMP_PERMUTATIONS, 4L), ZT = matrix(NA_real_, DECOMP_PERMUTATIONS, 4L))
-  f_null <- list(RT = list(), ZT = list())
-  for (p in seq_len(DECOMP_PERMUTATIONS)) {
-    d <- lapply(z, function(m) decomp_svd(decomp_shuffle(m)))
-    for (c in c("RT", "ZT")) {
-      below[[c]] <- below[[c]] + tabulate(bin[d[[c]]$f <= DECOMP_F_CUT], DECOMP_BINS)
-      perm_eigen[[c]][p, ] <- d[[c]]$eigen
-      if (p <= 10L) f_null[[c]][[p]] <- d[[c]]$f
-    }
-    both_perm[p, ] <- tabulate(bin[d$RT$f <= DECOMP_F_CUT & d$ZT$f <= DECOMP_F_CUT], DECOMP_BINS)
-  }
-  F_b <- lapply(below, function(b) b / (DECOMP_PERMUTATIONS * n_bin))
-  if (any(unlist(F_b) <= 0)) stop(name, ": null probability is zero in a mean bin.")
-  inv_both <- 1 / (F_b$RT * F_b$ZT)
-  both_obs <- tabulate(bin[obs$RT$f <= DECOMP_F_CUT & obs$ZT$f <= DECOMP_F_CUT], DECOMP_BINS)
-  le <- N - sum(both_obs * inv_both)
-  le_null <- N - as.vector(both_perm %*% inv_both)
-  S <- vapply(c("RT", "ZT"), function(c) N - sum(tabulate(bin[obs[[c]]$f <= DECOMP_F_CUT], DECOMP_BINS) / F_b[[c]]), numeric(1))
-  gap <- vapply(obs, function(o) o$eigen[1] / o$eigen[2], numeric(1))
-  p_gap <- vapply(c("RT", "ZT"), function(c) {
-    g <- perm_eigen[[c]][, 1] / perm_eigen[[c]][, 2]
-    (1 + sum(g >= gap[[c]])) / (1 + DECOMP_PERMUTATIONS)
-  }, numeric(1))
-  if (round(le) < 1) stop(name, ": no PASs are governed by PC1 beyond chance; no split is defined.")
-  list(name = name, N = N, leading_edge = as.integer(round(le)), S = S, joint = S[["RT"]] + S[["ZT"]] - le,
-       n_above = vapply(obs, function(o) sum(o$f > DECOMP_F_CUT), integer(1)),
-       f = lapply(obs, `[[`, "f"), f_null = lapply(f_null, unlist),
-       eigen = lapply(obs, `[[`, "eigen"), perm_eigen = perm_eigen, eigen_ratio = gap, p_eigen = p_gap,
-       p_leading_edge = (1 + sum(le_null >= le)) / (1 + DECOMP_PERMUTATIONS))
-}
-
-derive_decomposition_cutoffs <- function(count_path) {
-  message("Choosing the EVS cutoff by decomposition within each condition (", DECOMP_PERMUTATIONS, " permutations)...")
-  counts <- decomp_read_counts(count_path)
-  set.seed(DECOMP_SEED)
-  res <- lapply(names(DECOMP_COMPARISONS), function(cn) {
-    p <- DECOMP_COMPARISONS[[cn]]
-    ids <- c(paste0(p[["RT"]], "_", 1:5), paste0(p[["ZT"]], "_", 1:5))
-    r <- decomp_one(counts[, ids, drop = FALSE], cn)
-    message(sprintf("  %s: Leading Edge %d (governed by PC1 in RT %.0f, ZT %.0f, both %.0f); lambda1/lambda2 RT %.2f (p %.3f), ZT %.2f (p %.3f)",
-                    cn, r$leading_edge, r$S[["RT"]], r$S[["ZT"]], r$joint,
-                    r$eigen_ratio[["RT"]], r$p_eigen[["RT"]], r$eigen_ratio[["ZT"]], r$p_eigen[["ZT"]]))
-    r
-  })
-  names(res) <- names(DECOMP_COMPARISONS)
-  audit <- do.call(rbind, lapply(res, function(r) data.frame(
-    Comparison = r$name, N_PAS = r$N, Leading_Edge_size = r$leading_edge,
-    Governed_RT = round(r$S[["RT"]]), Governed_ZT = round(r$S[["ZT"]]), Governed_both = round(r$joint),
-    PAS_f_above_half_RT = r$n_above[["RT"]], PAS_f_above_half_ZT = r$n_above[["ZT"]],
-    Eigen_ratio_RT = r$eigen_ratio[["RT"]], p_PC1_distinct_RT = r$p_eigen[["RT"]],
-    Eigen_ratio_ZT = r$eigen_ratio[["ZT"]], p_PC1_distinct_ZT = r$p_eigen[["ZT"]],
-    p_Leading_Edge_vs_null = r$p_leading_edge, Permutations = DECOMP_PERMUTATIONS)))
-  list(results = res, audit = audit,
-       leading_edge = stats::setNames(vapply(res, function(r) r$leading_edge, integer(1)), names(res)))
-}
-
-# Figure 1: (a) each condition's PC1 is a distinct mode; (b) f within each
-# condition and the Leading Edge count.
-save_figure_1_decomposition <- function(dc, out_dir) {
-  if (!master_plotting_ready()) return(invisible(FALSE))
-  share <- function(e) e / sum(e)
-  cond_lab <- c(RT = "RT", ZT = "ZT")
-  eig <- do.call(rbind, lapply(dc$results, function(o) do.call(rbind, lapply(c("RT", "ZT"), function(c) {
-    pe <- t(apply(o$perm_eigen[[c]], 1, share))
-    data.frame(Comparison = o$name, Condition = c, Mode = seq_along(o$eigen[[c]]), observed = share(o$eigen[[c]]),
-               null_lo = apply(pe, 2, min), null_hi = apply(pe, 2, max))
-  }))))
-  eig$Comparison <- factor(eig$Comparison, levels = COMPARISON_NAMES)
-  eig_lab <- do.call(rbind, lapply(dc$results, function(o) data.frame(
-    Comparison = factor(o$name, levels = COMPARISON_NAMES), Condition = c("RT", "ZT"),
-    label = sprintf("lambda1/lambda2 = %.2f\np = %.3f", o$eigen_ratio, o$p_eigen))))
-  pa <- ggplot(eig, aes(Mode)) +
-    geom_ribbon(aes(ymin = null_lo, ymax = null_hi), fill = "grey82") +
-    geom_line(aes(y = observed), colour = METHOD_COLS[["Decomposition k"]], linewidth = 0.5) +
-    geom_point(aes(y = observed), colour = METHOD_COLS[["Decomposition k"]], size = 1.2) +
-    geom_text(data = eig_lab, aes(x = Inf, y = Inf, label = label), hjust = 1.05, vjust = 1.3, size = 2.0, fontface = "bold") +
-    facet_grid(Condition ~ Comparison, labeller = labeller(Comparison = comp_lab())) +
-    scale_x_continuous(breaks = 1:4) +
-    labs(x = "Mode", y = "Share of variance", tag = "a",
-         title = "PC1 within each condition is a distinct pattern",
-         subtitle = "Eigenvalues of each condition's 5 samples: observed vs shuffled data (grey range).") +
-    fig_theme()
-  fd <- do.call(rbind, lapply(dc$results, function(o) do.call(rbind, lapply(c("RT", "ZT"), function(c) rbind(
-    data.frame(Comparison = o$name, Condition = c, Source = "Observed", f = o$f[[c]]),
-    data.frame(Comparison = o$name, Condition = c, Source = "Shuffled", f = o$f_null[[c]]))))))
-  fd$Comparison <- factor(fd$Comparison, levels = COMPARISON_NAMES)
-  k_lab <- do.call(rbind, lapply(dc$results, function(o) data.frame(
-    Comparison = factor(o$name, levels = COMPARISON_NAMES), Condition = c("RT", "ZT"),
-    label = c(sprintf("governed in RT %s", format(round(o$S[["RT"]]), big.mark = ",")),
-              sprintf("governed in ZT %s\nLeading Edge %s", format(round(o$S[["ZT"]]), big.mark = ","),
-                      format(o$leading_edge, big.mark = ","))))))
-  pb <- ggplot(fd, aes(f, colour = Source, linetype = Source)) +
-    annotate("rect", xmin = DECOMP_F_CUT, xmax = 1, ymin = -Inf, ymax = Inf, fill = "#D7E5F3") +
-    geom_density(linewidth = 0.5, adjust = 0.6) +
-    geom_text(data = k_lab, aes(x = 0.75, y = Inf, label = label), inherit.aes = FALSE, vjust = 1.3, size = 2.0,
-              colour = METHOD_COLS[["Decomposition k"]], fontface = "bold") +
-    facet_grid(Condition ~ Comparison, labeller = labeller(Comparison = comp_lab())) +
-    coord_cartesian(xlim = c(0, 1)) +
-    scale_colour_manual(values = c(Observed = unname(METHOD_COLS[["Decomposition k"]]), Shuffled = "grey45")) +
-    scale_linetype_manual(values = c(Observed = "solid", Shuffled = "22")) +
-    scale_x_continuous(breaks = c(0, 0.5, 1)) +
-    labs(x = "f = share of a PAS's variation on its condition's PC1", y = "Density", tag = "b", colour = NULL, linetype = NULL,
-         title = "Leading Edge = PASs governed by PC1 (f > 1/2) in RT, ZT or both, after removing chance members",
-         subtitle = "Shaded: f > 1/2. The run sets k so that the union of the RT and ZT top-k sets holds the Leading Edge.") +
-    fig_theme()
-  fig <- assemble_rows(list(pa, pb), heights = c(1, 1),
-                       title = "Figure 1. Choosing the eigenvector split from the decomposition within each condition")
-  save_figure(fig, out_dir, "Figure_1_Choosing_k_Decomposition", 180, 170)
-  invisible(TRUE)
-}
-
-# =============================================================================
-# MASTER PROCESS: decomposition cutoffs, one child run per cutoff method, cross-method outputs
+# MASTER PROCESS: one child run per cutoff method, cross-method outputs
 # =============================================================================
 
 SEQUENCE_CHILD_RUN <- identical(Sys.getenv("SEQUENCE_CHILD_RUN", unset = "0"), "1")
@@ -517,22 +312,18 @@ if (!SEQUENCE_CHILD_RUN) {
     file.path(repo_guess, "data", count_name)
   if (!file.exists(count_path)) stop("Cannot find ", count_name, ". Set SEQUENCE_REPO_ROOT.")
 
-  # The decomposition's Leading Edge sizes are set once, here, before any split or test.
   cross_dir <- file.path(multi_root, "Cross_Method_Comparison")
   dir.create(cross_dir, recursive = TRUE, showWarnings = FALSE)
-  dc <- derive_decomposition_cutoffs(count_path)
-  utils::write.csv(dc$audit, file.path(cross_dir, "Table_Decomposition_Cutoff.csv"), row.names = FALSE)
-  try_fig(save_figure_1_decomposition(dc, cross_dir), "Figure 1")
 
-  # Fixed_5000 holds k; Decomposition_k holds the Leading Edge size, converted
-  # to k inside its run (see get_active_evs_cutoff).
+  # Fixed_5000 holds k; Optimal k is chosen inside its own run, per comparison,
+  # before any split or test (see OPTIMAL k).
   cutoff_manifest <- data.frame(
     Cutoff_Method = unname(METHOD_SLUGS),
-    RT0_ZT6 = c(5000L, dc$leading_edge[["RT0_ZT6"]]), RT2_ZT8 = c(5000L, dc$leading_edge[["RT2_ZT8"]]),
-    RT4_ZT10 = c(5000L, dc$leading_edge[["RT4_ZT10"]]), RT8_ZT14 = c(5000L, dc$leading_edge[["RT8_ZT14"]]),
-    Value = c("k per condition", "Leading Edge size"),
+    RT0_ZT6 = c(5000L, NA_integer_), RT2_ZT8 = c(5000L, NA_integer_),
+    RT4_ZT10 = c(5000L, NA_integer_), RT8_ZT14 = c(5000L, NA_integer_),
+    Value = c("k per condition", "k per condition, chosen in its run"),
     Source = c("Prespecified k of the paper",
-               "PASs governed by PC1 (f > 1/2) in RT, ZT or both, from an SVD within each condition, after removing chance members"))
+               "Minimum of the pooled DESeq2 dispersion prior variance W(k) over Leading Edge and Remainder"))
   utils::write.csv(cutoff_manifest, file.path(multi_root, "Cutoff_Method_Manifest.csv"), row.names = FALSE)
 
   for (m in METHOD_LEVELS) {
@@ -561,10 +352,11 @@ if (!SEQUENCE_CHILD_RUN) {
   if (!file.exists(final_zip)) stop("Final ZIP creation failed: ", final_zip)
 
   cat("\n=====================================================\n")
-  cat("All runs complete: Fixed 5,000 and Decomposition k.\n")
-  act <- read_run_table(multi_root, "Decomposition k", "Table_Active_Cutoff.csv")
+  cat("All runs complete: Fixed 5,000 and Optimal k.\n")
+  act <- read_run_table(multi_root, "Optimal k", "Table_Active_Cutoff.csv")
   if (!is.null(act)) for (i in seq_len(nrow(act)))
-    cat(sprintf("  %-9s Leading Edge %5d -> k = %5d\n", act$Comparison[i], act$Leading_Edge_target[i], act$k[i]))
+    cat(sprintf("  %-9s Optimal k = %5d (Leading Edge %5d, pooled prior variance %.4f)\n",
+                act$Comparison[i], act$k[i], act$Leading_Edge[i], act$Pooled_prior_variance_W[i]))
   tot <- stats::aggregate(cbind(Std, HBFSS) ~ Cutoff_Method, FUN = sum,
                           data = discoveries[discoveries$Track == "NormEVS", ])
   for (i in seq_len(nrow(tot))) cat(sprintf("  NormEVS LE + REM, %-13s Std = %5d  HBFSS = %5d\n",
@@ -581,7 +373,7 @@ if (is.na(CUTOFF_METHOD_LABEL)) stop("Unknown SEQUENCE_CUTOFF_METHOD: ", CUTOFF_
 CUTOFF_METHOD_SLUG <- METHOD_SLUGS[[CUTOFF_METHOD_LABEL]]
 CUTOFF_METHOD_BASIS <- c(
   "Fixed 5,000" = "Prespecified fixed top-5,000 PASs per condition",
-  "Decomposition k" = "Per comparison, the Leading Edge size is the number of PASs governed by PC1 (f > 1/2) in RT, ZT or both, from an SVD within each condition, after removing chance members by permutation; k is the smallest k whose NormEVS union of RT and ZT top-k sets reaches it; no DE p-values used"
+  "Optimal k" = "Per comparison, the k whose NormEVS split (union of RT and ZT top-k sets) minimizes the pooled DESeq2 dispersion prior variance over Leading Edge and Remainder; no DE p-values used"
 )[[CUTOFF_METHOD_LABEL]]
 
 
@@ -676,7 +468,7 @@ if (!is.numeric(HC_ALPHA0) || length(HC_ALPHA0) != 1L ||
 }
 
 # EVS selection size k is comparison-specific: prespecified (Fixed 5,000) or
-# set by the decomposition within each condition before any test (Decomposition k).
+# chosen before any test as the minimum of W(k) (Optimal k).
 EMPIRICAL_EVS_CUTOFF_BASIS <- paste0(
   CUTOFF_METHOD_BASIS,
   "; locked before downstream DE significance testing"
@@ -813,20 +605,19 @@ if (!all(required_manifest_methods %in% cutoff_manifest_runtime$Cutoff_Method)) 
 }
 manifest_row <- function(method) cutoff_manifest_runtime[match(method, cutoff_manifest_runtime$Cutoff_Method),,drop=FALSE]
 fixed_row <- manifest_row("Fixed_5000")
-decomp_row <- manifest_row("Decomposition_k")
 
 comparison_table <- data.frame(
   comparison_name = c("RT0_ZT6", "RT2_ZT8", "RT4_ZT10", "RT8_ZT14"),
   group1_prefix   = c("R0", "R2", "R4", "R8"),
   group2_prefix   = c("ZT6", "ZT8", "ZT10", "ZT14"),
   fixed_5000_k    = as.integer(unlist(fixed_row[c("RT0_ZT6","RT2_ZT8","RT4_ZT10","RT8_ZT14")], use.names=FALSE)),
-  decomp_leading_edge = as.integer(unlist(decomp_row[c("RT0_ZT6","RT2_ZT8","RT4_ZT10","RT8_ZT14")], use.names=FALSE)),
   stringsAsFactors = FALSE
 )
 
-# Decomposition k per comparison, set by set_decomposition_k() at the start of
-# each comparison's run.
-DECOMPOSITION_K <- list()
+# Optimal k per comparison, set by choose_optimal_k() at the start of each
+# comparison's run; the search itself is kept for Figure 1 and its table.
+OPTIMAL_K <- list()
+optimal_k_search_rows <- list()
 
 get_active_evs_cutoff <- function(comparison_name) {
   idx <- match(as.character(comparison_name), comparison_table$comparison_name)
@@ -834,8 +625,8 @@ get_active_evs_cutoff <- function(comparison_name) {
   k <- switch(
     CUTOFF_METHOD_KEY,
     fixed5000 = comparison_table$fixed_5000_k[idx],
-    decomp = DECOMPOSITION_K[[as.character(comparison_name)]] %||%
-      stop("Decomposition k has not been set for ", comparison_name)
+    optimal = OPTIMAL_K[[as.character(comparison_name)]] %||%
+      stop("Optimal k has not been set for ", comparison_name)
   )
   k <- as.integer(k)
   if (length(k) != 1L || is.na(k) || !is.finite(k) || k < 1L) {
@@ -846,7 +637,7 @@ get_active_evs_cutoff <- function(comparison_name) {
 
 
 if (anyDuplicated(comparison_table$comparison_name)) stop("comparison_table contains duplicated comparison names.")
-cutoff_cols <- c("fixed_5000_k", "decomp_leading_edge")
+cutoff_cols <- "fixed_5000_k"
 if (any(vapply(comparison_table[cutoff_cols], function(x) any(is.na(x) | x < 1L), logical(1)))) {
   stop("Every comparison must have a positive cutoff for every cutoff method.")
 }
@@ -1556,7 +1347,7 @@ create_all_tables_zip <- function() {
   add_if_exists(file.path(summary_table_dir, "Table_DE_Method_Counts.csv"))
   for (tab in c("Table_EVS_Cutoffs.csv", "Table_Empirical_Null_By_Analysis.csv",
                 "Table_Dispersion_After_EVS.csv", "Table_Active_Cutoff.csv",
-                "Table_EVS_Composition.csv")) {
+                "Table_EVS_Composition.csv", "Table_Optimal_k_Search.csv")) {
     add_if_exists(file.path(summary_table_dir, tab))
   }
   add_if_exists(file.path(summary_table_dir, "Table_EVS_Split_Audit.csv"))
@@ -3122,7 +2913,7 @@ write_methods_note <- function() {
     "PASs present in both condition-specific top-k sets were classified as Joint; PASs present in only one set were classified as Disjoint for that condition. Joint plus both Disjoint sets formed the Leading Edge, and all other PASs formed the Remainder. EVS defined PAS membership only. Downstream DESeq2 analyses received the corresponding raw-count subset and estimated normalization and dispersion parameters within that analysis view. The five reported views were Original (No EVS), NormEVS Lead, NormEVS Rem, RawEVS Lead, and RawEVS Rem.",
     "",
     "## Choice of the EVS cutoff k",
-    sprintf("Two cutoffs were analyzed: k = 5,000, the prespecified cutoff of the original study, and a data-derived Decomposition k. For each comparison and each condition separately (5 samples), log1p(counts per million) were centred per PAS and decomposed by singular value decomposition into four modes. Each PAS's variation was partitioned exactly across the modes, and f, its fraction on that condition's PC1, was computed. A PAS was governed by PC1 in a condition when f > 1/2, that is, when PC1 carried more of its variation than all other modes combined; a PAS governed by PC1 in RT, in ZT or in both belonged to the Leading Edge, matching the union used by the split. To remove PASs exceeding 1/2 by chance, each PAS's values were permuted among the condition's animals, which preserves its mean and variance but removes any shared pattern, and the decomposition was repeated (%d permutations). Within each of %d bins of mean expression, F was the fraction of permuted PASs with f <= 1/2 in each condition. A PAS governed in neither condition falls at or below 1/2 in both with probability F_RT x F_ZT, so the Remainder was the number of PASs at or below 1/2 in both conditions divided by F_RT x F_ZT, summed over bins (Storey 2002), and the Leading Edge size was the number of remaining PASs. Each condition's PC1 was required to be a distinct mode (ratio of first to second eigenvalue against the permuted data), and the Leading Edge size was compared with the same count in the permuted data (p = (1 + permutations at least as large) / (1 + permutations)). The split itself used the same procedure as for k = 5,000 (top-k PASs by absolute PC1 loading in each condition; Leading Edge = their union), with k the smallest value whose NormEVS union reached the Leading Edge size; the same k was used for the RawEVS track. The cutoff was fixed before any differential test.", DECOMP_PERMUTATIONS, DECOMP_BINS),
+    sprintf("Two cutoffs were analyzed: k = 5,000, the prespecified cutoff of the original study, and an Optimal k chosen for each comparison before any differential test. EVS increases detection power through dispersion estimation: the Leading Edge and Remainder each receive their own mean-dispersion trend, and DESeq2 shrinks each PAS's gene-wise dispersion toward its own set's trend under a log-normal prior, log alpha_i ~ N(log alpha_tr(mean_i), sigma_d^2). The narrower this prior, the more information each PAS borrows and the more precise its final dispersion and Wald statistic. DESeq2 estimates sigma_d^2 as the squared median absolute deviation of log gene-wise dispersions about the trend minus their sampling variance, trigamma((m - p)/2) for m samples and p coefficients (Love et al. 2014). For a candidate k, the split was built exactly as in the analysis (NormEVS ranking; top-k PASs by absolute PC1 loading in each condition; Leading Edge = their union; Remainder = all other PASs), and each set was processed with the analysis' own DESeq2 steps (size factors, gene-wise dispersions and the power trend described below). The pooled prior variance W(k) = (n_LE sigma_LE^2 + n_REM sigma_REM^2)/(n_LE + n_REM) was computed before DESeq2's lower bound of 0.25, which would otherwise mask differences between splits, and the Optimal k was the value minimizing W(k). Too small a k leaves structured PASs in the Remainder and widens its prior; too large a k places unstructured PASs in the Leading Edge and widens its prior; the minimum lies where the two dispersion laws separate. To locate the global minimum, W(k) was evaluated at %d values of k evenly spaced on the logarithmic scale from %d to %.0f%% of the PASs in the comparison (or less, so that at least %.0f%% of the PASs remained in the Remainder), and the minimum was then refined between the neighbours of the best value by Brent's method (stats::optimize, tolerance %d). Only counts and dispersion estimates entered W(k); no condition effect, p-value or significance call was used. The same k was used for the NormEVS and RawEVS tracks.", OPTIMAL_K_GRID_POINTS, OPTIMAL_K_MIN, 100 * OPTIMAL_K_MAX_FRACTION, 100 * OPTIMAL_K_MIN_REMAINDER_FRACTION, as.integer(OPTIMAL_K_TOL)),
     "",
     "## DESeq2 model and log2 fold-change shrinkage",
     "Each analysis view was modeled independently with DESeq2 using a negative-binomial generalized linear model with design ~ condition and ZT/untrt as the reference. DESeq2 estimated median-of-ratios size factors, gene-wise dispersions, the mean-dispersion trend, final dispersions, and Wald statistics for the RT/trt coefficient. The mean-dispersion trend in every view, including the Original, was alpha_tr(mean) = a0 + a1 mean^(-b), DESeq2's parametric form (b = 1; Love et al. 2014) with the exponent estimated, and was fitted on the log scale. DESeq2's default fit failed for the Remainder (a0 < 0), because nearly all well-expressed PASs fall in the Leading Edge and the Remainder's dispersions decline faster than 1/mean without a plateau; DESeq2 would then have substituted a local-regression trend for that group only. DESeq2's gamma-GLM fit also places the trend at the arithmetic mean of the dispersions, above about two thirds of PASs, whereas its prior is normal on the log scale (log alpha_i ~ N(log alpha_tr, sigma_d^2)), whose centre is the mean of the log dispersions. Dispersion as a power of the mean is the NB-P model (Di et al. 2011). For each candidate b, a0 and a1 (both constrained to be at least 1e-8) minimized the sum of squared differences between log gene-wise dispersions and log trend; as in DESeq2's fit, PASs outside 1e-4 to 15 times the current curve were set aside and the fit repeated until the coefficients converged. b was chosen, every 0.1 from 0.5 to 3.5 and then every 0.01 around the best value, to minimize the median absolute residual of log gene-wise dispersion about log trend. With this fit about half of the PASs lay on each side of their trend. The trend was supplied to DESeq2 through dispersionFunction(), and DESeq2's prior-variance estimate, MAP shrinkage, dispersion-outlier rule and Wald test were applied unchanged. Size factors, gene-wise dispersions, MAP dispersions and Wald tests were computed with estimateSizeFactors, estimateDispersionsGeneEst, estimateDispersionsMAP and nbinomWaldTest, the steps DESeq() runs. Log2 fold changes were then shrunken with apeglm. The apeglm-shrunken log2 fold change was the reported effect estimate, the effect term in HBFSS, the direction indicator, and the x-coordinate for all significance figures.",
@@ -3165,7 +2956,7 @@ write_methods_note <- function() {
     "Human 3'aTWAS gene symbols were mapped to rat gene symbols by combining database-supported babelgene human-to-rat ortholog mappings (top=FALSE) with direct case-insensitive symbol-equivalent matches present in the WTTS annotation. For every comparison and analysis view, mapped TWAS orthologs were intersected with Standard, Strong, Weak, and HBFSS WTTS discoveries. Concise TWAS tables reported the human TWAS symbol, rat ortholog, total TWAS records, distinct TWAS transcript count, TWAS multi-transcript/APA status, total WTTS PAS count, WTTS multi-PAS/APA status, significant WTTS PAS identifiers, significant multi-PAS status, and the method(s) and analysis view in which significance was observed.",
     "",
     "## Output organization",
-    "Original (No EVS), NormEVS Lead, NormEVS Rem, RawEVS Lead, and RawEVS Rem were written to separate folders within each comparison for view-specific tables. The decomposition cutoff (Leading Edge size, PASs governed in each condition, eigenvalue gaps and permutation p-values per comparison), Figure 1 and Figure S3 were written to Cross_Method_Comparison by the master process. Manuscript figures were organized as comparison-level panels so related volcano, PCA/EVS, and 3'aTWAS results could be reviewed side by side without redundant individual images. The curated figure archive SEQUENCE_ALL_FIGURES.zip contained manuscript PNG panels only. The separate archive SEQUENCE_ALL_TABLES.zip contained the locked EVS cutoff table, the empirical-null table for every analysis, the dispersion-after-EVS tables, the EVS split audit table, overall differential-expression method-count table, quantitative EVS/PCA evidence table, one all-view significant-PAS table and method-count table for each comparison, and the combined 3'aTWAS PAS-, gene-, and method-summary tables."
+    "Original (No EVS), NormEVS Lead, NormEVS Rem, RawEVS Lead, and RawEVS Rem were written to separate folders within each comparison for view-specific tables. Every value of k evaluated in the Optimal k search (Leading Edge and Remainder sizes, W(k), prior variance and trend exponent b of each set) was written to Table_Optimal_k_Search.csv and plotted in Figure 1 of the Optimal k run; Figure S3 was written to Cross_Method_Comparison by the master process. Manuscript figures were organized as comparison-level panels so related volcano, PCA/EVS, and 3'aTWAS results could be reviewed side by side without redundant individual images. The curated figure archive SEQUENCE_ALL_FIGURES.zip contained manuscript PNG panels only. The separate archive SEQUENCE_ALL_TABLES.zip contained the locked EVS cutoff table, the empirical-null table for every analysis, the dispersion-after-EVS tables, the EVS split audit table, overall differential-expression method-count table, quantitative EVS/PCA evidence table, one all-view significant-PAS table and method-count table for each comparison, and the combined 3'aTWAS PAS-, gene-, and method-summary tables."
   )
 
   writeLines(methods_text, file.path(output_dir, "Methods_Manuscript.md"), useBytes = TRUE)
@@ -3211,6 +3002,7 @@ dispersion_view_metrics <- function(dds) {
     var_log_disp_residuals = if (length(v) == 1L) as.numeric(v) else NA_real_,
     sampling_var_log_disp = trigamma((ncol(dds) - ncol(X)) / 2),
     deseq2_disp_prior_var = as.numeric(attr(dfun, "dispPriorVar") %||% NA_real_),
+    prior_var_before_floor = if (length(v) == 1L) as.numeric(v) - trigamma((ncol(dds) - ncol(X)) / 2) else NA_real_,
     trend_a0 = attr(dfun, "coefficients")[["a0"]],
     trend_a1 = attr(dfun, "coefficients")[["a1"]],
     trend_b = attr(dfun, "coefficients")[["b"]],
@@ -3281,7 +3073,7 @@ panel_dispersion_grid <- function(pas, trd, met, tag, n_points = 3000L) {
   m <- met[met$View %in% names(VIEW_SET), ]
   m$Set <- factor(unname(VIEW_SET[m$View]), levels = names(SET_COLS)); m$Comparison <- as_comp(m$Comparison)
   m$label <- sprintf("n = %s\ntrend %.3f + %.2f x mean^-%.2f\nprior variance %.2f", format(m$n_PAS, big.mark = ","),
-                     m$trend_a0, m$trend_a1, m$trend_b, m$deseq2_disp_prior_var)
+                     m$trend_a0, m$trend_a1, m$trend_b, m$prior_var_before_floor)
   ggplot(d, aes(baseMean)) +
     geom_point(aes(y = dispGeneEst), colour = "grey72", size = 0.12, alpha = 0.5) +
     geom_point(aes(y = dispersion, colour = Set), size = 0.12, alpha = 0.6) +
@@ -3297,23 +3089,42 @@ panel_dispersion_grid <- function(pas, trd, met, tag, n_points = 3000L) {
     fig_theme() + theme(panel.border = element_rect(fill = NA, colour = "grey60", linewidth = 0.3))
 }
 
-# DESeq2's dispersion prior variance (dispPriorVar: residual variance of log
-# gene-wise dispersions about the trend minus their sampling variance, floored
-# at 0.25) for the Original and each NormEVS group; W = n-weighted pool.
+# Exponent b of the fitted trend a0 + a1 * mean^(-b), Original vs each NormEVS
+# set: a different b means the Leading Edge and Remainder follow different
+# dispersion laws.
+panel_trend_exponent <- function(met, tag) {
+  d <- met[met$View %in% names(VIEW_SET), c("Comparison", "View", "trend_b")]
+  d$Set <- factor(unname(VIEW_SET[d$View]), levels = names(SET_COLS)); d$Comparison <- as_comp(d$Comparison)
+  ggplot(d, aes(Comparison, trend_b, fill = Set)) +
+    geom_col(position = position_dodge(width = 0.8), width = 0.74) +
+    geom_text(aes(label = sprintf("%.2f", trend_b)), position = position_dodge(width = 0.8), vjust = -0.4, size = 1.8) +
+    set_bars_scale() +
+    scale_x_discrete(labels = function(x) sub("_", "\n", x)) +
+    scale_y_continuous(limits = c(0, NA), expand = expansion(mult = c(0, 0.15))) +
+    labs(x = NULL, y = "Trend exponent b", tag = tag,
+         title = "Shape of the dispersion trend",
+         subtitle = "b in a0 + a1 x mean^-b: Leading Edge and Remainder follow different laws.") +
+    fig_theme() + theme(panel.grid.major.x = element_blank())
+}
+
+# DESeq2's dispersion prior variance before its 0.25 floor (residual variance
+# of log gene-wise dispersions about the trend minus their sampling variance)
+# for the Original and each NormEVS set; W = n-weighted pool, the quantity the
+# Optimal k minimizes.
 panel_prior_width <- function(met, tag) {
-  d <- met[met$View %in% names(VIEW_SET), c("Comparison", "View", "n_PAS", "deseq2_disp_prior_var")]
+  d <- met[met$View %in% names(VIEW_SET), c("Comparison", "View", "n_PAS", "prior_var_before_floor")]
   d$Set <- factor(unname(VIEW_SET[d$View]), levels = names(SET_COLS)); d$Comparison <- as_comp(d$Comparison)
   s <- do.call(rbind, lapply(split(d, d$Comparison, drop = TRUE), function(x) {
     sp <- x[x$Set != ORIGINAL_LABEL, ]
-    w <- sum(sp$n_PAS * sp$deseq2_disp_prior_var) / sum(sp$n_PAS)
-    w0 <- x$deseq2_disp_prior_var[x$Set == ORIGINAL_LABEL]
-    data.frame(Comparison = x$Comparison[1], W = w, top = max(x$deseq2_disp_prior_var),
+    w <- sum(sp$n_PAS * sp$prior_var_before_floor) / sum(sp$n_PAS)
+    w0 <- x$prior_var_before_floor[x$Set == ORIGINAL_LABEL]
+    data.frame(Comparison = x$Comparison[1], W = w, top = max(x$prior_var_before_floor),
                pct = if (length(w0)) 100 * (1 - w / w0) else NA_real_)
   }))
   s$x <- as.numeric(s$Comparison)
   s$lab <- ifelse(is.finite(s$pct), sprintf("W %.2f\n%.0f%% %s", s$W, abs(s$pct), ifelse(s$pct >= 0, "narrower", "wider")),
                   sprintf("W %.2f", s$W))
-  ggplot(d, aes(Comparison, deseq2_disp_prior_var, fill = Set)) +
+  ggplot(d, aes(Comparison, prior_var_before_floor, fill = Set)) +
     geom_col(position = position_dodge(width = 0.8), width = 0.74) +
     geom_segment(data = s, aes(x = x - 0.42, xend = x + 0.42, y = W, yend = W),
                  inherit.aes = FALSE, colour = "grey10", linewidth = 0.9) +
@@ -3321,8 +3132,8 @@ panel_prior_width <- function(met, tag) {
               lineheight = 0.9, fontface = "bold", colour = "grey10") +
     set_bars_scale() +
     scale_x_discrete(labels = function(x) sub("_", "\n", x)) +
-    scale_y_continuous(limits = c(0, NA), expand = expansion(mult = c(0, 0.3))) +
-    labs(x = NULL, y = "DESeq2 prior variance", tag = tag,
+    scale_y_continuous(expand = expansion(mult = c(0.05, 0.3))) +
+    labs(x = NULL, y = "DESeq2 prior variance\n(before the 0.25 floor)", tag = tag,
          title = "Width of the dispersion prior",
          subtitle = "Black line: Leading Edge and Remainder pooled (n-weighted), vs the Original.") +
     fig_theme() + theme(panel.grid.major.x = element_blank())
@@ -3344,24 +3155,72 @@ save_dispersion_outputs <- function() {
   if (!is.null(trd)) save_csv(trd, file.path(out, "Table_Dispersion_Trends_By_View.csv"))
   if (!is.null(pas)) save_csv(pas, file.path(out, "Table_Dispersion_Estimates_By_View.csv"))
   if (length(active_cutoff_rows)) save_csv(dplyr::bind_rows(active_cutoff_rows), file.path(out, "Table_Active_Cutoff.csv"))
+  if (length(optimal_k_search_rows)) {
+    save_csv(dplyr::bind_rows(optimal_k_search_rows), file.path(out, "Table_Optimal_k_Search.csv"))
+    try_fig(save_figure_1_optimal_k(), "Figure 1")
+  }
 
   if (!is.null(pas) && !is.null(trd) && !is.null(met)) try_fig({
-    fig2 <- assemble_rows(list(panel_dispersion_grid(pas, trd, met, "a"), panel_prior_width(met, "b")),
+    fig2 <- assemble_rows(list(panel_dispersion_grid(pas, trd, met, "a"),
+                               list(plots = list(panel_trend_exponent(met, "b"), panel_prior_width(met, "c")),
+                                    widths = c(1, 1))),
                           heights = c(2.2, 0.9),
-                          title = paste0("Figure 2. DESeq2 dispersions and the width of its prior, Original vs split (",
+                          title = paste0("Figure 2. DESeq2 dispersions, trend shape and prior width, Original vs split (",
                                          CUTOFF_METHOD_LABEL, ")"))
     save_figure(fig2, paper_fig_dir, paste0("Figure_2_Dispersion_", CUTOFF_METHOD_SLUG), 180, 215)
   }, "Figure 2")
   invisible(TRUE)
 }
 
-# Decomposition k: the smallest k whose union of the RT and ZT top-k sets (by
-# |PC1 loading| of the NormEVS ranking, as build_eigenvector_split uses)
-# reaches the decomposition's Leading Edge size. A PAS is in the union at k
-# exactly when its better rank in the two conditions is <= k.
-set_decomposition_k <- function(comparison_name, count_matrix, coldata) {
-  target <- comparison_table$decomp_leading_edge[match(comparison_name, comparison_table$comparison_name)]
-  raw <- coerce_raw_count_matrix_for_deseq2(count_matrix, context = paste0(comparison_name, " decomposition k"))
+# =============================================================================
+# OPTIMAL k: THE SPLIT THAT GIVES DESeq2 THE TIGHTEST DISPERSION PRIOR
+# =============================================================================
+# EVS gains power in one way: the Leading Edge and the Remainder each get their
+# own dispersion trend, and DESeq2 shrinks every PAS's gene-wise dispersion
+# toward its own set's trend with the prior
+#     log alpha_i ~ N( log alpha_tr(mean_i), sigma_d^2 ).
+# The narrower this prior, the more information each PAS borrows from the
+# others and the more precise its final dispersion and Wald test. DESeq2
+# estimates its width as
+#     sigma_d^2 = s_r^2 - trigamma((m - p) / 2),
+# where s_r^2 is the squared MAD of log gene-wise dispersions about the trend
+# (varLogDispEsts) and trigamma((m - p) / 2) their sampling variance (m samples,
+# p model coefficients). DESeq2 then floors sigma_d^2 at 0.25 for safety; the
+# criterion below uses the estimate before that floor, which would otherwise
+# hide differences between splits.
+#
+# For a given k the split is built exactly as in the analysis (NormEVS
+# ranking: top-k PASs by |PC1 loading| in RT and in ZT; Leading Edge = their
+# union; Remainder = all other PASs), and each set runs the analysis' own
+# DESeq2 steps up to the prior (size factors, gene-wise dispersions, the power
+# trend of this pipeline). The pooled prior variance is
+#     W(k) = [ n_LE sigma_LE^2 + n_REM sigma_REM^2 ] / (n_LE + n_REM).
+# The Optimal k minimizes W(k). If k is too small, structured PASs stay in the
+# Remainder and widen its prior; if k is too large, flat PASs enter the Leading
+# Edge and widen its prior; the minimum is where the two dispersion laws
+# separate. Only counts and DESeq2's dispersion estimates enter W(k): no
+# condition effect, p-value or call is used, so k is fixed before any test.
+#
+# Search. W(k) need not be smooth or have a single minimum, so the minimum is
+# first bracketed and then refined: W is evaluated at OPTIMAL_K_GRID_POINTS
+# values of k evenly spaced on the log scale from OPTIMAL_K_MIN to
+# OPTIMAL_K_MAX_FRACTION x the number of PASs, or the largest k that leaves at
+# least OPTIMAL_K_MIN_REMAINDER_FRACTION of the PASs in the Remainder if that is
+# smaller (plus k = 5,000, the paper's cutoff, for reference); Brent's method
+# (stats::optimize) then refines the minimum between the two neighbours of the
+# best of those values, to within OPTIMAL_K_TOL. The Optimal k is the evaluated k with the smallest W. The same
+# k is used for the RawEVS track, exactly as k = 5,000 is.
+OPTIMAL_K_MIN <- 250L
+OPTIMAL_K_MAX_FRACTION <- 0.5
+OPTIMAL_K_MIN_REMAINDER_FRACTION <- 0.1
+OPTIMAL_K_GRID_POINTS <- 12L
+OPTIMAL_K_TOL <- 10
+OPTIMAL_K_REFERENCE <- 5000L
+
+# Better |PC1| rank of each PAS over the two conditions (NormEVS ranking, as
+# build_eigenvector_split uses). A PAS is in the Leading Edge at k exactly
+# when this depth is <= k.
+evs_union_depth <- function(raw, coldata) {
   rank_obj <- make_rank_matrix_for_track(raw, coldata, "normalized_evs")
   ids <- colnames(raw)
   rank_in <- function(cond) {
@@ -3369,25 +3228,123 @@ set_decomposition_k <- function(comparison_name, count_matrix, coldata) {
     stats::setNames(lt$rank, lt$feature_id)[rownames(raw)]
   }
   depth <- pmin(rank_in("trt"), rank_in("untrt"))
-  union_at <- cumsum(tabulate(depth, nrow(raw)))
-  k <- which(union_at >= target)[1]
-  if (is.na(k)) stop(comparison_name, ": the Leading Edge size ", target, " exceeds the PASs available.")
-  DECOMPOSITION_K[[comparison_name]] <<- as.integer(k)
-  message(sprintf("  %s: decomposition Leading Edge %d -> k = %d per condition (union %d)",
-                  comparison_name, target, k, union_at[k]))
+  if (anyNA(depth)) stop("PC1 ranks are missing for some PASs.")
+  depth
+}
+
+# DESeq2's dispersion prior for one set of PASs: the analysis' own steps
+# (fit_view_model) up to the trend. Returns the set size, the prior variance
+# before DESeq2's 0.25 floor, and the trend coefficients.
+dispersion_prior_of_set <- function(raw_subset, coldata) {
+  dds <- DESeq2::DESeqDataSetFromMatrix(raw_subset, colData = coldata, design = make_design_formula(coldata))
+  dds <- dds[rowSums(DESeq2::counts(dds)) > 0, ]
+  dds <- DESeq2::estimateSizeFactors(dds)
+  dds <- suppressMessages(DESeq2::estimateDispersionsGeneEst(dds, quiet = TRUE))
+  dds <- set_dispersion_trend(dds)
+  f <- DESeq2::dispersionFunction(dds)
+  X <- stats::model.matrix(DESeq2::design(dds), as.data.frame(SummarizedExperiment::colData(dds)))
+  cf <- attr(f, "coefficients")
+  c(n = nrow(dds), prior_var = as.numeric(attr(f, "varLogDispEsts")) - trigamma((ncol(dds) - ncol(X)) / 2),
+    a0 = cf[["a0"]], a1 = cf[["a1"]], b = cf[["b"]])
+}
+
+choose_optimal_k <- function(comparison_name, count_matrix, coldata) {
+  raw <- coerce_raw_count_matrix_for_deseq2(count_matrix, context = paste0(comparison_name, " optimal k"))
+  depth <- evs_union_depth(raw, coldata)
+  union_at <- cumsum(tabulate(depth, nrow(raw)))                 # Leading Edge size at each k
+  fits_remainder <- function(k) nrow(raw) - union_at[k] >= OPTIMAL_K_MIN_REMAINDER_FRACTION * nrow(raw)
+  k_max <- min(as.integer(floor(OPTIMAL_K_MAX_FRACTION * nrow(raw))),
+               max(c(0L, which(union_at <= (1 - OPTIMAL_K_MIN_REMAINDER_FRACTION) * nrow(raw)))))
+  if (k_max <= OPTIMAL_K_MIN) stop(comparison_name, ": too few PASs (", nrow(raw), ") to search for k.")
+  evaluated <- list()
+  W <- function(k) {
+    k <- as.integer(round(k))
+    key <- as.character(k)
+    if (is.null(evaluated[[key]])) {
+      le <- depth <= k
+      a <- dispersion_prior_of_set(raw[le, , drop = FALSE], coldata)
+      r <- dispersion_prior_of_set(raw[!le, , drop = FALSE], coldata)
+      evaluated[[key]] <<- data.frame(
+        Comparison = comparison_name, k = k, Leading_Edge = as.integer(a[["n"]]), Remainder = as.integer(r[["n"]]),
+        W = (a[["n"]] * a[["prior_var"]] + r[["n"]] * r[["prior_var"]]) / (a[["n"]] + r[["n"]]),
+        prior_var_LE = a[["prior_var"]], prior_var_REM = r[["prior_var"]],
+        b_LE = a[["b"]], b_REM = r[["b"]], Search_step = "bracket")
+    }
+    evaluated[[key]]$W
+  }
+  grid <- unique(as.integer(round(exp(seq(log(OPTIMAL_K_MIN), log(k_max), length.out = OPTIMAL_K_GRID_POINTS)))))
+  w_grid <- vapply(grid, W, numeric(1))
+  i <- which.min(w_grid)
+  if (i %in% c(1L, length(grid))) warning(comparison_name, ": the minimum of W(k) is at the edge of the search interval (k = ",
+                                          grid[i], ").", call. = FALSE)
+  n_bracket <- length(evaluated)
+  stats::optimize(W, interval = c(grid[max(1L, i - 1L)], grid[min(length(grid), i + 1L)]), tol = OPTIMAL_K_TOL)
+  refined <- names(evaluated)[seq_along(evaluated) > n_bracket]
+  for (key in refined) evaluated[[key]]$Search_step <- "refine"
+  if (OPTIMAL_K_REFERENCE <= nrow(raw) && fits_remainder(OPTIMAL_K_REFERENCE)) {
+    ref_new <- is.null(evaluated[[as.character(OPTIMAL_K_REFERENCE)]])
+    W(OPTIMAL_K_REFERENCE)
+    if (ref_new) evaluated[[as.character(OPTIMAL_K_REFERENCE)]]$Search_step <- "reference (paper)"
+  }
+  s <- do.call(rbind, evaluated)
+  s <- s[order(s$k), , drop = FALSE]
+  rownames(s) <- NULL
+  k <- s$k[which.min(s$W)]
+  s$Chosen <- s$k == k
+  OPTIMAL_K[[comparison_name]] <<- as.integer(k)
+  optimal_k_search_rows[[comparison_name]] <<- s
+  ch <- s[s$Chosen, ]
+  message(sprintf("  %s: optimal k = %d (Leading Edge %d, Remainder %d; pooled prior variance %.4f, b LE %.2f / REM %.2f; %d evaluations)",
+                  comparison_name, k, ch$Leading_Edge, ch$Remainder, ch$W, ch$b_LE, ch$b_REM, nrow(s)))
   invisible(k)
+}
+
+# Figure 1: W(k) for each comparison, its minimum and the paper's 5,000.
+save_figure_1_optimal_k <- function() {
+  s <- dplyr::bind_rows(optimal_k_search_rows)
+  if (!nrow(s)) return(invisible(FALSE))
+  s$Comparison <- as_comp(s$Comparison)
+  ch <- s[s$Chosen, , drop = FALSE]
+  ref <- s[s$k == OPTIMAL_K_REFERENCE, , drop = FALSE]
+  lab <- merge(ch[, c("Comparison", "k", "W", "Leading_Edge")],
+               data.frame(Comparison = ref$Comparison, W_ref = ref$W), all.x = TRUE)
+  lab$label <- sprintf("k = %s (Leading Edge %s)\nW = %.3f%s", format(lab$k, big.mark = ","),
+                       format(lab$Leading_Edge, big.mark = ","), lab$W,
+                       ifelse(is.finite(lab$W_ref), sprintf("; at 5,000: %.3f", lab$W_ref), ""))
+  col <- unname(METHOD_COLS[["Optimal k"]])
+  p <- ggplot(s, aes(k, W)) +
+    geom_vline(xintercept = OPTIMAL_K_REFERENCE, colour = unname(METHOD_COLS[["Fixed 5,000"]]), linetype = "22", linewidth = 0.4) +
+    geom_line(colour = col, linewidth = 0.5) +
+    geom_point(colour = col, size = 0.9) +
+    geom_point(data = ch, colour = col, size = 2.6, shape = 21, fill = "white", stroke = 0.9) +
+    geom_text(data = lab, aes(x = -Inf, y = Inf, label = label), hjust = -0.03, vjust = 1.2, size = 2.0,
+              colour = col, fontface = "bold", lineheight = 0.95) +
+    facet_wrap(~ Comparison, nrow = 1, scales = "free_y", labeller = labeller(Comparison = comp_lab())) +
+    scale_x_log10(labels = scales::label_comma(), expand = expansion(mult = c(0.25, 0.05))) +
+    scale_y_continuous(expand = expansion(mult = c(0.05, 0.3))) +
+    labs(x = "k (top-|PC1| PASs per condition; log scale)", y = "Pooled DESeq2 prior variance W(k)",
+         title = "Figure 1. Choosing k: the split that gives DESeq2 the tightest dispersion prior",
+         subtitle = paste0("W(k): size-weighted prior variance of log dispersion about each set's own trend (Leading Edge, Remainder), ",
+                           "before DESeq2's 0.25 floor. Open circle: minimum (Optimal k). Dashed: the paper's 5,000. No p-values used.")) +
+    fig_theme() + theme(panel.border = element_rect(fill = NA, colour = "grey60", linewidth = 0.3))
+  save_figure(p, paper_fig_dir, "Figure_1_Choosing_k", 180, 70)
+  invisible(TRUE)
 }
 
 run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata, annot_df) {
   dir.create(file.path(output_dir, comparison_name), recursive = TRUE, showWarnings = FALSE)
 
   # The cutoff is fixed before any split or test: 5,000 (prespecified), or the
-  # k whose NormEVS union reaches the decomposition's Leading Edge size.
-  if (identical(CUTOFF_METHOD_KEY, "decomp")) set_decomposition_k(comparison_name, count_matrix, coldata)
+  # k that minimizes the pooled DESeq2 prior variance (Optimal k).
+  if (identical(CUTOFF_METHOD_KEY, "optimal")) choose_optimal_k(comparison_name, count_matrix, coldata)
+  ch <- if (identical(CUTOFF_METHOD_KEY, "optimal")) {
+    s <- optimal_k_search_rows[[comparison_name]]
+    s[s$Chosen, , drop = FALSE]
+  } else NULL
   active_cutoff_rows[[comparison_name]] <<- data.frame(
     Comparison = comparison_name, Cutoff_Method = CUTOFF_METHOD_LABEL, k = get_active_evs_cutoff(comparison_name),
-    Leading_Edge_target = if (identical(CUTOFF_METHOD_KEY, "decomp"))
-      comparison_table$decomp_leading_edge[match(comparison_name, comparison_table$comparison_name)] else NA_integer_)
+    Leading_Edge = if (is.null(ch)) NA_integer_ else ch$Leading_Edge,
+    Pooled_prior_variance_W = if (is.null(ch)) NA_real_ else ch$W)
   for (track_key in c("normalized_evs", "raw_evs")) {
     message("Running ", comparison_name, " ", unname(track_short[track_key]))
     ok <- run_one_evs_track(comparison_name = comparison_name, track_key = track_key,
