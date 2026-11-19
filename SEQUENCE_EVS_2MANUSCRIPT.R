@@ -2090,9 +2090,30 @@ comparison_size_factors <- function(raw, coldata) {
   stats::setNames(as.numeric(sf), colnames(raw))
 }
 
-estimate_dispersions_with_trend <- function(dds, size_factors = NULL) {
+# Gene-wise dispersions computed once per comparison (shared normalization only).
+# A PAS's gene-wise (Cox-Reid) dispersion depends only on its own counts, the
+# design and the size factors, so with shared size factors it is the same in
+# the Original and in any EVS partition: it is estimated once on the full
+# comparison matrix and reused for every split. Only the trend, the prior and
+# the MAP dispersions depend on the split. Every run checks the equality on its
+# final analysis (validate_track_normalization).
+comparison_gene_dds <- function(raw, coldata, size_factors) {
+  if (is.null(size_factors)) return(NULL)
+  dds <- DESeq2::DESeqDataSetFromMatrix(coerce_raw_count_matrix_for_deseq2(raw, context = "gene-wise dispersions"),
+                                        colData = coldata, design = make_design_formula(coldata))
+  dds <- dds[rowSums(DESeq2::counts(dds)) > 0, ]
   dds <- apply_size_factors(dds, size_factors)
-  dds <- suppressMessages(DESeq2::estimateDispersionsGeneEst(dds, quiet = TRUE))
+  suppressMessages(DESeq2::estimateDispersionsGeneEst(dds, quiet = TRUE))
+}
+
+estimate_dispersions_with_trend <- function(dds, size_factors = NULL, gene_dds = NULL) {
+  if (!is.null(gene_dds)) {
+    if (!all(rownames(dds) %in% rownames(gene_dds))) stop("Precomputed gene-wise dispersions lack some PASs.")
+    dds <- gene_dds[rownames(dds), ]
+  } else {
+    dds <- apply_size_factors(dds, size_factors)
+    dds <- suppressMessages(DESeq2::estimateDispersionsGeneEst(dds, quiet = TRUE))
+  }
   dds <- set_dispersion_trend(dds)
   suppressMessages(DESeq2::estimateDispersionsMAP(dds, quiet = TRUE))
 }
@@ -2113,7 +2134,7 @@ estimate_dispersions_with_trend <- function(dds, size_factors = NULL) {
 # when should hypothesis testing problems be combined?").
 
 # Model stage: DESeq2 with the power trend, the three Wald tests, apeglm.
-fit_view_model <- function(count_mat, coldata, dataset_name, size_factors = NULL) {
+fit_view_model <- function(count_mat, coldata, dataset_name, size_factors = NULL, gene_dds = NULL) {
   dds <- DESeq2::DESeqDataSetFromMatrix(
     countData = coerce_raw_count_matrix_for_deseq2(
       count_mat,
@@ -2126,7 +2147,7 @@ fit_view_model <- function(count_mat, coldata, dataset_name, size_factors = NULL
 
   # DESeq2 with the power trend fitted above, then the Wald test (no beta prior;
   # with 5 replicates per group DESeq() would not replace outliers either).
-  dds <- estimate_dispersions_with_trend(dds, size_factors)
+  dds <- estimate_dispersions_with_trend(dds, size_factors, gene_dds)
   dds <- DESeq2::nbinomWaldTest(dds, quiet = TRUE)
 
   contrast <- c("condition", "trt", "untrt")
@@ -3062,7 +3083,7 @@ write_methods_note <- function() {
     "PASs present in both condition-specific top-k sets were classified as Joint; PASs present in only one set were classified as Disjoint for that condition. Joint plus both Disjoint sets formed the Leading Edge, and all other PASs formed the Remainder. EVS defined PAS membership only. Downstream DESeq2 analyses received the corresponding raw-count subset and estimated dispersion parameters within that analysis view. The five reported views were Original (No EVS), NormEVS Lead, NormEVS Rem, RawEVS Lead, and RawEVS Rem.",
     "",
     "## Normalization",
-    if (identical(NORMALIZATION_MODE, "shared")) "Size factors were estimated once per comparison by DESeq2's median-of-ratios method on the full comparison matrix and supplied unchanged to the Original, Leading Edge and Remainder models (and to every model fitted while choosing k), so each PAS had identical normalized counts in the Original and in its EVS partition; this was verified for every view. Estimating size factors within a partition would let the median-of-ratios reference change with the partition, confounding the effect of the split with a change of normalization." else "Each analysis view estimated its own median-of-ratios size factors from its own PASs (legacy normalization).",
+    if (identical(NORMALIZATION_MODE, "shared")) "Size factors were estimated once per comparison by DESeq2's median-of-ratios method on the full comparison matrix and supplied unchanged to the Original, Leading Edge and Remainder models (and to every model fitted while choosing k), so each PAS had identical normalized counts in the Original and in its EVS partition; this was verified for every view. Because a PAS's gene-wise dispersion depends only on its own counts, the design and the size factors, it is then also identical in every partition; it was therefore estimated once per comparison and reused when evaluating candidate cutoffs (only the trend, prior and MAP dispersions depend on the split), and its equality with the final analysis was verified. Estimating size factors within a partition would let the median-of-ratios reference change with the partition, confounding the effect of the split with a change of normalization." else "Each analysis view estimated its own median-of-ratios size factors from its own PASs (legacy normalization).",
     "",
     "## Choice of the EVS cutoff k",
     sprintf("Three cutoff rules were analyzed: k = 5,000, the prespecified cutoff of the original study; a Prior-optimal k chosen for each comparison before any differential test; and an exploratory Discovery-optimal k (below). EVS increases detection power through dispersion estimation: the Leading Edge and Remainder each receive their own mean-dispersion trend, and DESeq2 shrinks each PAS's gene-wise dispersion toward its own set's trend under a log-normal prior, log alpha_i ~ N(log alpha_tr(mean_i), sigma_d^2). The narrower this prior, the more information each PAS borrows and the more precise its final dispersion and Wald statistic. DESeq2 estimates sigma_d^2 as the squared median absolute deviation of log gene-wise dispersions about the trend minus their sampling variance, trigamma((m - p)/2) for m samples and p coefficients (Love et al. 2014). For a candidate k, the split was built exactly as in the analysis (NormEVS ranking; top-k PASs by absolute PC1 loading in each condition; Leading Edge = their union; Remainder = all other PASs), and each set was processed with the analysis' own DESeq2 steps (size factors, gene-wise dispersions and the power trend described below). The pooled prior variance W(k) = (n_LE sigma_LE^2 + n_REM sigma_REM^2)/(n_LE + n_REM) was computed before DESeq2's lower bound of 0.25, which would otherwise mask differences between splits, and the Prior-optimal k was the value minimizing W(k). Too small a k leaves structured PASs in the Remainder and widens its prior; too large a k places unstructured PASs in the Leading Edge and widens its prior; the minimum lies where the two dispersion laws separate. To locate the global minimum, W(k) was evaluated at %d values of k evenly spaced on the logarithmic scale from %d to %.0f%% of the PASs in the comparison (or less, so that at least %.0f%% of the PASs remained in the Remainder), and the minimum was then refined between the neighbours of the best value by Brent's method (stats::optimize, tolerance %d). Only counts and dispersion estimates entered W(k); no condition effect, p-value or significance call was used. The same k was used for the NormEVS and RawEVS tracks.", OPTIMAL_K_GRID_POINTS, OPTIMAL_K_MIN, 100 * OPTIMAL_K_MAX_FRACTION, 100 * OPTIMAL_K_MIN_REMAINDER_FRACTION, as.integer(OPTIMAL_K_TOL)),
@@ -3417,11 +3438,16 @@ evs_union_depth <- function(raw, coldata, track_key = "normalized_evs") {
 # DESeq2's dispersion prior for one set of PASs: the analysis' own steps
 # (fit_view_model) up to the trend. Returns the set size, the prior variance
 # before DESeq2's 0.25 floor, and the trend coefficients.
-dispersion_prior_of_set <- function(raw_subset, coldata, size_factors = NULL, final = FALSE) {
-  dds <- DESeq2::DESeqDataSetFromMatrix(raw_subset, colData = coldata, design = make_design_formula(coldata))
-  dds <- dds[rowSums(DESeq2::counts(dds)) > 0, ]
-  dds <- apply_size_factors(dds, size_factors)
-  dds <- suppressMessages(DESeq2::estimateDispersionsGeneEst(dds, quiet = TRUE))
+dispersion_prior_of_set <- function(raw_subset, coldata, size_factors = NULL, final = FALSE, gene_dds = NULL) {
+  keep <- rownames(raw_subset)[rowSums(raw_subset) > 0]
+  if (!is.null(gene_dds)) {
+    dds <- gene_dds[keep, ]                    # gene-wise dispersions computed once (shared normalization)
+  } else {
+    dds <- DESeq2::DESeqDataSetFromMatrix(raw_subset[keep, , drop = FALSE], colData = coldata,
+                                          design = make_design_formula(coldata))
+    dds <- apply_size_factors(dds, size_factors)
+    dds <- suppressMessages(DESeq2::estimateDispersionsGeneEst(dds, quiet = TRUE))
+  }
   dds <- set_dispersion_trend(dds)
   f <- DESeq2::dispersionFunction(dds)
   X <- stats::model.matrix(DESeq2::design(dds), as.data.frame(SummarizedExperiment::colData(dds)))
@@ -3438,6 +3464,7 @@ choose_optimal_k <- function(comparison_name, count_matrix, coldata) {
   raw <- coerce_raw_count_matrix_for_deseq2(count_matrix, context = paste0(comparison_name, " optimal k"))
   depth <- evs_union_depth(raw, coldata)
   sf <- comparison_size_factors(raw, coldata)
+  gdds <- comparison_gene_dds(raw, coldata, sf)
   union_at <- cumsum(tabulate(depth, nrow(raw)))                 # Leading Edge size at each k
   fits_remainder <- function(k) nrow(raw) - union_at[k] >= OPTIMAL_K_MIN_REMAINDER_FRACTION * nrow(raw)
   k_max <- min(as.integer(floor(OPTIMAL_K_MAX_FRACTION * nrow(raw))),
@@ -3449,8 +3476,8 @@ choose_optimal_k <- function(comparison_name, count_matrix, coldata) {
     key <- as.character(k)
     if (is.null(evaluated[[key]])) {
       le <- depth <= k
-      fit <- tryCatch(list(a = dispersion_prior_of_set(raw[le, , drop = FALSE], coldata, sf),
-                           r = dispersion_prior_of_set(raw[!le, , drop = FALSE], coldata, sf)),
+      fit <- tryCatch(list(a = dispersion_prior_of_set(raw[le, , drop = FALSE], coldata, sf, gene_dds = gdds),
+                           r = dispersion_prior_of_set(raw[!le, , drop = FALSE], coldata, sf, gene_dds = gdds)),
                       error = function(e) e)
       if (inherits(fit, "error")) {
         # A failed fit is logged and can never be the minimum.
@@ -3753,7 +3780,8 @@ view_dispersion_summary <- function(dds) {
 
 # ---- one cutoff -------------------------------------------------------------------
 
-discovery_context <- function(comparison_name, raw, coldata, annot_df, track_key, size_factors, original_counts) {
+discovery_context <- function(comparison_name, raw, coldata, annot_df, track_key, size_factors, original_counts,
+                              gene_dds = NULL) {
   depth <- evs_union_depth(raw, coldata, track_key)
   N <- nrow(raw)
   union_at <- cumsum(tabulate(depth, N))                       # LE size at each k
@@ -3768,7 +3796,8 @@ discovery_context <- function(comparison_name, raw, coldata, annot_df, track_key
                DISC_MIN_SET_SIZE, DISC_MIN_SET_FRACTION, sep = "|")
   dir.create(DISC_CHECKPOINT_DIR, recursive = TRUE, showWarnings = FALSE)
   ctx <- list(comparison = comparison_name, track = track_key, raw = raw, coldata = coldata, annot = annot_df,
-              sf = size_factors, orig = original_counts, depth = depth, union_at = union_at, min_set = min_set,
+              sf = size_factors, gene_dds = gene_dds, orig = original_counts, depth = depth, union_at = union_at,
+              min_set = min_set,
               k_lo = min(ok_k), k_hi = max(ok_k), key = key, cache = new.env(), state = new.env(),
               checkpoint = file.path(DISC_CHECKPOINT_DIR, sprintf("Discovery_%s_%s_%s.csv", comparison_name,
                                                                   track_key, NORMALIZATION_MODE)))
@@ -3855,7 +3884,8 @@ discovery_evaluate <- function(ctx, k, stage) {
     # failure stops the evaluation before the larger (slower) set is fitted.
     order_fit <- order(vapply(mats, nrow, integer(1)))
     nm <- paste(ctx$comparison, unname(track_short[ctx$track]), "k", k, names(mats), sep = "_")
-    fits <- Map(function(m, n) fit_view_model(m, ctx$coldata, n, size_factors = ctx$sf), mats[order_fit], nm[order_fit])
+    fits <- Map(function(m, n) fit_view_model(m, ctx$coldata, n, size_factors = ctx$sf, gene_dds = ctx$gene_dds),
+                mats[order_fit], nm[order_fit])
     names(fits) <- names(mats)[order_fit]
     fits <- fits[names(mats)]
     sig <- call_significance(fits, paste(ctx$comparison, unname(track_short[ctx$track]), "k", k), ctx$annot, lean = TRUE)
@@ -4215,8 +4245,8 @@ discovery_w_eval <- function(ctx, k) {
   le <- ctx$depth <= k
   tryCatch({
     if (sum(le) < ctx$min_set || sum(!le) < ctx$min_set) stop("partition below the minimum size")
-    a <- dispersion_prior_of_set(ctx$raw[le, , drop = FALSE], ctx$coldata, ctx$sf, final = TRUE)
-    r <- dispersion_prior_of_set(ctx$raw[!le, , drop = FALSE], ctx$coldata, ctx$sf, final = TRUE)
+    a <- dispersion_prior_of_set(ctx$raw[le, , drop = FALSE], ctx$coldata, ctx$sf, final = TRUE, gene_dds = ctx$gene_dds)
+    r <- dispersion_prior_of_set(ctx$raw[!le, , drop = FALSE], ctx$coldata, ctx$sf, final = TRUE, gene_dds = ctx$gene_dds)
     data.frame(Comparison = ctx$comparison, EVS_Method = unname(track_short[ctx$track]), Cutoff_k = as.integer(k),
                Leading_Edge_Size = as.integer(a[["n"]]), Remainder_Size = as.integer(r[["n"]]),
                Prior_Variance_LE = a[["prior_var"]], Prior_Variance_REM = r[["prior_var"]],
@@ -4376,8 +4406,9 @@ choose_discovery_k <- function(comparison_name, count_matrix, coldata, annot_df)
                     oflags[match(ores$feature_id, oflags$feature_id),
                            c("padj_global", "padjGA_global", "padjLA_global", "Standard", "Strong", "Weak", "HBFSS")])
   save_csv(base_tab, file.path(output_dir, comparison_name, paste0("Table_", comparison_name, "_Original_Baseline.csv")))
+  gdds <- comparison_gene_dds(raw, coldata, sf)               # once per comparison, reused for every k
   for (tk in DISC_TRACKS) {
-    ctx <- discovery_context(comparison_name, raw, coldata, annot_df, tk, sf, ocnt)
+    ctx <- discovery_context(comparison_name, raw, coldata, annot_df, tk, sf, ocnt, gdds)
     res <- discovery_search(ctx)
     discovery_search_rows[[paste(comparison_name, tk)]] <<- res$rows
     discovery_summary_rows[[paste(comparison_name, tk)]] <<- res$selection
@@ -4422,6 +4453,20 @@ validate_track_normalization <- function(comparison_name, track_key, analysis_re
   }
   add_validation("Shared normalization is propagated", comparison_name,
                  all(vapply(analysis_results, function(a) isTRUE(size_factors_match(a$dds, sf)), logical(1))), tr)
+  o0 <- analysis_results$raw_dataset %||% {
+    reg0 <- paper_registry[[registry_key(comparison_name, "normalized_evs")]]
+    if (is.null(reg0)) NULL else reg0$analysis_results$raw_dataset
+  }
+  if (!is.null(o0)) {
+    og <- S4Vectors::mcols(o0$dds)$dispGeneEst
+    names(og) <- rownames(o0$dds)
+    same_gw <- all(vapply(c("leading_edge_dataset", "remainder_dataset"), function(v) {
+      d <- analysis_results[[v]]$dds
+      isTRUE(all.equal(unname(S4Vectors::mcols(d)$dispGeneEst), unname(og[rownames(d)]), tolerance = 1e-8))
+    }, logical(1)))
+    add_validation("Gene-wise dispersions are identical in the Original and the partition (computed once in the search)",
+                   comparison_name, same_gw, tr)
+  }
   o <- analysis_results$raw_dataset %||% {
     reg <- paper_registry[[registry_key(comparison_name, "normalized_evs")]]
     if (is.null(reg)) NULL else reg$analysis_results$raw_dataset
