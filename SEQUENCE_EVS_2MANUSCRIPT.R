@@ -3105,7 +3105,7 @@ write_methods_note <- function() {
       "For Standard, Strong and Weak, S was computed with one Benjamini-Hochberg correction over the combined Leading Edge and Remainder raw p-values of each hypothesis family, and S_Original with one correction over the Original's raw p-values, so both used the same hypothesis universe, eligibility (a finite DESeq2 p-value) and threshold, without independent filtering; HBFSS retained its own calibration. ",
       "Admissible k were integers of at least %d leaving at least %.0f%% of the PASs (and at least %d) in both the Leading Edge and the Remainder, so that both sets supported a dispersion trend, an empirical null and higher criticism; values of k giving the same Leading Edge were evaluated once, and if the analysis failed at a k below (or above) every k at which it succeeded, all k further out were skipped. Not every admissible k was evaluated, so k* is the best observed cutoff; untested ranges are listed in Table_Discovery_Coverage.csv. ",
       "The contiguous run of evaluated k whose count stayed at or above %.0f%% of the maximum was reported as a measure of stability (wider than %d: broad plateau; otherwise narrow spike), with the widest such run giving a separately labelled stable-plateau cutoff; a common cutoff maximizing the summed gain over the four comparisons was reported separately. ",
-      "The run's own k was k* of the NormEVS track for %s; RawEVS used the same k, and its own k* and the matched-k comparison of the two tracks were reported as diagnostics. Each run started without results from any earlier run, and k = 5,000 was evaluated after the search for comparison only and was not a candidate. ",
+      "The run's own k was k* of the NormEVS track for %s; RawEVS used the same k", if ("raw_evs" %in% DISC_TRACKS) ", and its own k* and the matched-k comparison of the two tracks were reported as diagnostics" else " (the search was run on the NormEVS track only)", ". Each run started without results from any earlier run, and k = 5,000 was evaluated after the search for comparison only and was not a candidate. ",
       "Only the dispersion window was chosen without the test results; the choice within it used them, so its discoveries are not protected by the nominal FDR, and small final dispersions raise Wald statistics spuriously if the noise is underestimated. The whole procedure was therefore evaluated on simulated data with known truth (Supplementary Figure S2)."),
       DISC_SCAN_COARSE, DISC_SCAN_FINE, DISC_SCAN_COARSE, DISC_SCAN_FINE, DISC_FINE_REGIONS,
       paste(union(DISC_REFINE_CALLS, DISCOVERY_OBJECTIVE), collapse = " and "),
@@ -4549,8 +4549,9 @@ save_figure_S5_discovery <- function(rows, sel) {
     facet_grid(Significance ~ Comparison, scales = "free_y", labeller = labeller(Comparison = comp_lab())) +
     scale_colour_manual(values = c(NormEVS = "#1F6FB2", RawEVS = "#C0392B")) +
     scale_x_continuous(labels = scales::label_comma()) +
-    labs(x = NULL, y = "Gain over the Original", tag = "a", title = "NormEVS vs RawEVS",
-         subtitle = "Each track's analysed k (RawEVS also at the NormEVS window k); matched values in Table_Discovery_Matched_Cutoffs.csv.") +
+    labs(x = NULL, y = "Gain over the Original", tag = "a",
+         title = if (length(unique(g$Track)) == 2L) "NormEVS vs RawEVS" else paste(unique(g$Track), collapse = ", "),
+         subtitle = if (length(unique(g$Track)) == 2L) "Each track's analysed k (RawEVS also at the NormEVS window k); matched values in Table_Discovery_Matched_Cutoffs.csv." else "Gain at each analysed k.") +
     fig_theme()
   tr0 <- unname(track_short[discovery_objective_track()])
   d <- r[r$EVS_Method == tr0, , drop = FALSE]
