@@ -15,9 +15,6 @@
 #     SEQUENCE_MULTI_ROOT      output folder (default <repo>/exports/sequence_evs_manuscript)
 #     SEQUENCE_METHODS         cutoff methods to run, comma-separated keys
 #                              (default fixed5000,optimal,discovery)
-#     SEQUENCE_NORMALIZATION   shared (default): size factors estimated once on
-#                              the full comparison matrix and passed to every
-#                              view; subset: each view estimates its own (legacy)
 #     SEQUENCE_NULL_METHOD     fndr (default), pct0 or theoretical (HBFSS null)
 #     Discovery-optimal k: SEQUENCE_DISCOVERY_CORES, _TRACKS, _OBJECTIVE,
 #     _REFINE, _FINE_REGIONS, _SCAN_COARSE, _SCAN_FINE, _MAX_EVALS, _RESUME and
@@ -44,7 +41,7 @@
 # from each condition. PASs in both top-k sets are Joint, in one set Disjoint;
 # Joint plus Disjoint form the Leading Edge (LE) and all other PASs the
 # Remainder (REM). LE and REM are separate datasets: DESeq2 receives their raw
-# counts with the comparison's shared size factors (SEQUENCE_NORMALIZATION) and
+# counts with the comparison's shared size factors and
 # estimates its own dispersion trend and prior. The same k is used for NormEVS
 # and RawEVS.
 #
@@ -75,11 +72,12 @@
 #   Strong    greaterAbs(lfcThreshold = 1), BH padj < 0.10 and |apeglm LFC| >= 1
 #   Weak      lessAbs(lfcThreshold = 1), BH padj < 0.20, |apeglm LFC| < 1, and HBFSS
 #   HBFSS     |apeglm LFC| x [-log10(empirical p)] > Htau
-# BH adjustment is DESeq2's own, within each view (with its independent
-# filtering) for the manuscript tables; for comparing EVS with the Original,
-# Standard, Strong and Weak are also recomputed with one BH correction over the
-# combined Leading Edge + Remainder raw p-values (no independent filtering), as
-# for the Original (Table_DE_Method_Counts_Global_BH.csv). Empirical p-values
+# Multiple testing (Standard, Strong, Weak): one BH correction per analysis and
+# test, over the Original's raw p-values, or over the Leading Edge and Remainder
+# raw p-values combined, without independent filtering; Cook's outlier PASs are
+# identified once, in the Original's fit, and their p-values are removed in
+# every view. The Original and the EVS views therefore test the same PASs under
+# the same rules. Empirical p-values
 # come from fdrtool (normal empirical null; cutoff SEQUENCE_NULL_METHOD, default
 # 'fndr') applied to the Wald statistics of each view separately: the
 # Original, the Leading Edge and the Remainder each have their own null. Higher
@@ -102,7 +100,7 @@
 # Plus volcano, PCA/EVS evidence, HBFSS support and 3'aTWAS figures.
 # =============================================================================
 
-PIPELINE_BUILD <- "SEQUENCE_EVS_MANUSCRIPT_2026-11-18"
+PIPELINE_BUILD <- "SEQUENCE_EVS_MANUSCRIPT_2026-11-19"
 
 
 # =============================================================================
@@ -683,6 +681,9 @@ discovery_ablation_rows <- list()
 discovery_wscan_rows <- list()
 discovery_window_rows <- list()
 original_baseline_cache <- list()
+# The Original's Cook's outlier PASs per comparison: applied in every view.
+original_cooks_cache <- list()
+MULTIPLE_TESTING_RULE <- "BH per analysis (LE+REM combined), no independent filtering, Cook's outliers from the Original"
 validation_rows <- list()
 
 get_active_evs_cutoff <- function(comparison_name) {
@@ -1434,7 +1435,7 @@ create_all_tables_zip <- function() {
   for (tab in c("Table_EVS_Cutoffs.csv", "Table_Empirical_Null_By_Analysis.csv",
                 "Table_Dispersion_After_EVS.csv", "Table_Active_Cutoff.csv",
                 "Table_EVS_Composition.csv", "Table_Optimal_k_Search.csv",
-                "Table_DE_Method_Counts_Global_BH.csv", "Table_Validation_Checks.csv",
+                "Table_Validation_Checks.csv",
                 "Table_Discovery_Search_All_k.csv", "Table_Discovery_Optimal_k.csv",
                 "Table_Discovery_Coverage.csv", "Table_Discovery_Common_Cutoff.csv",
                 "Table_Discovery_Ablation.csv", "Table_Discovery_Matched_Cutoffs.csv",
@@ -2073,11 +2074,11 @@ set_dispersion_trend <- function(dds) {
 
 # DESeq2's dispersion steps with the trend above: size factors, gene-wise
 # dispersions, trend, MAP shrinkage. These are the steps DESeq() runs, with the
-# trend fit replaced. Size factors: the comparison's shared factors when
-# supplied (SEQUENCE_NORMALIZATION = shared; estimated once on the full
-# comparison matrix, so a PAS has identical normalized counts in the Original
-# and in its EVS partition), otherwise the dataset's own median-of-ratios
-# (legacy). Supplied factors are never re-estimated downstream.
+# trend fit replaced. Size factors: the comparison's shared factors, estimated
+# once on the full comparison matrix, so a PAS has identical normalized counts
+# in the Original and in its EVS partition. Supplied factors are never
+# re-estimated downstream (NULL, used only for a whole comparison matrix,
+# estimates them from that matrix).
 apply_size_factors <- function(dds, size_factors = NULL) {
   if (is.null(size_factors)) return(DESeq2::estimateSizeFactors(dds))
   if (!setequal(names(size_factors), colnames(dds)) || anyNA(size_factors) || any(size_factors <= 0)) {
@@ -2087,10 +2088,9 @@ apply_size_factors <- function(dds, size_factors = NULL) {
   dds
 }
 
-# Size factors of a comparison for the shared-normalization mode (NULL in the
-# legacy subset mode): DESeq2 median-of-ratios on the full comparison matrix.
+# Shared size factors of a comparison: DESeq2 median-of-ratios on the full
+# comparison matrix, used by the Original and every EVS view.
 comparison_size_factors <- function(raw, coldata) {
-  if (!identical(NORMALIZATION_MODE, "shared")) return(NULL)
   dds <- DESeq2::DESeqDataSetFromMatrix(
     coerce_raw_count_matrix_for_deseq2(raw, context = "shared size factors"),
     colData = coldata, design = make_design_formula(coldata))
@@ -2131,7 +2131,8 @@ estimate_dispersions_with_trend <- function(dds, size_factors = NULL, gene_dds =
 # STAGE (per analysis view)
 # =============================================================================
 # Each analysis view (Original; Leading Edge; Remainder) is its own DESeq2
-# dataset with its own size factors, dispersion trend, prior and shrinkage
+# dataset with its own dispersion trend, prior and shrinkage (size factors are
+# shared from the full comparison matrix)
 # (model stage, fit_view_model), and its own significance calibration
 # (significance stage, call_significance): fdrtool fits an empirical null to
 # the view's own Wald statistics, and higher criticism sets the view's own HBFSS
@@ -2142,7 +2143,8 @@ estimate_dispersions_with_trend <- function(dds, size_factors = NULL, gene_dds =
 # when should hypothesis testing problems be combined?").
 
 # Model stage: DESeq2 with the power trend, the three Wald tests, apeglm.
-fit_view_model <- function(count_mat, coldata, dataset_name, size_factors = NULL, gene_dds = NULL) {
+fit_view_model <- function(count_mat, coldata, dataset_name, size_factors = NULL, gene_dds = NULL,
+                           cooks_outliers = NULL) {
   dds <- DESeq2::DESeqDataSetFromMatrix(
     countData = coerce_raw_count_matrix_for_deseq2(
       count_mat,
@@ -2158,15 +2160,32 @@ fit_view_model <- function(count_mat, coldata, dataset_name, size_factors = NULL
   dds <- estimate_dispersions_with_trend(dds, size_factors, gene_dds)
   dds <- DESeq2::nbinomWaldTest(dds, quiet = TRUE)
 
+  # The three DESeq2 tests with independentFiltering = FALSE and
+  # cooksCutoff = FALSE. The Cook's outlier rule is applied below with ONE
+  # outlier list per comparison (the Original's), and the BH correction is
+  # applied later, once per analysis (call_significance), so the Original and
+  # the EVS views test the same PASs under the same rules.
   contrast <- c("condition", "trt", "untrt")
-  res <- DESeq2::results(dds, contrast = contrast, alpha = BH_FDR_STANDARD, pAdjustMethod = "BH")
-  res_strong <- DESeq2::results(dds, contrast = contrast, lfcThreshold = lfc_boundary,
-                                altHypothesis = "greaterAbs", alpha = BH_FDR_STRONG, pAdjustMethod = "BH")
-  res_weak <- DESeq2::results(dds, contrast = contrast, lfcThreshold = lfc_boundary,
-                              altHypothesis = "lessAbs", alpha = BH_FDR_WEAK, pAdjustMethod = "BH")
+  tests <- list(std = list(alpha = BH_FDR_STANDARD),
+                strong = list(lfcThreshold = lfc_boundary, altHypothesis = "greaterAbs", alpha = BH_FDR_STRONG),
+                weak = list(lfcThreshold = lfc_boundary, altHypothesis = "lessAbs", alpha = BH_FDR_WEAK))
+  prim <- lapply(tests, function(a) do.call(DESeq2::results, c(list(dds, contrast = contrast, pAdjustMethod = "BH",
+                                                                    independentFiltering = FALSE, cooksCutoff = FALSE), a)))
 
-  res_df <- as.data.frame(res)
+  res_df <- as.data.frame(prim$std)
   res_df$feature_id <- as.character(rownames(res_df))
+  # Cook's outliers by DESeq2's default rule (Cook's distance above the 0.99
+  # quantile of F(p, m - p)), detected in the Original's fit (cooks_outliers =
+  # NULL) and supplied as that list to every EVS view of the comparison.
+  if (is.null(cooks_outliers)) {
+    cooks_p <- DESeq2::results(dds, contrast = contrast, independentFiltering = FALSE)$pvalue
+    res_df$cooks_outlier <- is.na(cooks_p) & !is.na(prim$std$pvalue)
+  } else {
+    res_df$cooks_outlier <- res_df$feature_id %in% cooks_outliers
+  }
+  bh_view <- function(p) { q <- rep(NA_real_, length(p)); ok <- is.finite(p); q[ok] <- stats::p.adjust(p[ok], "BH"); q }
+  res_df$pvalue[res_df$cooks_outlier] <- NA_real_
+  res_df$padj <- bh_view(res_df$pvalue)      # replaced by the analysis-wide BH in call_significance
 
   shr <- DESeq2::lfcShrink(dds, coef = get_condition_coef(dds), type = "apeglm")
   shr_df <- data.frame(feature_id = rownames(shr), lfc_shrunk = shr$log2FoldChange)
@@ -2177,10 +2196,12 @@ fit_view_model <- function(count_mat, coldata, dataset_name, size_factors = NULL
     ifelse(res_df$lfc_shrunk > 0, "upregulated",
            ifelse(res_df$lfc_shrunk < 0, "downregulated", "no_change")))
 
-  res_df$resGA_pvalue <- res_strong$pvalue[match(res_df$feature_id, rownames(res_strong))]
-  res_df$resGA_padj <- res_strong$padj[match(res_df$feature_id, rownames(res_strong))]
-  res_df$resLA_pvalue <- res_weak$pvalue[match(res_df$feature_id, rownames(res_weak))]
-  res_df$resLA_padj <- res_weak$padj[match(res_df$feature_id, rownames(res_weak))]
+  i_ga <- match(res_df$feature_id, rownames(prim$strong))
+  i_la <- match(res_df$feature_id, rownames(prim$weak))
+  res_df$resGA_pvalue <- ifelse(res_df$cooks_outlier, NA_real_, prim$strong$pvalue[i_ga])
+  res_df$resLA_pvalue <- ifelse(res_df$cooks_outlier, NA_real_, prim$weak$pvalue[i_la])
+  res_df$resGA_padj <- bh_view(res_df$resGA_pvalue)
+  res_df$resLA_padj <- bh_view(res_df$resLA_pvalue)
 
   list(dds = dds, res_df = res_df, dataset_name = dataset_name)
 }
@@ -2191,6 +2212,7 @@ fit_view_model <- function(count_mat, coldata, dataset_name, size_factors = NULL
 # view's HBFSS scores and calls. Returns the per-view results and one summary
 # row per view.
 call_significance <- function(fits, analysis_label, annot_df, lean = FALSE) {
+  fits <- combine_bh_across_views(fits)
   views <- list()
   null_rows <- list()
   for (i in seq_along(fits)) {
@@ -2222,8 +2244,38 @@ call_significance <- function(fits, analysis_label, annot_df, lean = FALSE) {
   list(views = views, null = do.call(rbind, null_rows))
 }
 
-run_core_analysis <- function(count_mats, coldata, dataset_names, annot_df, analysis_label, size_factors = NULL) {
-  fits <- Map(function(m, nm) fit_view_model(m, coldata, nm, size_factors = size_factors), count_mats, dataset_names)
+# One BH correction per analysis for each DESeq2 test: over the Original's raw
+# p-values, or over the Leading Edge and Remainder raw p-values combined (one
+# hypothesis family; the views are disjoint). No independent filtering.
+combine_bh_across_views <- function(fits) {
+  n <- vapply(fits, function(f) nrow(f$res_df), integer(1))
+  idx <- rep(seq_along(fits), n)
+  for (col in c("pvalue", "resGA_pvalue", "resLA_pvalue")) {
+    p <- unlist(lapply(fits, function(f) f$res_df[[col]]), use.names = FALSE)
+    q <- rep(NA_real_, length(p))
+    ok <- is.finite(p)
+    q[ok] <- stats::p.adjust(p[ok], method = "BH")
+    for (i in seq_along(fits)) fits[[i]]$res_df[[sub("pvalue", "padj", col)]] <- q[idx == i]
+  }
+  fits
+}
+
+# The Original's Cook's outlier list of a comparison (fitted once; the EVS views
+# of that comparison use it instead of their own).
+remember_original_cooks <- function(comparison_name, results) {
+  original_cooks_cache[[comparison_name]] <<- as.character(results$feature_id[results$cooks_outlier %in% TRUE])
+  invisible(original_cooks_cache[[comparison_name]])
+}
+original_cooks_outliers <- function(comparison_name, raw, coldata, size_factors) {
+  if (!is.null(original_cooks_cache[[comparison_name]])) return(original_cooks_cache[[comparison_name]])
+  fit <- fit_view_model(raw, coldata, paste(comparison_name, "Original (Cook's outliers)"), size_factors = size_factors)
+  remember_original_cooks(comparison_name, fit$res_df)
+}
+
+run_core_analysis <- function(count_mats, coldata, dataset_names, annot_df, analysis_label, size_factors = NULL,
+                              cooks_outliers = NULL) {
+  fits <- Map(function(m, nm) fit_view_model(m, coldata, nm, size_factors = size_factors,
+                                             cooks_outliers = cooks_outliers), count_mats, dataset_names)
   names(fits) <- names(count_mats)
   call_significance(fits, analysis_label, annot_df)
 }
@@ -2781,8 +2833,8 @@ run_one_evs_track <- function(comparison_name, track_key, count_matrix, coldata,
   analyses <- list(split = c("leading_edge_dataset", "remainder_dataset"))
   if (!is.null(analysis_dataset_list$raw_dataset)) analyses <- c(list(original = "raw_dataset"), analyses)
 
-  # Shared size factors (SEQUENCE_NORMALIZATION = shared): estimated once on the
-  # full comparison matrix and used by every view; NULL in the legacy mode.
+  # Shared size factors: estimated once on the full comparison matrix and used
+  # by every view.
   sf <- comparison_size_factors(evs$raw_dataset, coldata)
 
   analysis_results <- list()
@@ -2792,14 +2844,18 @@ run_one_evs_track <- function(comparison_name, track_key, count_matrix, coldata,
     # The Original is fitted once per comparison: reuse the baseline of the
     # discovery-optimal search when it exists (same counts, factors, settings).
     cached <- if (a == "original") original_baseline_cache[[comparison_name]] else NULL
+    # Cook's outliers: the Original uses its own; the EVS views use the Original's.
+    cooks <- if (a == "original") NULL else original_cooks_outliers(comparison_name, evs$raw_dataset, coldata, sf)
     out <- if (!is.null(cached)) cached$out else run_core_analysis(
       count_mats = analysis_dataset_list[keys],
       coldata = coldata,
       dataset_names = paste(comparison_name, unname(track_short[track_key]), keys, sep = "_"),
       annot_df = annot_df,
       analysis_label = paste(comparison_name, analysis_label),
-      size_factors = sf
+      size_factors = sf,
+      cooks_outliers = cooks
     )
+    if (a == "original") remember_original_cooks(comparison_name, out$views$raw_dataset$results)
     for (nm in keys) {
       analysis_results[[nm]] <- list(dds = out$views[[nm]]$dds, results = out$views[[nm]]$results,
                                      dataset_mat = analysis_dataset_list[[nm]])
@@ -3091,7 +3147,7 @@ write_methods_note <- function() {
     "PASs present in both condition-specific top-k sets were classified as Joint; PASs present in only one set were classified as Disjoint for that condition. Joint plus both Disjoint sets formed the Leading Edge, and all other PASs formed the Remainder. EVS defined PAS membership only. Downstream DESeq2 analyses received the corresponding raw-count subset and estimated dispersion parameters within that analysis view. The five reported views were Original (No EVS), NormEVS Lead, NormEVS Rem, RawEVS Lead, and RawEVS Rem.",
     "",
     "## Normalization",
-    if (identical(NORMALIZATION_MODE, "shared")) "Size factors were estimated once per comparison by DESeq2's median-of-ratios method on the full comparison matrix and supplied unchanged to the Original, Leading Edge and Remainder models (and to every model fitted while choosing k), so each PAS had identical normalized counts in the Original and in its EVS partition; this was verified for every view. Because a PAS's gene-wise dispersion depends only on its own counts, the design and the size factors, it is then also identical in every partition; it was therefore estimated once per comparison and reused when evaluating candidate cutoffs (only the trend, prior and MAP dispersions depend on the split), and its equality with the final analysis was verified. Estimating size factors within a partition would let the median-of-ratios reference change with the partition, confounding the effect of the split with a change of normalization." else "Each analysis view estimated its own median-of-ratios size factors from its own PASs (legacy normalization).",
+    "Size factors were estimated once per comparison by DESeq2's median-of-ratios method on the full comparison matrix and supplied unchanged to the Original, Leading Edge and Remainder models (and to every model fitted while choosing k), so each PAS had identical normalized counts in the Original and in its EVS partition; this was verified for every view. Because a PAS's gene-wise dispersion depends only on its own counts, the design and the size factors, it is then also identical in every partition; it was therefore estimated once per comparison and reused when evaluating candidate cutoffs (only the trend, prior and MAP dispersions depend on the split), and its equality with the final analysis was verified. Estimating size factors within a partition would let the median-of-ratios reference change with the partition, confounding the effect of the split with a change of normalization.",
     "",
     "## Choice of the EVS cutoff k",
     sprintf("Three cutoff rules were analyzed: k = 5,000, the prespecified cutoff of the original study; a Prior-optimal k chosen for each comparison before any differential test; and an exploratory Discovery-optimal k (below). EVS increases detection power through dispersion estimation: the Leading Edge and Remainder each receive their own mean-dispersion trend, and DESeq2 shrinks each PAS's gene-wise dispersion toward its own set's trend under a log-normal prior, log alpha_i ~ N(log alpha_tr(mean_i), sigma_d^2). The narrower this prior, the more information each PAS borrows and the more precise its final dispersion and Wald statistic. DESeq2 estimates sigma_d^2 as the squared median absolute deviation of log gene-wise dispersions about the trend minus their sampling variance, trigamma((m - p)/2) for m samples and p coefficients (Love et al. 2014). For a candidate k, the split was built exactly as in the analysis (NormEVS ranking; top-k PASs by absolute PC1 loading in each condition; Leading Edge = their union; Remainder = all other PASs), and each set was processed with the analysis' own DESeq2 steps (size factors, gene-wise dispersions and the power trend described below). The pooled prior variance W(k) = (n_LE sigma_LE^2 + n_REM sigma_REM^2)/(n_LE + n_REM) was computed before DESeq2's lower bound of 0.25, which would otherwise mask differences between splits, and the Prior-optimal k was the value minimizing W(k). Too small a k leaves structured PASs in the Remainder and widens its prior; too large a k places unstructured PASs in the Leading Edge and widens its prior; the minimum lies where the two dispersion laws separate. To locate the global minimum, W(k) was evaluated at %d values of k evenly spaced on the logarithmic scale from %d to %.0f%% of the PASs in the comparison (or less, so that at least %.0f%% of the PASs remained in the Remainder), and the minimum was then refined between the neighbours of the best value by Brent's method (stats::optimize, tolerance %d). Only counts and dispersion estimates entered W(k); no condition effect, p-value or significance call was used. The same k was used for the NormEVS and RawEVS tracks.", OPTIMAL_K_GRID_POINTS, OPTIMAL_K_MIN, 100 * OPTIMAL_K_MAX_FRACTION, 100 * OPTIMAL_K_MIN_REMAINDER_FRACTION, as.integer(OPTIMAL_K_TOL)),
@@ -3123,6 +3179,9 @@ write_methods_note <- function() {
     "",
     "## Weak composite-null effect",
     sprintf("Weak-effect support was tested with DESeq2 results(..., lfcThreshold=%.1f, altHypothesis='lessAbs'). Weak-CNH support required Benjamini-Hochberg adjusted p-value < %.2f and |apeglm LFC| < %.1f. A lessAbs rejection alone was not reported as differential expression. A PAS was reported as final Weak only when the same sub-boundary PAS also passed HBFSS.", lfc_boundary, BH_FDR_WEAK, lfc_boundary),
+    "",
+    "## Multiple testing",
+    "For each of the three DESeq2 tests (Wald, greaterAbs, lessAbs), the Benjamini-Hochberg correction was applied once per analysis: over the raw p-values of the Original, and over the raw p-values of the Leading Edge and the Remainder combined, which are disjoint and together contain every PAS of the comparison. DESeq2's independent filtering was not used, because it chooses a different mean-count filter in each view from that view's own results. Cook's-distance outliers were identified once per comparison, by DESeq2's default rule (Cook's distance above the 0.99 quantile of the F(p, m - p) distribution) in the Original's fit, and the p-values of those PASs were removed in every view, so the Original and the EVS analyses tested the same PASs. HBFSS used the Wald statistics and its own empirical null and higher-criticism threshold, so neither the BH family nor the Cook's rule applied to it.",
     "",
     "## Empirical-null calibration, higher criticism, and HBFSS",
     sprintf(
@@ -3593,22 +3652,20 @@ save_figure_1_optimal_k <- function() {
 # the smallest k giving that partition.
 #
 # Controlled comparison with the Original
-#   * Normalization. With SEQUENCE_NORMALIZATION = shared (default) the size
-#     factors are estimated once on the full comparison matrix and used by the
-#     Original, the LE and the REM, so a PAS has identical normalized counts in
-#     every view; subset (legacy) lets each view estimate its own and is used
-#     here only as the alternative in the ablation table.
+#   * Normalization. The size factors are estimated once on the full
+#     comparison matrix and used by the Original, the LE and the REM, so a PAS
+#     has identical normalized counts in every view.
 #   * Gene-wise dispersions. With shared size factors a PAS's gene-wise
 #     dispersion is the same in every partition, so it is estimated once per
 #     comparison (comparison_gene_dds) and reused for every k; only the trend,
 #     prior and MAP dispersions are recomputed. The final analysis estimates
 #     them from scratch and the equality is checked.
-#   * Multiple testing. Standard, Strong and Weak are counted with ONE BH
-#     correction over the combined LE + REM raw p-values of each hypothesis
-#     family, and the Original with one BH over its own raw p-values (same
-#     universe, same eligibility, no independent filtering). The manuscript's
-#     per-view counts are kept as the "_legacy" columns. HBFSS keeps its own
-#     per-view calibration; BH does not apply to it.
+#   * Multiple testing. As in the whole pipeline, Standard, Strong and Weak use
+#     ONE BH correction over the combined LE + REM raw p-values of each test,
+#     and the Original one BH over its own raw p-values (same universe, same
+#     eligibility, no independent filtering, the Original's Cook's outliers in
+#     every view).
+#     HBFSS keeps its own per-view calibration; BH does not apply to it.
 #   * The Original is fitted once per comparison and reused for every k and for
 #     the final analysis.
 #
@@ -3633,7 +3690,7 @@ save_figure_1_optimal_k <- function() {
 # labelled stable-plateau cutoff), a common cutoff across the four comparisons
 # (never replacing them), the NormEVS vs RawEVS comparison (RawEVS is also
 # analysed at the NormEVS window k, as matched diagnostics), and an
-# ablation (alternative normalization, pooled LE + REM null).
+# ablation (pooled LE + REM null).
 #
 # EXPLORATORY. Only the dispersion window is chosen without the test results;
 # the choice within it uses them, so its discoveries are not protected by the
@@ -3649,7 +3706,7 @@ disc_env_int <- function(name, default) {
   v <- suppressWarnings(as.integer(Sys.getenv(name, unset = as.character(default))))
   if (length(v) != 1L || is.na(v) || v < 1L) default else v
 }
-NORMALIZATION_MODE <- Sys.getenv("SEQUENCE_NORMALIZATION", unset = "shared")
+NORMALIZATION_MODE <- "shared"   # size factors from the full comparison matrix, in every view
 DISCOVERY_SIGNIFICANCE <- c("Standard", "Strong", "Weak", "HBFSS")
 DISCOVERY_OBJECTIVE <- Sys.getenv("SEQUENCE_DISCOVERY_OBJECTIVE", unset = "HBFSS")
 DISC_SCAN_COARSE <- disc_env_int("SEQUENCE_DISCOVERY_SCAN_COARSE", 250L)
@@ -3672,10 +3729,8 @@ DISC_PLATEAU_FRACTION <- 0.95
 DISC_REFINE_CALLS <- trimws(strsplit(Sys.getenv("SEQUENCE_DISCOVERY_REFINE", unset = "Standard,HBFSS"), ",")[[1]])
 DISC_TRACKS <- trimws(strsplit(Sys.getenv("SEQUENCE_DISCOVERY_TRACKS", unset = "normalized_evs,raw_evs"), ",")[[1]])
 DISC_CHECKPOINT_DIR <- Sys.getenv("SEQUENCE_CHECKPOINT_DIR", unset = paste0(multi_output_root, "_checkpoints"))
-DISC_COUNT_NAMES <- c("Standard", "Strong", "Weak", "HBFSS", "Standard_legacy", "Strong_legacy", "Weak_legacy",
-                      "n_tested", "n_with_pvalue")
+DISC_COUNT_NAMES <- c("Standard", "Strong", "Weak", "HBFSS", "n_tested", "n_with_pvalue")
 
-if (!NORMALIZATION_MODE %in% c("shared", "subset")) stop("SEQUENCE_NORMALIZATION must be shared or subset.")
 if (!DISCOVERY_OBJECTIVE %in% DISCOVERY_SIGNIFICANCE) {
   stop("SEQUENCE_DISCOVERY_OBJECTIVE must be one of: ", paste(DISCOVERY_SIGNIFICANCE, collapse = ", "))
 }
@@ -3700,9 +3755,9 @@ size_factors_match <- function(dds, size_factors) {
   isTRUE(all.equal(unname(sizeFactors(dds)), unname(size_factors[colnames(dds)]), tolerance = 1e-12))
 }
 
-# Per-PAS calls of one analysis (a named list of view results): the combined
-# BH ("global") Standard, Strong and Weak, HBFSS as calibrated per view, and the
-# manuscript's per-view ("legacy") flags.
+# Per-PAS calls of one analysis (a named list of view results): Standard,
+# Strong and Weak from one BH over all its views' raw p-values (as in
+# call_significance), HBFSS as calibrated per view.
 discovery_flags <- function(res_list) {
   cols <- c("feature_id", "pvalue", "resGA_pvalue", "resLA_pvalue", "lfc_shrunk",
             "standard_flag", "strong_cnh_flag", "weak_significant_flag", "hbfss_flag")
@@ -3729,9 +3784,6 @@ discovery_flags <- function(res_list) {
   d$Standard <- big & !is.na(d$padj_global) & d$padj_global < BH_FDR_STANDARD
   d$Strong <- big & !is.na(d$padjGA_global) & d$padjGA_global < BH_FDR_STRONG
   d$Weak <- small & !is.na(d$padjLA_global) & d$padjLA_global < BH_FDR_WEAK & d$HBFSS
-  d$Standard_legacy <- d$standard_flag %in% TRUE
-  d$Strong_legacy <- d$strong_cnh_flag %in% TRUE
-  d$Weak_legacy <- d$weak_significant_flag %in% TRUE
   d
 }
 
@@ -3745,8 +3797,7 @@ apply_hbfss_calls <- function(flags, hbfss) {
 
 count_discoveries <- function(flags) {
   c(Standard = sum(flags$Standard), Strong = sum(flags$Strong), Weak = sum(flags$Weak), HBFSS = sum(flags$HBFSS),
-    Standard_legacy = sum(flags$Standard_legacy), Strong_legacy = sum(flags$Strong_legacy),
-    Weak_legacy = sum(flags$Weak_legacy), n_tested = nrow(flags), n_with_pvalue = sum(is.finite(flags$pvalue)))
+    n_tested = nrow(flags), n_with_pvalue = sum(is.finite(flags$pvalue)))
 }
 
 # HBFSS with ONE empirical null and HC threshold for LE + REM pooled (diagnostic).
@@ -3790,7 +3841,7 @@ discovery_context <- function(comparison_name, raw, coldata, annot_df, track_key
                format(sum(as.numeric(raw %*% seq_len(ncol(raw)))), scientific = FALSE),
                BH_FDR_STANDARD, BH_FDR_STRONG, BH_FDR_WEAK, lfc_boundary, HC_ALPHA0,
                paste(TREND_B_RANGE, collapse = ","), TREND_B_COARSE_STEP, TREND_B_FINE_STEP,
-               DISC_MIN_SET_SIZE, DISC_MIN_SET_FRACTION, sep = "|")
+               DISC_MIN_SET_SIZE, DISC_MIN_SET_FRACTION, MULTIPLE_TESTING_RULE, sep = "|")
   dir.create(DISC_CHECKPOINT_DIR, recursive = TRUE, showWarnings = FALSE)
   ctx <- list(comparison = comparison_name, track = track_key, raw = raw, coldata = coldata, annot = annot_df,
               sf = size_factors, gene_dds = gene_dds, orig = original_counts, depth = depth, union_at = union_at,
@@ -3837,10 +3888,6 @@ discovery_row <- function(ctx, k, stage, out, runtime) {
     r[[paste0(m, "_Gain")]] <- e - o
     r[[paste0(m, "_Gain_Pct")]] <- if (is.finite(e) && o > 0) 100 * (e - o) / o else NA_real_
   }
-  for (m in c("Standard", "Strong", "Weak")) {
-    r[[paste0("Original_", m, "_legacy")]] <- unname(ctx$orig[[paste0(m, "_legacy")]])
-    r[[paste0("EVS_", m, "_legacy")]] <- unname(cnt[[paste0(m, "_legacy")]])
-  }
   views <- c(LE = "leading_edge_dataset", REM = "remainder_dataset")
   for (s in names(views)) {
     for (m in DISCOVERY_SIGNIFICANCE) {
@@ -3884,7 +3931,8 @@ discovery_evaluate <- function(ctx, k, stage) {
     # failure stops the evaluation before the larger (slower) set is fitted.
     order_fit <- order(vapply(mats, nrow, integer(1)))
     nm <- paste(ctx$comparison, unname(track_short[ctx$track]), "k", k, names(mats), sep = "_")
-    fits <- Map(function(m, n) fit_view_model(m, ctx$coldata, n, size_factors = ctx$sf, gene_dds = ctx$gene_dds),
+    fits <- Map(function(m, n) fit_view_model(m, ctx$coldata, n, size_factors = ctx$sf, gene_dds = ctx$gene_dds,
+                                              cooks_outliers = ctx$cooks_outliers),
                 mats[order_fit], nm[order_fit])
     names(fits) <- names(mats)[order_fit]
     fits <- fits[names(mats)]
@@ -4184,7 +4232,7 @@ discovery_search <- function(ctx) {
 
 discovery_objective_track <- function() if ("normalized_evs" %in% DISC_TRACKS) "normalized_evs" else DISC_TRACKS[1]
 
-# The Original baseline (once per comparison and normalization mode), the
+# The Original baseline (once per comparison), the
 # search on each track, and the run's k.
 choose_discovery_k <- function(comparison_name, count_matrix, coldata, annot_df) {
   raw <- coerce_raw_count_matrix_for_deseq2(count_matrix, context = paste0(comparison_name, " discovery-optimal k"))
@@ -4194,6 +4242,7 @@ choose_discovery_k <- function(comparison_name, count_matrix, coldata, annot_df)
   orig <- run_core_analysis(list(raw_dataset = raw), coldata, base_name, annot_df,
                             paste(comparison_name, ORIGINAL_LABEL), size_factors = sf)
   original_baseline_cache[[comparison_name]] <<- list(out = orig, size_factors = sf)
+  remember_original_cooks(comparison_name, orig$views$raw_dataset$results)
   ores <- orig$views$raw_dataset$results
   oflags <- discovery_flags(list(raw_dataset = ores))
   ocnt <- count_discoveries(oflags)
@@ -4210,6 +4259,7 @@ choose_discovery_k <- function(comparison_name, count_matrix, coldata, annot_df)
   for (tk in DISC_TRACKS) {
     ctx <- discovery_context(comparison_name, raw, coldata, annot_df, tk, sf, ocnt, gdds)
     ctx$matched_k <- matched
+    ctx$cooks_outliers <- original_cooks_cache[[comparison_name]]
     res <- discovery_search(ctx)
     discovery_search_rows[[paste(comparison_name, tk)]] <<- res$rows
     discovery_summary_rows[[paste(comparison_name, tk)]] <<- res$selection
@@ -4242,16 +4292,21 @@ validate_track_normalization <- function(comparison_name, track_key, analysis_re
                    length(evs$leading_edge_ids) + length(evs$remainder_ids) == length(ids), tr)
   same_samples <- all(vapply(analysis_results, function(a) identical(colnames(a$dds), rownames(coldata)), logical(1)))
   add_validation("Original and EVS sample identities match", comparison_name, same_samples, tr)
-  if (is.null(sf)) {
-    add_validation("Shared normalization is propagated", comparison_name, NA, paste(tr, "(legacy subset mode)"))
-    own <- all(vapply(analysis_results, function(a) {
-      chk <- DESeq2::estimateSizeFactors(DESeq2::DESeqDataSetFromMatrix(
-        DESeq2::counts(a$dds), colData = coldata, design = make_design_formula(coldata)))
-      isTRUE(all.equal(unname(sizeFactors(chk)), unname(sizeFactors(a$dds))))
-    }, logical(1)))
-    add_validation("Legacy settings reproduce per-view size factors", comparison_name, own, tr)
-    return(invisible(TRUE))
-  }
+  ev <- c("leading_edge_dataset", "remainder_dataset")
+  oc <- original_cooks_cache[[comparison_name]]
+  cooks_ok <- !is.null(oc) && all(vapply(ev, function(v) {
+    r <- analysis_results[[v]]$results
+    out <- r$cooks_outlier %in% TRUE
+    setequal(r$feature_id[out], intersect(oc, r$feature_id)) && all(is.na(r$pvalue[out]))
+  }, logical(1)))
+  add_validation("Cook's outliers are the Original's in every view", comparison_name, cooks_ok,
+                 sprintf("%s; %d outlier PASs in the Original", tr, length(oc)))
+  ab <- do.call(rbind, lapply(ev, function(v) analysis_results[[v]]$results[, c("pvalue", "padj")]))
+  q <- rep(NA_real_, nrow(ab))
+  okp <- is.finite(ab$pvalue)
+  q[okp] <- stats::p.adjust(ab$pvalue[okp], method = "BH")
+  add_validation("Standard padj is one BH over LE + REM, without independent filtering", comparison_name,
+                 isTRUE(all.equal(q, ab$padj)), tr)
   add_validation("Shared normalization is propagated", comparison_name,
                  all(vapply(analysis_results, function(a) isTRUE(size_factors_match(a$dds, sf)), logical(1))), tr)
   o0 <- analysis_results$raw_dataset %||% {
@@ -4309,8 +4364,8 @@ verify_discovery_selection <- function(comparison_name) {
   invisible(same)
 }
 
-# Ablation at a cutoff: how normalization, the null, the BH family and each
-# partition contribute to the gain over the Original (NormEVS).
+# Ablation at a cutoff: how the separate Leading Edge and Remainder empirical
+# nulls and each partition contribute to the gain over the Original (NormEVS).
 discovery_ablation <- function(comparison_name, count_matrix, coldata, annot_df, k, label, final_results = NULL) {
   raw <- coerce_raw_count_matrix_for_deseq2(count_matrix, context = "ablation")
   depth <- evs_union_depth(raw, coldata, "normalized_evs")
@@ -4318,18 +4373,14 @@ discovery_ablation <- function(comparison_name, count_matrix, coldata, annot_df,
   mats <- list(leading_edge_dataset = raw[le, , drop = FALSE], remainder_dataset = raw[!le, , drop = FALSE])
   sf <- comparison_size_factors(raw, coldata)
   fit_with <- function(size_factors, tag) {
-    fits <- Map(function(m, n) fit_view_model(m, coldata, n, size_factors = size_factors), mats,
+    fits <- Map(function(m, n) fit_view_model(m, coldata, n, size_factors = size_factors,
+                                              cooks_outliers = original_cooks_cache[[comparison_name]]), mats,
                 paste(comparison_name, "ablation", tag, k, names(mats), sep = "_"))
     names(fits) <- names(mats)
     sig <- call_significance(fits, paste(comparison_name, "ablation", tag, k), annot_df, lean = TRUE)
     list(results = lapply(sig$views, `[[`, "results"), null = sig$null)
   }
   primary <- if (!is.null(final_results)) list(results = final_results, null = NULL) else fit_with(sf, "primary")
-  alt_sf <- if (is.null(sf)) {
-    full <- DESeq2::estimateSizeFactors(DESeq2::DESeqDataSetFromMatrix(raw, colData = coldata, design = make_design_formula(coldata)))
-    stats::setNames(as.numeric(sizeFactors(full)), colnames(raw))
-  } else NULL
-  alt <- fit_with(alt_sf, if (is.null(sf)) "shared" else "subset")
   base <- original_baseline_cache[[comparison_name]]
   oflags <- discovery_flags(list(raw_dataset = base$out$views$raw_dataset$results))
   row <- function(variant, flags, extra = list()) {
@@ -4344,20 +4395,14 @@ discovery_ablation <- function(comparison_name, count_matrix, coldata, annot_df,
       d[[paste0("LE_", m)]] <- sum(flags[[m]][flags$View == "leading_edge_dataset"])
       d[[paste0("REM_", m)]] <- sum(flags[[m]][flags$View == "remainder_dataset"])
     }
-    for (m in c("Standard", "Strong", "Weak")) {
-      d[[paste0("EVS_", m, "_legacy")]] <- cnt[[paste0(m, "_legacy")]]
-      d[[paste0("Original_", m, "_legacy")]] <- ocnt[[paste0(m, "_legacy")]]
-    }
     for (nm in names(extra)) d[[nm]] <- extra[[nm]]
     d
   }
   pf <- discovery_flags(primary$results)
   pooled <- pooled_null_hbfss(primary$results, paste(comparison_name, label, "pooled LE+REM"))
   pooled_flags <- apply_hbfss_calls(pf, pooled$hbfss[pf$feature_id])
-  af <- discovery_flags(alt$results)
   rbind(
-    row(sprintf("Primary: %s size factors, per-view null, combined BH", NORMALIZATION_MODE), pf),
-    row(sprintf("Alternative normalization: %s size factors", if (is.null(sf)) "shared" else "subset (legacy)"), af),
+    row("Primary: shared size factors, separate LE and REM nulls, one BH per analysis", pf),
     row("Pooled LE + REM empirical null for HBFSS", pooled_flags,
         list(Pooled_Null_SD = pooled$null_sd, Pooled_Htau = pooled$htau))
   )
@@ -4375,33 +4420,6 @@ record_discovery_ablation <- function(comparison_name, count_matrix, coldata, an
   }
   discovery_ablation_rows[[comparison_name]] <<- dplyr::bind_rows(a)
   invisible(TRUE)
-}
-
-# Combined-BH counts of every run (Original vs LE + REM, both tracks).
-build_global_bh_counts <- function() {
-  out <- list()
-  for (cn in comparison_table$comparison_name) {
-    regn <- paper_registry[[registry_key(cn, "normalized_evs")]]
-    if (is.null(regn)) next
-    o <- regn$analysis_results$raw_dataset
-    if (is.null(o)) next
-    oc <- count_discoveries(discovery_flags(list(raw_dataset = o$results)))
-    out[[length(out) + 1L]] <- data.frame(Comparison = cn, Analysis = ORIGINAL_LABEL, k = NA_integer_, t(oc))
-    for (tk in c("normalized_evs", "raw_evs")) {
-      reg <- paper_registry[[registry_key(cn, tk)]]
-      if (is.null(reg)) next
-      ar <- reg$analysis_results
-      ec <- count_discoveries(discovery_flags(list(leading_edge_dataset = ar$leading_edge_dataset$results,
-                                                   remainder_dataset = ar$remainder_dataset$results)))
-      out[[length(out) + 1L]] <- data.frame(Comparison = cn, Analysis = paste(unname(track_short[tk]), "LE + REM"),
-                                            k = get_active_evs_cutoff(cn), t(ec))
-    }
-  }
-  if (!length(out)) return(NULL)
-  d <- dplyr::bind_rows(out)
-  d$Cutoff_Method <- CUTOFF_METHOD_LABEL
-  d$Normalization_Mode <- NORMALIZATION_MODE
-  d
 }
 
 # Common cutoff: the k (evaluated in all four comparisons) with the largest
@@ -4432,8 +4450,6 @@ discovery_common_cutoff <- function(rows_all) {
 save_discovery_outputs <- function() {
   out <- summary_table_dir
   if (length(validation_rows)) save_csv(dplyr::bind_rows(validation_rows), file.path(out, "Table_Validation_Checks.csv"))
-  gb <- build_global_bh_counts()
-  if (!is.null(gb)) save_csv(gb, file.path(out, "Table_DE_Method_Counts_Global_BH.csv"))
   if (!length(discovery_search_rows)) return(invisible(FALSE))
   rows <- dplyr::bind_rows(discovery_search_rows)
   sel <- dplyr::bind_rows(discovery_summary_rows)
@@ -6033,6 +6049,114 @@ comparison_inputs <- lapply(seq_len(nrow(comparison_table)), function(i) {
   )
 })
 names(comparison_inputs) <- comparison_table$comparison_name
+
+# =============================================================================
+# DIAGNOSTIC ONLY (SEQUENCE_DIAGNOSTIC=le_factor; no manuscript output)
+# Does a shared within-condition sample factor explain the wide Leading Edge
+# empirical null? For each comparison at k = SEQUENCE_DIAGNOSTIC_K (default
+# 5000, NormEVS split, shared size factors):
+#   (1) Correlation: root-mean-square correlation between PASs of the
+#       within-condition centred log2 normalized counts, per view (2,000 PASs
+#       sampled per view), and its excess over independence (1/df per pair,
+#       df = samples - conditions; Efron 2007, correlated z-values widen or
+#       narrow the empirical null).
+#   (2) Model: the pipeline's analysis (trend, prior, MAP, Wald, apeglm, Cook's
+#       outliers from the Original, combined BH, per-view fdrtool null, HC,
+#       HBFSS) with design ~ condition (current) and with ~ f_trt + f_untrt +
+#       condition, where f_<cond> is that condition's standardized PC1 sample
+#       score (the factor that defines the split) and 0 in the other
+#       condition. Both designs are applied to the Original as well.
+# Writes Diagnostic_LE_Factor/Table_Diagnostic_LE_Correlation.csv and
+# Table_Diagnostic_LE_Factor_Model.csv, then stops.
+# =============================================================================
+if (identical(Sys.getenv("SEQUENCE_DIAGNOSTIC"), "le_factor")) {
+  diag_k <- as.integer(Sys.getenv("SEQUENCE_DIAGNOSTIC_K", unset = "5000"))
+  diag_dir <- file.path(multi_output_root, "Diagnostic_LE_Factor")
+  dir.create(diag_dir, recursive = TRUE, showWarnings = FALSE)
+  base_design <- make_design_formula
+  factor_design <- function(coldata) {
+    if (all(c("f_trt", "f_untrt") %in% names(coldata))) ~ f_trt + f_untrt + condition else ~ condition
+  }
+  corr_rows <- list()
+  fit_rows <- list()
+  set.seed(1)
+  for (cmp in names(comparison_inputs)) {
+    message("Diagnostic (LE factor): ", cmp, ", k = ", diag_k)
+    raw <- comparison_inputs[[cmp]]$count_matrix
+    cd <- comparison_inputs[[cmp]]$coldata
+    depth <- evs_union_depth(raw, cd, "normalized_evs")
+    le <- depth <= diag_k
+    sf_full <- stats::setNames(as.numeric(DESeq2::sizeFactors(DESeq2::estimateSizeFactors(
+      DESeq2::DESeqDataSetFromMatrix(raw, colData = cd, design = ~ condition)))), colnames(raw))
+    nc <- sweep(raw, 2, sf_full[colnames(raw)], "/")
+
+    # (1) correlation between PASs, within-condition residuals
+    lg <- log2(nc + 1)
+    rs <- lg
+    for (cond in unique(as.character(cd$condition))) {
+      j <- as.character(cd$condition) == cond
+      rs[, j] <- lg[, j, drop = FALSE] - rowMeans(lg[, j, drop = FALSE])
+    }
+    df_res <- ncol(raw) - length(unique(as.character(cd$condition)))
+    views <- list(Original = rownames(raw), LeadingEdge = rownames(raw)[le], Remainder = rownames(raw)[!le])
+    for (v in names(views)) {
+      ids <- views[[v]]
+      ids <- ids[rowSums(rs[ids, , drop = FALSE]^2) > 0]
+      sel <- sample(ids, min(2000L, length(ids)))
+      r <- stats::cor(t(rs[sel, , drop = FALSE]))
+      r2 <- mean(r[upper.tri(r)]^2)
+      corr_rows[[length(corr_rows) + 1L]] <- data.frame(
+        Comparison = cmp, k = diag_k, View = v, n_PAS = length(views[[v]]), n_sampled = length(sel),
+        RMS_correlation = sqrt(r2), RMS_if_independent = sqrt(1 / df_res),
+        Excess_RMS_correlation = sqrt(max(0, r2 - 1 / df_res)))
+    }
+
+    # (2) the analysis with and without the PC1 sample factor
+    cdf <- cd
+    cdf$f_trt <- 0
+    cdf$f_untrt <- 0
+    for (cond in c("trt", "untrt")) {
+      j <- which(as.character(cd$condition) == cond)
+      sc <- stats::prcomp(t(as.matrix(nc[, j, drop = FALSE])), center = TRUE, scale. = FALSE, rank. = 1)$x[, 1]
+      cdf[[paste0("f_", cond)]][j] <- sc / stats::sd(sc)
+    }
+    for (model in c("~ condition (current)", "~ PC1 factor + condition")) {
+      make_design_formula <- if (startsWith(model, "~ condition")) base_design else factor_design
+      cdm <- if (startsWith(model, "~ condition")) cd else cdf
+      fit_set <- function(mats, cooks) {
+        fits <- Map(function(m, nm) fit_view_model(m, cdm, paste(cmp, model, nm), size_factors = sf_full,
+                                                   cooks_outliers = cooks), mats, names(mats))
+        names(fits) <- names(mats)
+        call_significance(fits, paste(cmp, model), OrigID_Symbol, lean = TRUE)
+      }
+      o <- tryCatch(fit_set(list(Original = raw), NULL), error = function(e) { message("  ", model, " Original failed: ", conditionMessage(e)); NULL })
+      if (is.null(o)) next
+      oc <- with(o$views$Original$results, feature_id[cooks_outlier %in% TRUE])
+      e <- tryCatch(fit_set(list(LeadingEdge = raw[le, , drop = FALSE], Remainder = raw[!le, , drop = FALSE]), oc),
+                    error = function(err) { message("  ", model, " LE/REM failed: ", conditionMessage(err)); NULL })
+      for (sig in list(o, e)) {
+        if (is.null(sig)) next
+        for (v in names(sig$views)) {
+          r <- sig$views[[v]]$results
+          dds <- sig$views[[v]]$dds
+          nl <- sig$null[sig$null$View == v, , drop = FALSE]
+          pv <- tryCatch(as.numeric(attr(DESeq2::dispersionFunction(dds), "dispPriorVar")), error = function(e) NA_real_)
+          fit_rows[[length(fit_rows) + 1L]] <- data.frame(
+            Comparison = cmp, k = diag_k, Model = model, View = v, n_PAS = nrow(r),
+            Median_Final_Dispersion = stats::median(r$dispersion, na.rm = TRUE), Prior_Variance = pv,
+            Null_SD = nl$null_sd[1], Null_Eta0 = nl$null_fraction_eta0[1], Htau = nl$hbfss_threshold[1],
+            Standard = sum(r$standard_flag %in% TRUE), Strong = sum(r$strong_cnh_flag %in% TRUE),
+            Weak = sum(r$weak_significant_flag %in% TRUE), HBFSS = sum(r$hbfss_flag %in% TRUE))
+        }
+      }
+    }
+    make_design_formula <- base_design
+    save_csv(dplyr::bind_rows(corr_rows), file.path(diag_dir, "Table_Diagnostic_LE_Correlation.csv"))
+    if (length(fit_rows)) save_csv(dplyr::bind_rows(fit_rows), file.path(diag_dir, "Table_Diagnostic_LE_Factor_Model.csv"))
+  }
+  message("Diagnostic written to ", diag_dir)
+  quit(save = "no", status = 0L)
+}
 
 failed_comparisons <- list()
 
