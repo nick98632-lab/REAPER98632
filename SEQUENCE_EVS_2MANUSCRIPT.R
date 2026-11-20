@@ -16,9 +16,8 @@
 #     SEQUENCE_METHODS         cutoff methods to run, comma-separated keys
 #                              (default fixed5000,optimal,discovery)
 #     SEQUENCE_NULL_METHOD     fndr (default), pct0 or theoretical (HBFSS null)
-#     Discovery-optimal k: SEQUENCE_DISCOVERY_CORES, _TRACKS, _OBJECTIVE,
-#     _REFINE, _FINE_REGIONS, _SCAN_COARSE, _SCAN_FINE, _MAX_EVALS, _RESUME and
-#     SEQUENCE_CHECKPOINT_DIR; see DISCOVERY-OPTIMAL k below.
+#     Discovery-optimal k: SEQUENCE_DISCOVERY_CORES, _OBJECTIVE, _REFINE,
+#     _FINE_REGIONS, _SCAN_COARSE and _SCAN_FINE; see DISCOVERY-OPTIMAL k below.
 #
 # The script runs as a master process. The master relaunches itself once per
 # cutoff method (Fixed 5,000, Prior-optimal k, Discovery-optimal k), then
@@ -32,18 +31,17 @@
 #   RT0 vs ZT6, RT2 vs ZT8, RT4 vs ZT10, RT8 vs ZT14
 #
 # ANALYSIS VIEWS PER COMPARISON
-#   Original (No EVS), NormEVS Lead, NormEVS Rem, RawEVS Lead, RawEVS Rem
+#   Original (No EVS), NormEVS Lead, NormEVS Rem
 #
 # EIGENVECTOR SPLITTING
 # Within each condition, prcomp (centred, unscaled) is applied to the PAS-by-
-# sample matrix: DESeq2 median-of-ratios normalized counts for NormEVS, raw
-# counts for RawEVS. PASs are ranked by |PC1 loading| and the top k are taken
+# sample matrix of DESeq2 median-of-ratios normalized counts (NormEVS). PASs are
+# ranked by |PC1 loading| and the top k are taken
 # from each condition. PASs in both top-k sets are Joint, in one set Disjoint;
 # Joint plus Disjoint form the Leading Edge (LE) and all other PASs the
 # Remainder (REM). LE and REM are separate datasets: DESeq2 receives their raw
 # counts with the comparison's shared size factors and
-# estimates its own dispersion trend and prior. The same k is used for NormEVS
-# and RawEVS.
+# estimates its own dispersion trend and prior.
 #
 # CHOICE OF k
 #   Fixed 5,000      the prespecified k of the paper (fixed before any test).
@@ -51,8 +49,9 @@
 #                    narrowest dispersion prior, pooled over Leading Edge and
 #                    Remainder (minimum of W(k)). See OPTIMAL k below.
 #   Discovery-optimal k  EXPLORATORY. Per comparison: first, without any test,
-#                    the window of k with the smallest dispersion estimates in
-#                    both the Leading Edge and the Remainder; then, within it,
+#                    the window of k with the smallest dispersion estimates and
+#                    narrowest priors in both the Leading Edge and the
+#                    Remainder; then, within it,
 #                    the k whose Leading Edge + Remainder gives the largest gain
 #                    in significant PASs over the Original, every candidate
 #                    analysed in full. It uses the test results, so its
@@ -91,8 +90,6 @@
 #   Figure S4  discovery landscape: significant PASs vs k, all four calls,
 #              with the Original, the dispersion window and k*
 #                                                       (Discovery-optimal k run)
-#   Figure S5  NormEVS vs RawEVS; dispersion estimates of both sets over k
-#              (scan) and calibration over k            (Discovery-optimal k run)
 #   Figure 2   DESeq2 dispersions (gene-wise, trend, final), trend exponent b
 #              and prior width: Original vs Leading Edge and Remainder (each run)
 #   Figure S3  the three cutoff methods                         (master)
@@ -275,11 +272,11 @@ save_figure_S3 <- function(multi_root, out_dir, manifest, discoveries) {
   invisible(TRUE)
 }
 
-# Per cutoff method, EVS track and comparison: final significant PASs
+# Per cutoff method and comparison: final significant PASs
 # (Std | Strong | Weak | HBFSS) in the Leading Edge and Remainder, and the
 # Original (No EVS) reference. Leading Edge and Remainder are disjoint.
 collect_cross_method_discoveries <- function(multi_root) {
-  views <- c("NormEVS Lead", "NormEVS Rem", "RawEVS Lead", "RawEVS Rem", ORIGINAL_LABEL)
+  views <- c("NormEVS Lead", "NormEVS Rem", ORIGINAL_LABEL)
   flag_cols <- c(Std = "Std", Strong = "Strong", Weak = "Weak", HBFSS = "HBFSS_sig")
   rows <- list()
   for (m in METHOD_LEVELS) {
@@ -301,8 +298,7 @@ collect_cross_method_discoveries <- function(multi_root) {
     }
   }
   out <- do.call(rbind, rows)
-  out$Track <- ifelse(grepl("^NormEVS", out$Analysis), "NormEVS",
-                      ifelse(grepl("^RawEVS", out$Analysis), "RawEVS", "Original"))
+  out$Track <- ifelse(grepl("^NormEVS", out$Analysis), "NormEVS", "Original")
   out$Set <- ifelse(grepl("Lead$", out$Analysis), "Leading Edge",
                     ifelse(grepl("Rem$", out$Analysis), "Remainder", "Original"))
   out
@@ -582,10 +578,7 @@ dataset_short <- c(
   remainder_dataset = "Rem"
 )
 
-track_short <- c(
-  normalized_evs = "NormEVS",
-  raw_evs = "RawEVS"
-)
+track_short <- c(normalized_evs = "NormEVS")
 
 dataset_key_order <- c(
   "raw_dataset",
@@ -676,14 +669,11 @@ if (requireNamespace("RhpcBLASctl", quietly = TRUE)) {
 DISCOVERY_K <- list()
 discovery_search_rows <- list()
 discovery_summary_rows <- list()
-discovery_coverage_rows <- list()
-discovery_ablation_rows <- list()
 discovery_wscan_rows <- list()
 discovery_window_rows <- list()
 original_baseline_cache <- list()
 # The Original's Cook's outlier PASs per comparison: applied in every view.
 original_cooks_cache <- list()
-MULTIPLE_TESTING_RULE <- "BH per analysis (LE+REM combined), no independent filtering, Cook's outliers from the Original"
 validation_rows <- list()
 
 get_active_evs_cutoff <- function(comparison_name) {
@@ -1395,7 +1385,7 @@ create_all_figures_zip <- function() {
   figure_files <- all_png[keep]
 
   # The global TWAS method-count figure is intentionally excluded because the
-  # per-comparison five-view TWAS panels already contain the same count summary.
+  # per-comparison three-view TWAS panels already contain the same count summary.
   figure_files <- figure_files[
     !grepl("Figure_TWAS_Method_Counts\\.png$", figure_files)
   ]
@@ -1437,8 +1427,6 @@ create_all_tables_zip <- function() {
                 "Table_EVS_Composition.csv", "Table_Optimal_k_Search.csv",
                 "Table_Validation_Checks.csv",
                 "Table_Discovery_Search_All_k.csv", "Table_Discovery_Optimal_k.csv",
-                "Table_Discovery_Coverage.csv", "Table_Discovery_Common_Cutoff.csv",
-                "Table_Discovery_Ablation.csv", "Table_Discovery_Matched_Cutoffs.csv",
                 "Table_Discovery_Dispersion_vs_Discoveries.csv",
                 "Table_Discovery_Dispersion_Scan.csv", "Table_Discovery_Dispersion_Window.csv")) {
     add_if_exists(file.path(summary_table_dir, tab))
@@ -1717,16 +1705,7 @@ coerce_raw_count_matrix_for_deseq2 <- function(count_mat, context = "count matri
 }
 
 make_rank_matrix_for_track <- function(count_matrix, coldata, track_key) {
-  track_key <- match.arg(track_key, c("normalized_evs", "raw_evs"))
-
-  if (track_key == "raw_evs") {
-    return(
-      list(
-        rank_matrix = as.data.frame(count_matrix),
-        preprocessing_label = "Raw counts prior to EVS; PCA is performed directly on raw counts"
-      )
-    )
-  }
+  track_key <- match.arg(track_key, "normalized_evs")
 
   dds_init <- DESeq2::DESeqDataSetFromMatrix(
     countData = coerce_raw_count_matrix_for_deseq2(
@@ -1805,15 +1784,13 @@ compute_pc1_loading_table <- function(value_df, sample_names, top_n, preprocessi
 }
 
 build_eigenvector_split <- function(comparison_name, count_matrix, coldata, track_key) {
-  track_key <- match.arg(track_key, c("normalized_evs", "raw_evs"))
+  track_key <- match.arg(track_key, "normalized_evs")
   empirical_k <- get_active_evs_cutoff(comparison_name)
 
-  # The EVS matrix is used only to choose feature IDs. The normalized track
+  # The EVS matrix is used only to choose feature IDs. NormEVS
   # follows the supplied workflow: median-of-ratios normalization of the full
   # RT/ZT comparison matrix, followed by condition-specific PCA/PC1 eigenvectors.
-  # RawEVS repeats the same PCA/ranking rule without pre-split normalization.
-  # Both tracks use the same comparison-specific k so preprocessing
-  # is the only difference in the selection rule. Downstream DESeq2 always
+ Downstream DESeq2 always
   # receives the corresponding raw-count subset.
   raw_count_matrix <- coerce_raw_count_matrix_for_deseq2(
     count_matrix,
@@ -1945,8 +1922,8 @@ build_eigenvector_split <- function(comparison_name, count_matrix, coldata, trac
 #    Original, and are shrunk upward. The prior above is a normal distribution
 #    for LOG dispersions, so its centre is the mean of the log dispersions.
 #
-# Every DESeq2 fit in this pipeline (Original, Leading Edge, Remainder, RawEVS
-# views, calibration) therefore uses
+# Every DESeq2 fit in this pipeline (Original, Leading Edge, Remainder,
+# calibration) therefore uses
 #     alpha_tr(mean) = a0 + a1 * mean^(-b)
 # with the exponent b estimated (b = 1 is DESeq2's form; dispersion as a power
 # of the mean is the NB-P model, Di et al. 2011), and a0, a1 fitted on the log
@@ -2824,9 +2801,7 @@ run_one_evs_track <- function(comparison_name, track_key, count_matrix, coldata,
     coldata = coldata
   )
 
-  # Original is independent of the EVS preprocessing path and is analyzed once.
   analysis_dataset_list <- dataset_list
-  if (identical(track_key, "raw_evs")) analysis_dataset_list$raw_dataset <- NULL
 
   # Two analyses: the Original, and the Leading Edge with the Remainder. Each
   # view gets its own empirical null and HBFSS threshold (call_significance).
@@ -2916,16 +2891,8 @@ build_support_label <- function(df) {
 
 comparison_analysis_views <- function() {
   data.frame(
-    track_key = c(
-      "normalized_evs",
-      "normalized_evs", "normalized_evs",
-      "raw_evs", "raw_evs"
-    ),
-    dataset_key = c(
-      "raw_dataset",
-      "leading_edge_dataset", "remainder_dataset",
-      "leading_edge_dataset", "remainder_dataset"
-    ),
+    track_key = "normalized_evs",
+    dataset_key = c("raw_dataset", "leading_edge_dataset", "remainder_dataset"),
     stringsAsFactors = FALSE
   )
 }
@@ -3055,7 +3022,7 @@ export_comparison_manuscript_tables <- function(comparison_name) {
     if (nrow(sig_out)) comparison_sig_rows[[length(comparison_sig_rows) + 1L]] <- sig_out
 
     # Individual view figures are optional. Journal-ready review uses the
-    # comparison-level panels generated after all five analysis views are fit.
+    # comparison-level panels generated after all three analysis views are fit.
     if (isTRUE(EXPORT_INDIVIDUAL_VIEW_FIGURES)) {
       dataset_name <- paste(comparison_name, unname(track_short[track_key]), dataset_key, sep = "_")
       volcano <- plot_final_volcano(
@@ -3138,19 +3105,18 @@ write_methods_note <- function() {
         paste0(comparison_table$comparison_name, " k=", vapply(comparison_table$comparison_name, get_active_evs_cutoff, integer(1))),
         collapse = ", "
       ),
-      ". These cutoffs were locked before downstream differential-expression testing. ",
-      "The same active cutoff was applied to NormEVS and RawEVS within each comparison so the two EVS tracks differed only in the matrix used for PC1 ranking, not in the number of PASs selected per condition. ",
-      "NormEVS used DESeq2 median-of-ratios normalized counts before PCA, whereas RawEVS used raw counts before PCA. ",
+      if (identical(CUTOFF_METHOD_KEY, "discovery")) ". These cutoffs were chosen as described under Choice of the EVS cutoff k, using the significance results of candidate cutoffs. " else ". These cutoffs were fixed before any differential-expression test. ",
+      "PCA used DESeq2 median-of-ratios normalized counts of the full comparison matrix (NormEVS). ",
       "Within each condition, prcomp was applied to the transposed feature-by-sample matrix with centering and without scaling. ",
       "PASs were ranked by absolute PC1 loading, and the comparison-specific k highest-loading PASs were selected independently from the RT and ZT condition eigenvectors."
     ),
-    "PASs present in both condition-specific top-k sets were classified as Joint; PASs present in only one set were classified as Disjoint for that condition. Joint plus both Disjoint sets formed the Leading Edge, and all other PASs formed the Remainder. EVS defined PAS membership only. Downstream DESeq2 analyses received the corresponding raw-count subset and estimated dispersion parameters within that analysis view. The five reported views were Original (No EVS), NormEVS Lead, NormEVS Rem, RawEVS Lead, and RawEVS Rem.",
+    "PASs present in both condition-specific top-k sets were classified as Joint; PASs present in only one set were classified as Disjoint for that condition. Joint plus both Disjoint sets formed the Leading Edge, and all other PASs formed the Remainder. EVS defined PAS membership only. Downstream DESeq2 analyses received the corresponding raw-count subset and estimated dispersion parameters within that analysis view. The three reported views were Original (No EVS), NormEVS Lead and NormEVS Rem.",
     "",
     "## Normalization",
     "Size factors were estimated once per comparison by DESeq2's median-of-ratios method on the full comparison matrix and supplied unchanged to the Original, Leading Edge and Remainder models (and to every model fitted while choosing k), so each PAS had identical normalized counts in the Original and in its EVS partition; this was verified for every view. Because a PAS's gene-wise dispersion depends only on its own counts, the design and the size factors, it is then also identical in every partition; it was therefore estimated once per comparison and reused when evaluating candidate cutoffs (only the trend, prior and MAP dispersions depend on the split), and its equality with the final analysis was verified. Estimating size factors within a partition would let the median-of-ratios reference change with the partition, confounding the effect of the split with a change of normalization.",
     "",
     "## Choice of the EVS cutoff k",
-    sprintf("Three cutoff rules were analyzed: k = 5,000, the prespecified cutoff of the original study; a Prior-optimal k chosen for each comparison before any differential test; and an exploratory Discovery-optimal k (below). EVS increases detection power through dispersion estimation: the Leading Edge and Remainder each receive their own mean-dispersion trend, and DESeq2 shrinks each PAS's gene-wise dispersion toward its own set's trend under a log-normal prior, log alpha_i ~ N(log alpha_tr(mean_i), sigma_d^2). The narrower this prior, the more information each PAS borrows and the more precise its final dispersion and Wald statistic. DESeq2 estimates sigma_d^2 as the squared median absolute deviation of log gene-wise dispersions about the trend minus their sampling variance, trigamma((m - p)/2) for m samples and p coefficients (Love et al. 2014). For a candidate k, the split was built exactly as in the analysis (NormEVS ranking; top-k PASs by absolute PC1 loading in each condition; Leading Edge = their union; Remainder = all other PASs), and each set was processed with the analysis' own DESeq2 steps (size factors, gene-wise dispersions and the power trend described below). The pooled prior variance W(k) = (n_LE sigma_LE^2 + n_REM sigma_REM^2)/(n_LE + n_REM) was computed before DESeq2's lower bound of 0.25, which would otherwise mask differences between splits, and the Prior-optimal k was the value minimizing W(k). Too small a k leaves structured PASs in the Remainder and widens its prior; too large a k places unstructured PASs in the Leading Edge and widens its prior; the minimum lies where the two dispersion laws separate. To locate the global minimum, W(k) was evaluated at %d values of k evenly spaced on the logarithmic scale from %d to %.0f%% of the PASs in the comparison (or less, so that at least %.0f%% of the PASs remained in the Remainder), and the minimum was then refined between the neighbours of the best value by Brent's method (stats::optimize, tolerance %d). Only counts and dispersion estimates entered W(k); no condition effect, p-value or significance call was used. The same k was used for the NormEVS and RawEVS tracks.", OPTIMAL_K_GRID_POINTS, OPTIMAL_K_MIN, 100 * OPTIMAL_K_MAX_FRACTION, 100 * OPTIMAL_K_MIN_REMAINDER_FRACTION, as.integer(OPTIMAL_K_TOL)),
+    sprintf("Three cutoff rules were analyzed: k = 5,000, the prespecified cutoff of the original study; a Prior-optimal k chosen for each comparison before any differential test; and an exploratory Discovery-optimal k (below). EVS increases detection power through dispersion estimation: the Leading Edge and Remainder each receive their own mean-dispersion trend, and DESeq2 shrinks each PAS's gene-wise dispersion toward its own set's trend under a log-normal prior, log alpha_i ~ N(log alpha_tr(mean_i), sigma_d^2). The narrower this prior, the more information each PAS borrows and the more precise its final dispersion and Wald statistic. DESeq2 estimates sigma_d^2 as the squared median absolute deviation of log gene-wise dispersions about the trend minus their sampling variance, trigamma((m - p)/2) for m samples and p coefficients (Love et al. 2014). For a candidate k, the split was built exactly as in the analysis (NormEVS ranking; top-k PASs by absolute PC1 loading in each condition; Leading Edge = their union; Remainder = all other PASs), and each set was processed with the analysis' own DESeq2 steps (size factors, gene-wise dispersions and the power trend described below). The pooled prior variance W(k) = (n_LE sigma_LE^2 + n_REM sigma_REM^2)/(n_LE + n_REM) was computed before DESeq2's lower bound of 0.25, which would otherwise mask differences between splits, and the Prior-optimal k was the value minimizing W(k). Too small a k leaves structured PASs in the Remainder and widens its prior; too large a k places unstructured PASs in the Leading Edge and widens its prior; the minimum lies where the two dispersion laws separate. To locate the global minimum, W(k) was evaluated at %d values of k evenly spaced on the logarithmic scale from %d to %.0f%% of the PASs in the comparison (or less, so that at least %.0f%% of the PASs remained in the Remainder), and the minimum was then refined between the neighbours of the best value by Brent's method (stats::optimize, tolerance %d). Only counts and dispersion estimates entered W(k); no condition effect, p-value or significance call was used.", OPTIMAL_K_GRID_POINTS, OPTIMAL_K_MIN, 100 * OPTIMAL_K_MAX_FRACTION, 100 * OPTIMAL_K_MIN_REMAINDER_FRACTION, as.integer(OPTIMAL_K_TOL)),
     "",
     sprintf(paste0(
       "The Discovery-optimal k was chosen in two steps and was exploratory. ",
@@ -3158,15 +3124,13 @@ write_methods_note <- function() {
       "k was scanned every %d over the admissible range and every %d within %d of each Pareto-optimal k of that scan, and the dispersion window was the Pareto set of all scanned k (k for which no other scanned k was at least as small on both criteria and smaller on one). ",
       "Step 2: the complete significance analysis (DESeq2 with the trend below, the three Wald tests, apeglm, per-view empirical nulls, higher criticism and HBFSS) was run at every window k and at every integer within %d of the %d best separated discovery peaks of %s among them. ",
       "For each significance call, the gain over the Original, G(k) = S_LE+REM(k) - S_Original in unique significant PASs, was computed, with the Original fitted once per comparison; k* maximized G(k) over the evaluated k, with ties broken by the smallest k. ",
-      "For Standard, Strong and Weak, S was computed with one Benjamini-Hochberg correction over the combined Leading Edge and Remainder raw p-values of each hypothesis family, and S_Original with one correction over the Original's raw p-values, so both used the same hypothesis universe, eligibility (a finite DESeq2 p-value) and threshold, without independent filtering; HBFSS retained its own calibration. ",
-      "Admissible k were integers of at least %d leaving at least %.0f%% of the PASs (and at least %d) in both the Leading Edge and the Remainder, so that both sets supported a dispersion trend, an empirical null and higher criticism; values of k giving the same Leading Edge were evaluated once, and if the analysis failed at a k below (or above) every k at which it succeeded, all k further out were skipped. Not every admissible k was evaluated, so k* is the best observed cutoff; untested ranges are listed in Table_Discovery_Coverage.csv. ",
-      "The contiguous run of evaluated k whose count stayed at or above %.0f%% of the maximum was reported as a measure of stability (wider than %d: broad plateau; otherwise narrow spike), with the widest such run giving a separately labelled stable-plateau cutoff; a common cutoff maximizing the summed gain over the four comparisons was reported separately. ",
-      "The run's own k was k* of the NormEVS track for %s; RawEVS used the same k", if ("raw_evs" %in% DISC_TRACKS) ", and its own k* and the matched-k comparison of the two tracks were reported as diagnostics" else " (the search was run on the NormEVS track only)", ". Each run started without results from any earlier run, and k = 5,000 was evaluated after the search for comparison only and was not a candidate. ",
+      "S was counted under the same rules as the reported results (see Multiple testing), so S_LE+REM and S_Original used the same PASs, tests and thresholds. ",
+      "Admissible k were integers of at least %d leaving at least %.0f%% of the PASs (and at least %d) in both the Leading Edge and the Remainder, so that both sets supported a dispersion trend, an empirical null and higher criticism; values of k giving the same Leading Edge were evaluated once, and if the analysis failed at a k below (or above) every k at which it succeeded, all k further out were skipped. Not every admissible k was evaluated, so k* is the best observed cutoff. ",
+      "The run's k was k* for %s. ",
       "Only the dispersion window was chosen without the test results; the choice within it used them, so its discoveries are not protected by the nominal FDR, and small final dispersions raise Wald statistics spuriously if the noise is underestimated. The whole procedure was therefore evaluated on simulated data with known truth (Supplementary Figure S2)."),
       DISC_SCAN_COARSE, DISC_SCAN_FINE, DISC_SCAN_COARSE, DISC_SCAN_FINE, DISC_FINE_REGIONS,
       paste(union(DISC_REFINE_CALLS, DISCOVERY_OBJECTIVE), collapse = " and "),
-      DISC_K_MIN, 100 * DISC_MIN_SET_FRACTION, DISC_MIN_SET_SIZE,
-      100 * DISC_PLATEAU_FRACTION, 2L * DISC_SCAN_COARSE, DISCOVERY_OBJECTIVE),
+      DISC_K_MIN, 100 * DISC_MIN_SET_FRACTION, DISC_MIN_SET_SIZE, DISCOVERY_OBJECTIVE),
     "",
     "## DESeq2 model and log2 fold-change shrinkage",
     "Each analysis view was modeled independently with DESeq2 using a negative-binomial generalized linear model with design ~ condition and ZT/untrt as the reference. DESeq2 used the size factors described under Normalization and estimated gene-wise dispersions, the mean-dispersion trend, final dispersions, and Wald statistics for the RT/trt coefficient. The mean-dispersion trend in every view, including the Original, was alpha_tr(mean) = a0 + a1 mean^(-b), DESeq2's parametric form (b = 1; Love et al. 2014) with the exponent estimated, and was fitted on the log scale. DESeq2's default fit failed for the Remainder (a0 < 0), because nearly all well-expressed PASs fall in the Leading Edge and the Remainder's dispersions decline faster than 1/mean without a plateau; DESeq2 would then have substituted a local-regression trend for that group only. DESeq2's gamma-GLM fit also places the trend at the arithmetic mean of the dispersions, above about two thirds of PASs, whereas its prior is normal on the log scale (log alpha_i ~ N(log alpha_tr, sigma_d^2)), whose centre is the mean of the log dispersions. Dispersion as a power of the mean is the NB-P model (Di et al. 2011). For each candidate b, a0 and a1 (both constrained to be at least 1e-8) minimized the sum of squared differences between log gene-wise dispersions and log trend; as in DESeq2's fit, PASs outside 1e-4 to 15 times the current curve were set aside and the fit repeated until the coefficients converged. b was chosen, every 0.1 from 0.5 to 3.5 and then every 0.01 around the best value, to minimize the median absolute residual of log gene-wise dispersion about log trend. Because a log gene-wise dispersion estimate is biased low by psi(nu/2) - log(nu/2) under the chi-square sampling model DESeq2 uses for its prior variance (nu = m - p residual degrees of freedom; -0.130 for 10 samples and 2 coefficients), a0 and a1 were then multiplied by exp(-(psi(nu/2) - log(nu/2))) (1.139), so that the prior was centred on the true rather than the estimated log dispersion; b and the prior variance were unchanged by this correction. The trend was supplied to DESeq2 through dispersionFunction(), and DESeq2's prior-variance estimate, MAP shrinkage, dispersion-outlier rule and Wald test were applied unchanged. Size factors, gene-wise dispersions, MAP dispersions and Wald tests were computed with estimateSizeFactors, estimateDispersionsGeneEst, estimateDispersionsMAP and nbinomWaldTest, the steps DESeq() runs. Log2 fold changes were then shrunken with apeglm. The apeglm-shrunken log2 fold change was the reported effect estimate, the effect term in HBFSS, the direction indicator, and the x-coordinate for all significance figures.",
@@ -3186,7 +3150,7 @@ write_methods_note <- function() {
     "## Empirical-null calibration, higher criticism, and HBFSS",
     sprintf(
       paste0(
-        "The empirical null was estimated separately for each analysis view: the Original (No EVS), and the Leading Edge and the Remainder of each EVS track, each from its own Wald statistics. The Leading Edge and Remainder are different populations, differing in expression range, dispersion law and fraction of changed PASs, and a null shared between them would be too strict for one and too loose for the other (Efron 2008). ",
+        "The empirical null was estimated separately for each analysis view: the Original (No EVS), the Leading Edge and the Remainder, each from its own Wald statistics. The Leading Edge and Remainder are different populations, differing in expression range, dispersion law and fraction of changed PASs, and a null shared between them would be too strict for one and too loose for the other (Efron 2008). ",
         "The finite ordinary DESeq2 Wald statistics of each view were ", if (identical(EMPIRICAL_NULL_METHOD, "theoretical")) "referred to the theoretical N(0,1) null (reference analysis; no empirical correction). " else paste0("supplied to fdrtool with statistic='normal' and cutoff.method='", EMPIRICAL_NULL_METHOD, "'", if (identical(EMPIRICAL_NULL_METHOD, "pct0")) sprintf(" (central %.0f%%%% of the statistics)", 100 * EMPIRICAL_NULL_PCT0) else "", " to estimate a zero-centered normal empirical null and the corresponding empirical-null p-values. "), "The fitted null standard deviation and null fraction (eta0) were reported for every view. ",
         "These empirical p-values were distinct from the ordinary DESeq2 Wald p-values and from the greaterAbs/lessAbs p-values. ",
         "Higher-Criticism scores were then calculated from each view's ordered empirical-null p-values with fdrtool::hc.score, giving one HCp and one Htau per view. ",
@@ -3202,7 +3166,7 @@ write_methods_note <- function() {
     "Overlap was the number of unique HBFSS-significant PASs that also satisfied at least one DESeq2 criterion (Standard, Strong, or Weak-CNH). Overlap was a comparison quantity, not a separate significance test. Because final Weak required HBFSS, every final Weak PAS contributed to the overlap set.",
     "",
     "## PCA comparison after eigenvector splitting",
-    "PCA comparison figures used the same matrices that defined EVS: full-comparison median-of-ratios normalized counts for NormEVS and raw counts for RawEVS. No additional log transformation or post-split re-normalization was applied. Original, Leading Edge, and Remainder were compared within the same preprocessing scale. For each view, the full PCA eigenspectrum was used to calculate the percentage of total variance explained by PC1 and PC2. PC1 eigenvalue retention was calculated as the first eigenvalue of the view divided by the first eigenvalue of the corresponding Original matrix. Original-PC1 loading energy captured by a feature subset was calculated as the sum of squared Original PC1 loadings for that subset divided by the sum of squared Original PC1 loadings for all PASs. Leading Edge and Remainder loading-energy fractions were required to sum to 100%. Treatment-control separation was summarized in the PC1-PC2 plane as centroid distance divided by pooled within-group root-mean-square distance. PCA panels reported PAS count, PC1 explained variance, PC1 eigenvalue retention, Original-PC1 loading-energy fraction, and the separation ratio.",
+    "PCA comparison figures used the same matrices that defined EVS: full-comparison median-of-ratios normalized counts (NormEVS). No additional log transformation or post-split re-normalization was applied. Original, Leading Edge, and Remainder were compared within the same preprocessing scale. For each view, the full PCA eigenspectrum was used to calculate the percentage of total variance explained by PC1 and PC2. PC1 eigenvalue retention was calculated as the first eigenvalue of the view divided by the first eigenvalue of the corresponding Original matrix. Original-PC1 loading energy captured by a feature subset was calculated as the sum of squared Original PC1 loadings for that subset divided by the sum of squared Original PC1 loadings for all PASs. Leading Edge and Remainder loading-energy fractions were required to sum to 100%. Treatment-control separation was summarized in the PC1-PC2 plane as centroid distance divided by pooled within-group root-mean-square distance. PCA panels reported PAS count, PC1 explained variance, PC1 eigenvalue retention, Original-PC1 loading-energy fraction, and the separation ratio.",
     "",
     "## Volcano figures and tables",
     sprintf("All significance volcanoes used the HBFSS plotting coordinates: apeglm-shrunken log2 fold change on the x-axis and -log10(empirical-null p) on the y-axis. Standard DESeq2, Strong greaterAbs, and Weak lessAbs significance were determined from their own DESeq2 p-values and BH-adjusted p-values, then their markers were projected onto these common HBFSS coordinates only for visual comparison. The HBFSS boundary y=Htau/|LFC| and HCp reference were drawn on the same axes. The same key was used throughout: Std = green diamond, Strong = red square, Weak = blue triangle, HBFSS = purple star. Multiple method markers were superimposed at the same PAS coordinate. LessAbs-only PASs remained background. Each volcano reported the number of significant PASs for Std, Strong, Weak, HBFSS, and their HBFSS/DESeq2 overlap and labeled at most %d final significant PASs.", n_top_labels_volcano),
@@ -3212,7 +3176,7 @@ write_methods_note <- function() {
     "Human 3'aTWAS gene symbols were mapped to rat gene symbols by combining database-supported babelgene human-to-rat ortholog mappings (top=FALSE) with direct case-insensitive symbol-equivalent matches present in the WTTS annotation. For every comparison and analysis view, mapped TWAS orthologs were intersected with Standard, Strong, Weak, and HBFSS WTTS discoveries. Concise TWAS tables reported the human TWAS symbol, rat ortholog, total TWAS records, distinct TWAS transcript count, TWAS multi-transcript/APA status, total WTTS PAS count, WTTS multi-PAS/APA status, significant WTTS PAS identifiers, significant multi-PAS status, and the method(s) and analysis view in which significance was observed.",
     "",
     "## Output organization",
-    "Original (No EVS), NormEVS Lead, NormEVS Rem, RawEVS Lead, and RawEVS Rem were written to separate folders within each comparison for view-specific tables. Every value of k evaluated in the Prior-optimal k search (Leading Edge and Remainder sizes, W(k), prior variance and trend exponent b of each set) was written to Table_Optimal_k_Search.csv and plotted in Figure 1 of the Prior-optimal k run; Figure S3 was written to Cross_Method_Comparison by the master process. Manuscript figures were organized as comparison-level panels so related volcano, PCA/EVS, and 3'aTWAS results could be reviewed side by side without redundant individual images. The curated figure archive SEQUENCE_ALL_FIGURES.zip contained manuscript PNG panels only. The separate archive SEQUENCE_ALL_TABLES.zip contained the locked EVS cutoff table, the empirical-null table for every analysis, the dispersion-after-EVS tables, the EVS split audit table, overall differential-expression method-count table, quantitative EVS/PCA evidence table, one all-view significant-PAS table and method-count table for each comparison, and the combined 3'aTWAS PAS-, gene-, and method-summary tables."
+    "Original (No EVS), NormEVS Lead and NormEVS Rem were written to separate folders within each comparison for view-specific tables. Every value of k evaluated in the Prior-optimal k search (Leading Edge and Remainder sizes, W(k), prior variance and trend exponent b of each set) was written to Table_Optimal_k_Search.csv and plotted in Figure 1 of the Prior-optimal k run. In the Discovery-optimal k run, every evaluated k (set sizes, dispersion and prior criteria, null and higher-criticism values, and the four discovery counts with their gains over the Original) was written to Table_Discovery_Search_All_k.csv, the dispersion scan and window to Table_Discovery_Dispersion_Scan.csv and Table_Discovery_Dispersion_Window.csv, k* for each significance call to Table_Discovery_Optimal_k.csv, the rank correlation of the two dispersion criteria with discoveries to Table_Discovery_Dispersion_vs_Discoveries.csv, the automated checks to Table_Validation_Checks.csv, and the landscape to Figure S4. Figure S3, comparing the three cutoff methods, was written to Cross_Method_Comparison by the master process. Manuscript figures were organized as comparison-level panels so related volcano, PCA/EVS, and 3'aTWAS results could be reviewed side by side without redundant individual images. The curated figure archive SEQUENCE_ALL_FIGURES.zip contained manuscript PNG panels only. The separate archive SEQUENCE_ALL_TABLES.zip contained the locked EVS cutoff table, the empirical-null table for every analysis, the dispersion-after-EVS tables, the EVS split audit table, overall differential-expression method-count table, quantitative EVS/PCA evidence table, one all-view significant-PAS table and method-count table for each comparison, and the combined 3'aTWAS PAS-, gene-, and method-summary tables."
   )
 
   writeLines(methods_text, file.path(output_dir, "Methods_Manuscript.md"), useBytes = TRUE)
@@ -3464,8 +3428,7 @@ save_dispersion_outputs <- function() {
 # least OPTIMAL_K_MIN_REMAINDER_FRACTION of the PASs in the Remainder if that is
 # smaller (plus k = 5,000, the paper's cutoff, for reference); Brent's method
 # (stats::optimize) then refines the minimum between the two neighbours of the
-# best of those values, to within OPTIMAL_K_TOL. The Prior-optimal k is the evaluated k with the smallest W. The same
-# k is used for the RawEVS track, exactly as k = 5,000 is.
+# best of those values, to within OPTIMAL_K_TOL. The Prior-optimal k is the evaluated k with the smallest W.
 OPTIMAL_K_MIN <- 250L
 OPTIMAL_K_MAX_FRACTION <- 0.5
 OPTIMAL_K_MIN_REMAINDER_FRACTION <- 0.1
@@ -3673,24 +3636,12 @@ save_figure_1_optimal_k <- function() {
 # (10% of the PASs, and at least 500) in both the LE and the REM. The LE is
 # nested in k, so k values giving the same LE are evaluated once. If the
 # analysis fails at a k below (or above) every k at which it worked, all k
-# further out are skipped. Untested k are listed in Table_Discovery_Coverage.csv
-# and k* is labelled "best observed".
+# further out are skipped. Not every admissible k is evaluated, so k* is the
+# best observed cutoff.
 #
 # Running: evaluations run in parallel (SEQUENCE_DISCOVERY_CORES, forked
-# workers). Each result is written to a checkpoint outside the output folder,
-# keyed by every setting that affects it; it is read back only with
-# SEQUENCE_DISCOVERY_RESUME=1, to finish an interrupted run. By default every
-# run starts from nothing, so no earlier result steers or enters the analysis.
-# The paper's 5,000 is evaluated after the search for comparison only and is
-# never a candidate. SEQUENCE_DISCOVERY_MAX_EVALS caps new full evaluations.
-#
-# Reported with k*: its stability (the contiguous run of evaluated k whose count
-# stays >= 95% of the maximum; wider than 2 x DISC_SCAN_COARSE = "broad
-# plateau", else "narrow spike", with the widest run giving a separately
-# labelled stable-plateau cutoff), a common cutoff across the four comparisons
-# (never replacing them), the NormEVS vs RawEVS comparison (RawEVS is also
-# analysed at the NormEVS window k, as matched diagnostics), and an
-# ablation (pooled LE + REM null).
+# workers). Every run starts from nothing, so no earlier result steers or
+# enters the analysis.
 #
 # EXPLORATORY. Only the dispersion window is chosen without the test results;
 # the choice within it uses them, so its discoveries are not protected by the
@@ -3698,9 +3649,8 @@ save_figure_1_optimal_k <- function() {
 # the noise is underestimated. SEQUENCE_EVS_CALIBRATION.R reruns the whole
 # procedure on simulated data with known truth (method "EVS, Discovery-optimal
 # k") and reports its empirical FDR, true-positive rate, false positives, gain
-# and k stability. The run's own k is k* of the NormEVS track for
-# SEQUENCE_DISCOVERY_OBJECTIVE (default HBFSS); RawEVS uses the same k, and its
-# own k* is reported as a diagnostic.
+# and k stability. The run's k is k* for SEQUENCE_DISCOVERY_OBJECTIVE (default
+# HBFSS).
 
 disc_env_int <- function(name, default) {
   v <- suppressWarnings(as.integer(Sys.getenv(name, unset = as.character(default))))
@@ -3712,23 +3662,18 @@ DISCOVERY_OBJECTIVE <- Sys.getenv("SEQUENCE_DISCOVERY_OBJECTIVE", unset = "HBFSS
 DISC_SCAN_COARSE <- disc_env_int("SEQUENCE_DISCOVERY_SCAN_COARSE", 250L)
 DISC_SCAN_FINE <- disc_env_int("SEQUENCE_DISCOVERY_SCAN_FINE", 25L)
 DISC_FINE_REGIONS <- disc_env_int("SEQUENCE_DISCOVERY_FINE_REGIONS", 3L)
-DISC_MAX_EVALS <- disc_env_int("SEQUENCE_DISCOVERY_MAX_EVALS", 1000000L)
 DISC_CORES <- disc_env_int("SEQUENCE_DISCOVERY_CORES",
                            max(1L, suppressWarnings(as.integer(parallel::detectCores())) - 1L, na.rm = TRUE))
 DISC_K_MIN <- 100L
-DISC_RESUME <- identical(Sys.getenv("SEQUENCE_DISCOVERY_RESUME", unset = "0"), "1")
 DISC_MIN_SET_SIZE <- 500L
 DISC_MIN_SET_FRACTION <- 0.10
 # Smallest allowed Leading Edge and Remainder for n PASs: 10% of the PASs and
 # never fewer than 500, so both sets support a dispersion trend, an empirical
 # null and higher criticism.
 disc_min_set <- function(n) as.integer(max(DISC_MIN_SET_SIZE, ceiling(DISC_MIN_SET_FRACTION * n)))
-DISC_PLATEAU_FRACTION <- 0.95
 # Calls whose discovery peaks get the every-integer step (all four are counted
 # at every evaluated k).
 DISC_REFINE_CALLS <- trimws(strsplit(Sys.getenv("SEQUENCE_DISCOVERY_REFINE", unset = "Standard,HBFSS"), ",")[[1]])
-DISC_TRACKS <- trimws(strsplit(Sys.getenv("SEQUENCE_DISCOVERY_TRACKS", unset = "normalized_evs,raw_evs"), ",")[[1]])
-DISC_CHECKPOINT_DIR <- Sys.getenv("SEQUENCE_CHECKPOINT_DIR", unset = paste0(multi_output_root, "_checkpoints"))
 DISC_COUNT_NAMES <- c("Standard", "Strong", "Weak", "HBFSS", "n_tested", "n_with_pvalue")
 
 if (!DISCOVERY_OBJECTIVE %in% DISCOVERY_SIGNIFICANCE) {
@@ -3736,9 +3681,6 @@ if (!DISCOVERY_OBJECTIVE %in% DISCOVERY_SIGNIFICANCE) {
 }
 if (!length(DISC_REFINE_CALLS) || !all(DISC_REFINE_CALLS %in% DISCOVERY_SIGNIFICANCE)) {
   stop("SEQUENCE_DISCOVERY_REFINE must be a comma-separated subset of: ", paste(DISCOVERY_SIGNIFICANCE, collapse = ", "))
-}
-if (!length(DISC_TRACKS) || !all(DISC_TRACKS %in% c("normalized_evs", "raw_evs"))) {
-  stop("SEQUENCE_DISCOVERY_TRACKS must be a comma-separated subset of: normalized_evs, raw_evs")
 }
 
 add_validation <- function(check, comparison, passed, detail = "") {
@@ -3787,33 +3729,9 @@ discovery_flags <- function(res_list) {
   d
 }
 
-# Replace the HBFSS calls (e.g. from a pooled null) and recompute final Weak.
-apply_hbfss_calls <- function(flags, hbfss) {
-  flags$HBFSS <- hbfss %in% TRUE
-  small <- is.finite(flags$lfc_shrunk) & abs(flags$lfc_shrunk) < lfc_boundary
-  flags$Weak <- small & !is.na(flags$padjLA_global) & flags$padjLA_global < BH_FDR_WEAK & flags$HBFSS
-  flags
-}
-
 count_discoveries <- function(flags) {
   c(Standard = sum(flags$Standard), Strong = sum(flags$Strong), Weak = sum(flags$Weak), HBFSS = sum(flags$HBFSS),
     n_tested = nrow(flags), n_with_pvalue = sum(is.finite(flags$pvalue)))
-}
-
-# HBFSS with ONE empirical null and HC threshold for LE + REM pooled (diagnostic).
-pooled_null_hbfss <- function(res_list, label) {
-  d <- do.call(rbind, lapply(names(res_list), function(v)
-    data.frame(feature_id = res_list[[v]]$feature_id, stat = res_list[[v]]$stat, lfc = res_list[[v]]$lfc_shrunk)))
-  valid <- is.finite(d$stat)
-  fit <- run_empirical_null_fdrtool(d$stat[valid], dataset_name = label)
-  p <- rep(NA_real_, nrow(d))
-  p[valid] <- as.numeric(fit$pval)
-  hc_p <- safe_hc_thresh(fit$pval, dataset_name = label)
-  htau <- if (!is.na(hc_p) && is.finite(hc_p) && hc_p > 0 && hc_p <= 1) abs(log10(hc_p)) * lfc_boundary else NA_real_
-  score <- abs(d$lfc) * (-log10(pmax(p, 1e-300)))
-  hb <- is.finite(d$lfc) & !is.na(htau) & is.finite(score) & score > htau
-  list(hbfss = stats::setNames(hb, d$feature_id), htau = htau,
-       null_sd = if ("sd" %in% colnames(fit$param)) unname(fit$param[1, "sd"]) else NA_real_)
 }
 
 view_dispersion_summary <- function(dds) {
@@ -3836,39 +3754,9 @@ discovery_context <- function(comparison_name, raw, coldata, annot_df, track_key
   min_set <- disc_min_set(N)
   ok_k <- which(seq_len(N) >= DISC_K_MIN & union_at >= min_set & (N - union_at) >= min_set)
   if (!length(ok_k)) stop(comparison_name, " ", track_key, ": no admissible k (too few PASs).")
-  key <- paste(PIPELINE_BUILD, comparison_name, track_key, NORMALIZATION_MODE, EMPIRICAL_NULL_METHOD,
-               EMPIRICAL_NULL_PCT0, N, paste(colnames(raw), collapse = ","), sum(as.numeric(raw)),
-               format(sum(as.numeric(raw %*% seq_len(ncol(raw)))), scientific = FALSE),
-               BH_FDR_STANDARD, BH_FDR_STRONG, BH_FDR_WEAK, lfc_boundary, HC_ALPHA0,
-               paste(TREND_B_RANGE, collapse = ","), TREND_B_COARSE_STEP, TREND_B_FINE_STEP,
-               DISC_MIN_SET_SIZE, DISC_MIN_SET_FRACTION, MULTIPLE_TESTING_RULE, sep = "|")
-  dir.create(DISC_CHECKPOINT_DIR, recursive = TRUE, showWarnings = FALSE)
   ctx <- list(comparison = comparison_name, track = track_key, raw = raw, coldata = coldata, annot = annot_df,
               sf = size_factors, gene_dds = gene_dds, orig = original_counts, depth = depth, union_at = union_at,
-              min_set = min_set,
-              k_lo = min(ok_k), k_hi = max(ok_k), key = key, cache = new.env(), state = new.env(),
-              checkpoint = file.path(DISC_CHECKPOINT_DIR, sprintf("Discovery_%s_%s_%s.csv", comparison_name,
-                                                                  track_key, NORMALIZATION_MODE)))
-  ctx$state$n_new <- 0L
-  ctx$state$pending <- integer(0)
-  ctx$state$ignored <- 0L
-  ctx$state$skipped <- integer(0)
-  # Every run starts from nothing: an earlier run's results never steer or enter
-  # this analysis. A checkpoint is read only to finish an interrupted run with
-  # identical settings (SEQUENCE_DISCOVERY_RESUME=1); otherwise it is replaced.
-  if (!DISC_RESUME && file.exists(ctx$checkpoint)) unlink(ctx$checkpoint)
-  if (DISC_RESUME && file.exists(ctx$checkpoint)) {
-    old <- tryCatch(utils::read.csv(ctx$checkpoint, stringsAsFactors = FALSE, check.names = FALSE),
-                    error = function(e) NULL)
-    if (!is.null(old) && nrow(old) && "Settings_Key" %in% names(old)) {
-      same <- old$Settings_Key == key & old$Leading_Edge_Size %in% union_at
-      ctx$state$ignored <- sum(!same)
-      old <- old[same, , drop = FALSE]
-      for (i in seq_len(nrow(old))) assign(as.character(old$Leading_Edge_Size[i]), old[i, , drop = FALSE], envir = ctx$cache)
-      if (nrow(old)) message("  ", comparison_name, " ", unname(track_short[track_key]), ": resumed ", nrow(old),
-                             " evaluated partitions from the checkpoint.")
-    }
-  }
+              min_set = min_set, k_lo = min(ok_k), k_hi = max(ok_k), cache = new.env(), state = new.env())
   ctx
 }
 
@@ -3915,7 +3803,6 @@ discovery_row <- function(ctx, k, stage, out, runtime) {
   r$Search_Stage <- stage
   r$Fit_Status <- if (failed) paste("failed:", msg) else "ok"
   r$Runtime_sec <- round(runtime, 1)
-  r$Settings_Key <- ctx$key
   r
 }
 
@@ -3951,12 +3838,12 @@ discovery_rows <- function(ctx) {
   r[order(r$Cutoff_k), , drop = FALSE]
 }
 
-# Evaluate a set of k (new partitions only), in parallel, checkpointing each.
+# Evaluate a set of k (new partitions only), in parallel.
 # k beyond a failure at the edge of the successful range are skipped: if the
 # analysis fails at some k below every k that worked (the Leading Edge too
 # small) or above every k that worked (the Remainder too small), every k
 # further out is skipped without fitting. Failures between successful k skip
-# only their own partition. Skipped k are reported as unexplored.
+# only their own partition.
 discovery_feasible <- function(ctx, ks) {
   rows <- discovery_rows(ctx)
   if (is.null(rows)) return(ks)
@@ -3968,7 +3855,6 @@ discovery_feasible <- function(ctx, ks) {
   keep <- rep(TRUE, length(ks))
   if (length(low)) keep <- keep & ks > max(low)
   if (length(high)) keep <- keep & ks < min(high)
-  if (any(!keep)) ctx$state$skipped <- unique(c(ctx$state$skipped, ks[!keep]))
   ks[keep]
 }
 
@@ -3980,11 +3866,6 @@ discovery_run_batch <- function(ctx, ks, stage) {
   keys <- as.character(ctx$union_at[ks])
   new <- !duplicated(keys) & !vapply(keys, exists, logical(1), envir = ctx$cache, inherits = FALSE)
   ks <- ks[new]
-  budget <- max(0L, DISC_MAX_EVALS - ctx$state$n_new)
-  if (length(ks) > budget) {
-    ctx$state$pending <- c(ctx$state$pending, if (budget > 0L) ks[-seq_len(budget)] else ks)
-    ks <- ks[seq_len(budget)]
-  }
   if (!length(ks)) return(invisible(0L))
   message(sprintf("  %s %s stage %s: %d new partitions (%d cores)", ctx$comparison, unname(track_short[ctx$track]),
                   stage, length(ks), DISC_CORES))
@@ -3999,12 +3880,9 @@ discovery_run_batch <- function(ctx, ks, stage) {
       r <- rows[[i]]
       if (!is.data.frame(r)) r <- discovery_row(ctx, ch[i], stage, simpleError(paste("worker failed:", paste(as.character(r), collapse = " "))), NA_real_)
       assign(as.character(ctx$union_at[ch[i]]), r, envir = ctx$cache)
-      utils::write.table(r, ctx$checkpoint, sep = ",", row.names = FALSE, qmethod = "double",
-                         col.names = !file.exists(ctx$checkpoint), append = file.exists(ctx$checkpoint))
       if (!identical(r$Fit_Status, "ok")) message("    k = ", ch[i], " ", r$Fit_Status)
     }
     done <- done + length(ch)
-    ctx$state$n_new <- ctx$state$n_new + length(ch)
     message(sprintf("    %d / %d done", done, length(ks)))
   }
   invisible(length(ks))
@@ -4027,62 +3905,22 @@ discovery_peaks <- function(rows, m, n, min_sep) {
   chosen
 }
 
-# Maximum-discovery k, its stability, and the stable-plateau k for one call.
+# Maximum-discovery k for one call (ties: the smallest k).
 discovery_select <- function(rows, m, k_lo, k_hi) {
   r <- rows[rows$Fit_Status == "ok", , drop = FALSE]
-  r <- r[order(r$Cutoff_k), , drop = FALSE]
   if (!nrow(r)) return(NULL)
   y <- r[[paste0("EVS_", m)]]
-  best <- max(y)
-  i <- which(y == best)
+  i <- which(y == max(y))
   i <- i[which.min(r$Equivalent_k_min[i])]
-  above <- y >= DISC_PLATEAU_FRACTION * best
-  runs <- rle(above)
-  ends <- cumsum(runs$lengths); starts <- ends - runs$lengths + 1L
-  blocks <- data.frame(start = starts, end = ends)[runs$values, , drop = FALSE]
-  blocks$width <- r$Equivalent_k_max[blocks$end] - r$Equivalent_k_min[blocks$start]
-  own <- blocks[blocks$start <= i & blocks$end >= i, , drop = FALSE]
-  wide <- blocks[which.max(blocks$width), , drop = FALSE]
-  j_range <- wide$start:wide$end
-  j <- j_range[which(y[j_range] == max(y[j_range]))]
-  j <- j[which.min(r$Equivalent_k_min[j])]
-  mk <- function(idx, selection, block) data.frame(
-    Comparison = r$Comparison[idx], EVS_Method = r$EVS_Method[idx], Significance = m, Selection = selection,
-    Cutoff_k = r$Equivalent_k_min[idx], Same_Partition_k_max = r$Equivalent_k_max[idx],
-    Leading_Edge_Size = r$Leading_Edge_Size[idx], Remainder_Size = r$Remainder_Size[idx],
-    EVS_Discoveries = y[idx], Original_Discoveries = r[[paste0("Original_", m)]][idx],
-    Gain = r[[paste0(m, "_Gain")]][idx], Gain_Pct = r[[paste0(m, "_Gain_Pct")]][idx],
-    Plateau_k_min = r$Equivalent_k_min[block$start], Plateau_k_max = r$Equivalent_k_max[block$end],
-    Plateau_Width = block$width,
-    Peak_Shape = if (block$width >= 2L * DISC_SCAN_COARSE) "broad plateau" else "narrow spike",
-    Weighted_Prior_Variance = r$Weighted_Prior_Variance[idx],
-    Boundary_Warning = r$Equivalent_k_min[idx] <= k_lo || r$Equivalent_k_max[idx] >= k_hi,
-    k_Admissible_Min = k_lo, k_Admissible_Max = k_hi)
-  out <- mk(i, "Maximum discovery", own)
-  if (nrow(wide) && (j != i)) out <- rbind(out, mk(j, "Stable plateau (widest run >= 95% of maximum)", wide))
-  out
-}
-
-# Coverage of the admissible range: evaluated vs unexplored k.
-discovery_coverage <- function(ctx, rows) {
-  ks <- ctx$k_lo:ctx$k_hi
-  ok_sizes <- rows$Leading_Edge_Size[rows$Fit_Status == "ok"]
-  covered <- ctx$union_at[ks] %in% ok_sizes
-  rl <- rle(!covered)
-  ends <- cumsum(rl$lengths); starts <- ends - rl$lengths + 1L
-  gaps <- data.frame(from = ks[starts], to = ks[ends])[rl$values, , drop = FALSE]
-  gap_txt <- if (nrow(gaps)) paste(sprintf("%d-%d", gaps$from, gaps$to)[seq_len(min(60L, nrow(gaps)))], collapse = "; ") else ""
-  if (nrow(gaps) > 60L) gap_txt <- paste0(gap_txt, sprintf("; ... (%d ranges in all)", nrow(gaps)))
   data.frame(
-    Comparison = ctx$comparison, EVS_Method = unname(track_short[ctx$track]), Normalization_Mode = NORMALIZATION_MODE,
-    k_Admissible_Min = ctx$k_lo, k_Admissible_Max = ctx$k_hi, Admissible_k = length(ks),
-    Distinct_Partitions = length(unique(ctx$union_at[ks])),
-    Partitions_Evaluated_ok = length(unique(ok_sizes)), Partitions_Failed = sum(rows$Fit_Status != "ok"),
-    k_Covered = sum(covered), k_Unexplored = sum(!covered), Pending_Over_Budget = length(unique(ctx$state$pending)),
-    Skipped_Beyond_Edge_Failure = length(unique(ctx$state$skipped)),
-    Search_Status = if (all(covered)) "verified global maximum (every admissible k evaluated)" else
-      "best observed (not every admissible k evaluated)",
-    Unexplored_k_Ranges = gap_txt, Checkpoint_Rows_Ignored = ctx$state$ignored)
+    Comparison = r$Comparison[i], EVS_Method = r$EVS_Method[i], Significance = m, Selection = "Maximum discovery",
+    Cutoff_k = r$Equivalent_k_min[i], Same_Partition_k_max = r$Equivalent_k_max[i],
+    Leading_Edge_Size = r$Leading_Edge_Size[i], Remainder_Size = r$Remainder_Size[i],
+    EVS_Discoveries = y[i], Original_Discoveries = r[[paste0("Original_", m)]][i],
+    Gain = r[[paste0(m, "_Gain")]][i], Gain_Pct = r[[paste0(m, "_Gain_Pct")]][i],
+    Weighted_Prior_Variance = r$Weighted_Prior_Variance[i],
+    Boundary_Warning = r$Equivalent_k_min[i] <= k_lo || r$Equivalent_k_max[i] >= k_hi,
+    k_Admissible_Min = k_lo, k_Admissible_Max = k_hi)
 }
 
 # ---- Dispersion-window search ------------------------------------------------------
@@ -4174,66 +4012,42 @@ discovery_dispersion_window_search <- function(ctx) {
     discovery_peaks(rows, m, DISC_FINE_REGIONS, DISC_SCAN_FINE))))
   discovery_run_batch(ctx, unlist(lapply(centres, function(p) seq(p - DISC_SCAN_FINE, p + DISC_SCAN_FINE))),
                       "dispersion window, every integer")
-  # Matched k (last, so they never displace a candidate): the other track's
-  # window k, so the two tracks can be compared at the same cutoffs. They are
-  # diagnostics, not candidates.
-  if (length(ctx$matched_k)) discovery_run_batch(ctx, ctx$matched_k, "matched k (other track's window)")
   invisible(TRUE)
 }
 
 discovery_search <- function(ctx) {
   discovery_dispersion_window_search(ctx)
-  # The paper's 5,000 is evaluated after the search, for comparison only, so it
-  # never steers where the search looks. It is not a candidate for k*.
-  if (OPTIMAL_K_REFERENCE >= ctx$k_lo && OPTIMAL_K_REFERENCE <= ctx$k_hi) {
-    discovery_run_batch(ctx, OPTIMAL_K_REFERENCE, "reference (paper, not a candidate)")
-  }
   rows <- discovery_rows(ctx)
-  # Candidates: the k chosen by this track's own search (not 5,000, not the
-  # other track's window k).
-  cand_rows <- rows[!startsWith(rows$Search_Stage, "reference") & !startsWith(rows$Search_Stage, "matched"), , drop = FALSE]
-  if (!any(cand_rows$Fit_Status == "ok")) stop(ctx$comparison, " ", ctx$track, ": every evaluated cutoff failed.")
-  cov <- discovery_coverage(ctx, rows)
-  sel <- do.call(rbind, lapply(DISCOVERY_SIGNIFICANCE, function(m) discovery_select(cand_rows, m, ctx$k_lo, ctx$k_hi)))
-  sel$Search_Status <- cov$Search_Status
-  sel$Search_Method <- "dispersion window (smallest dispersion estimates in both LE and REM), then discoveries"
+  if (!any(rows$Fit_Status == "ok")) stop(ctx$comparison, ": every evaluated cutoff failed.")
+  sel <- do.call(rbind, lapply(DISCOVERY_SIGNIFICANCE, function(m) discovery_select(rows, m, ctx$k_lo, ctx$k_hi)))
+  sel$Search_Method <- "dispersion window (smallest dispersion estimates and narrowest priors in both LE and REM), then discoveries"
   pw <- ctx$state$dispersion_window
-  if (!is.null(pw)) {
-    sel$Dispersion_Window_k_min <- pw$Window_k_min
-    sel$Dispersion_Window_k_max <- pw$Window_k_max
-    sel$Window_n_k <- pw$Window_n_k
-  }
+  sel$Dispersion_Window_k_min <- pw$Window_k_min
+  sel$Dispersion_Window_k_max <- pw$Window_k_max
+  sel$Window_n_k <- pw$Window_n_k
   # The scanned k with the smallest dispersion estimates in both sets.
   ws <- ctx$state$w_scan
   ws <- ws[ws$Fit_Status == "ok" & is.finite(ws$Max_Median_Dispersion), , drop = FALSE]
   sel$Min_Dispersion_k <- if (nrow(ws)) ws$Cutoff_k[which.min(ws$Max_Median_Dispersion)] else NA_integer_
-  sel$Run_Objective <- sel$Significance == DISCOVERY_OBJECTIVE & sel$Selection == "Maximum discovery" &
-    ctx$track == discovery_objective_track()
+  sel$Run_Objective <- sel$Significance == DISCOVERY_OBJECTIVE
   # Determinism: the same rows in another order select the same k.
   sel2 <- do.call(rbind, lapply(DISCOVERY_SIGNIFICANCE, function(m)
-    discovery_select(cand_rows[rev(seq_len(nrow(cand_rows))), , drop = FALSE], m, ctx$k_lo, ctx$k_hi)))
+    discovery_select(rows[rev(seq_len(nrow(rows))), , drop = FALSE], m, ctx$k_lo, ctx$k_hi)))
   add_validation("Selection is deterministic (row order does not change k*)", ctx$comparison,
-                 identical(sel$Cutoff_k, sel2$Cutoff_k), paste(unname(track_short[ctx$track])))
-  win <- sel[sel$Selection == "Maximum discovery", , drop = FALSE]
+                 identical(sel$Cutoff_k, sel2$Cutoff_k), "NormEVS")
   add_validation("Selected cutoffs are admissible", ctx$comparison,
-                 all(win$Cutoff_k >= ctx$k_lo & win$Cutoff_k <= ctx$k_hi),
-                 sprintf("%s: admissible %d-%d", unname(track_short[ctx$track]), ctx$k_lo, ctx$k_hi))
+                 all(sel$Cutoff_k >= ctx$k_lo & sel$Cutoff_k <= ctx$k_hi),
+                 sprintf("admissible %d-%d", ctx$k_lo, ctx$k_hi))
   add_validation("Failed fits are logged and excluded from selection", ctx$comparison,
-                 all(vapply(win$Cutoff_k, function(k) any(cand_rows$Fit_Status == "ok" & cand_rows$Equivalent_k_min == k), logical(1))),
-                 sprintf("%s: %d failed partitions", unname(track_short[ctx$track]), sum(rows$Fit_Status != "ok")))
-  add_validation("Checkpoint rows from other settings are not reused", ctx$comparison, TRUE,
-                 sprintf("%s: %d rows with another settings key ignored", unname(track_short[ctx$track]), ctx$state$ignored))
-  for (w in which(win$Boundary_Warning)) warning(ctx$comparison, " ", unname(track_short[ctx$track]), " ",
-                                                  win$Significance[w], ": the discovery maximum is at the edge of the admissible range (k = ",
-                                                  win$Cutoff_k[w], ").", call. = FALSE)
-  list(rows = rows, selection = sel, coverage = cov,
-       w_scan = ctx$state$w_scan, dispersion_window = ctx$state$dispersion_window)
+                 all(vapply(sel$Cutoff_k, function(k) any(rows$Fit_Status == "ok" & rows$Equivalent_k_min == k), logical(1))),
+                 sprintf("%d failed partitions", sum(rows$Fit_Status != "ok")))
+  for (w in which(sel$Boundary_Warning)) warning(ctx$comparison, " ", sel$Significance[w],
+                                                 ": the discovery maximum is at the edge of the admissible range (k = ",
+                                                 sel$Cutoff_k[w], ").", call. = FALSE)
+  list(rows = rows, selection = sel, w_scan = ctx$state$w_scan, dispersion_window = ctx$state$dispersion_window)
 }
 
-discovery_objective_track <- function() if ("normalized_evs" %in% DISC_TRACKS) "normalized_evs" else DISC_TRACKS[1]
-
-# The Original baseline (once per comparison), the
-# search on each track, and the run's k.
+# The Original baseline (once per comparison), the search, and the run's k.
 choose_discovery_k <- function(comparison_name, count_matrix, coldata, annot_df) {
   raw <- coerce_raw_count_matrix_for_deseq2(count_matrix, context = paste0(comparison_name, " discovery-optimal k"))
   sf <- comparison_size_factors(raw, coldata)
@@ -4248,33 +4062,23 @@ choose_discovery_k <- function(comparison_name, count_matrix, coldata, annot_df)
   ocnt <- count_discoveries(oflags)
   keep <- intersect(c("feature_id", "gene_symbol", "baseMean", "stat", "pvalue", "padj", "resGA_pvalue", "resGA_padj",
                       "resLA_pvalue", "resLA_padj", "log2FoldChange", "lfc_shrunk", "dispGeneEst", "dispFit",
-                      "dispersion", "empirical_p", "HBFSS", "standard_flag", "strong_cnh_flag",
+                      "dispersion", "empirical_p", "HBFSS", "cooks_outlier", "standard_flag", "strong_cnh_flag",
                       "weak_significant_flag", "hbfss_flag"), names(ores))
-  base_tab <- cbind(ores[, keep, drop = FALSE],
-                    oflags[match(ores$feature_id, oflags$feature_id),
-                           c("padj_global", "padjGA_global", "padjLA_global", "Standard", "Strong", "Weak", "HBFSS")])
-  save_csv(base_tab, file.path(output_dir, comparison_name, paste0("Table_", comparison_name, "_Original_Baseline.csv")))
+  save_csv(ores[, keep, drop = FALSE], file.path(output_dir, comparison_name, paste0("Table_", comparison_name, "_Original_Baseline.csv")))
   gdds <- comparison_gene_dds(raw, coldata, sf)               # once per comparison, reused for every k
-  matched <- integer(0)
-  for (tk in DISC_TRACKS) {
-    ctx <- discovery_context(comparison_name, raw, coldata, annot_df, tk, sf, ocnt, gdds)
-    ctx$matched_k <- matched
-    ctx$cooks_outliers <- original_cooks_cache[[comparison_name]]
-    res <- discovery_search(ctx)
-    discovery_search_rows[[paste(comparison_name, tk)]] <<- res$rows
-    discovery_summary_rows[[paste(comparison_name, tk)]] <<- res$selection
-    discovery_coverage_rows[[paste(comparison_name, tk)]] <<- res$coverage
-    if (!is.null(res$w_scan)) discovery_wscan_rows[[paste(comparison_name, tk)]] <<- res$w_scan
-    if (!is.null(res$dispersion_window)) discovery_window_rows[[paste(comparison_name, tk)]] <<- res$dispersion_window
-    if (!is.null(res$dispersion_window)) matched <- unique(c(matched, as.integer(strsplit(res$dispersion_window$Window_k, ",")[[1]])))
-  }
-  sel <- discovery_summary_rows[[paste(comparison_name, discovery_objective_track())]]
+  ctx <- discovery_context(comparison_name, raw, coldata, annot_df, "normalized_evs", sf, ocnt, gdds)
+  ctx$cooks_outliers <- original_cooks_cache[[comparison_name]]
+  res <- discovery_search(ctx)
+  discovery_search_rows[[comparison_name]] <<- res$rows
+  discovery_summary_rows[[comparison_name]] <<- res$selection
+  discovery_wscan_rows[[comparison_name]] <<- res$w_scan
+  discovery_window_rows[[comparison_name]] <<- res$dispersion_window
+  sel <- res$selection
   k <- sel$Cutoff_k[sel$Run_Objective][1]
   if (is.null(k) || is.na(k)) stop(comparison_name, ": no discovery-optimal k for ", DISCOVERY_OBJECTIVE)
   DISCOVERY_K[[comparison_name]] <<- as.integer(k)
-  w <- sel[sel$Selection == "Maximum discovery", , drop = FALSE]
-  message(sprintf("  %s: discovery-optimal k (NormEVS, %s) = %d; gains over the Original: %s", comparison_name,
-                  DISCOVERY_OBJECTIVE, k, paste(sprintf("%s %+d at k=%d", w$Significance, w$Gain, w$Cutoff_k), collapse = ", ")))
+  message(sprintf("  %s: discovery-optimal k (%s) = %d; gains over the Original: %s", comparison_name,
+                  DISCOVERY_OBJECTIVE, k, paste(sprintf("%s %+d at k=%d", sel$Significance, sel$Gain, sel$Cutoff_k), collapse = ", ")))
   invisible(k)
 }
 
@@ -4340,12 +4144,12 @@ validate_track_normalization <- function(comparison_name, track_key, analysis_re
 
 # The count at the run's k must equal the count of the complete final analysis.
 verify_discovery_selection <- function(comparison_name) {
-  reg <- paper_registry[[registry_key(comparison_name, discovery_objective_track())]]
+  reg <- paper_registry[[registry_key(comparison_name, "normalized_evs")]]
   ar <- reg$analysis_results
   flags <- discovery_flags(list(leading_edge_dataset = ar$leading_edge_dataset$results,
                                 remainder_dataset = ar$remainder_dataset$results))
   cnt <- count_discoveries(flags)
-  rows <- discovery_search_rows[[paste(comparison_name, discovery_objective_track())]]
+  rows <- discovery_search_rows[[comparison_name]]
   k <- DISCOVERY_K[[comparison_name]]
   r <- rows[rows$Fit_Status == "ok" & rows$Equivalent_k_min <= k & rows$Equivalent_k_max >= k, , drop = FALSE]
   same <- nrow(r) == 1L && isTRUE(all(vapply(DISCOVERY_SIGNIFICANCE, function(m)
@@ -4364,88 +4168,7 @@ verify_discovery_selection <- function(comparison_name) {
   invisible(same)
 }
 
-# Ablation at a cutoff: how the separate Leading Edge and Remainder empirical
-# nulls and each partition contribute to the gain over the Original (NormEVS).
-discovery_ablation <- function(comparison_name, count_matrix, coldata, annot_df, k, label, final_results = NULL) {
-  raw <- coerce_raw_count_matrix_for_deseq2(count_matrix, context = "ablation")
-  depth <- evs_union_depth(raw, coldata, "normalized_evs")
-  le <- depth <= k
-  mats <- list(leading_edge_dataset = raw[le, , drop = FALSE], remainder_dataset = raw[!le, , drop = FALSE])
-  sf <- comparison_size_factors(raw, coldata)
-  fit_with <- function(size_factors, tag) {
-    fits <- Map(function(m, n) fit_view_model(m, coldata, n, size_factors = size_factors,
-                                              cooks_outliers = original_cooks_cache[[comparison_name]]), mats,
-                paste(comparison_name, "ablation", tag, k, names(mats), sep = "_"))
-    names(fits) <- names(mats)
-    sig <- call_significance(fits, paste(comparison_name, "ablation", tag, k), annot_df, lean = TRUE)
-    list(results = lapply(sig$views, `[[`, "results"), null = sig$null)
-  }
-  primary <- if (!is.null(final_results)) list(results = final_results, null = NULL) else fit_with(sf, "primary")
-  base <- original_baseline_cache[[comparison_name]]
-  oflags <- discovery_flags(list(raw_dataset = base$out$views$raw_dataset$results))
-  row <- function(variant, flags, extra = list()) {
-    cnt <- count_discoveries(flags)
-    ocnt <- count_discoveries(oflags)
-    d <- data.frame(Comparison = comparison_name, Cutoff = label, Cutoff_k = k, Variant = variant,
-                    Leading_Edge_Size = sum(le), Remainder_Size = sum(!le))
-    for (m in DISCOVERY_SIGNIFICANCE) {
-      d[[paste0("EVS_", m)]] <- cnt[[m]]
-      d[[paste0("Original_", m)]] <- ocnt[[m]]
-      d[[paste0(m, "_Gain")]] <- cnt[[m]] - ocnt[[m]]
-      d[[paste0("LE_", m)]] <- sum(flags[[m]][flags$View == "leading_edge_dataset"])
-      d[[paste0("REM_", m)]] <- sum(flags[[m]][flags$View == "remainder_dataset"])
-    }
-    for (nm in names(extra)) d[[nm]] <- extra[[nm]]
-    d
-  }
-  pf <- discovery_flags(primary$results)
-  pooled <- pooled_null_hbfss(primary$results, paste(comparison_name, label, "pooled LE+REM"))
-  pooled_flags <- apply_hbfss_calls(pf, pooled$hbfss[pf$feature_id])
-  rbind(
-    row("Primary: shared size factors, separate LE and REM nulls, one BH per analysis", pf),
-    row("Pooled LE + REM empirical null for HBFSS", pooled_flags,
-        list(Pooled_Null_SD = pooled$null_sd, Pooled_Htau = pooled$htau))
-  )
-}
-
-record_discovery_ablation <- function(comparison_name, count_matrix, coldata, annot_df) {
-  k <- DISCOVERY_K[[comparison_name]]
-  reg <- paper_registry[[registry_key(comparison_name, "normalized_evs")]]
-  fr <- list(leading_edge_dataset = reg$analysis_results$leading_edge_dataset$results,
-             remainder_dataset = reg$analysis_results$remainder_dataset$results)
-  a <- list(discovery_ablation(comparison_name, count_matrix, coldata, annot_df, k, "Discovery-optimal k", fr))
-  rows <- discovery_search_rows[[paste(comparison_name, "normalized_evs")]]
-  if (!is.null(rows) && any(rows$Cutoff_k == OPTIMAL_K_REFERENCE & rows$Fit_Status == "ok") && k != OPTIMAL_K_REFERENCE) {
-    a[[2]] <- discovery_ablation(comparison_name, count_matrix, coldata, annot_df, OPTIMAL_K_REFERENCE, "Fixed 5,000")
-  }
-  discovery_ablation_rows[[comparison_name]] <<- dplyr::bind_rows(a)
-  invisible(TRUE)
-}
-
-# Common cutoff: the k (evaluated in all four comparisons) with the largest
-# summed gain. Reported separately; never replaces the per-comparison k*.
-discovery_common_cutoff <- function(rows_all) {
-  out <- list()
-  for (tr in unique(rows_all$EVS_Method)) {
-    r <- rows_all[rows_all$EVS_Method == tr & rows_all$Fit_Status == "ok", , drop = FALSE]
-    ks <- Reduce(intersect, lapply(split(r$Cutoff_k, r$Comparison), unique))
-    if (length(unique(r$Comparison)) < length(comparison_table$comparison_name) || !length(ks)) next
-    for (m in DISCOVERY_SIGNIFICANCE) {
-      g <- vapply(ks, function(k) sum(r[[paste0(m, "_Gain")]][r$Cutoff_k == k]), numeric(1))
-      best <- ks[g == max(g)]
-      kb <- min(best)
-      sub <- r[r$Cutoff_k == kb, , drop = FALSE]
-      out[[length(out) + 1L]] <- data.frame(
-        EVS_Method = tr, Significance = m, Selection = "Common cutoff (all four comparisons)", Cutoff_k = kb,
-        k_Evaluated_In_All = length(ks), Summed_EVS = sum(sub[[paste0("EVS_", m)]]),
-        Summed_Original = sum(sub[[paste0("Original_", m)]]), Summed_Gain = max(g),
-        Per_Comparison_Gain = paste(sprintf("%s %+d", sub$Comparison, sub[[paste0(m, "_Gain")]]), collapse = "; "))
-    }
-  }
-  if (length(out)) dplyr::bind_rows(out) else NULL
-}
-
-# ---- outputs: tables and Figures S4, S5 ------------------------------------------
+# ---- outputs: tables and Figure S4 ------------------------------------------
 
 save_discovery_outputs <- function() {
   out <- summary_table_dir
@@ -4453,24 +4176,19 @@ save_discovery_outputs <- function() {
   if (!length(discovery_search_rows)) return(invisible(FALSE))
   rows <- dplyr::bind_rows(discovery_search_rows)
   sel <- dplyr::bind_rows(discovery_summary_rows)
-  cov <- dplyr::bind_rows(discovery_coverage_rows)
-  common <- discovery_common_cutoff(rows)
-  save_csv(rows[, setdiff(names(rows), "Settings_Key"), drop = FALSE], file.path(out, "Table_Discovery_Search_All_k.csv"))
+  save_csv(rows, file.path(out, "Table_Discovery_Search_All_k.csv"))
   save_csv(sel, file.path(out, "Table_Discovery_Optimal_k.csv"))
-  save_csv(cov, file.path(out, "Table_Discovery_Coverage.csv"))
-  if (!is.null(common)) save_csv(common, file.path(out, "Table_Discovery_Common_Cutoff.csv"))
-  if (length(discovery_ablation_rows)) save_csv(dplyr::bind_rows(discovery_ablation_rows), file.path(out, "Table_Discovery_Ablation.csv"))
   # Do smaller dispersions (and narrower priors) in both sets go with more
   # discoveries? Spearman correlation over the evaluated k (negative = smaller
   # dispersions, more calls).
-  okr <- rows[rows$Fit_Status == "ok" & !startsWith(rows$Search_Stage, "reference") & !startsWith(rows$Search_Stage, "matched"), , drop = FALSE]
+  okr <- rows[rows$Fit_Status == "ok", , drop = FALSE]
   spear <- function(x, y) {
     ok <- is.finite(x) & is.finite(y)
     if (sum(ok) < 5L || stats::sd(x[ok]) == 0 || stats::sd(y[ok]) == 0) return(c(NA_real_, NA_real_))
     ct <- suppressWarnings(stats::cor.test(x[ok], y[ok], method = "spearman", exact = FALSE))
     c(unname(ct$estimate), ct$p.value)
   }
-  pv <- dplyr::bind_rows(lapply(split(okr, list(okr$Comparison, okr$EVS_Method), drop = TRUE), function(x)
+  pv <- dplyr::bind_rows(lapply(split(okr, okr$Comparison, drop = TRUE), function(x)
     dplyr::bind_rows(lapply(DISCOVERY_SIGNIFICANCE, function(m) {
       y <- x[[paste0("EVS_", m)]]
       d <- spear(x$Max_Median_Dispersion, y)
@@ -4486,24 +4204,13 @@ save_discovery_outputs <- function() {
   if (nrow(pv)) save_csv(pv, file.path(out, "Table_Discovery_Dispersion_vs_Discoveries.csv"))
   if (length(discovery_wscan_rows)) save_csv(dplyr::bind_rows(discovery_wscan_rows), file.path(out, "Table_Discovery_Dispersion_Scan.csv"))
   if (length(discovery_window_rows)) save_csv(dplyr::bind_rows(discovery_window_rows), file.path(out, "Table_Discovery_Dispersion_Window.csv"))
-  tracks <- unique(rows$EVS_Method)
-  if (length(tracks) == 2L) {
-    a <- rows[rows$EVS_Method == tracks[1] & rows$Fit_Status == "ok", , drop = FALSE]
-    b <- rows[rows$EVS_Method == tracks[2] & rows$Fit_Status == "ok", , drop = FALSE]
-    keep <- c("Comparison", "Cutoff_k", paste0("EVS_", DISCOVERY_SIGNIFICANCE), paste0("Original_", DISCOVERY_SIGNIFICANCE),
-              "Leading_Edge_Size", "Weighted_Prior_Variance")
-    mt <- merge(a[, keep], b[, keep[!grepl("^Original_", keep)]], by = c("Comparison", "Cutoff_k"),
-                suffixes = paste0("_", tracks))
-    if (nrow(mt)) save_csv(mt, file.path(out, "Table_Discovery_Matched_Cutoffs.csv"))
-  }
   try_fig(save_figure_S4_discovery(rows, sel), "Figure S4")
-  try_fig(save_figure_S5_discovery(rows, sel), "Figure S5")
   invisible(TRUE)
 }
 
 save_figure_S4_discovery <- function(rows, sel) {
-  tr <- unname(track_short[discovery_objective_track()])
-  r <- rows[rows$EVS_Method == tr & rows$Fit_Status == "ok", , drop = FALSE]
+  tr <- "NormEVS"
+  r <- rows[rows$Fit_Status == "ok", , drop = FALSE]
   if (!nrow(r)) return(invisible(FALSE))
   long <- dplyr::bind_rows(lapply(DISCOVERY_SIGNIFICANCE, function(m) data.frame(
     Comparison = r$Comparison, Significance = m, k = r$Cutoff_k, EVS = r[[paste0("EVS_", m)]],
@@ -4512,12 +4219,11 @@ save_figure_S4_discovery <- function(rows, sel) {
   long$Significance <- factor(long$Significance, levels = DISCOVERY_SIGNIFICANCE)
   long <- long[order(long$Comparison, long$Significance, long$k), ]
   long$above_hi <- pmax(long$EVS, long$Original)
-  s <- sel[sel$EVS_Method == tr, , drop = FALSE]
+  s <- sel
   s$Comparison <- as_comp(s$Comparison)
   s$Significance <- factor(s$Significance, levels = DISCOVERY_SIGNIFICANCE)
-  mx <- s[s$Selection == "Maximum discovery", , drop = FALSE]
-  pl <- s[s$Selection != "Maximum discovery", , drop = FALSE]
-  pm <- mx[!duplicated(paste(mx$Comparison, mx$Significance)), , drop = FALSE]
+  mx <- s
+  pm <- mx
   wmin <- merge(pm[, c("Comparison", "Significance", "Min_Dispersion_k")],
                 long[, c("Comparison", "Significance", "k", "EVS")],
                 by.x = c("Comparison", "Significance", "Min_Dispersion_k"), by.y = c("Comparison", "Significance", "k"))
@@ -4526,8 +4232,6 @@ save_figure_S4_discovery <- function(rows, sel) {
   p <- ggplot(long, aes(k)) +
     (if (has_win) geom_rect(data = mx, aes(xmin = Dispersion_Window_k_min, xmax = Dispersion_Window_k_max, ymin = -Inf, ymax = Inf),
                             inherit.aes = FALSE, fill = unname(METHOD_COLS[["Prior-optimal k"]]), alpha = 0.08) else NULL) +
-    geom_rect(data = mx, aes(xmin = Plateau_k_min, xmax = Plateau_k_max, ymin = -Inf, ymax = Inf),
-              inherit.aes = FALSE, fill = col, alpha = 0.10) +
     geom_ribbon(aes(ymin = Original, ymax = above_hi), fill = "#2E8B57", alpha = 0.25) +
     geom_hline(aes(yintercept = Original), colour = unname(SET_COLS[ORIGINAL_LABEL]), linetype = "22", linewidth = 0.35) +
     geom_line(aes(y = EVS), colour = col, linewidth = 0.45) +
@@ -4544,65 +4248,11 @@ save_figure_S4_discovery <- function(rows, sel) {
     scale_y_continuous(expand = expansion(mult = c(0.05, 0.25))) +
     labs(x = "k (top-|PC1| PASs per condition; log scale)", y = paste0("Significant PASs, ", tr, " LE + REM"),
          title = "Supplementary Figure S4. Discovery landscape over the cutoff k (exploratory)",
-         subtitle = paste0("Points/line: evaluated k (LE + REM); blue band: span of the dispersion window (smallest dispersion estimates in both sets, chosen before any test); dashed: Original; green: EVS above the Original; filled circle: maximum (k*); ",
-                           "diamond: smallest dispersion estimates in both sets; band: run >= 95% of the maximum. ",
+         subtitle = paste0("Points/line: evaluated k (LE + REM); blue band: span of the dispersion window (smallest dispersion estimates and narrowest priors in both sets, chosen before any test); dashed: Original; green: EVS above the Original; filled circle: maximum (k*); ",
+                           "diamond: smallest dispersion estimates in both sets. ",
                            "Standard, Strong, Weak: one BH over LE + REM. Chosen from the same data: not FDR-protected.")) +
     fig_theme() + theme(panel.border = element_rect(fill = NA, colour = "grey70", linewidth = 0.3))
   save_figure(p, paper_fig_dir, "Figure_S4_Discovery_Landscape", 200, 190)
-  invisible(TRUE)
-}
-
-save_figure_S5_discovery <- function(rows, sel) {
-  r <- rows[rows$Fit_Status == "ok", , drop = FALSE]
-  if (!nrow(r)) return(invisible(FALSE))
-  r$Comparison <- as_comp(r$Comparison)
-  g <- dplyr::bind_rows(lapply(c("Standard", "HBFSS"), function(m) data.frame(
-    Comparison = r$Comparison, Track = r$EVS_Method, Significance = m, k = r$Cutoff_k, Gain = r[[paste0(m, "_Gain")]])))
-  g <- g[order(g$Comparison, g$Track, g$Significance, g$k), ]
-  pa <- ggplot(g, aes(k, Gain, colour = Track)) +
-    geom_hline(yintercept = 0, linewidth = 0.3, colour = "grey40") +
-    geom_line(linewidth = 0.4) +
-    facet_grid(Significance ~ Comparison, scales = "free_y", labeller = labeller(Comparison = comp_lab())) +
-    scale_colour_manual(values = c(NormEVS = "#1F6FB2", RawEVS = "#C0392B")) +
-    scale_x_continuous(labels = scales::label_comma()) +
-    labs(x = NULL, y = "Gain over the Original", tag = "a",
-         title = if (length(unique(g$Track)) == 2L) "NormEVS vs RawEVS" else paste(unique(g$Track), collapse = ", "),
-         subtitle = if (length(unique(g$Track)) == 2L) "Each track's analysed k (RawEVS also at the NormEVS window k); matched values in Table_Discovery_Matched_Cutoffs.csv." else "Gain at each analysed k.") +
-    fig_theme()
-  tr0 <- unname(track_short[discovery_objective_track()])
-  d <- r[r$EVS_Method == tr0, , drop = FALSE]
-  d <- d[order(d$Comparison, d$Cutoff_k), ]
-  sc <- if (length(discovery_wscan_rows)) dplyr::bind_rows(discovery_wscan_rows) else NULL
-  sc <- if (is.null(sc)) NULL else sc[sc$EVS_Method == tr0 & sc$Fit_Status == "ok", , drop = FALSE]
-  if (!is.null(sc) && nrow(sc)) {
-    sc$Comparison <- as_comp(sc$Comparison)
-    sc <- sc[order(sc$Comparison, sc$Cutoff_k), ]
-  }
-  scan_part <- if (is.null(sc) || !nrow(sc)) NULL else dplyr::bind_rows(
-    data.frame(Comparison = sc$Comparison, k = sc$Cutoff_k, Quantity = "Median final dispersion", value = sc$Median_Dispersion_LE, Set = "Leading Edge"),
-    data.frame(Comparison = sc$Comparison, k = sc$Cutoff_k, Quantity = "Median final dispersion", value = sc$Median_Dispersion_REM, Set = "Remainder"),
-    data.frame(Comparison = sc$Comparison, k = sc$Cutoff_k, Quantity = "Prior variance", value = sc$Prior_Variance_LE, Set = "Leading Edge"),
-    data.frame(Comparison = sc$Comparison, k = sc$Cutoff_k, Quantity = "Prior variance", value = sc$Prior_Variance_REM, Set = "Remainder"))
-  w <- dplyr::bind_rows(
-    scan_part,
-    data.frame(Comparison = d$Comparison, k = d$Cutoff_k, Quantity = "fdrtool null SD", value = d$Null_SD_LE, Set = "Leading Edge"),
-    data.frame(Comparison = d$Comparison, k = d$Cutoff_k, Quantity = "fdrtool null SD", value = d$Null_SD_REM, Set = "Remainder"),
-    data.frame(Comparison = d$Comparison, k = d$Cutoff_k, Quantity = "HBFSS threshold Htau", value = d$Htau_LE, Set = "Leading Edge"),
-    data.frame(Comparison = d$Comparison, k = d$Cutoff_k, Quantity = "HBFSS threshold Htau", value = d$Htau_REM, Set = "Remainder"))
-  w$Quantity <- factor(w$Quantity, levels = c("Median final dispersion", "Prior variance", "fdrtool null SD", "HBFSS threshold Htau"))
-  pb <- ggplot(w, aes(k, value, colour = Set)) +
-    geom_line(linewidth = 0.4, na.rm = TRUE) +
-    facet_grid(Quantity ~ Comparison, scales = "free_y", labeller = labeller(Comparison = comp_lab())) +
-    geom_point(size = 0.5, na.rm = TRUE) +
-    scale_colour_manual(values = c("Leading Edge" = unname(SET_COLS["Leading Edge"]), "Remainder" = unname(SET_COLS["Remainder"]))) +
-    scale_x_continuous(labels = scales::label_comma()) +
-    labs(x = "k (top-|PC1| PASs per condition)", y = NULL, tag = "b",
-         title = "Dispersion estimates and calibration over k (NormEVS)",
-         subtitle = "Top two rows: the dispersion scan (no test). Bottom two: the k analysed in full; gaps in Htau = higher criticism undefined.") +
-    fig_theme()
-  fig <- assemble_rows(list(pa, pb), heights = c(1, 1.3),
-                       title = "Supplementary Figure S5. Track comparison, dispersion estimates and calibration over k")
-  save_figure(fig, paper_fig_dir, "Figure_S5_Discovery_Diagnostics", 200, 240)
   invisible(TRUE)
 }
 
@@ -4618,7 +4268,7 @@ run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata,
     s <- optimal_k_search_rows[[comparison_name]]
     s[s$Chosen, , drop = FALSE]
   } else if (identical(CUTOFF_METHOD_KEY, "discovery")) {
-    s <- discovery_search_rows[[paste(comparison_name, discovery_objective_track())]]
+    s <- discovery_search_rows[[comparison_name]]
     k <- DISCOVERY_K[[comparison_name]]
     s <- s[s$Fit_Status == "ok" & s$Equivalent_k_min <= k & s$Equivalent_k_max >= k, , drop = FALSE]
     data.frame(Leading_Edge = s$Leading_Edge_Size[1], W = s$Weighted_Prior_Variance[1])
@@ -4629,18 +4279,11 @@ run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata,
     Pooled_prior_variance_W = if (is.null(ch)) NA_real_ else ch$W,
     Normalization_Mode = NORMALIZATION_MODE,
     Discovery_Objective = if (identical(CUTOFF_METHOD_KEY, "discovery")) DISCOVERY_OBJECTIVE else NA_character_)
-  for (track_key in c("normalized_evs", "raw_evs")) {
-    message("Running ", comparison_name, " ", unname(track_short[track_key]))
-    ok <- run_one_evs_track(comparison_name = comparison_name, track_key = track_key,
-                            count_matrix = count_matrix, coldata = coldata, annot_df = annot_df)
-    if (!isTRUE(ok)) stop("Analysis track failed: ", comparison_name, " / ", track_key)
-  }
-  if (identical(CUTOFF_METHOD_KEY, "discovery")) {
-    verify_discovery_selection(comparison_name)
-    tryCatch(record_discovery_ablation(comparison_name, count_matrix, coldata, annot_df),
-             error = function(e) warning("Discovery ablation skipped for ", comparison_name, ": ",
-                                         conditionMessage(e), call. = FALSE))
-  }
+  message("Running ", comparison_name, " NormEVS")
+  ok <- run_one_evs_track(comparison_name = comparison_name, track_key = "normalized_evs",
+                          count_matrix = count_matrix, coldata = coldata, annot_df = annot_df)
+  if (!isTRUE(ok)) stop("Analysis failed: ", comparison_name)
+  if (identical(CUTOFF_METHOD_KEY, "discovery")) verify_discovery_selection(comparison_name)
 
   tryCatch(collect_dispersion_after_evs(comparison_name),
            error = function(e) warning("Dispersion summaries skipped for ", comparison_name, ": ",
@@ -4710,9 +4353,7 @@ save_paper_volcano_panels <- function() {
   short_view <- c(
     "Original (No EVS)" = "Orig",
     "NormEVS Lead" = "N-Lead",
-    "NormEVS Rem" = "N-Rem",
-    "RawEVS Lead" = "R-Lead",
-    "RawEVS Rem" = "R-Rem"
+    "NormEVS Rem" = "N-Rem"
   )
 
   # Computed once so every comparison/view volcano in the manuscript shares
@@ -4981,7 +4622,7 @@ build_evs_split_audit_table <- function() {
   rows <- list()
 
   for (comparison_name in as.character(comparison_table$comparison_name)) {
-    for (track_key in c("normalized_evs", "raw_evs")) {
+    for (track_key in "normalized_evs") {
       obj <- paper_registry[[registry_key(comparison_name, track_key)]]
       if (is.null(obj) || is.null(obj$evs)) next
 
@@ -5026,7 +4667,7 @@ build_evs_split_audit_table <- function() {
 build_evs_pca_evidence_table <- function(comparison_name) {
   rows <- list()
 
-  for (track_key in c("normalized_evs", "raw_evs")) {
+  for (track_key in "normalized_evs") {
     obj <- paper_registry[[registry_key(comparison_name, track_key)]]
     if (is.null(obj) || is.null(obj$evs)) next
 
@@ -5233,7 +4874,7 @@ save_paper_pca_panels <- function() {
   for (comparison_name in as.character(comparison_table$comparison_name)) {
     plots <- list()
 
-    for (track_key in c("normalized_evs", "raw_evs")) {
+    for (track_key in "normalized_evs") {
       obj <- paper_registry[[registry_key(comparison_name, track_key)]]
       if (is.null(obj) || is.null(obj$evs)) next
 
@@ -5241,7 +4882,6 @@ save_paper_pca_panels <- function() {
       original_stats <- pca_variance_stats(original_mat, obj$coldata)
       if (is.null(original_stats)) next
 
-      track_abbr <- if (track_key == "normalized_evs") "Norm" else "Raw"
 
       for (dataset_key in c("raw_dataset", "leading_edge_dataset", "remainder_dataset")) {
         mat <- pca_track_matrix(obj, dataset_key)
@@ -5254,7 +4894,7 @@ save_paper_pca_panels <- function() {
         plots[[length(plots) + 1L]] <- compute_pca_support_plot(
           value_df = mat,
           coldata = obj$coldata,
-          short_title = paste0(track_abbr, "-", ds_abbr),
+          short_title = ds_abbr,
           original_stats = original_stats
         )
       }
@@ -5273,9 +4913,9 @@ save_paper_pca_panels <- function() {
           "Blue triangles: RT samples. Grey circles: ZT samples. X: condition centroid; lines join each sample to its centroid.",
           gp = grid::gpar(fontsize = 11, col = "grey20"))
       )
-      base <- file.path(panel_dir, paste0("Figure_", comparison_name, "_PCA_EVS_2x3"))
-      save_grob(panel, paste0(base, ".png"), width = 16.5, height = 10.8)
-      save_grob(panel, paste0(base, ".pdf"), width = 16.5, height = 10.8)
+      base <- file.path(panel_dir, paste0("Figure_", comparison_name, "_PCA_EVS"))
+      save_grob(panel, paste0(base, ".png"), width = 16.5, height = 6.0)
+      save_grob(panel, paste0(base, ".pdf"), width = 16.5, height = 6.0)
     }
 
     evidence_tbl <- build_evs_pca_evidence_table(comparison_name)
@@ -5319,10 +4959,10 @@ save_paper_empirical_hbfss_panels <- function() {
       output_suffix <- "Raw_AllComparisons"
       panel_height <- 5.8
     } else {
-      track_order_use <- c("normalized_evs", "raw_evs")
-      panel_title <- paste0("HBFSS calibration | ", unname(dataset_short[dataset_key]), " (Norm vs Raw) | ", CUTOFF_METHOD_LABEL)
-      output_suffix <- paste0(unname(dataset_short[dataset_key]), "_AllComparisons_NormEVS_vs_RawEVS")
-      panel_height <- 11.0
+      track_order_use <- "normalized_evs"
+      panel_title <- paste0("HBFSS calibration | ", unname(dataset_short[dataset_key]), " | ", CUTOFF_METHOD_LABEL)
+      output_suffix <- paste0(unname(dataset_short[dataset_key]), "_AllComparisons")
+      panel_height <- 5.8
     }
 
     for (track_key in track_order_use) {
@@ -5705,8 +5345,7 @@ build_twas_overlap_pas_table <- function(all_results, twas_rat_meta) {
       }, character(1)),
       Analysis = factor(Analysis, levels = c(
         "Original (No EVS)",
-        "NormEVS Lead", "NormEVS Rem",
-        "RawEVS Lead", "RawEVS Rem"
+        "NormEVS Lead", "NormEVS Rem"
       ))
     ) %>%
     dplyr::transmute(
@@ -5733,8 +5372,7 @@ build_twas_overlap_pas_table <- function(all_results, twas_rat_meta) {
       Comparison,
       factor(Analysis, levels = c(
         "Original (No EVS)",
-        "NormEVS Lead", "NormEVS Rem",
-        "RawEVS Lead", "RawEVS Rem"
+        "NormEVS Lead", "NormEVS Rem"
       )),
       Rat_Ortholog,
       WTTS_DE_PAS
@@ -5791,8 +5429,7 @@ build_twas_overlap_gene_table <- function(pas_table) {
       Comparison,
       factor(Analysis, levels = c(
         "Original (No EVS)",
-        "NormEVS Lead", "NormEVS Rem",
-        "RawEVS Lead", "RawEVS Rem"
+        "NormEVS Lead", "NormEVS Rem"
       )),
       Rat_Ortholog
     )
@@ -5822,9 +5459,7 @@ plot_twas_gene_support <- function(gene_table, figure_dir) {
   analysis_map <- c(
     "Original (No EVS)"="Orig",
     "NormEVS Lead"="N-Lead",
-    "NormEVS Rem"="N-Rem",
-    "RawEVS Lead"="R-Lead",
-    "RawEVS Rem"="R-Rem"
+    "NormEVS Rem"="N-Rem"
   )
   analysis_levels <- unname(analysis_map)
 
@@ -5974,7 +5609,7 @@ save_twas_comparison_panels <- function(summary_table) {
     sub <- summary_table[summary_table$Comparison == comparison_name, , drop = FALSE]
     if (!nrow(sub)) next
 
-    preferred_views <- c("Original (No EVS)", "NormEVS Lead", "NormEVS Rem", "RawEVS Lead", "RawEVS Rem")
+    preferred_views <- c("Original (No EVS)", "NormEVS Lead", "NormEVS Rem")
     views <- preferred_views[preferred_views %in% unique(as.character(sub$Analysis))]
     plots <- lapply(views, function(v) {
       one <- sub[sub$Analysis == v, , drop = FALSE]
@@ -5982,9 +5617,7 @@ save_twas_comparison_panels <- function(summary_table) {
       short <- c(
         "Original (No EVS)"="Orig",
         "NormEVS Lead"="N-Lead",
-        "NormEVS Rem"="N-Rem",
-        "RawEVS Lead"="R-Lead",
-        "RawEVS Rem"="R-Rem"
+        "NormEVS Rem"="N-Rem"
       )[[v]]
       plot_twas_view_counts(one, short)
     })
@@ -6050,114 +5683,6 @@ comparison_inputs <- lapply(seq_len(nrow(comparison_table)), function(i) {
 })
 names(comparison_inputs) <- comparison_table$comparison_name
 
-# =============================================================================
-# DIAGNOSTIC ONLY (SEQUENCE_DIAGNOSTIC=le_factor; no manuscript output)
-# Does a shared within-condition sample factor explain the wide Leading Edge
-# empirical null? For each comparison at k = SEQUENCE_DIAGNOSTIC_K (default
-# 5000, NormEVS split, shared size factors):
-#   (1) Correlation: root-mean-square correlation between PASs of the
-#       within-condition centred log2 normalized counts, per view (2,000 PASs
-#       sampled per view), and its excess over independence (1/df per pair,
-#       df = samples - conditions; Efron 2007, correlated z-values widen or
-#       narrow the empirical null).
-#   (2) Model: the pipeline's analysis (trend, prior, MAP, Wald, apeglm, Cook's
-#       outliers from the Original, combined BH, per-view fdrtool null, HC,
-#       HBFSS) with design ~ condition (current) and with ~ f_trt + f_untrt +
-#       condition, where f_<cond> is that condition's standardized PC1 sample
-#       score (the factor that defines the split) and 0 in the other
-#       condition. Both designs are applied to the Original as well.
-# Writes Diagnostic_LE_Factor/Table_Diagnostic_LE_Correlation.csv and
-# Table_Diagnostic_LE_Factor_Model.csv, then stops.
-# =============================================================================
-if (identical(Sys.getenv("SEQUENCE_DIAGNOSTIC"), "le_factor")) {
-  diag_k <- as.integer(Sys.getenv("SEQUENCE_DIAGNOSTIC_K", unset = "5000"))
-  diag_dir <- file.path(multi_output_root, "Diagnostic_LE_Factor")
-  dir.create(diag_dir, recursive = TRUE, showWarnings = FALSE)
-  base_design <- make_design_formula
-  factor_design <- function(coldata) {
-    if (all(c("f_trt", "f_untrt") %in% names(coldata))) ~ f_trt + f_untrt + condition else ~ condition
-  }
-  corr_rows <- list()
-  fit_rows <- list()
-  set.seed(1)
-  for (cmp in names(comparison_inputs)) {
-    message("Diagnostic (LE factor): ", cmp, ", k = ", diag_k)
-    raw <- comparison_inputs[[cmp]]$count_matrix
-    cd <- comparison_inputs[[cmp]]$coldata
-    depth <- evs_union_depth(raw, cd, "normalized_evs")
-    le <- depth <= diag_k
-    sf_full <- stats::setNames(as.numeric(DESeq2::sizeFactors(DESeq2::estimateSizeFactors(
-      DESeq2::DESeqDataSetFromMatrix(raw, colData = cd, design = ~ condition)))), colnames(raw))
-    nc <- sweep(raw, 2, sf_full[colnames(raw)], "/")
-
-    # (1) correlation between PASs, within-condition residuals
-    lg <- log2(nc + 1)
-    rs <- lg
-    for (cond in unique(as.character(cd$condition))) {
-      j <- as.character(cd$condition) == cond
-      rs[, j] <- lg[, j, drop = FALSE] - rowMeans(lg[, j, drop = FALSE])
-    }
-    df_res <- ncol(raw) - length(unique(as.character(cd$condition)))
-    views <- list(Original = rownames(raw), LeadingEdge = rownames(raw)[le], Remainder = rownames(raw)[!le])
-    for (v in names(views)) {
-      ids <- views[[v]]
-      ids <- ids[rowSums(rs[ids, , drop = FALSE]^2) > 0]
-      sel <- sample(ids, min(2000L, length(ids)))
-      r <- stats::cor(t(rs[sel, , drop = FALSE]))
-      r2 <- mean(r[upper.tri(r)]^2)
-      corr_rows[[length(corr_rows) + 1L]] <- data.frame(
-        Comparison = cmp, k = diag_k, View = v, n_PAS = length(views[[v]]), n_sampled = length(sel),
-        RMS_correlation = sqrt(r2), RMS_if_independent = sqrt(1 / df_res),
-        Excess_RMS_correlation = sqrt(max(0, r2 - 1 / df_res)))
-    }
-
-    # (2) the analysis with and without the PC1 sample factor
-    cdf <- cd
-    cdf$f_trt <- 0
-    cdf$f_untrt <- 0
-    for (cond in c("trt", "untrt")) {
-      j <- which(as.character(cd$condition) == cond)
-      sc <- stats::prcomp(t(as.matrix(nc[, j, drop = FALSE])), center = TRUE, scale. = FALSE, rank. = 1)$x[, 1]
-      cdf[[paste0("f_", cond)]][j] <- sc / stats::sd(sc)
-    }
-    for (model in c("~ condition (current)", "~ PC1 factor + condition")) {
-      make_design_formula <- if (startsWith(model, "~ condition")) base_design else factor_design
-      cdm <- if (startsWith(model, "~ condition")) cd else cdf
-      fit_set <- function(mats, cooks) {
-        fits <- Map(function(m, nm) fit_view_model(m, cdm, paste(cmp, model, nm), size_factors = sf_full,
-                                                   cooks_outliers = cooks), mats, names(mats))
-        names(fits) <- names(mats)
-        call_significance(fits, paste(cmp, model), OrigID_Symbol, lean = TRUE)
-      }
-      o <- tryCatch(fit_set(list(Original = raw), NULL), error = function(e) { message("  ", model, " Original failed: ", conditionMessage(e)); NULL })
-      if (is.null(o)) next
-      oc <- with(o$views$Original$results, feature_id[cooks_outlier %in% TRUE])
-      e <- tryCatch(fit_set(list(LeadingEdge = raw[le, , drop = FALSE], Remainder = raw[!le, , drop = FALSE]), oc),
-                    error = function(err) { message("  ", model, " LE/REM failed: ", conditionMessage(err)); NULL })
-      for (sig in list(o, e)) {
-        if (is.null(sig)) next
-        for (v in names(sig$views)) {
-          r <- sig$views[[v]]$results
-          dds <- sig$views[[v]]$dds
-          nl <- sig$null[sig$null$View == v, , drop = FALSE]
-          pv <- tryCatch(as.numeric(attr(DESeq2::dispersionFunction(dds), "dispPriorVar")), error = function(e) NA_real_)
-          fit_rows[[length(fit_rows) + 1L]] <- data.frame(
-            Comparison = cmp, k = diag_k, Model = model, View = v, n_PAS = nrow(r),
-            Median_Final_Dispersion = stats::median(r$dispersion, na.rm = TRUE), Prior_Variance = pv,
-            Null_SD = nl$null_sd[1], Null_Eta0 = nl$null_fraction_eta0[1], Htau = nl$hbfss_threshold[1],
-            Standard = sum(r$standard_flag %in% TRUE), Strong = sum(r$strong_cnh_flag %in% TRUE),
-            Weak = sum(r$weak_significant_flag %in% TRUE), HBFSS = sum(r$hbfss_flag %in% TRUE))
-        }
-      }
-    }
-    make_design_formula <- base_design
-    save_csv(dplyr::bind_rows(corr_rows), file.path(diag_dir, "Table_Diagnostic_LE_Correlation.csv"))
-    if (length(fit_rows)) save_csv(dplyr::bind_rows(fit_rows), file.path(diag_dir, "Table_Diagnostic_LE_Factor_Model.csv"))
-  }
-  message("Diagnostic written to ", diag_dir)
-  quit(save = "no", status = 0L)
-}
-
 failed_comparisons <- list()
 
 for (cmp in names(comparison_inputs)) {
@@ -6214,7 +5739,7 @@ empirical_cutoff_export$Active_k_per_condition <- vapply(
   function(cn) tryCatch(get_active_evs_cutoff(cn), error = function(e) NA_integer_), integer(1)
 )
 empirical_cutoff_export$Basis <- EMPIRICAL_EVS_CUTOFF_BASIS
-empirical_cutoff_export$Applied_to <- "NormEVS and RawEVS"
+empirical_cutoff_export$Applied_to <- "NormEVS"
 save_csv(
   empirical_cutoff_export,
   file.path(summary_table_dir, "Table_EVS_Cutoffs.csv")
