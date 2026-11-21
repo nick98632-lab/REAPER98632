@@ -1790,8 +1790,7 @@ build_eigenvector_split <- function(comparison_name, count_matrix, coldata, trac
   # The EVS matrix is used only to choose feature IDs. NormEVS
   # follows the supplied workflow: median-of-ratios normalization of the full
   # RT/ZT comparison matrix, followed by condition-specific PCA/PC1 eigenvectors.
- Downstream DESeq2 always
-  # receives the corresponding raw-count subset.
+  # Downstream DESeq2 always receives the corresponding raw-count subset.
   raw_count_matrix <- coerce_raw_count_matrix_for_deseq2(
     count_matrix,
     context = paste0(track_key, " full comparison matrix before EVS")
@@ -2075,7 +2074,7 @@ comparison_size_factors <- function(raw, coldata) {
   stats::setNames(as.numeric(sf), colnames(raw))
 }
 
-# Gene-wise dispersions computed once per comparison (shared normalization only).
+# Gene-wise dispersions computed once per comparison.
 # A PAS's gene-wise (Cox-Reid) dispersion depends only on its own counts, the
 # design and the size factors, so with shared size factors it is the same in
 # the Original and in any EVS partition: it is estimated once on the full
@@ -2803,10 +2802,9 @@ run_one_evs_track <- function(comparison_name, track_key, count_matrix, coldata,
 
   analysis_dataset_list <- dataset_list
 
-  # Two analyses: the Original, and the Leading Edge with the Remainder. Each
+  # Two analyses: the Original, then the Leading Edge with the Remainder. Each
   # view gets its own empirical null and HBFSS threshold (call_significance).
-  analyses <- list(split = c("leading_edge_dataset", "remainder_dataset"))
-  if (!is.null(analysis_dataset_list$raw_dataset)) analyses <- c(list(original = "raw_dataset"), analyses)
+  analyses <- list(original = "raw_dataset", split = c("leading_edge_dataset", "remainder_dataset"))
 
   # Shared size factors: estimated once on the full comparison matrix and used
   # by every view.
@@ -4085,7 +4083,7 @@ choose_discovery_k <- function(comparison_name, count_matrix, coldata, annot_df)
 # ---- checks and diagnostics on the final analysis --------------------------------
 
 # Shared normalization reached every view, the samples match, the partition is
-# exact, and (shared mode) a PAS has identical normalized counts in the
+# exact, and a PAS has identical normalized counts in the
 # Original and in its EVS partition.
 validate_track_normalization <- function(comparison_name, track_key, analysis_results, sf, evs, coldata) {
   tr <- unname(track_short[track_key])
@@ -4223,8 +4221,7 @@ save_figure_S4_discovery <- function(rows, sel) {
   s$Comparison <- as_comp(s$Comparison)
   s$Significance <- factor(s$Significance, levels = DISCOVERY_SIGNIFICANCE)
   mx <- s
-  pm <- mx
-  wmin <- merge(pm[, c("Comparison", "Significance", "Min_Dispersion_k")],
+  wmin <- merge(mx[, c("Comparison", "Significance", "Min_Dispersion_k")],
                 long[, c("Comparison", "Significance", "k", "EVS")],
                 by.x = c("Comparison", "Significance", "Min_Dispersion_k"), by.y = c("Comparison", "Significance", "k"))
   col <- unname(METHOD_COLS[["Discovery-optimal k"]])
