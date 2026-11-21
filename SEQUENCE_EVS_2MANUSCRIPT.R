@@ -504,7 +504,9 @@ lfc_boundary <- 1.0
 # Higher Criticism searches only the lower tail of the ordered empirical-null
 # p-value distribution. alpha0 = 0.10 means that the maximum HC score is sought
 # only among the lowest 10% of empirical p-values. A non-positive maximum HC
-# score yields no HC threshold and therefore no HBFSS discoveries in that view.
+# score yields no HC threshold and therefore no HBFSS discoveries in that
+# analysis. HC is computed once per analysis, over the empirical p-values of all
+# its views (call_significance).
 HC_ALPHA0 <- 0.10
 
 if (!is.numeric(HC_ALPHA0) || length(HC_ALPHA0) != 1L ||
@@ -1087,11 +1089,11 @@ safe_hc_thresh <- function(empirical_p, dataset_name) {
 
   # A non-positive maximum indicates no excess of small empirical p-values in
   # the prespecified HC search region. In that case no HC/HBFSS threshold is
-  # asserted for the dataset/view.
+  # asserted for the analysis.
   if (!is.finite(best_hc) || is.na(best_hc) || best_hc <= 0) {
     message(
       sprintf(
-        "[%s] No positive Higher-Criticism signal within the lowest %.1f%% of empirical p-values; HBFSS disabled for this view.",
+        "[%s] No positive Higher-Criticism signal within the lowest %.1f%% of empirical p-values; HBFSS disabled for this analysis.",
         dataset_name,
         100 * HC_ALPHA0
       )
@@ -2111,8 +2113,8 @@ estimate_dispersions_with_trend <- function(dds, size_factors = NULL, gene_dds =
 # shared from the full comparison matrix)
 # (model stage, fit_view_model), and its own significance calibration
 # (significance stage, call_significance): fdrtool fits an empirical null to
-# the view's own Wald statistics, and higher criticism sets the view's own HBFSS
-# threshold from its own empirical p-values. The Leading Edge and Remainder are
+# the view's own Wald statistics, and higher criticism sets one HBFSS threshold
+# per analysis from the empirical p-values of all its views. The Leading Edge and Remainder are
 # different populations (different expression ranges, dispersion laws and
 # fractions of changed PASs), and a null shared by the two would be too strict
 # for one and too loose for the other (Efron 2008, "Simultaneous inference:
@@ -2182,14 +2184,19 @@ fit_view_model <- function(count_mat, coldata, dataset_name, size_factors = NULL
   list(dds = dds, res_df = res_df, dataset_name = dataset_name)
 }
 
-# Significance stage for one analysis (a named list of model-stage fits): for
-# each view, one fdrtool empirical null fitted to that view's Wald statistics,
-# one higher-criticism threshold from that view's empirical p-values, then the
-# view's HBFSS scores and calls. Returns the per-view results and one summary
-# row per view.
+# Significance stage for one analysis (a named list of model-stage fits):
+#   1. one fdrtool empirical null per view, fitted to that view's own Wald
+#      statistics, so each view's empirical p-values are calibrated to its own
+#      population (the Leading Edge and the Remainder differ);
+#   2. one higher-criticism threshold per analysis, from the empirical p-values
+#      of all its views together (the Original alone; the Leading Edge and the
+#      Remainder combined), as the BH correction is one per analysis. Every
+#      view of an analysis therefore has the same HCp and Htau, and the Original
+#      and the split each get one threshold from one family of all PASs;
+#   3. each view's HBFSS scores and calls.
+# Returns the per-view results and one summary row per view.
 call_significance <- function(fits, analysis_label, annot_df, lean = FALSE) {
   fits <- combine_bh_across_views(fits)
-  views <- list()
   null_rows <- list()
   for (i in seq_along(fits)) {
     f <- fits[[i]]
@@ -2202,22 +2209,27 @@ call_significance <- function(fits, analysis_label, annot_df, lean = FALSE) {
     if (length(fdr_fit$pval) != sum(valid)) {
       stop(sprintf("[%s] fdrtool empirical-p output length mismatch.", view_label))
     }
-    hc_p <- safe_hc_thresh(fdr_fit$pval, dataset_name = view_label)
-    hc_ok <- !is.na(hc_p) && is.finite(hc_p) && hc_p > 0 && hc_p <= 1
-    htau <- if (hc_ok) abs(log10(hc_p)) * lfc_boundary else NA_real_
     param <- fdr_fit$param
     null_rows[[i]] <- data.frame(
       View = names(fits)[i],
       n_wald_statistics = sum(valid),
       null_sd = if ("sd" %in% colnames(param)) unname(param[1, "sd"]) else NA_real_,
-      null_fraction_eta0 = if ("eta0" %in% colnames(param)) unname(param[1, "eta0"]) else NA_real_,
-      hc_p_threshold = hc_p,
-      hbfss_threshold = htau)
-    f$res_df$empirical_p <- NA_real_
-    f$res_df$empirical_p[valid] <- as.numeric(fdr_fit$pval)
-    views[[names(fits)[i]]] <- classify_view(f, hc_p, htau, annot_df, lean = lean)
+      null_fraction_eta0 = if ("eta0" %in% colnames(param)) unname(param[1, "eta0"]) else NA_real_)
+    fits[[i]]$res_df$empirical_p <- NA_real_
+    fits[[i]]$res_df$empirical_p[valid] <- as.numeric(fdr_fit$pval)
   }
-  list(views = views, null = do.call(rbind, null_rows))
+  all_p <- unlist(lapply(fits, function(f) f$res_df$empirical_p), use.names = FALSE)
+  all_p <- all_p[is.finite(all_p)]
+  hc_p <- safe_hc_thresh(all_p, dataset_name = paste(analysis_label, "(all views)"))
+  hc_ok <- !is.na(hc_p) && is.finite(hc_p) && hc_p > 0 && hc_p <= 1
+  htau <- if (hc_ok) abs(log10(hc_p)) * lfc_boundary else NA_real_
+  null_rows <- do.call(rbind, null_rows)
+  null_rows$hc_p_threshold <- hc_p
+  null_rows$hbfss_threshold <- htau
+  null_rows$n_hc_empirical_p <- length(all_p)
+  views <- list()
+  for (i in seq_along(fits)) views[[names(fits)[i]]] <- classify_view(fits[[i]], hc_p, htau, annot_df, lean = lean)
+  list(views = views, null = null_rows)
 }
 
 # One BH correction per analysis for each DESeq2 test: over the Original's raw
@@ -2257,7 +2269,7 @@ run_core_analysis <- function(count_mats, coldata, dataset_names, annot_df, anal
 }
 
 # HBFSS scores and the Standard / Strong / Weak / HBFSS calls for one view,
-# given its empirical p-values and the view's own HC threshold.
+# given its empirical p-values and the analysis's HC threshold.
 # lean = TRUE (used only by the discovery search) returns the decision table
 # without normalized counts, annotation and dispersion columns; every flag and
 # runtime check is identical. The final analysis always uses lean = FALSE.
@@ -2803,7 +2815,8 @@ run_one_evs_track <- function(comparison_name, track_key, count_matrix, coldata,
   analysis_dataset_list <- dataset_list
 
   # Two analyses: the Original, then the Leading Edge with the Remainder. Each
-  # view gets its own empirical null and HBFSS threshold (call_significance).
+  # view gets its own empirical null; each analysis one BH and one HC threshold
+  # (call_significance).
   analyses <- list(original = "raw_dataset", split = c("leading_edge_dataset", "remainder_dataset"))
 
   # Shared size factors: estimated once on the full comparison matrix and used
@@ -3120,7 +3133,7 @@ write_methods_note <- function() {
       "The Discovery-optimal k was chosen in two steps and was exploratory. ",
       "Step 1, without any test: for each scanned k, the split was built as in the analysis and both the Leading Edge and the Remainder were taken through DESeq2 up to the final (MAP) dispersions, without Wald tests, apeglm or p-values. Two criteria were computed, each the larger of the two sets' values so that both sets had to do well: the median final dispersion (the smallest dispersion estimates in both sets, since smaller dispersions give larger Wald statistics) and the dispersion-prior variance (how precisely each set's dispersions were estimated). ",
       "k was scanned every %d over the admissible range and every %d within %d of each Pareto-optimal k of that scan, and the dispersion window was the Pareto set of all scanned k (k for which no other scanned k was at least as small on both criteria and smaller on one). ",
-      "Step 2: the complete significance analysis (DESeq2 with the trend below, the three Wald tests, apeglm, per-view empirical nulls, higher criticism and HBFSS) was run at every window k and at every integer within %d of the %d best separated discovery peaks of %s among them. ",
+      "Step 2: the complete significance analysis (DESeq2 with the trend below, the three Wald tests, apeglm, per-view empirical nulls, one higher-criticism threshold per analysis and HBFSS) was run at every window k and at every integer within %d of the %d best separated discovery peaks of %s among them. ",
       "For each significance call, the gain over the Original, G(k) = S_LE+REM(k) - S_Original in unique significant PASs, was computed, with the Original fitted once per comparison; k* maximized G(k) over the evaluated k, with ties broken by the smallest k. ",
       "S was counted under the same rules as the reported results (see Multiple testing), so S_LE+REM and S_Original used the same PASs, tests and thresholds. ",
       "Admissible k were integers of at least %d leaving at least %.0f%% of the PASs (and at least %d) in both the Leading Edge and the Remainder, so that both sets supported a dispersion trend, an empirical null and higher criticism; values of k giving the same Leading Edge were evaluated once, and if the analysis failed at a k below (or above) every k at which it succeeded, all k further out were skipped. Not every admissible k was evaluated, so k* is the best observed cutoff. ",
@@ -3143,7 +3156,7 @@ write_methods_note <- function() {
     sprintf("Weak-effect support was tested with DESeq2 results(..., lfcThreshold=%.1f, altHypothesis='lessAbs'). Weak-CNH support required Benjamini-Hochberg adjusted p-value < %.2f and |apeglm LFC| < %.1f. A lessAbs rejection alone was not reported as differential expression. A PAS was reported as final Weak only when the same sub-boundary PAS also passed HBFSS.", lfc_boundary, BH_FDR_WEAK, lfc_boundary),
     "",
     "## Multiple testing",
-    "For each of the three DESeq2 tests (Wald, greaterAbs, lessAbs), the Benjamini-Hochberg correction was applied once per analysis: over the raw p-values of the Original, and over the raw p-values of the Leading Edge and the Remainder combined, which are disjoint and together contain every PAS of the comparison. DESeq2's independent filtering was not used, because it chooses a different mean-count filter in each view from that view's own results. Cook's-distance outliers were identified once per comparison, by DESeq2's default rule (Cook's distance above the 0.99 quantile of the F(p, m - p) distribution) in the Original's fit, and the p-values of those PASs were removed in every view, so the Original and the EVS analyses tested the same PASs. HBFSS used the Wald statistics and its own empirical null and higher-criticism threshold, so neither the BH family nor the Cook's rule applied to it.",
+    "For each of the three DESeq2 tests (Wald, greaterAbs, lessAbs), the Benjamini-Hochberg correction was applied once per analysis: over the raw p-values of the Original, and over the raw p-values of the Leading Edge and the Remainder combined, which are disjoint and together contain every PAS of the comparison. DESeq2's independent filtering was not used, because it chooses a different mean-count filter in each view from that view's own results. Cook's-distance outliers were identified once per comparison, by DESeq2's default rule (Cook's distance above the 0.99 quantile of the F(p, m - p) distribution) in the Original's fit, and the p-values of those PASs were removed in every view, so the Original and the EVS analyses tested the same PASs. HBFSS used the Wald statistics, a separate empirical null for each view and one higher-criticism threshold per analysis (below), so neither the BH family nor the Cook's rule applied to it.",
     "",
     "## Empirical-null calibration, higher criticism, and HBFSS",
     sprintf(
@@ -3151,9 +3164,9 @@ write_methods_note <- function() {
         "The empirical null was estimated separately for each analysis view: the Original (No EVS), the Leading Edge and the Remainder, each from its own Wald statistics. The Leading Edge and Remainder are different populations, differing in expression range, dispersion law and fraction of changed PASs, and a null shared between them would be too strict for one and too loose for the other (Efron 2008). ",
         "The finite ordinary DESeq2 Wald statistics of each view were ", if (identical(EMPIRICAL_NULL_METHOD, "theoretical")) "referred to the theoretical N(0,1) null (reference analysis; no empirical correction). " else paste0("supplied to fdrtool with statistic='normal' and cutoff.method='", EMPIRICAL_NULL_METHOD, "'", if (identical(EMPIRICAL_NULL_METHOD, "pct0")) sprintf(" (central %.0f%%%% of the statistics)", 100 * EMPIRICAL_NULL_PCT0) else "", " to estimate a zero-centered normal empirical null and the corresponding empirical-null p-values. "), "The fitted null standard deviation and null fraction (eta0) were reported for every view. ",
         "These empirical p-values were distinct from the ordinary DESeq2 Wald p-values and from the greaterAbs/lessAbs p-values. ",
-        "Higher-Criticism scores were then calculated from each view's ordered empirical-null p-values with fdrtool::hc.score, giving one HCp and one Htau per view. ",
+        "Higher-Criticism scores were then calculated once per analysis with fdrtool::hc.score, from the ordered empirical-null p-values of all its views together (the Original alone; the Leading Edge and the Remainder combined), giving one HCp and one Htau per analysis. This parallels the single Benjamini-Hochberg correction per analysis: each view's p-values were calibrated by its own empirical null, and the Original and the split were then each thresholded once over one family containing every PAS of the comparison, so that the smaller Leading Edge did not receive a separate, noisier threshold. ",
         "The HC maximization region was prespecified as the lowest %.0f%% of ordered empirical p-values (alpha0=%.2f), matching the lower-tail restriction provided by fdrtool::hc.thresh(alpha0=...). ",
-        "Within that region, HCp was the empirical p-value at the maximum HC score. A view was assigned an HCp threshold only when that maximum HC score was strictly positive; if the maximum HC score was non-positive or no valid search point existed, HCp and Htau were left undefined and no PAS in that view was called HBFSS-significant."
+        "Within that region, HCp was the empirical p-value at the maximum HC score. An analysis was assigned an HCp threshold only when that maximum HC score was strictly positive; if the maximum HC score was non-positive or no valid search point existed, HCp and Htau were left undefined and no PAS in that analysis was called HBFSS-significant."
       ),
       100 * HC_ALPHA0,
       HC_ALPHA0
@@ -3604,7 +3617,8 @@ save_figure_1_optimal_k <- function() {
 #
 # Step 2, significance (only inside the window). The complete analysis of the
 # pipeline (DESeq2 with the power trend, Wald / greaterAbs / lessAbs, apeglm,
-# per-view empirical null, higher criticism, HBFSS) is run at every window k,
+# per-view empirical null, one higher-criticism threshold over LE + REM, HBFSS)
+# is run at every window k,
 # then at every integer within DISC_SCAN_FINE of the DISC_FINE_REGIONS (3) best
 # separated discovery peaks of each call in SEQUENCE_DISCOVERY_REFINE (default
 # Standard and HBFSS, plus the run's objective). For each call
@@ -3626,7 +3640,9 @@ save_figure_1_optimal_k <- function() {
 #     and the Original one BH over its own raw p-values (same universe, same
 #     eligibility, no independent filtering, the Original's Cook's outliers in
 #     every view).
-#     HBFSS keeps its own per-view calibration; BH does not apply to it.
+#     HBFSS: a separate empirical null per view, and one higher-criticism
+#     threshold per analysis (over LE + REM; over the Original); BH does not
+#     apply to it.
 #   * The Original is fitted once per comparison and reused for every k and for
 #     the final analysis.
 #
