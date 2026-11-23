@@ -360,19 +360,23 @@ write_regime_master_figures <- function(multi_root, methods, comparison, out_dir
     scale_fill_manual(values = mcols, name = NULL) +
     scale_y_continuous(labels = scales::label_comma(), expand = expansion(c(0, 0.15))) +
     labs(x = NULL, y = "k* (PASs per arm)", title = "Two-trend cutoffs", tag = "a") + fig_theme()
-  oc <- do.call(rbind, lapply(c("Two-trend k*" = "Expected_Correct_k", "Regime k*" = "Expected_Correct_Regime_k",
-                                 "k = 5,000" = "Expected_Correct_k5000", "All Remainder" = "Expected_Correct_All_Remainder"),
-                               function(col) data.frame(tsum[, c("Comparison", "EVS_PCA_Method")], v = tsum[[col]])))
-  oc$Cutoff <- factor(rep(c("Two-trend k*", "Regime k*", "k = 5,000", "All Remainder"), each = nrow(tsum)),
-                      levels = c("Two-trend k*", "Regime k*", "k = 5,000", "All Remainder"))
-  pb <- ggplot(oc, aes(Cutoff, v, fill = Cutoff)) + geom_col(width = 0.7) +
-    geom_text(aes(label = sprintf("%.2f", v)), vjust = -0.4, size = 1.6) +
+  cuts <- c("Two-trend k*" = "k", "Regime k*" = "Regime_k", "k = 5,000" = "k5000")
+  oc <- do.call(rbind, lapply(names(cuts), function(cn) rbind(
+    data.frame(tsum[, c("Comparison", "EVS_PCA_Method")], Cutoff = cn, Measure = "Leading Edge fits LE trend",
+               v = tsum[[paste0("LE_Fits_LE_", cuts[[cn]])]]),
+    data.frame(tsum[, c("Comparison", "EVS_PCA_Method")], Cutoff = cn, Measure = "Remainder fits REM trend",
+               v = tsum[[paste0("REM_Fits_REM_", cuts[[cn]])]]))))
+  oc$Cutoff <- factor(oc$Cutoff, levels = names(cuts))
+  pb <- ggplot(oc, aes(Cutoff, v, fill = Measure)) +
+    geom_col(position = position_dodge(0.8), width = 0.75) +
+    geom_text(aes(label = sprintf("%.2f", v)), position = position_dodge(0.8), vjust = -0.4, size = 1.5) +
     facet_grid(EVS_PCA_Method ~ Comparison) +
-    scale_fill_manual(values = c("Two-trend k*" = "#CC79A7", "Regime k*" = "#D55E00", "k = 5,000" = "grey55",
-                                 "All Remainder" = "grey80"), name = NULL) +
-    coord_cartesian(ylim = c(0.5, 0.85)) +
-    labs(x = NULL, y = "Expected share of PASs on their own trend", title = "Allocation accuracy", tag = "b") +
-    fig_theme() + theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())
+    scale_fill_manual(values = c("Leading Edge fits LE trend" = "#1F6FB2", "Remainder fits REM trend" = "#C0392B"),
+                      name = NULL) +
+    coord_cartesian(ylim = c(0.3, 0.9)) +
+    labs(x = NULL, y = "Share of sites fitting their own set's trend better",
+         title = "Allocation at each cutoff (held-out trends)", tag = "b") +
+    fig_theme() + theme(axis.text.x = element_text(angle = 35, hjust = 1))
   rows <- list(list(plots = list(pa, pb), widths = c(1, 1.4)))
   pc <- NULL
   if (!is.null(sites) && length(methods) > 1L) {
@@ -3667,7 +3671,10 @@ build_regime_arm <- function(rank_matrix, norm, pooled_var, arm_samples) {
   p <- stats::prcomp(t(z), center = TRUE, scale. = FALSE, rank. = 1)
   loading <- p$rotation[, 1]
   loading[!is.finite(loading)] <- 0
-  ord <- order(abs(loading), decreasing = FALSE)
+  # Ascending order whose top k (tail) is exactly the split's top k: the split
+  # ranks by order(|loading|, decreasing = TRUE), which keeps tied PASs in row
+  # order, so the same tie-breaking is used here.
+  ord <- rev(order(abs(loading), decreasing = TRUE))
   P <- (p$sdev[1]^2 * loading^2)[ord]
   E <- pmax(pooled_var - rowMeans(norm[, arm_samples, drop = FALSE]), 0)[ord]
   if (sum(P) <= 0 || sum(E) <= 0) stop("Undefined PC1 or excess-variance mass for an arm.")
@@ -4101,6 +4108,9 @@ compute_twotrend_cutoffs <- function(method = EVS_PCA_METHOD) {
     s$Chosen <- seq_len(nrow(s)) == j
     kr <- REGIME_K[[cmp]]
     ec <- function(kk) twotrend_expected_correct(p_le, depth <= kk)
+    sh_le <- function(kk) mean(q_le[depth <= kk] > 0.5)      # LE sites fitting the LE trend better
+    sh_rem <- function(kk) mean(q_le[depth > kk] <= 0.5)     # REM sites fitting the REM trend better
+    kref <- if (is.null(kr)) NA_integer_ else kr
     par_le <- fit$mix$pars[[le_c]]; par_rem <- fit$mix$pars[[rem_c]]
     fits[[cmp]] <- data.frame(
       Comparison = cmp, Heldout_Samples = paste(fit$heldout_samples, collapse = ","),
@@ -4129,6 +4139,13 @@ compute_twotrend_cutoffs <- function(method = EVS_PCA_METHOD) {
       Mean_P_LE_in_LE = mean(p_le[depth <= k]), Mean_P_LE_in_REM = mean(p_le[depth > k]),
       Share_Fit_LE_Better_in_LE = mean(q_le[depth <= k] > 0.5), Share_Fit_LE_Better_in_REM = mean(q_le[depth > k] > 0.5),
       Share_Fit_LE_Better_All = mean(q_le > 0.5),
+      LE_Fits_LE_k = sh_le(k), REM_Fits_REM_k = sh_rem(k),
+      LE_Fits_LE_Regime_k = if (is.na(kref)) NA_real_ else sh_le(kref),
+      REM_Fits_REM_Regime_k = if (is.na(kref)) NA_real_ else sh_rem(kref),
+      LE_Fits_LE_k5000 = sh_le(TWOTREND_K_REFERENCE), REM_Fits_REM_k5000 = sh_rem(TWOTREND_K_REFERENCE),
+      Score_Gap_Regime_k = if (is.na(kref)) NA_real_ else
+        s$Score[j] - s$Score[which.min(abs(s$k - kref))],
+      Score_Gap_k5000 = s$Score[j] - s$Score[which.min(abs(s$k - TWOTREND_K_REFERENCE))],
       EM_converged = fit$mix$converged)
     message(sprintf("  %s: two-trend k* = %d (Leading Edge %d, %.0f%% fit the LE trend better vs %.0f%% of all PASs; LE trend b = %.2f, REM trend b = %.2f%s)",
                     cmp, k, sum(depth <= k), 100 * mean(q_le[depth <= k] > 0.5), 100 * mean(q_le > 0.5), par_le[3], par_rem[3],
@@ -4182,7 +4199,7 @@ plot_twotrend_figure <- function() {
                      lab = sprintf("LE: b = %.2f, %.0f%%\nREM: b = %.2f, %.0f%%", fits$LE_b, 100 * fits$LE_share,
                                    fits$REM_b, 100 * fits$REM_share))
   pa <- ggplot(pts, aes(Heldout_Mean, Heldout_Dispersion)) +
-    geom_point(aes(colour = Fit_P_LE_Trend), size = 0.05, alpha = 0.45, stroke = 0) +
+    geom_point(aes(colour = Fit_P_LE_Trend), size = 0.25, alpha = 0.6, stroke = 0) +
     geom_line(data = curves[curves$Trend == "Leading-Edge trend", ], aes(x, y), colour = TWOTREND_COLS[[1]],
               linewidth = 0.7) +
     geom_line(data = curves[curves$Trend == "Remainder trend", ], aes(x, y), colour = TWOTREND_COLS[[2]],
@@ -4190,8 +4207,9 @@ plot_twotrend_figure <- function() {
     geom_text(data = blab, aes(label = lab), x = Inf, y = Inf, hjust = 1.04, vjust = 1.15,
               size = 1.9, lineheight = 0.9, inherit.aes = FALSE) +
     facet_wrap(~ Comparison, nrow = 1, labeller = labeller(Comparison = comp_lab())) +
-    scale_x_log10(labels = scales::label_number(drop0trailing = TRUE, big.mark = ",")) +
-    scale_y_log10(labels = scales::label_number(drop0trailing = TRUE)) +
+    scale_x_log10(labels = scales::label_comma(accuracy = 1)) +
+    scale_y_log10(breaks = 10^(-4:3), labels = function(v) ifelse(v >= 1, format(v, big.mark = ",", scientific = FALSE, trim = TRUE),
+                                                                 format(v, scientific = FALSE, drop0trailing = TRUE, trim = TRUE))) +
     scale_colour_gradient2(low = "#C0392B", mid = "grey85", high = "#1F6FB2", midpoint = 0.5, limits = c(0, 1),
                            name = "Fits LE trend\n(likelihood share)") +
     labs(x = "Mean, held-out samples", y = "Gene-wise dispersion,\nheld-out samples", tag = "a",
@@ -4236,7 +4254,7 @@ plot_twotrend_figure <- function() {
   pc <- ggplot(sc, aes(k, Score_rel)) +
     geom_vline(data = klines, aes(xintercept = k, colour = Cutoff), linewidth = 0.45, linetype = "22") +
     geom_line(linewidth = 0.5) +
-    geom_text(data = klab, aes(x = k, y = -Inf, label = lab), hjust = -0.08, vjust = -0.3, size = 1.9,
+    geom_text(data = klab, aes(x = Inf, y = -Inf, label = lab), hjust = 1.05, vjust = -0.3, size = 1.9,
               colour = TWOTREND_KCOLS[["Two-trend k*"]], fontface = "bold") +
     facet_wrap(~ Comparison, nrow = 1, scales = "free_y", labeller = labeller(Comparison = comp_lab())) +
     scale_x_continuous(labels = scales::label_comma()) +
