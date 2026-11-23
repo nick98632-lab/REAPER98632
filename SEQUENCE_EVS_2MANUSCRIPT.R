@@ -89,8 +89,9 @@
 # 'fndr') applied to the Wald statistics of each view separately: the
 # Original, the Leading Edge and the Remainder each have their own null. Higher
 # criticism is maximized over the lowest 10% (alpha0 = 0.10) of the ordered
-# empirical p-values of all views of an analysis together and must be
-# positive; Htau = -log10(HCp), one threshold per analysis.
+# empirical p-values of the comparison's Original and must be positive;
+# Htau = -log10(HCp), one threshold per comparison, applied to the Original
+# and to the Leading Edge and Remainder alike.
 # See the section DIFFERENTIAL EXPRESSION: MODEL STAGE AND SIGNIFICANCE STAGE.
 #
 # FIGURES (per run in EVS_PCA_<METHOD>/Combined_Figures; master figures in
@@ -2228,7 +2229,7 @@ estimate_dispersions_with_trend <- function(dds, size_factors = NULL, gene_dds =
 # (model stage, fit_view_model), and its own significance calibration
 # (significance stage, call_significance): fdrtool fits an empirical null to
 # the view's own Wald statistics, and higher criticism sets one HBFSS threshold
-# per analysis from the empirical p-values of all its views. The Leading Edge and Remainder are
+# per comparison from the Original's empirical p-values, applied to every view. The Leading Edge and Remainder are
 # different populations (different expression ranges, dispersion laws and
 # fractions of changed PASs), and a null shared by the two would be too strict
 # for one and too loose for the other (Efron 2008, "Simultaneous inference:
@@ -2314,7 +2315,10 @@ fit_view_model <- function(count_mat, coldata, dataset_name, size_factors = NULL
 #      and the split each get one threshold from one family of all PASs;
 #   3. each view's HBFSS scores and calls.
 # Returns the per-view results and one summary row per view.
-call_significance <- function(fits, analysis_label, annot_df, lean = FALSE) {
+# hc_p_fixed: when given (the EVS analysis), the HC threshold of the
+# comparison's Original is used instead of a new one, so the Original and the
+# Leading Edge + Remainder share one HBFSS threshold per comparison.
+call_significance <- function(fits, analysis_label, annot_df, lean = FALSE, hc_p_fixed = NULL) {
   SIGNIFICANCE_CALLS$null <- SIGNIFICANCE_CALLS$null + 1L
   fits <- combine_bh_across_views(fits)
   null_rows <- list()
@@ -2340,11 +2344,13 @@ call_significance <- function(fits, analysis_label, annot_df, lean = FALSE) {
   }
   all_p <- unlist(lapply(fits, function(f) f$res_df$empirical_p), use.names = FALSE)
   all_p <- all_p[is.finite(all_p)]
-  hc_p <- safe_hc_thresh(all_p, dataset_name = paste(analysis_label, "(all views)"))
+  hc_source <- if (is.null(hc_p_fixed)) "this analysis" else "the comparison's Original"
+  hc_p <- if (is.null(hc_p_fixed)) safe_hc_thresh(all_p, dataset_name = paste(analysis_label, "(all views)")) else hc_p_fixed
   hc_ok <- !is.na(hc_p) && is.finite(hc_p) && hc_p > 0 && hc_p <= 1
   htau <- if (hc_ok) abs(log10(hc_p)) * lfc_boundary else NA_real_
   null_rows <- do.call(rbind, null_rows)
   null_rows$hc_p_threshold <- hc_p
+  null_rows$hc_threshold_source <- hc_source
   null_rows$hbfss_threshold <- htau
   null_rows$n_hc_empirical_p <- length(all_p)
   views <- list()
@@ -2410,11 +2416,11 @@ original_cooks_outliers <- function(comparison_name, raw, coldata, size_factors)
 }
 
 run_core_analysis <- function(count_mats, coldata, dataset_names, annot_df, analysis_label, size_factors = NULL,
-                              gene_dds = NULL, cooks_outliers = NULL) {
+                              gene_dds = NULL, cooks_outliers = NULL, hc_p_fixed = NULL) {
   fits <- Map(function(m, nm) fit_view_model(m, coldata, nm, size_factors = size_factors, gene_dds = gene_dds,
                                              cooks_outliers = cooks_outliers), count_mats, dataset_names)
   names(fits) <- names(count_mats)
-  call_significance(fits, analysis_label, annot_df)
+  call_significance(fits, analysis_label, annot_df, hc_p_fixed = hc_p_fixed)
 }
 
 # HBFSS scores and the Standard / Strong / Weak / HBFSS calls for one view,
@@ -2964,8 +2970,9 @@ run_one_evs_track <- function(comparison_name, track_key, count_matrix, coldata,
   analysis_dataset_list <- dataset_list
 
   # Two analyses: the Original, then the Leading Edge with the Remainder. Each
-  # view gets its own empirical null; each analysis one BH and one HC threshold
-  # (call_significance).
+  # view gets its own empirical null; each analysis one BH. One HC / HBFSS
+  # threshold per comparison: set by the Original and reused by the EVS
+  # analysis (call_significance, hc_p_fixed).
   analyses <- list(original = "raw_dataset", split = c("leading_edge_dataset", "remainder_dataset"))
 
   # Shared size factors and gene-wise dispersions: estimated once on the full
@@ -2976,6 +2983,7 @@ run_one_evs_track <- function(comparison_name, track_key, count_matrix, coldata,
   sf <- cache$sf
 
   analysis_results <- list()
+  original_hc_p <- NULL
   for (a in names(analyses)) {
     keys <- analyses[[a]]
     analysis_label <- if (a == "original") ORIGINAL_LABEL else paste(unname(track_short[track_key]), "LE + REM")
@@ -2989,9 +2997,16 @@ run_one_evs_track <- function(comparison_name, track_key, count_matrix, coldata,
       analysis_label = paste(comparison_name, analysis_label),
       size_factors = sf,
       gene_dds = cache$gene_dds,
-      cooks_outliers = cooks
+      cooks_outliers = cooks,
+      hc_p_fixed = if (a == "original") NULL else original_hc_p
     )
     if (a == "original") {
+      original_hc_p <- out$null$hc_p_threshold[1]
+      if (is.null(original_hc_p) || !is.finite(original_hc_p)) original_hc_p <- NA_real_
+    } else {
+      add_validation("One HBFSS threshold per comparison (Original and EVS share the Original's HC threshold)",
+                     comparison_name, identical(unique(out$null$hc_p_threshold), original_hc_p),
+                     sprintf("HC p = %.4g; Htau = %.3f", original_hc_p, out$null$hbfss_threshold[1]))
       remember_original_cooks(comparison_name, out$views$raw_dataset$results)
       # Reference baseline: the Original with DESeq2's default trend (once).
       tryCatch(record_default_trend_baseline(comparison_name, evs$raw_dataset, coldata, annot_df, sf, out),
@@ -3313,7 +3328,7 @@ write_methods_note <- function() {
         "The empirical null was estimated separately for each analysis view: the Original (No EVS), the Leading Edge and the Remainder, each from its own Wald statistics. The Leading Edge and Remainder are different populations, differing in expression range, dispersion law and fraction of changed PASs, and a null shared between them would be too strict for one and too loose for the other (Efron 2008). ",
         "The finite ordinary DESeq2 Wald statistics of each view were ", if (identical(EMPIRICAL_NULL_METHOD, "theoretical")) "referred to the theoretical N(0,1) null (reference analysis; no empirical correction). " else paste0("supplied to fdrtool with statistic='normal' and cutoff.method='", EMPIRICAL_NULL_METHOD, "'", if (identical(EMPIRICAL_NULL_METHOD, "pct0")) sprintf(" (central %.0f%%%% of the statistics)", 100 * EMPIRICAL_NULL_PCT0) else "", " to estimate a zero-centered normal empirical null and the corresponding empirical-null p-values. "), "The fitted null standard deviation and null fraction (eta0) were reported for every view. ",
         "These empirical p-values were distinct from the ordinary DESeq2 Wald p-values and from the greaterAbs/lessAbs p-values. ",
-        "Higher-Criticism scores were then calculated once per analysis with fdrtool::hc.score, from the ordered empirical-null p-values of all its views together (the Original alone; the Leading Edge and the Remainder combined), giving one HCp and one Htau per analysis. This parallels the single Benjamini-Hochberg correction per analysis: each view's p-values were calibrated by its own empirical null, and the Original and the split were then each thresholded once over one family containing every PAS of the comparison, so that the smaller Leading Edge did not receive a separate, noisier threshold. ",
+        "Higher-Criticism scores were then calculated once per comparison with fdrtool::hc.score, from the ordered empirical-null p-values of the Original, giving one HCp and one Htau per comparison that was applied to the Original and to the Leading Edge and Remainder alike. The HC maximum is sensitive to small changes in the p-value distribution, so separate thresholds for the Original and the split would make their HBFSS counts differ mainly through where each threshold fell; with one threshold, HBFSS differences between the Original and EVS reflect only each PAS's shrunken fold change and its empirical p-value, which was calibrated by its own view's empirical null. ",
         "The HC maximization region was prespecified as the lowest %.0f%% of ordered empirical p-values (alpha0=%.2f), matching the lower-tail restriction provided by fdrtool::hc.thresh(alpha0=...). ",
         "Within that region, HCp was the empirical p-value at the maximum HC score. An analysis was assigned an HCp threshold only when that maximum HC score was strictly positive; if the maximum HC score was non-positive or no valid search point existed, HCp and Htau were left undefined and no PAS in that analysis was called HBFSS-significant."
       ),
