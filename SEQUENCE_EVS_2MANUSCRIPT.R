@@ -16,7 +16,7 @@
 # SEQUENCE_CORES (parallel comparisons, default up to 4), SEQUENCE_RANDOM_SPLITS
 # (permutation searches, default 5), SEQUENCE_DISP_GRID_STEP (0.25),
 # SEQUENCE_PRIOR_VAR_MIN (0.01), SEQUENCE_NULL_METHOD (fndr).
-# Calibration: SEQUENCE_EVS_CALIBRATION.R. Methods text: MANUSCRIPT_METHODS.
+# Methods text: MANUSCRIPT_METHODS.
 # =============================================================================
 
 MANUSCRIPT_METHODS <- c(
@@ -75,10 +75,6 @@ MANUSCRIPT_METHODS <- c(
   "",
   "The factorial design is analysed jointly in one DESeq2 model across all 40 samples, ~ time + condition + time:condition, with experiment-wide size factors and the hierarchical dispersion trend (one population). Likelihood-ratio tests against ~ time (a treatment effect at any recovery time) and against ~ time + condition (a treatment effect that changes with recovery time) are adjusted by BH within each test. The treatment log₂ fold change and Wald test at each recovery time are obtained from the condition and interaction coefficients. This tests time explicitly instead of comparing separate significance lists. [1, 16]",
   "",
-  "## Calibration",
-  "",
-  "Error rates are assessed by simulation (SEQUENCE_EVS_CALIBRATION.R), using the pipeline's own functions. For each comparison, 10,000 real PASs are subsampled; the truth's means, size factors and dispersion model (trend and τ², from the same marginal likelihood) are fitted on the real counts, either as one population or as the Leading Edge and Remainder at k* scaled to the subsample, optionally with the real samples' PC1 structure. Ten percent of PASs receive true log₂ fold changes; null scenarios have none. The Original and EVS are run with the estimated prior variance and with the 0.25 floor. Each call type is scored against its own truth: Standard and HBFSS against any true change, Strong against |true log₂FC| > 1, and Weak against 0 < |true log₂FC| < 1. FDR, false non-discovery rate, power, false calls under the null, the empirical-null spread, and the error of the final dispersions and shrunken fold changes are reported.",
-  "",
   "## Alternative polyadenylation",
   "",
   "Differential abundance does not establish a change in which PAS a gene uses, so APA is analysed separately for each pairwise comparison with edgeR quasi-likelihood models (robust dispersion) on raw counts, with offsets from the shared DESeq2 size factors. Gene units are defined by gene symbol, chromosome and strand, and PASs are ordered along the direction of transcription by their peak coordinate. (i) Usage change: for genes with at least two eligible PASs, diffSpliceDGE tests each PAS against the other PASs of its gene; gene-level p-values are Simes combinations, with BH across genes, and, when the stageR package is installed, a stage-wise analysis screens genes by the Simes p-value and confirms individual PASs within significant genes with overall FDR control at 0.10. (ii) Direction: for each gene, the two most used PASs (mean normalized count ≥ 5 each) form a proximal/distal pair, and the relative expression difference RED is the treatment log₂ fold change of the distal PAS minus that of the proximal PAS, i.e. the change in log₂ distal/proximal usage; positive values indicate 3′ UTR lengthening (more distal use in recovery) and negative values shortening. The gene-level diffSpliceDGE test of the pair gives the p-value, with BH across genes (FDR < 0.10). Whether the pair's PASs lie in the EVS Leading Edge is reported. [11, 12, 17]",
@@ -87,7 +83,7 @@ MANUSCRIPT_METHODS <- c(
   "",
   "## Figures",
   "",
-  "Figure 1, the EVS cutoff (held-out dispersions with the Leading-Edge, Remainder and single trends at k*; profile likelihood over k). Figure 2, DESeq2 dispersions after the split (dispersion plots, trend exponent, prior variance used). Figure 3, model comparison and sensitivity (BIC of each alternative relative to EVS; observed versus permuted rankings; Standard discoveries in the primary and sensitivity analyses). Figure 4, the time-course model (significant PASs per recovery time; treatment log₂FC over recovery for the strongest time-varying PASs). Figure 5, alternative polyadenylation (genes with a usage change and with significant shortening or lengthening per recovery time; RED volcano plots; 3′aTWAS enrichment of APA genes). Per comparison: volcano plots, PCA before and after EVS, PC1 evidence and 3′aTWAS overlap; discovery counts and HBFSS calibration across comparisons; 3′aTWAS gene support; calibration (FDR, false non-discovery rate, power, null false calls, empirical-null spread, estimation error) and the HBFSS null choice.",
+  "Figure 1, the EVS cutoff (held-out dispersions with the Leading-Edge, Remainder and single trends at k*; profile likelihood over k). Figure 2, DESeq2 dispersions after the split (dispersion plots, trend exponent, prior variance used). Figure 3, model comparison and sensitivity (BIC of each alternative relative to EVS; observed versus permuted rankings; Standard discoveries in the primary and sensitivity analyses). Figure 4, the time-course model (significant PASs per recovery time; treatment log₂FC over recovery for the strongest time-varying PASs). Figure 5, alternative polyadenylation (genes with a usage change and with significant shortening or lengthening per recovery time; RED volcano plots; 3′aTWAS enrichment of APA genes). Per comparison: volcano plots, PCA before and after EVS, PC1 evidence and 3′aTWAS overlap; discovery counts and HBFSS thresholds across comparisons; 3′aTWAS gene support.",
   "",
   "## Reproducibility and limitations",
   "",
@@ -983,7 +979,7 @@ safe_hc_thresh <- function(empirical_p, dataset_name) {
 
   message(
     sprintf(
-      "[%s] HC calibration: alpha0=%.3f, HCmax=%.6f, HCp=%.8g, search=%d/%d empirical p-values.",
+      "[%s] HC threshold: alpha0=%.3f, HCmax=%.6f, HCp=%.8g, search=%d/%d empirical p-values.",
       dataset_name,
       HC_ALPHA0,
       best_hc,
@@ -2037,7 +2033,7 @@ dispersion_prior_variance <- function(dds, prior_floor = DISP_PRIOR_VAR_MIN) {
 # Each analysis view (Original; Leading Edge; Remainder) is its own DESeq2
 # dataset with its own dispersion trend, prior and shrinkage (size factors are
 # shared from the full comparison matrix)
-# (model stage, fit_view_model), and its own significance calibration
+# (model stage, fit_view_model), and its own significance threshold
 # (significance stage, call_significance): fdrtool fits an empirical null to
 # the view's own Wald statistics, and higher criticism sets one HBFSS threshold
 # per comparison from the Original's empirical p-values, applied to every view. The Leading Edge and Remainder are
@@ -2123,7 +2119,7 @@ fit_view_model <- function(count_mat, coldata, dataset_name, size_factors = NULL
 
 # Significance stage for one analysis (a named list of model-stage fits):
 #   1. one fdrtool empirical null per view, fitted to that view's own Wald
-#      statistics, so each view's empirical p-values are calibrated to its own
+#      statistics, so each view's empirical p-values are referenced to its own
 #      population (the Leading Edge and the Remainder differ);
 #   2. one higher-criticism threshold per analysis, from the empirical p-values
 #      of all its views together (the Original alone; the Leading Edge and the
@@ -3420,7 +3416,7 @@ ARM_RANKS <- NULL
 ARM_COMPARATOR_POS <- NULL
 REFERENCE_K <- list()
 # FALSE skips the comparators, the reference ranking and the permutations
-# (used by the calibration script, which needs k* only).
+# (returns k* only).
 CUTOFF_COMPARATORS <- TRUE
 
 # Experiment-wide raw counts: every PAS with a nonzero count in any sample.
@@ -3867,7 +3863,7 @@ size_factors_match <- function(dds, size_factors) {
 
 # Per-PAS calls of one analysis (a named list of view results): Standard,
 # Strong and Weak from one BH over all its views' raw p-values (as in
-# call_significance), HBFSS as calibrated per view.
+# call_significance), HBFSS thresholded per view.
 discovery_flags <- function(res_list) {
   cols <- c("feature_id", "pvalue", "resGA_pvalue", "resLA_pvalue", "lfc_shrunk",
             "standard_flag", "strong_cnh_flag", "weak_significant_flag", "hbfss_flag")
@@ -4782,12 +4778,12 @@ save_paper_empirical_hbfss_panels <- function() {
 
     if (identical(dataset_key, "raw_dataset")) {
       track_order_use <- "normalized_evs"
-      panel_title <- paste0("HBFSS calibration | Orig | ", CUTOFF_METHOD_LABEL)
+      panel_title <- paste0("HBFSS threshold | Orig | ", CUTOFF_METHOD_LABEL)
       output_suffix <- "Raw_AllComparisons"
       panel_height <- 5.8
     } else {
       track_order_use <- "normalized_evs"
-      panel_title <- paste0("HBFSS calibration | ", unname(dataset_short[dataset_key]), " | ", CUTOFF_METHOD_LABEL)
+      panel_title <- paste0("HBFSS threshold | ", unname(dataset_short[dataset_key]), " | ", CUTOFF_METHOD_LABEL)
       output_suffix <- paste0(unname(dataset_short[dataset_key]), "_AllComparisons")
       panel_height <- 5.8
     }
