@@ -3417,7 +3417,10 @@ ARM_COMPARATOR_POS <- NULL
 REFERENCE_K <- list()
 # FALSE skips the comparators, the reference ranking and the permutations
 # (returns k* only).
-CUTOFF_COMPARATORS <- TRUE
+# Comparator, permutation and numerical-check searches around k* (several times
+# the cost of the k* search itself). SEQUENCE_CUTOFF_COMPARATORS=0 skips them;
+# k* and every downstream analysis are unchanged.
+CUTOFF_COMPARATORS <- !identical(Sys.getenv("SEQUENCE_CUTOFF_COMPARATORS", "1"), "0")
 
 # Experiment-wide raw counts: every PAS with a nonzero count in any sample.
 experiment_counts <- function() {
