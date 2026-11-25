@@ -29,11 +29,11 @@ MANUSCRIPT_METHODS <- c(
   "",
   "## Study design and input",
   "",
-  "The analytical unit is a WTTS-Seq polyadenylation site (PAS), identified by OrigID; gene symbols are annotations, never units of differential testing. Four prespecified comparisons are analysed: RT0 vs ZT6, RT2 vs ZT8, RT4 vs ZT10 and RT8 vs ZT14, each with five samples per arm (40 samples, eight arms). For each comparison a PAS is eligible if it has at least one count in at least one of the comparison's samples (MIN_PAS_COUNT = 1, MIN_PAS_SAMPLES = 1, prespecified); the same universe is used for the Original and both partitions. No result-dependent filtering is performed. Rows with missing or nonnumeric counts are removed at import; negative counts stop the run. Samples are assumed independent; no batch, pairing or longitudinal structure is modelled. [1, 5]",
+  "The analytical unit is a WTTS-Seq polyadenylation site (PAS), identified by OrigID; gene symbols are annotations, never units of differential testing. The study is a 4 × 2 factorial time course: rats in recovery after sleep deprivation (R arms, treatment) sampled at 0, 2, 4 and 8 h of recovery, and undisturbed controls sampled at the same clock times (ZT6, ZT8, ZT10 and ZT14), five samples per arm (40 samples, eight arms). Four prespecified pairwise comparisons are analysed: RT0 vs ZT6, RT2 vs ZT8, RT4 vs ZT10 and RT8 vs ZT14; the full design is also analysed jointly (Time-course model). For each comparison a PAS is eligible if it has at least one count in at least one of the comparison's samples (MIN_PAS_COUNT = 1, MIN_PAS_SAMPLES = 1, prespecified); the same universe is used for the Original and both partitions. No result-dependent filtering is performed. Rows with missing or nonnumeric counts are removed at import; negative counts stop the run. Samples are assumed independent; no batch, pairing or longitudinal structure is modelled. [1, 5]",
   "",
   "## Normalization and eigenvector ranking",
   "",
-  "DESeq2 median-of-ratios size factors are estimated once per comparison on the full eligible comparison matrix (poscounts if the standard estimator fails). The same factors and the same gene-wise dispersion estimates are supplied to the Original and to both partitions, so the views differ only in their dispersion moderation. Raw counts, never VST values, enter the negative-binomial models. [1]",
+  "DESeq2 median-of-ratios size factors are estimated once per comparison on the full eligible comparison matrix (poscounts if the standard estimator fails). The same factors and the same gene-wise dispersion estimates are supplied to the Original and to both partitions, so the views differ only in their dispersion moderation. Raw counts, never VST values, enter the negative-binomial models. As a check for compositional bias, the size factors are compared with edgeR TMM and upper-quartile effective library sizes (each rescaled to geometric mean 1); agreement within 20% for every sample is recorded as a validation check, with per-sample library sizes and zero fractions. [1, 11]",
   "",
   "For ranking only, a blind variance-stabilizing transformation (VST) is computed across all 40 samples. Within each arm, PCA (centred, unscaled) is applied to the PAS-by-sample VST matrix and PASs are ranked by |PC1 loading|. For PAS i, the union depth dᵢ is the smaller of its two positions in the comparison's arms (1 = largest loading). At cutoff k, the Leading Edge (LE) is every eligible PAS with dᵢ ≤ k (the union of the two arms' top-k sets) and the Remainder (REM) is the complement; the partition is exhaustive and disjoint, and ties follow a fixed feature order. The ranking uses the tested arms (without condition labels or test statistics) and the VST uses all samples, so the split is data-adaptive; an independent reference ranking built from held-out samples only is analysed as a sensitivity analysis (below). [1, 5]",
   "",
@@ -45,7 +45,7 @@ MANUSCRIPT_METHODS <- c(
   "",
   "ℓᵢ is evaluated on a fixed grid of log dispersions from log(10⁻⁶) to log(10³) with spacing 0.25. Below 10⁻⁶ the likelihood is close to its Poisson limit at the count levels in these data, so assigning all prior mass below the grid to the lowest cell has negligible effect; above 10³ the likelihood is negligible. Normal CDF differences assign the prior mass to grid cells, and the marginal objective is Σᵢ log Σₕ Lᵢ(zₕ) P(zᵢ ∈ cell h | mᵢ, τ²), with Lᵢ the relative likelihood. PASs with weakly informative likelihoods therefore contribute less, boundary gene-wise estimates are retained, and no uniform digamma bias correction is needed.",
   "",
-  "The parameters are estimated by bound-constrained L-BFGS-B with analytic gradients (at most 1,000 iterations), with a₀ ∈ [10⁻⁸, 10³], a₁ ∈ [10⁻⁸, 10⁸], b ∈ [0.5, 3.5] and τ² ∈ [0.01, 16]. The lower bound 0.01 on τ² regularizes against collapse of the prior variance to zero and is identical in the cutoff search and in the final moderation; a population whose estimate reaches the bound is flagged. The estimated τ² is the prior variance used in DESeq2's MAP shrinkage. DESeq2's conventional 0.25 floor on the prior variance is run as a reference analysis. Pooled and final fits use three starting values; nonconverged fits are excluded. The bounds, the grid spacing and the 0.01 regularization bound are prespecified implementation choices; the grid can be rerun at spacing 0.125 (SEQUENCE_DISP_GRID_STEP) as a numerical check. [1–3]",
+  "The parameters are estimated by bound-constrained L-BFGS-B with analytic gradients (at most 1,000 iterations), with a₀ ∈ [10⁻⁸, 10³], a₁ ∈ [10⁻⁸, 10⁸], b ∈ [0.5, 3.5] and τ² ∈ [0.01, 16]. The lower bound 0.01 on τ² regularizes against collapse of the prior variance to zero and is identical in the cutoff search and in the final moderation; a population whose estimate reaches the bound is flagged. The estimated τ² is the prior variance used in DESeq2's MAP shrinkage. DESeq2's conventional 0.25 floor on the prior variance is run as a reference analysis. Pooled and final fits use three starting values; nonconverged fits are excluded. The bounds, the grid spacing and the 0.01 regularization bound are prespecified implementation choices. Their numerical adequacy is checked for every comparison at k*: the Leading-Edge and Remainder fits are repeated from several starting values, with the grid spacing halved, and with the τ² bound reduced tenfold, and the changes in log likelihood, trend parameters and τ² are reported and checked automatically. [1–3]",
   "",
   "## Cutoff selection and model comparison",
   "",
@@ -59,9 +59,9 @@ MANUSCRIPT_METHODS <- c(
   "",
   "For each comparison the Original and the two partitions use the same raw counts, shared size factors, condition design and gene-wise dispersions. The hierarchical model is refitted to the PASs of each view; its trend and τ² are supplied to DESeq2 (dispersionFunction, estimateDispersionsMAP), and DESeq2's dispersion-outlier rule and Wald test are retained. The Original refitted with DESeq2's default parametric trend is reported as a reference. [1, 2]",
   "",
-  "One Cook's-distance exclusion list is derived from the Original (DESeq2's default rule) and applied to every view; excluded PASs enter neither the tests nor the empirical null, higher criticism or HBFSS. Benjamini–Hochberg adjustment is applied per comparison and test, across the Original's PASs or across the LE and REM PASs combined, without independent filtering. The primary endpoint is the ordinary two-sided Wald test of β = 0 at BH < 0.10. The secondary strong-effect test is DESeq2's greaterAbs test of |β| > 1 at BH < 0.10. The secondary weak-effect test is an intersection–union test of 0 < |β| < 1, using the larger of the ordinary p-value and the lessAbs equivalence p-value, at BH < 0.20. No fold-change gate is added to any test, and no FDR claim is made for the union of the test families. [1, 4, 5]",
+  "One Cook's-distance exclusion list is derived from the Original (DESeq2's default rule) and applied to every view; excluded PASs enter neither the tests nor the empirical null, higher criticism or HBFSS. Benjamini–Hochberg adjustment is applied per comparison and test, across the Original's PASs or across the LE and REM PASs combined, without independent filtering. The primary endpoint is the ordinary two-sided Wald test of β = 0 at BH < 0.10. The secondary strong-effect test is DESeq2's greaterAbs test of |β| > 1 at BH < 0.10. The secondary weak-effect test is an intersection–union test of 0 < |β| < 1, using the larger of the ordinary p-value and the lessAbs equivalence p-value, at BH < 0.20; a prespecified minimum effect δ (δ < |β| < 1, replacing the ordinary test by greaterAbs at δ) is available but set to 0. No fold-change gate is added to any test, and no FDR claim is made for the union of the test families. For comparison with earlier analyses, Standard calls with |apeglm log₂FC| ≥ 1 are also counted, as a descriptive column only (a fold-change filter applied after BH is not FDR-controlled; the Strong test is the formal counterpart). [1, 4, 5]",
   "",
-  "Fold changes are shrunk with apeglm for interpretation and visualization (prior estimated per view); shrunken values do not define rejections. The selected-model tables report one analysis per comparison; all views are retained in the all-PAS and secondary/exploratory tables. [1, 6]",
+  "Fold changes are shrunk with apeglm for interpretation and visualization, with the prior scale adapted within each view, consistent with treating the views as separate populations; shrunken values do not define rejections. The selected-model tables report one analysis per comparison; all views are retained in the all-PAS and secondary/exploratory tables. [1, 6]",
   "",
   "## Exploratory higher criticism and HBFSS",
   "",
@@ -69,21 +69,29 @@ MANUSCRIPT_METHODS <- c(
   "",
   "## Sensitivity analyses",
   "",
-  "For each comparison, under the primary testing rules (the Original's Cook's list and HBFSS threshold, one BH per analysis): (i) the Original and EVS at k* with DESeq2's 0.25 floor on the MAP prior variance; (ii) EVS with an independent reference ranking, in which the VST is computed on the 30 held-out samples alone, PASs are positioned by |PC1 loading| within each held-out arm, a condition's reference position is the mean over its three held-out arms, the union depth is the smaller of the treatment and control positions, and the cutoff is selected by the same search, so that no tested count enters the split; the overlap of its Leading Edge with the primary one is reported (Jaccard index); and (iii) independent hypothesis weighting (IHW) of the Original's p-values with the PC1 union depth as covariate, the established covariate-weighting alternative to splitting, run when the IHW package is installed. [9, 10]",
+  "For each comparison, under the primary testing rules (the Original's Cook's list and HBFSS threshold, one BH per analysis): (i) the Original and EVS at k* with DESeq2's 0.25 floor on the MAP prior variance; (ii) EVS with an independent reference ranking, in which the VST is computed on the 30 held-out samples alone, PASs are positioned by |PC1 loading| within each held-out arm, a condition's reference position is the mean over its three held-out arms, the union depth is the smaller of the treatment and control positions, and the cutoff is selected by the same search, so that no tested count enters the split; the overlap of its Leading Edge with the primary one is reported (Jaccard index); (iii) independent hypothesis weighting (IHW) of the Original's p-values with the PC1 union depth as covariate, the established covariate-weighting alternative to splitting, run when the IHW package is installed; and (iv) negative binomial count splitting, in which each tested count is split into two independent negative binomial parts by beta-binomial thinning (ε = 0.5, size 1/α from the Original's final dispersion), the split is ranked on one half (VST and per-arm PC1 of the ten training samples, primary k*), and the Original and EVS are both tested on the other half, so the ranking is independent of the tested counts. [9, 10, 15]",
+  "",
+  "## Time-course model",
+  "",
+  "The factorial design is analysed jointly in one DESeq2 model across all 40 samples, ~ time + condition + time:condition, with experiment-wide size factors and the hierarchical dispersion trend (one population). Likelihood-ratio tests against ~ time (a treatment effect at any recovery time) and against ~ time + condition (a treatment effect that changes with recovery time) are adjusted by BH within each test. The treatment log₂ fold change and Wald test at each recovery time are obtained from the condition and interaction coefficients. This tests time explicitly instead of comparing separate significance lists. [1, 16]",
   "",
   "## Calibration",
   "",
   "Error rates are assessed by simulation (SEQUENCE_EVS_CALIBRATION.R), using the pipeline's own functions. For each comparison, 10,000 real PASs are subsampled; the truth's means, size factors and dispersion model (trend and τ², from the same marginal likelihood) are fitted on the real counts, either as one population or as the Leading Edge and Remainder at k* scaled to the subsample, optionally with the real samples' PC1 structure. Ten percent of PASs receive true log₂ fold changes; null scenarios have none. The Original and EVS are run with the estimated prior variance and with the 0.25 floor. Each call type is scored against its own truth: Standard and HBFSS against any true change, Strong against |true log₂FC| > 1, and Weak against 0 < |true log₂FC| < 1. FDR, false non-discovery rate, power, false calls under the null, the empirical-null spread, and the error of the final dispersions and shrunken fold changes are reported.",
   "",
-  "## Relative PAS usage and human orthology",
+  "## Alternative polyadenylation",
   "",
-  "Differential abundance does not establish altered within-gene PAS usage. For annotated genes with at least two eligible PASs, edgeR quasi-likelihood fits (robust dispersion, offsets from the shared size factors) support diffSpliceDGE tests comparing each PAS with the other PASs of its gene. PAS-level results and gene-level results (Simes combination of each gene's PAS tests, BH across genes) are reported. The grouping uses gene symbols; stable gene identifiers should be substituted where available. [11, 12]",
+  "Differential abundance does not establish a change in which PAS a gene uses, so APA is analysed separately for each pairwise comparison with edgeR quasi-likelihood models (robust dispersion) on raw counts, with offsets from the shared DESeq2 size factors. Gene units are defined by gene symbol, chromosome and strand, and PASs are ordered along the direction of transcription by their peak coordinate. (i) Usage change: for genes with at least two eligible PASs, diffSpliceDGE tests each PAS against the other PASs of its gene; gene-level p-values are Simes combinations, with BH across genes, and, when the stageR package is installed, a stage-wise analysis screens genes by the Simes p-value and confirms individual PASs within significant genes with overall FDR control at 0.10. (ii) Direction: for each gene, the two most used PASs (mean normalized count ≥ 5 each) form a proximal/distal pair, and the relative expression difference RED is the treatment log₂ fold change of the distal PAS minus that of the proximal PAS, i.e. the change in log₂ distal/proximal usage; positive values indicate 3′ UTR lengthening (more distal use in recovery) and negative values shortening. The gene-level diffSpliceDGE test of the pair gives the p-value, with BH across genes (FDR < 0.10). Whether the pair's PASs lie in the EVS Leading Edge is reported. [11, 12, 17]",
   "",
-  "3′aTWAS genes are mapped from human to rat with database-supported babelgene orthologs (at least one supporting source); symbol similarity alone is not orthology. Gene-level enrichment uses the eligible, finite-p-value, ortholog-mapped rat genes of the selected model as the background, each gene counted once. Logistic regression relates any primary PAS discovery in a gene to TWAS membership, adjusting for log(1 + number of tested PASs), log(1 + mean normalized count) and log(number of supporting ortholog databases); a sensitivity analysis restricts to one-to-one mappings. Odds ratios, Wald 95% intervals and p-values are reported with BH adjustment across the enrichment analyses. Overlap is corroboration, not causal evidence, and several significant PASs in one gene are not proof of differential APA. [13, 14]",
+  "3′aTWAS genes are mapped from human to rat with database-supported babelgene orthologs (at least one supporting source); symbol similarity alone is not orthology. Gene-level enrichment uses the eligible, finite-p-value, ortholog-mapped rat genes of the selected model as the background, each gene counted once. Logistic regression relates any primary PAS discovery in a gene to TWAS membership, adjusting for log(1 + number of tested PASs), log(1 + mean normalized count) and log(number of supporting ortholog databases); a sensitivity analysis restricts to one-to-one mappings. Odds ratios, Wald 95% intervals and p-values are reported with BH adjustment across the enrichment analyses. The same model relates significant APA genes (shortening or lengthening) to 3′aTWAS membership, with the ortholog-mapped tested genes of the APA pair analysis as background, adjusting for log(1 + mean normalized count of the pair) and ortholog support; because 3′aTWAS identifies genetically regulated APA, this is the most direct cross-species comparison. Overlap is corroboration, not causal evidence. [13, 14]",
+  "",
+  "## Figures",
+  "",
+  "Figure 1, the EVS cutoff (held-out dispersions with the Leading-Edge, Remainder and single trends at k*; profile likelihood over k). Figure 2, DESeq2 dispersions after the split (dispersion plots, trend exponent, prior variance used). Figure 3, model comparison and sensitivity (BIC of each alternative relative to EVS; observed versus permuted rankings; Standard discoveries in the primary and sensitivity analyses). Figure 4, the time-course model (significant PASs per recovery time; treatment log₂FC over recovery for the strongest time-varying PASs). Figure 5, alternative polyadenylation (genes with a usage change and with significant shortening or lengthening per recovery time; RED volcano plots; 3′aTWAS enrichment of APA genes). Per comparison: volcano plots, PCA before and after EVS, PC1 evidence and 3′aTWAS overlap; discovery counts and HBFSS calibration across comparisons; 3′aTWAS gene support; calibration (FDR, false non-discovery rate, power, null false calls, empirical-null spread, estimation error) and the HBFSS null choice.",
   "",
   "## Reproducibility and limitations",
   "",
-  "The pipeline records the cutoff profile, fitted coefficients and prior variances, the selected model, all comparator criteria, the sensitivity analyses, full PAS-level results, input MD5 checksums, sessionInfo(), settings and seeds, and a table of automated validation checks. Analyses not implemented: a common apeglm prior across views (shrinkage affects interpretation only, not the formal tests); a condition-by-time interaction model (the RT and ZT arms are not a verified factorial design); an explicit compositional-bias assessment; and negative-binomial count splitting of the tested samples, which would make the ranking independent of the tested counts at a cost in power and which the independent reference ranking partly addresses [15]. The nominal 10% and 20% FDR levels are prespecified, not optimized. No discovery count was used to tune any setting.",
+  "The pipeline records the cutoff profile, fitted coefficients and prior variances, the selected model, all comparator criteria, the sensitivity analyses, full PAS-level results, input MD5 checksums, sessionInfo(), settings and seeds, and a table of automated validation checks. The time-course model uses one dispersion population; EVS is applied to the pairwise comparisons. Count splitting halves the counts available to each step, so its discovery counts are compared only with the Original on the same half. The nominal 10% and 20% FDR levels are prespecified, not optimized. No discovery count was used to tune any setting.",
   "",
   "# References",
   "",
@@ -101,7 +109,9 @@ MANUSCRIPT_METHODS <- c(
   "12. Van den Berge K, Soneson C, Robinson MD, Clement L. stageR: a general stage-wise method for controlling the gene-level false discovery rate in differential expression and differential transcript usage. Genome Biology. 2017;18:151. https://doi.org/10.1186/s13059-017-1277-0",
   "13. Alternative polyadenylation transcriptome-wide association study identifies APA-linked susceptibility genes in brain disorders. Nature Communications. 2023;14. https://doi.org/10.1038/s41467-023-36311-8",
   "14. babelgene: gene orthologs for model organisms in a tidy data format. https://igordot.github.io/babelgene/",
-  "15. Neufeld A, Popp J, Gao LL, Battle A, Witten D. Negative binomial count splitting for single-cell RNA sequencing data. arXiv:2307.12985 (2023). https://arxiv.org/abs/2307.12985"
+  "15. Neufeld A, Popp J, Gao LL, Battle A, Witten D. Negative binomial count splitting for single-cell RNA sequencing data. arXiv:2307.12985 (2023). https://arxiv.org/abs/2307.12985",
+  "16. Love MI, Anders S, Huber W. Analyzing RNA-seq data with DESeq2 (Bioconductor vignette; sections on likelihood ratio tests and interactions). https://bioconductor.org/packages/release/bioc/vignettes/DESeq2/inst/doc/DESeq2.html",
+  "17. Hoque M, Ji Z, Zheng D, Luo W, Li W, You B, Park JY, Yehia G, Tian B. Analysis of alternative cleavage and polyadenylation by 3′ region extraction and deep sequencing. Nature Methods. 2013;10:133–139. https://doi.org/10.1038/nmeth.2288"
 )
 
 PIPELINE_BUILD <- "SEQUENCE_EVS_MANUSCRIPT_HIERARCHICAL_V2"
@@ -363,6 +373,11 @@ BH_FDR_STRONG <- 0.10
 BH_FDR_WEAK <- 0.20
 
 lfc_boundary <- 1.0
+# Optional minimum meaningful effect for Weak (delta < |LFC| < 1). Default 0:
+# Weak tests 0 < |LFC| < 1. With delta > 0 the nonzero test is replaced by
+# DESeq2's greaterAbs test at lfcThreshold = delta. Prespecify before analysis.
+WEAK_DELTA <- as.numeric(Sys.getenv("SEQUENCE_WEAK_DELTA", "0"))
+stopifnot(is.finite(WEAK_DELTA), WEAK_DELTA >= 0, WEAK_DELTA < 1)
 # Prespecified abundance eligibility: default 1 count in 1 sample preserves the
 # original universe. Override BEFORE looking at results for a sensitivity run.
 MIN_PAS_COUNT <- 1L
@@ -1298,7 +1313,9 @@ create_all_tables_zip <- function() {
                 "Table_EVS_Composition.csv", "Table_Cutoff_Summary.csv", "Table_Cutoff_Profile_Likelihood.csv",
                 "Table_Cutoff_Random_Splits.csv", "Table_Sensitivity_Analyses.csv",
                 "Table_Selected_Model_Primary_Discoveries.csv", "Table_TWAS_Enrichment.csv",
-                "Table_Complementary_PAS_Usage_Gene_Simes.csv",
+                "Table_APA_Summary.csv", "Table_APA_Shortening_Lengthening.csv", "Table_APA_Gene_Usage_Simes.csv",
+                "Table_APA_TWAS_Enrichment.csv", "Table_TimeCourse_Summary.csv",
+                "Table_TimeCourse_PAS.csv", "Table_Normalization_Check.csv",
                 "Table_Validation_Checks.csv", "Table_Original_DESeq2_Default_Trend.csv")) {
     add_if_exists(file.path(summary_table_dir, tab))
   }
@@ -2059,9 +2076,10 @@ fit_view_model <- function(count_mat, coldata, dataset_name, size_factors = NULL
   # applied later, once per analysis (call_significance), so the Original and
   # the EVS views test the same PASs under the same rules.
   contrast <- c("condition", "trt", "untrt")
-  tests <- list(std = list(alpha = BH_FDR_STANDARD),
-                strong = list(lfcThreshold = lfc_boundary, altHypothesis = "greaterAbs", alpha = BH_FDR_STRONG),
-                weak = list(lfcThreshold = lfc_boundary, altHypothesis = "lessAbs", alpha = BH_FDR_WEAK))
+  tests <- c(list(std = list(alpha = BH_FDR_STANDARD)),
+             if (WEAK_DELTA > 0) list(delta = list(lfcThreshold = WEAK_DELTA, altHypothesis = "greaterAbs", alpha = BH_FDR_WEAK)),
+             list(strong = list(lfcThreshold = lfc_boundary, altHypothesis = "greaterAbs", alpha = BH_FDR_STRONG),
+                  weak = list(lfcThreshold = lfc_boundary, altHypothesis = "lessAbs", alpha = BH_FDR_WEAK)))
   prim <- lapply(tests, function(a) do.call(DESeq2::results, c(list(dds, contrast = contrast, pAdjustMethod = "BH",
                                                                     independentFiltering = FALSE, cooksCutoff = FALSE), a)))
 
@@ -2094,7 +2112,9 @@ fit_view_model <- function(count_mat, coldata, dataset_name, size_factors = NULL
   res_df$resGA_pvalue <- ifelse(res_df$cooks_outlier, NA_real_, prim$strong$pvalue[i_ga])
   # Intersection-union p-value: reject both zero effect and >= boundary.
   res_df$equivalence_pvalue <- ifelse(res_df$cooks_outlier, NA_real_, prim$weak$pvalue[i_la])
-  res_df$resLA_pvalue <- pmax(res_df$pvalue, res_df$equivalence_pvalue)
+  # Lower side of Weak: |LFC| > 0 (ordinary test) or |LFC| > delta when set.
+  lower_p <- if (WEAK_DELTA > 0) ifelse(res_df$cooks_outlier, NA_real_, prim$delta$pvalue[match(res_df$feature_id, rownames(prim$delta))]) else res_df$pvalue
+  res_df$resLA_pvalue <- pmax(lower_p, res_df$equivalence_pvalue)
   res_df$resGA_padj <- bh_view(res_df$resGA_pvalue)
   res_df$resLA_padj <- bh_view(res_df$resLA_pvalue)
 
@@ -2248,6 +2268,9 @@ classify_view <- function(fit, hc_p_threshold, hbfss_threshold, annot_df, lean =
   abs_shrunk_lfc <- abs(res_df$lfc_shrunk)
   eligible <- !res_df$cooks_outlier & is.finite(res_df$pvalue)
   res_df$standard_flag <- eligible & !is.na(res_df$padj) & res_df$padj < BH_FDR_STANDARD
+  # Descriptive only (not FDR-controlled): Standard calls with |apeglm LFC| >= 1,
+  # the definition used in earlier versions. "Strong" is the formal test of |LFC| > 1.
+  res_df$standard_lfc1_descriptive <- res_df$standard_flag & finite_lfc & abs_shrunk_lfc >= lfc_boundary
   res_df$strong_cnh_flag <- eligible & !is.na(res_df$resGA_padj) & res_df$resGA_padj < BH_FDR_STRONG
   res_df$weak_cnh_flag <- eligible & !is.na(res_df$resLA_padj) & res_df$resLA_padj < BH_FDR_WEAK
   res_df$weak_significant_flag <- res_df$weak_cnh_flag
@@ -2359,6 +2382,7 @@ classify_view <- function(fit, hc_p_threshold, hbfss_threshold, annot_df, lean =
     "weak_cnh_flag",
     "strong_cnh_flag",
     "standard_flag",
+    "standard_lfc1_descriptive",
     "hbfss_flag",
     "weak_significant_flag",
     "final_significant_flag",
@@ -2831,8 +2855,67 @@ run_sensitivity_analyses <- function(comparison_name, evs, coldata, annot_df, sf
       k = NA_integer_, Leading_Edge = NA_integer_, PAS_tested = NA_integer_, Standard = NA_integer_,
       Strong = NA_integer_, Weak = NA_integer_, HBFSS = NA_integer_, Note = "not run: IHW package not installed")
   }
+  # 4. Negative binomial count splitting (Neufeld et al.): each tested count is
+  #    split into two independent NB parts (beta-binomial thinning with the
+  #    Original's final dispersion, epsilon = 0.5). The split is ranked on the
+  #    training half (VST and PC1 of the ten training samples, the primary k*)
+  #    and both the Original and EVS are tested on the other half, so the
+  #    ranking is independent of the tested counts. Both use half the data.
+  cs <- tryCatch(count_split_analysis(comparison_name, evs, coldata, annot_df, k,
+                                      DESeq2::dispersions(analysis_results$raw_dataset$dds),
+                                      rownames(analysis_results$raw_dataset$dds)),
+                 error = function(e) { warning(comparison_name, ": count splitting failed: ", conditionMessage(e), call. = FALSE); NULL })
+  if (!is.null(cs)) rows <- c(rows, cs)
   sensitivity_rows[[comparison_name]] <<- dplyr::bind_rows(rows)
   invisible(TRUE)
+}
+
+COUNT_SPLIT_EPSILON <- 0.5
+
+count_split_analysis <- function(comparison_name, evs, coldata, annot_df, k, disp, disp_ids) {
+  set.seed(SPLIT_SEED + match(comparison_name, comparison_table$comparison_name))
+  y <- evs$raw_dataset
+  alpha <- disp[match(rownames(y), disp_ids)]
+  alpha[!is.finite(alpha) | alpha <= 0] <- stats::median(alpha[is.finite(alpha) & alpha > 0])
+  size <- matrix(1 / pmax(alpha, 1e-8), nrow(y), ncol(y))
+  p <- stats::rbeta(length(y), COUNT_SPLIT_EPSILON * size, (1 - COUNT_SPLIT_EPSILON) * size)
+  train <- matrix(stats::rbinom(length(y), as.vector(y), p), nrow(y), dimnames = dimnames(y))
+  test <- y - train
+  storage.mode(train) <- "integer"; storage.mode(test) <- "integer"
+  # Ranking on the training half only.
+  tr <- train[rowSums(train) > 0, , drop = FALSE]
+  dtr <- DESeq2::DESeqDataSetFromMatrix(tr, colData = coldata, design = make_design_formula(coldata))
+  dtr <- tryCatch(DESeq2::estimateSizeFactors(dtr), error = function(e) DESeq2::estimateSizeFactors(dtr, type = "poscounts"))
+  v <- as.matrix(SummarizedExperiment::assay(suppressMessages(DESeq2::varianceStabilizingTransformation(dtr, blind = TRUE))))
+  pos <- lapply(c("trt", "untrt"), function(cnd) {
+    r <- arm_pc1_ranks(v, colnames(v)[coldata[colnames(v), "condition"] == cnd]); nrow(v) - r + 1L })
+  depth <- pmin(pos[[1]], pos[[2]])
+  te <- test[rowSums(test) > 0, , drop = FALSE]
+  d_te <- depth[rownames(te)]; d_te[is.na(d_te)] <- .Machine$integer.max
+  le <- rownames(te)[d_te <= k]; rem <- setdiff(rownames(te), le)
+  if (length(le) < SPLIT_MIN_SET || length(rem) < SPLIT_MIN_SET) stop("count-split partition too small")
+  # Testing on the other half, with the primary rules.
+  sf <- comparison_size_factors(te, coldata); gdds <- comparison_gene_dds(te, coldata, sf)
+  lab <- paste(comparison_name, "count split")
+  o <- fit_view_model(te, coldata, paste(lab, "Original"), size_factors = sf, gene_dds = gdds)
+  cooks <- as.character(o$res_df$feature_id[o$res_df$cooks_outlier %in% TRUE])
+  so <- call_significance(list(raw_dataset = o), paste(lab, "Original"), annot_df, lean = TRUE)
+  hc <- so$null$hc_p_threshold[1]
+  fits <- Map(function(m, nm) fit_view_model(m, coldata, paste(lab, nm), size_factors = sf, gene_dds = gdds,
+                                             cooks_outliers = cooks),
+              list(leading_edge_dataset = te[le, , drop = FALSE], remainder_dataset = te[rem, , drop = FALSE]),
+              c("Lead", "Rem"))
+  se <- call_significance(fits, paste(lab, "EVS"), annot_df, lean = TRUE, hc_p_fixed = if (is.finite(hc)) hc else NA_real_)
+  row <- function(label, res_list, le_n) {
+    cnt <- count_discoveries(discovery_flags(res_list))
+    data.frame(Comparison = comparison_name, Analysis = label, k = if (is.na(le_n)) NA_integer_ else k,
+               Leading_Edge = le_n, PAS_tested = cnt[["n_tested"]], Standard = cnt[["Standard"]],
+               Strong = cnt[["Strong"]], Weak = cnt[["Weak"]], HBFSS = cnt[["HBFSS"]],
+               Note = sprintf("NB count splitting, epsilon %.1f: ranked on one half, tested on the other; LE Jaccard with primary %.2f",
+                              COUNT_SPLIT_EPSILON, length(intersect(le, evs$leading_edge_ids)) / length(union(le, evs$leading_edge_ids))))
+  }
+  list(row("Count split: Original (test half)", list(raw_dataset = so$views$raw_dataset$results), NA_integer_),
+       row("Count split: EVS (test half)", lapply(se$views, `[[`, "results"), length(le)))
 }
 
 # Purpose: Analysis view label.
@@ -2937,6 +3020,7 @@ export_comparison_manuscript_tables <- function(comparison_name) {
       HCp = hc,
       Htau = htau,
       Std = sum(df$standard_flag, na.rm = TRUE),
+      Std_LFC1_descriptive = sum(df$standard_lfc1_descriptive, na.rm = TRUE),
       Strong = sum(df$strong_cnh_flag, na.rm = TRUE),
       Weak = sum(df$weak_significant_flag, na.rm = TRUE),
       HBFSS = sum(df$hbfss_flag, na.rm = TRUE),
@@ -3077,6 +3161,7 @@ build_overall_manuscript_summary <- function() {
         EVS_k_per_condition = if (identical(dataset_key, "raw_dataset")) NA_integer_ else get_active_evs_cutoff(comparison_name),
         PAS_tested = nrow(df),
         Std = sum(df$standard_flag, na.rm = TRUE),
+      Std_LFC1_descriptive = sum(df$standard_lfc1_descriptive, na.rm = TRUE),
         Strong = sum(df$strong_cnh_flag, na.rm = TRUE),
         Weak = sum(df$weak_significant_flag, na.rm = TRUE),
         HBFSS = sum(df$hbfss_flag, na.rm = TRUE),
@@ -3610,6 +3695,35 @@ cutoff_one <- function(i) {
     LE_prior_var=best$le$tau2,REM_prior_var=best$rem$tau2,One_prior_var=one$tau2,
     LE_prior_var_at_bound=best$le$tau2<=DISP_PRIOR_VAR_MIN*1.00001, REM_prior_var_at_bound=best$rem$tau2<=DISP_PRIOR_VAR_MIN*1.00001,
     Converged=isTRUE(best$converged) && isTRUE(one$converged))
+  # Numerical checks at k* (run last; in a parallel child the global changes
+  # below affect only this comparison's process, and they are restored):
+  # optimizer restarts, a finer dispersion grid (step / 2), and a lower tau^2
+  # bound (bound / 10). Reported as changes in log-likelihood and parameters.
+  num <- if (!CUTOFF_COMPARATORS) NULL else tryCatch({
+    le_k <- depth <= k
+    ms <- function(lkm, lxv) list(le = fit_marginal_trend(lxv[le_k], lkm[le_k,,drop=FALSE], multistart = TRUE),
+                                  rem = fit_marginal_trend(lxv[!le_k], lkm[!le_k,,drop=FALSE], multistart = TRUE))
+    r0 <- ms(lk, lx)
+    old <- list(g = DISP_LOG_GRID, e = DISP_LOG_EDGES, m = DISP_PRIOR_VAR_MIN)
+    on.exit({ DISP_LOG_GRID <<- old$g; DISP_LOG_EDGES <<- old$e; DISP_PRIOR_VAR_MIN <<- old$m }, add = TRUE)
+    DISP_LOG_GRID <<- seq(min(old$g), max(old$g), by = DISP_GRID_STEP / 2)
+    DISP_LOG_EDGES <<- c(-Inf, head(DISP_LOG_GRID, -1) + diff(DISP_LOG_GRID) / 2, Inf)
+    lk2 <- make_dispersion_likelihood(ho$dds)[fit_ids, , drop = FALSE]
+    r1 <- ms(lk2, lx)
+    DISP_LOG_GRID <<- old$g; DISP_LOG_EDGES <<- old$e; DISP_PRIOR_VAR_MIN <<- old$m / 10
+    r2 <- ms(lk, lx)
+    DISP_PRIOR_VAR_MIN <<- old$m
+    pd <- function(a, b) max(abs(c(a$le$par[1:3] - b$le$par[1:3], a$rem$par[1:3] - b$rem$par[1:3])))
+    tau <- function(a) c(a$le$tau2, a$rem$tau2)
+    data.frame(Check_multistart_dLogLik = (r0$le$loglik + r0$rem$loglik) - best$loglik,
+               Check_finer_grid_max_par_change = pd(r1, r0),
+               Check_finer_grid_max_tau2_rel_change = max(abs(tau(r1) / tau(r0) - 1)),
+               Check_lower_tau2_bound_max_par_change = pd(r2, r0),
+               Check_lower_tau2_bound_tau2_LE = r2$le$tau2, Check_lower_tau2_bound_tau2_REM = r2$rem$tau2)
+  }, error = function(e) data.frame(Check_multistart_dLogLik = NA_real_, Check_finer_grid_max_par_change = NA_real_,
+                                    Check_finer_grid_max_tau2_rel_change = NA_real_, Check_lower_tau2_bound_max_par_change = NA_real_,
+                                    Check_lower_tau2_bound_tau2_LE = NA_real_, Check_lower_tau2_bound_tau2_REM = NA_real_))
+  if (!is.null(num)) summary <- cbind(summary, num)
   pas <- data.frame(Comparison=cmp,feature_id=ids,Union_Depth=unname(depth_all),Reference_Depth=unname(ref_depth[ids]),
     Heldout_Mean=unname(ho$mean[ids]),Heldout_Dispersion=unname(ho$disp[ids]),In_Trend_Fit=unname(ho$use[ids]),
     In_Leading_Edge=unname(depth_all<=k))
@@ -3802,7 +3916,10 @@ validate_track_normalization <- function(comparison_name, track_key, analysis_re
   same_samples <- all(vapply(analysis_results, function(a) identical(colnames(a$dds), rownames(coldata)), logical(1)))
   add_validation("Original and EVS sample identities match", comparison_name, same_samples, tr)
   ev <- c("leading_edge_dataset", "remainder_dataset")
-  oc <- original_cooks_cache[[comparison_name]]
+  # The Original's own flagged PASs, read from its results (not from the cache),
+  # so that a comparison with no outliers is checked as an empty list.
+  r0 <- analysis_results[["raw_dataset"]]$results
+  oc <- if (is.null(r0)) NULL else as.character(r0$feature_id[r0$cooks_outlier %in% TRUE])
   cooks_ok <- !is.null(oc) && all(vapply(ev, function(v) {
     r <- analysis_results[[v]]$results
     out <- r$cooks_outlier %in% TRUE
@@ -3915,6 +4032,9 @@ save_run_checks <- function() {
   if (length(default_trend_rows)) save_csv(dplyr::bind_rows(default_trend_rows), file.path(out, "Table_Original_DESeq2_Default_Trend.csv"))
   if (length(pca_ranking_rows)) save_csv(dplyr::bind_rows(pca_ranking_rows), file.path(out, "Table_EVS_PCA_Ranking.csv"))
   if (length(sensitivity_rows)) save_csv(dplyr::bind_rows(sensitivity_rows), file.path(out, "Table_Sensitivity_Analyses.csv"))
+  if (length(normalization_rows)) save_csv(dplyr::bind_rows(normalization_rows), file.path(out, "Table_Normalization_Check.csv"))
+  if (!is.null(CUTOFF)) try_fig(save_figure(plot_model_sensitivity_figure(), paper_fig_dir,
+                                            "Figure_3_Model_Comparison_Sensitivity", 180, 170), "Figure 3")
   invisible(TRUE)
 }
 
@@ -3928,6 +4048,8 @@ run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata,
   calls_before <- c(SIGNIFICANCE_CALLS$wald, SIGNIFICANCE_CALLS$null)
   prepare_comparison_cache(comparison_name, count_matrix, coldata)
   calls_after <- c(SIGNIFICANCE_CALLS$wald, SIGNIFICANCE_CALLS$null)
+  tryCatch(normalization_check(comparison_name, comparison_cache[[comparison_name]]$raw, comparison_cache[[comparison_name]]$sf),
+           error = function(e) warning(comparison_name, ": normalization check failed: ", conditionMessage(e), call. = FALSE))
   add_validation("Comparison preparation performed no significance testing", comparison_name,
                  identical(calls_before, calls_after),
                  sprintf("Wald fits %d -> %d; significance calls %d -> %d",
@@ -3955,6 +4077,13 @@ run_full_comparison_pipeline <- function(comparison_name, count_matrix, coldata,
                  comparison_name, if (cs$Permutation_searches_converged > 0) cs$Permutations_at_or_above_observed == 0 else NA,
                  sprintf("observed %.1f; permutations max %.1f (%d of %d converged)", cs$Coarse_grid_LRT_observed,
                          cs$Random_Split_LRT_Max, cs$Permutation_searches_converged, cs$Permutation_searches))
+  add_validation("Cutoff fit: restarts from several starting values do not improve the likelihood (< 0.5)", comparison_name,
+                 if (is.null(cs$Check_multistart_dLogLik) || !is.finite(cs$Check_multistart_dLogLik)) NA else cs$Check_multistart_dLogLik < 0.5,
+                 sprintf("log-likelihood change %.3g", cs$Check_multistart_dLogLik %||% NA_real_))
+  add_validation("Cutoff fit: halving the dispersion grid step changes the trend parameters by < 0.05", comparison_name,
+                 if (is.null(cs$Check_finer_grid_max_par_change) || !is.finite(cs$Check_finer_grid_max_par_change)) NA else cs$Check_finer_grid_max_par_change < 0.05,
+                 sprintf("largest parameter change %.3g (log a0, log a1, b); tau2 relative change %.3g",
+                         cs$Check_finer_grid_max_par_change %||% NA_real_, cs$Check_finer_grid_max_tau2_rel_change %||% NA_real_))
   add_validation("Prior variances not at their lower bound", comparison_name,
                  !isTRUE(cs$LE_prior_var_at_bound) && !isTRUE(cs$REM_prior_var_at_bound),
                  sprintf("LE tau2 %.4f; REM tau2 %.4f; bound %.3g", cs$LE_prior_var, cs$REM_prior_var, DISP_PRIOR_VAR_MIN))
@@ -4824,6 +4953,205 @@ save_paper_support_figures <- function(summary_df) {
 
 
 # =============================================================================
+# NORMALIZATION CHECK (compositional bias)
+# =============================================================================
+# DESeq2 median-of-ratios size factors are compared with edgeR TMM and
+# upper-quartile effective library sizes (each rescaled to geometric mean 1).
+# Large disagreement indicates composition effects (a few highly abundant or
+# strongly changing PASs) to which the normalization is sensitive. Zero-count
+# fractions and library sizes are reported per sample.
+NORMALIZATION_CHECK_TOL <- log2(1.2)
+normalization_rows <- list()
+
+normalization_check <- function(comparison_name, raw, sf) {
+  gm <- function(x) x / exp(mean(log(x)))
+  y <- edgeR::DGEList(counts = raw)
+  eff <- function(method) gm(y$samples$lib.size * edgeR::calcNormFactors(y, method = method)$samples$norm.factors)
+  d <- data.frame(Comparison = comparison_name, Sample = colnames(raw), Library_size = colSums(raw),
+                  Zero_fraction = colMeans(raw == 0), SF_DESeq2 = gm(sf[colnames(raw)]),
+                  SF_TMM = eff("TMM"), SF_upper_quartile = eff("upperquartile"))
+  d$log2_DESeq2_vs_TMM <- log2(d$SF_DESeq2 / d$SF_TMM)
+  d$log2_DESeq2_vs_UQ <- log2(d$SF_DESeq2 / d$SF_upper_quartile)
+  normalization_rows[[comparison_name]] <<- d
+  m <- max(abs(c(d$log2_DESeq2_vs_TMM, d$log2_DESeq2_vs_UQ)))
+  add_validation("Size factors agree with TMM and upper-quartile within 20% (compositional bias)", comparison_name,
+                 m <= NORMALIZATION_CHECK_TOL, sprintf("largest |log2 ratio| %.3f", m))
+  invisible(d)
+}
+
+# =============================================================================
+# TIME-COURSE MODEL: RECOVERY TIME x CONDITION (all 40 samples)
+# =============================================================================
+# The design is a 4 x 2 factorial: recovery after sleep deprivation (R arms,
+# treatment) and undisturbed controls at the same clock time (ZT arms), at
+# recovery 0, 2, 4 and 8 h (ZT6, ZT8, ZT10, ZT14). One DESeq2 model,
+# ~ time + condition + time:condition, with the hierarchical dispersion trend
+# and experiment-wide size factors, gives:
+#   any-time effect   LRT against ~ time (treatment changes the PAS at any time)
+#   time-varying      LRT against ~ time + condition (the treatment effect
+#                     differs between recovery times)
+#   per-time effects  Wald log2 fold change and test of trt vs untrt at each time
+# BH within each test, no independent filtering. This complements the four
+# pairwise comparisons by testing time explicitly; it uses one (pooled) trend.
+TIME_LEVELS <- c(T0 = "0 h (ZT6)", T2 = "2 h (ZT8)", T4 = "4 h (ZT10)", T8 = "8 h (ZT14)")
+TIME_OF_ARM <- c(R0 = "T0", ZT6 = "T0", R2 = "T2", ZT8 = "T2", R4 = "T4", ZT10 = "T4", R8 = "T8", ZT14 = "T8")
+TIME_COURSE <- NULL
+
+run_time_course <- function() {
+  raw <- experiment_counts()
+  arm <- as.character(experiment_arm(colnames(raw)))
+  cd <- data.frame(time = factor(unname(TIME_OF_ARM[arm]), levels = names(TIME_LEVELS)),
+                   condition = meta_all[colnames(raw), "condition"], row.names = colnames(raw))
+  if (anyNA(cd$time) || anyNA(cd$condition)) stop("Time-course design: unmapped samples.")
+  full <- ~ time + condition + time:condition
+  dds <- DESeq2::DESeqDataSetFromMatrix(raw, colData = cd, design = full)
+  sf <- DESeq2::sizeFactors(experiment_dds())[colnames(raw)]
+  dds <- estimate_dispersions_with_trend(dds, size_factors = sf)
+  lrt <- function(reduced) {
+    d <- DESeq2::nbinomLRT(dds, reduced = reduced, quiet = TRUE)
+    as.data.frame(DESeq2::results(d, independentFiltering = FALSE))[, c("stat", "pvalue", "padj")]
+  }
+  any_t <- lrt(~ time); int_t <- lrt(~ time + condition)
+  w <- DESeq2::nbinomWaldTest(dds, quiet = TRUE)
+  SIGNIFICANCE_CALLS$wald <- SIGNIFICANCE_CALLS$wald + 3L
+  rn <- DESeq2::resultsNames(w)
+  main <- grep("^condition_", rn, value = TRUE)
+  per <- lapply(names(TIME_LEVELS), function(tl) {
+    inter <- grep(paste0("^time", tl, "\\.condition"), rn, value = TRUE)
+    r <- DESeq2::results(w, contrast = list(c(main, inter)), independentFiltering = FALSE)
+    data.frame(lfc = r$log2FoldChange, padj = r$padj)
+  })
+  names(per) <- names(TIME_LEVELS)
+  out <- data.frame(feature_id = rownames(raw),
+                    gene_symbol = OrigID_Symbol$gene_symbol[match(rownames(raw), OrigID_Symbol$feature_id)],
+                    baseMean = S4Vectors::mcols(w)$baseMean,
+                    LRT_any_time_stat = any_t$stat, LRT_any_time_p = any_t$pvalue, LRT_any_time_padj = any_t$padj,
+                    LRT_time_varying_stat = int_t$stat, LRT_time_varying_p = int_t$pvalue,
+                    LRT_time_varying_padj = int_t$padj)
+  for (tl in names(per)) {
+    out[[paste0("LFC_", tl)]] <- per[[tl]]$lfc
+    out[[paste0("padj_", tl)]] <- per[[tl]]$padj
+  }
+  sig <- function(q) sum(!is.na(q) & q < BH_FDR_STANDARD)
+  summ <- data.frame(Test = c("Treatment effect at any time (LRT)", "Time-varying treatment effect (LRT)",
+                              paste("Treatment effect at", unname(TIME_LEVELS), "(Wald)")),
+                     Significant_BH_0.10 = c(sig(out$LRT_any_time_padj), sig(out$LRT_time_varying_padj),
+                                             vapply(names(TIME_LEVELS), function(tl) sig(out[[paste0("padj_", tl)]]), integer(1))),
+                     PAS_tested = nrow(out),
+                     Prior_variance = attr(DESeq2::dispersionFunction(dds), "dispPriorVar"))
+  TIME_COURSE <<- list(pas = out, summary = summ)
+  save_csv(out, file.path(summary_table_dir, "Table_TimeCourse_PAS.csv"))
+  save_csv(summ, file.path(summary_table_dir, "Table_TimeCourse_Summary.csv"))
+  try_fig(save_figure(plot_time_course_figure(), paper_fig_dir, "Figure_4_Time_Course", 180, 120), "Figure 4 (time course)")
+  invisible(TIME_COURSE)
+}
+
+# Figure 4: (a) significant PASs per recovery time in the time-course model,
+# next to the pairwise Original and EVS Standard counts; (b) treatment log2
+# fold change over recovery time for the 40 PASs with the strongest
+# time-varying effect.
+plot_time_course_figure <- function() {
+  s <- TIME_COURSE$summary; pas <- TIME_COURSE$pas
+  per <- data.frame(Time = factor(unname(TIME_LEVELS), levels = unname(TIME_LEVELS)),
+                    Analysis = "Time-course model (Wald, per time)",
+                    n = s$Significant_BH_0.10[3:6])
+  cnt <- build_overall_manuscript_summary()
+  pw <- do.call(rbind, lapply(seq_len(nrow(comparison_table)), function(i) {
+    cmp <- comparison_table$comparison_name[i]; z <- cnt[cnt$Comparison == cmp, , drop = FALSE]
+    data.frame(Time = unname(TIME_LEVELS)[i], Analysis = c("Pairwise Original (Standard)", "Pairwise EVS (Standard)"),
+               n = c(sum(z$Std[z$Analysis == ORIGINAL_LABEL]), sum(z$Std[z$Analysis %in% c("NormEVS Lead", "NormEVS Rem")])))
+  }))
+  d <- rbind(per, pw); d$Time <- factor(d$Time, levels = unname(TIME_LEVELS))
+  d$Analysis <- factor(d$Analysis, levels = c("Time-course model (Wald, per time)", "Pairwise Original (Standard)",
+                                              "Pairwise EVS (Standard)"))
+  pa <- ggplot(d, aes(Time, n, fill = Analysis)) +
+    geom_col(position = position_dodge(width = 0.8), width = 0.74) +
+    geom_text(aes(label = n), position = position_dodge(width = 0.8), vjust = -0.3, size = 1.9) +
+    scale_fill_manual(values = c("grey35", SET_COLS[["Original (No EVS)"]], SET_COLS[["Leading Edge"]]), name = NULL) +
+    scale_y_continuous(expand = expansion(mult = c(0, 0.12))) +
+    labs(x = "Recovery time", y = "Significant PASs (BH < 0.10)", tag = "a",
+         title = "Treatment effect at each recovery time",
+         subtitle = sprintf("Time-course model: %s PASs with an effect at any time; %s with a time-varying effect.",
+                            format(s$Significant_BH_0.10[1], big.mark = ","), format(s$Significant_BH_0.10[2], big.mark = ","))) +
+    fig_theme() + theme(panel.grid.major.x = element_blank())
+  top <- pas[is.finite(pas$LRT_time_varying_p), , drop = FALSE]
+  top <- head(top[order(top$LRT_time_varying_p), , drop = FALSE], 40L)
+  long <- do.call(rbind, lapply(names(TIME_LEVELS), function(tl)
+    data.frame(feature_id = top$feature_id, Time = unname(TIME_LEVELS[tl]), lfc = top[[paste0("LFC_", tl)]])))
+  long$Time <- factor(long$Time, levels = unname(TIME_LEVELS))
+  med <- stats::aggregate(lfc ~ Time, data = long, FUN = stats::median)
+  pb <- ggplot(long, aes(Time, lfc, group = feature_id)) +
+    geom_hline(yintercept = 0, colour = "grey60", linewidth = 0.3) +
+    geom_line(colour = SET_COLS[["Leading Edge"]], alpha = 0.35, linewidth = 0.35) +
+    geom_point(colour = SET_COLS[["Leading Edge"]], alpha = 0.5, size = 0.6) +
+    labs(x = "Recovery time", y = "Treatment log2 fold change", tag = "b",
+         title = "Strongest time-varying PASs",
+         subtitle = "The 40 PASs with the smallest time-varying LRT p-value; one line per PAS.") +
+    fig_theme()
+  assemble_rows(list(list(plots = list(pa, pb), widths = c(1.2, 1))), heights = 1,
+                title = "Figure 4. Recovery time x condition model across all 40 samples")
+}
+
+# =============================================================================
+# FIGURE 3: MODEL COMPARISON AND SENSITIVITY
+# =============================================================================
+# (a) BIC of each alternative minus BIC of EVS (negative = better than EVS);
+# (b) observed coarse-grid LRT vs the permutation searches; (c) Standard
+# discoveries across the primary and sensitivity analyses.
+plot_model_sensitivity_figure <- function() {
+  s <- CUTOFF$summary
+  alt <- c(BIC_pooled = "One trend (no split)", BIC_continuous_rank = "Continuous rank effect",
+           BIC_variance_split = "Variance-ranked split", BIC_pc12_split = "PC1+PC2-ranked split",
+           BIC_reference_ranking = "Independent reference ranking")
+  da <- do.call(rbind, lapply(names(alt), function(v)
+    data.frame(Comparison = s$Comparison, Model = unname(alt[v]), dBIC = s[[v]] - s$BIC_EVS)))
+  da <- da[is.finite(da$dBIC), , drop = FALSE]
+  da$Comparison <- as_comp(da$Comparison); da$Model <- factor(da$Model, levels = unname(alt))
+  pa <- ggplot(da, aes(Comparison, dBIC, fill = Model)) +
+    geom_hline(yintercept = 0, colour = "grey40", linewidth = 0.3) +
+    geom_col(position = position_dodge(width = 0.82), width = 0.76) +
+    scale_fill_manual(values = c("#2B2B2B", "#7F7F7F", "#E69F00", "#009E73", "#56B4E9"), name = NULL) +
+    scale_x_discrete(labels = function(x) sub("_", "\n", x)) + scale_y_continuous(labels = scales::label_comma()) +
+    labs(x = NULL, y = "BIC minus BIC of EVS", tag = "a", title = "Model comparison on held-out samples",
+         subtitle = "Positive: EVS fits the held-out dispersions better.") +
+    fig_theme() + theme(panel.grid.major.x = element_blank())
+  rnd <- CUTOFF$random; rnd <- rnd[is.finite(rnd$Coarse_LRT_vs_one_trend), , drop = FALSE]
+  ob <- data.frame(Comparison = as_comp(s$Comparison), LRT = s$Coarse_grid_LRT_observed)
+  pb <- ggplot() +
+    geom_point(data = ob, aes(Comparison, LRT), colour = "#D55E00", size = 2.2, shape = 18) +
+    scale_x_discrete(labels = function(x) sub("_", "\n", x), drop = FALSE) +
+    scale_y_continuous(labels = scales::label_comma()) +
+    labs(x = NULL, y = "LRT, split vs one trend (coarse grid)", tag = "b", title = "Observed split vs permuted rankings",
+         subtitle = "Diamond: observed PC1 ranking. Grey: permutation searches at the same resolution.") +
+    fig_theme() + theme(panel.grid.major.x = element_blank())
+  if (nrow(rnd)) pb <- pb + geom_jitter(data = transform(rnd, Comparison = as_comp(Comparison)),
+                                        aes(Comparison, Coarse_LRT_vs_one_trend), colour = "grey45", width = 0.12, height = 0, size = 1)
+  sens <- if (length(sensitivity_rows)) dplyr::bind_rows(sensitivity_rows) else NULL
+  if (is.null(sens) || !nrow(sens)) return(assemble_rows(list(list(plots = list(pa, pb), widths = c(1.3, 1))), 1,
+                                                       "Figure 3. Model comparison and sensitivity"))
+  lv <- c(ORIGINAL_LABEL, "EVS (primary)", paste0(ORIGINAL_LABEL, ", DESeq2 0.25 prior floor"), "EVS, DESeq2 0.25 prior floor",
+          "EVS, independent reference ranking", "IHW, Original p-values",
+          "Count split: Original (test half)", "Count split: EVS (test half)")
+  sens <- sens[sens$Analysis %in% lv, , drop = FALSE]
+  sens$Analysis <- factor(sens$Analysis, levels = lv); sens$Comparison <- as_comp(sens$Comparison)
+  cols <- c("#2B2B2B", "#1F6FB2", "#8C8C8C", "#8FB8DE", "#56B4E9", "#E69F00", "#B07AA1", "#7B3294")
+  names(cols) <- lv
+  bar <- function(var, tag, title, keep) {
+    d <- sens[sens$Analysis %in% keep & is.finite(sens[[var]]), , drop = FALSE]
+    ggplot(d, aes(Comparison, .data[[var]], fill = Analysis)) +
+      geom_col(position = position_dodge(width = 0.86), width = 0.8) +
+      scale_fill_manual(values = cols, name = NULL, drop = TRUE) +
+      scale_x_discrete(labels = function(x) sub("_", "\n", x)) +
+      scale_y_continuous(labels = scales::label_comma(), expand = expansion(mult = c(0, 0.08))) +
+      labs(x = NULL, y = paste(var, "discoveries"), tag = tag, title = title) +
+      fig_theme() + theme(panel.grid.major.x = element_blank(), legend.position = "right")
+  }
+  pc <- bar("Standard", "c", "Standard discoveries: primary and sensitivity analyses", lv)
+  assemble_rows(list(list(plots = list(pa, pb), widths = c(1.3, 1)), pc), heights = c(1, 1),
+                title = "Figure 3. Model comparison and sensitivity analyses")
+}
+
+# =============================================================================
 # FINAL 3'aTWAS ORTHOLOG COMPARISON
 # =============================================================================
 
@@ -5364,37 +5692,213 @@ export_selected_primary <- function() {
   invisible(d)
 }
 
-# Complementary relative PAS usage: edgeR quasi-likelihood diffSplice compares
-# each PAS effect with the remaining sites of its gene. This is NOT EVS
-# abundance. Use multi-PAS annotated genes and common full-matrix offsets.
-# Gene symbols are a provisional grouping; stable gene identifiers should be
-# substituted if available. BH is applied across all eligible PAS usage tests.
-run_pas_usage <- function() {
-  if(!requireNamespace("edgeR",quietly=TRUE)) stop("Install edgeR for complementary PAS usage analysis.")
-  out <- list(); out_gene <- list()
-  for(cmp in COMPARISON_NAMES) {
+# =============================================================================
+# ALTERNATIVE POLYADENYLATION: RELATIVE PAS USAGE, 3' UTR SHORTENING /
+# LENGTHENING, AND 3'aTWAS
+# =============================================================================
+# Differential abundance (EVS) does not establish a change in which PAS a gene
+# uses. APA is analysed per pairwise comparison with edgeR quasi-likelihood
+# models on raw counts with offsets from the shared DESeq2 size factors.
+# Gene units are gene symbol + chromosome + strand; PASs are ordered along the
+# direction of transcription by their peak coordinate (proximal = most 5').
+#   1. Any usage change: diffSpliceDGE tests each PAS against the other PASs of
+#      its gene (genes with >= 2 eligible PASs); gene level by Simes, BH across
+#      genes.
+#   2. Direction: for each gene, the two most used PASs (mean normalized count
+#      >= APA_MIN_MEAN each) form a proximal/distal pair. RED = treatment log2
+#      fold change of the distal PAS minus that of the proximal PAS (the change
+#      in log2 distal/proximal usage; Hoque et al. 2013); positive =
+#      lengthening (more distal use in recovery), negative = shortening. The
+#      gene-level diffSpliceDGE test of the pair gives the p-value; BH across
+#      genes, FDR < 0.10.
+#   3. 3'aTWAS: enrichment of APA genes among 3'aTWAS genes (logistic, the
+#      ortholog-mapped tested multi-PAS genes as background, adjusted for
+#      expression and ortholog support).
+APA_MIN_MEAN <- 5
+APA_FDR <- 0.10
+APA_RESULTS <- NULL
+
+pas_annotation <- function() {
+  need <- c("Chromosome", "Strand", "Peak")
+  if (!all(need %in% names(WTTS_Seq))) stop("The count file lacks PAS coordinates (Chromosome, Strand, Peak).")
+  d <- data.frame(feature_id = WTTS_Seq$feature_id, gene = trimws(as.character(WTTS_Seq$Symbol)),
+                  chr = as.character(WTTS_Seq$Chromosome), strand = as.character(WTTS_Seq$Strand),
+                  pos = suppressWarnings(as.numeric(gsub(",", "", as.character(WTTS_Seq$Peak)))))
+  d <- d[valid_gene_symbol(d$gene) & d$strand %in% c("+", "-") & is.finite(d$pos), , drop = FALSE]
+  d$gene_unit <- paste(d$gene, d$chr, d$strand, sep = "|")
+  d$tx_pos <- ifelse(d$strand == "+", d$pos, -d$pos)       # increases 5' -> 3'
+  d
+}
+
+apa_fit <- function(counts, genes, cache) {
+  X <- stats::model.matrix(make_design_formula(cache$coldata), cache$coldata)
+  yy <- edgeR::DGEList(counts = counts, genes = genes)
+  yy$offset <- matrix(log(cache$sf[colnames(counts)]), nrow = nrow(yy), ncol = ncol(yy), byrow = TRUE)
+  yy <- edgeR::estimateDisp(yy, X, robust = TRUE)
+  fit <- edgeR::glmQLFit(yy, X, robust = TRUE)
+  list(fit = fit, coef = ncol(X),
+       ds = edgeR::diffSpliceDGE(fit, coef = ncol(X), geneid = "gene_unit", exonid = "PAS", verbose = FALSE))
+}
+
+run_apa_analysis <- function() {
+  ann <- pas_annotation()
+  pas_out <- list(); gene_out <- list(); red_out <- list(); stage_out <- list()
+  for (cmp in COMPARISON_NAMES) {
     cache <- comparison_cache[[cmp]]; y <- cache$raw
-    sym <- OrigID_Symbol$gene_symbol[match(rownames(y),OrigID_Symbol$feature_id)]
-    keep <- valid_gene_symbol(sym); freq <- table(sym[keep]); keep <- keep & sym %in% names(freq[freq>=2])
-    if(sum(keep)<2L) next
-    X <- stats::model.matrix(make_design_formula(cache$coldata),cache$coldata)
-    yy <- edgeR::DGEList(counts=y[keep,,drop=FALSE],genes=data.frame(gene=sym[keep],PAS=rownames(y)[keep]))
-    # Shared DESeq2 relative library factors, multiplied by an arbitrary common
-    # constant; an intercept absorbs that constant. No subset-specific TMM.
-    yy$offset <- matrix(log(cache$sf[colnames(y)]),nrow=nrow(yy),ncol=ncol(yy),byrow=TRUE)
-    yy <- edgeR::estimateDisp(yy,X,robust=TRUE)
-    fit <- edgeR::glmQLFit(yy,X,robust=TRUE)
-    ds <- edgeR::diffSpliceDGE(fit,coef=ncol(X),geneid="gene",exonid="PAS")
-    tab <- edgeR::topSpliceDGE(ds,test="exon",number=Inf,FDR=1)
-    tab$Comparison <- cmp; out[[cmp]] <- tab
-    # Gene-level error control: Simes combination of each gene's PAS tests,
-    # BH across genes (the gene-level screen of a stage-wise analysis).
-    gtab <- edgeR::topSpliceDGE(ds,test="Simes",number=Inf,FDR=1)
-    gtab$Comparison <- cmp; out_gene[[cmp]] <- gtab
+    a <- ann[match(rownames(y), ann$feature_id), , drop = FALSE]
+    ok <- !is.na(a$gene_unit)
+    n_per <- table(a$gene_unit[ok]); multi <- ok & a$gene_unit %in% names(n_per[n_per >= 2])
+    le <- CUTOFF$pas[[cmp]]; le_ids <- if (is.null(le)) character() else le$feature_id[le$In_Leading_Edge]
+    # 1. Any usage change (all PASs of multi-PAS genes).
+    if (sum(multi) >= 2L) {
+      f <- apa_fit(y[multi, , drop = FALSE],
+                   data.frame(gene_unit = a$gene_unit[multi], Gene = a$gene[multi], PAS = rownames(y)[multi]), cache)
+      pt <- edgeR::topSpliceDGE(f$ds, test = "exon", number = Inf, FDR = 1); pt$Comparison <- cmp
+      gt <- edgeR::topSpliceDGE(f$ds, test = "Simes", number = Inf, FDR = 1); gt$Comparison <- cmp
+      # Stage-wise testing (stageR, Van den Berge et al. 2017): genes screened
+      # by the Simes p-value, then PASs confirmed within significant genes, with
+      # overall FDR control at APA_FDR. Run when the stageR package is installed.
+      if (requireNamespace("stageR", quietly = TRUE)) {
+        st <- tryCatch({
+          s <- stageR::stageRTx(pScreen = stats::setNames(gt$P.Value, gt$gene_unit),
+                                pConfirmation = matrix(pt$P.Value, ncol = 1, dimnames = list(pt$PAS, "usage")),
+                                pScreenAdjusted = FALSE, tx2gene = data.frame(pt$PAS, pt$gene_unit))
+          s <- stageR::stageWiseAdjustment(s, method = "dtu", alpha = APA_FDR)
+          out_st <- stageR::getAdjustedPValues(s, onlySignificantGenes = FALSE, order = FALSE)
+          out_st$Comparison <- cmp; out_st
+        }, error = function(e) { warning(cmp, ": stageR failed: ", conditionMessage(e), call. = FALSE); NULL })
+        if (!is.null(st)) stage_out[[cmp]] <- st
+      }
+      pas_out[[cmp]] <- pt; gene_out[[cmp]] <- gt
+    }
+    # 2. Proximal / distal pair of the two most used PASs.
+    nm <- rowMeans(sweep(y, 2, cache$sf[colnames(y)], "/"))
+    cand <- data.frame(feature_id = rownames(y)[ok], unit = a$gene_unit[ok], gene = a$gene[ok],
+                       tx = a$tx_pos[ok], pos = a$pos[ok], mean = nm[ok])
+    cand <- cand[cand$mean >= APA_MIN_MEAN, , drop = FALSE]
+    cand <- cand[order(cand$unit, -cand$mean, cand$tx), , drop = FALSE]
+    top2 <- do.call(rbind, lapply(split(cand, cand$unit), function(z) if (nrow(z) >= 2L) z[1:2, , drop = FALSE] else NULL))
+    if (is.null(top2) || nrow(top2) < 4L) next
+    top2 <- top2[order(top2$unit, top2$tx), , drop = FALSE]
+    top2$role <- rep(c("proximal", "distal"), nrow(top2) / 2)
+    f2 <- apa_fit(y[top2$feature_id, , drop = FALSE],
+                  data.frame(gene_unit = top2$unit, Gene = top2$gene, PAS = top2$feature_id), cache)
+    lfc <- f2$fit$coefficients[, f2$coef] / log(2)
+    g2 <- edgeR::topSpliceDGE(f2$ds, test = "gene", number = Inf, FDR = 1)
+    prox <- top2[top2$role == "proximal", , drop = FALSE]; dist <- top2[top2$role == "distal", , drop = FALSE]
+    red <- data.frame(Comparison = cmp, Gene = prox$gene, Gene_unit = prox$unit,
+                      Proximal_PAS = prox$feature_id, Distal_PAS = dist$feature_id,
+                      Distance_bp = abs(dist$pos - prox$pos), Mean_proximal = prox$mean, Mean_distal = dist$mean,
+                      RED_log2 = unname(lfc[match(dist$feature_id, top2$feature_id)] - lfc[match(prox$feature_id, top2$feature_id)]))
+    red$P <- g2$P.Value[match(red$Gene_unit, g2$gene_unit)]
+    red$FDR <- stats::p.adjust(red$P, "BH")
+    red$Significant <- is.finite(red$FDR) & red$FDR < APA_FDR
+    red$Direction <- ifelse(red$RED_log2 > 0, "Lengthening", "Shortening")
+    red$Proximal_in_LE <- red$Proximal_PAS %in% le_ids; red$Distal_in_LE <- red$Distal_PAS %in% le_ids
+    red_out[[cmp]] <- red
   }
-  save_csv(dplyr::bind_rows(out),file.path(summary_table_dir,"Table_Complementary_PAS_Usage.csv"))
-  save_csv(dplyr::bind_rows(out_gene),file.path(summary_table_dir,"Table_Complementary_PAS_Usage_Gene_Simes.csv"))
-  invisible(out)
+  pas_tab <- dplyr::bind_rows(pas_out); gene_tab <- dplyr::bind_rows(gene_out); red_tab <- dplyr::bind_rows(red_out)
+  save_csv(pas_tab, file.path(summary_table_dir, "Table_APA_PAS_Usage.csv"))
+  save_csv(gene_tab, file.path(summary_table_dir, "Table_APA_Gene_Usage_Simes.csv"))
+  save_csv(red_tab, file.path(summary_table_dir, "Table_APA_Shortening_Lengthening.csv"))
+  save_csv(if (length(stage_out)) dplyr::bind_rows(stage_out) else data.frame(Note = "stageR not installed or not run"),
+           file.path(summary_table_dir, "Table_APA_StageR.csv"))
+  summ <- do.call(rbind, lapply(COMPARISON_NAMES, function(cmp) {
+    r <- red_tab[red_tab$Comparison == cmp, , drop = FALSE]; g <- gene_tab[gene_tab$Comparison == cmp, , drop = FALSE]
+    data.frame(Comparison = cmp, Genes_usage_tested = nrow(g),
+               Genes_usage_changed = if (nrow(g)) sum(g$FDR < APA_FDR, na.rm = TRUE) else 0L,
+               Genes_pair_tested = nrow(r), Shortening = sum(r$Significant & r$Direction == "Shortening"),
+               Lengthening = sum(r$Significant & r$Direction == "Lengthening"),
+               Significant_with_PAS_in_LE = sum(r$Significant & (r$Proximal_in_LE | r$Distal_in_LE)))
+  }))
+  save_csv(summ, file.path(summary_table_dir, "Table_APA_Summary.csv"))
+  APA_RESULTS <<- list(pas = pas_tab, gene = gene_tab, red = red_tab, summary = summ, enrichment = NULL)
+  invisible(APA_RESULTS)
+}
+
+# 3'aTWAS enrichment among APA genes (significant shortening or lengthening).
+run_apa_twas_enrichment <- function(mapping) {
+  red <- APA_RESULTS$red
+  if (is.null(red) || !nrow(red)) stop("No APA results.")
+  rat <- unique(red$Gene[valid_gene_symbol(red$Gene)])
+  bg <- as.data.frame(babelgene::orthologs(genes = rat, species = TWAS_TARGET_SPECIES, human = FALSE,
+                                           min_support = TWAS_ORTHOLOG_MIN_SUPPORT, top = FALSE))
+  assert_required_columns(bg, c("symbol", "human_symbol"), "rat background orthology (APA)")
+  bgkey <- unique(gene_key(bg$symbol)); hit <- unique(mapping$gene_key)
+  sup <- if ("support_n" %in% names(bg)) tapply(suppressWarnings(as.numeric(bg$support_n)), gene_key(bg$symbol), max) else NULL
+  rows <- lapply(split(red, red$Comparison), function(z) {
+    z$gene_key <- gene_key(z$Gene)
+    g <- z |> dplyr::filter(gene_key %in% bgkey, is.finite(P)) |> dplyr::group_by(gene_key) |>
+      dplyr::summarise(APA = any(Significant), mean_count = mean(Mean_proximal + Mean_distal), .groups = "drop")
+    g$TWAS <- g$gene_key %in% hit
+    g$support <- if (is.null(sup)) 1 else as.numeric(sup[g$gene_key]); g$support[!is.finite(g$support)] <- 1
+    if (nrow(g) < 10L || length(unique(g$TWAS)) < 2L || length(unique(g$APA)) < 2L) return(NULL)
+    form <- if (length(unique(g$support)) > 1L) APA ~ TWAS + log1p(mean_count) + log(support) else APA ~ TWAS + log1p(mean_count)
+    f <- stats::glm(form, data = g, family = stats::binomial())
+    cc <- summary(f)$coefficients
+    if (!"TWASTRUE" %in% rownames(cc) || !f$converged) return(NULL)
+    b <- cc["TWASTRUE", 1]; se <- cc["TWASTRUE", 2]
+    data.frame(Comparison = z$Comparison[1], Genes = nrow(g), TWAS_genes = sum(g$TWAS), APA_genes = sum(g$APA),
+               Overlap = sum(g$APA & g$TWAS), Overlap_genes = paste(sort(unique(z$Gene[gene_key(z$Gene) %in% g$gene_key[g$APA & g$TWAS]])), collapse = ";"),
+               OR = exp(b), Lower95 = exp(b - 1.96 * se), Upper95 = exp(b + 1.96 * se), P = cc["TWASTRUE", 4])
+  })
+  d <- dplyr::bind_rows(rows); if (nrow(d)) d$BH <- stats::p.adjust(d$P, "BH")
+  save_csv(d, file.path(summary_table_dir, "Table_APA_TWAS_Enrichment.csv"))
+  APA_RESULTS$enrichment <<- d
+  invisible(d)
+}
+
+# Figure 5: (a) genes with a usage change and with significant shortening or
+# lengthening per recovery time; (b) RED volcano per comparison; (c) 3'aTWAS
+# enrichment of APA genes (odds ratio and 95% interval), when available.
+plot_apa_figure <- function() {
+  s <- APA_RESULTS$summary; red <- APA_RESULTS$red
+  tl <- stats::setNames(unname(TIME_LEVELS), COMPARISON_NAMES)
+  d <- rbind(data.frame(Comparison = s$Comparison, Class = "Any usage change (gene, Simes)", n = s$Genes_usage_changed),
+             data.frame(Comparison = s$Comparison, Class = "Shortening", n = s$Shortening),
+             data.frame(Comparison = s$Comparison, Class = "Lengthening", n = s$Lengthening))
+  d$Time <- factor(tl[d$Comparison], levels = unname(TIME_LEVELS))
+  d$Class <- factor(d$Class, levels = c("Any usage change (gene, Simes)", "Shortening", "Lengthening"))
+  cols <- c("Any usage change (gene, Simes)" = "grey40", "Shortening" = "#C0392B", "Lengthening" = "#1F6FB2")
+  pa <- ggplot(d, aes(Time, n, fill = Class)) +
+    geom_col(position = position_dodge(width = 0.8), width = 0.74) +
+    geom_text(aes(label = n), position = position_dodge(width = 0.8), vjust = -0.3, size = 1.9) +
+    scale_fill_manual(values = cols, name = NULL) + scale_y_continuous(expand = expansion(mult = c(0, 0.12))) +
+    labs(x = "Recovery time", y = sprintf("Genes (FDR < %.2f)", APA_FDR), tag = "a",
+         title = "Alternative polyadenylation in recovery",
+         subtitle = "Shortening / lengthening: two most used PASs per gene (RED). Any change: all PASs of the gene.") +
+    fig_theme() + theme(panel.grid.major.x = element_blank())
+  red$Time <- factor(tl[red$Comparison], levels = unname(TIME_LEVELS))
+  red$Class <- ifelse(red$Significant, red$Direction, "Not significant")
+  red$Class <- factor(red$Class, levels = c("Shortening", "Lengthening", "Not significant"))
+  red <- red[is.finite(red$RED_log2) & is.finite(red$FDR), , drop = FALSE]
+  red <- red[order(red$Class, decreasing = TRUE), , drop = FALSE]
+  pb <- ggplot(red, aes(RED_log2, -log10(pmax(FDR, 1e-300)), colour = Class)) +
+    geom_point(size = 0.5, alpha = 0.6, stroke = 0) +
+    geom_hline(yintercept = -log10(APA_FDR), linetype = "22", colour = "grey45", linewidth = 0.3) +
+    geom_vline(xintercept = 0, colour = "grey60", linewidth = 0.3) +
+    facet_wrap(~ Time, nrow = 1) +
+    scale_colour_manual(values = c("Shortening" = "#C0392B", "Lengthening" = "#1F6FB2", "Not significant" = "grey75"), name = NULL) +
+    labs(x = "RED: change in log2 distal / proximal usage (recovery vs control)", y = "-log10 FDR", tag = "b",
+         title = "Direction of APA changes",
+         subtitle = "Positive: more distal PAS use (3' UTR lengthening); negative: more proximal (shortening).") +
+    fig_theme()
+  rows <- list(pa, pb)
+  en <- APA_RESULTS$enrichment
+  if (!is.null(en) && nrow(en)) {
+    en$Time <- factor(tl[en$Comparison], levels = unname(TIME_LEVELS))
+    rows[[3]] <- ggplot(en, aes(Time, OR)) +
+      geom_hline(yintercept = 1, linetype = "22", colour = "grey45", linewidth = 0.3) +
+      geom_errorbar(aes(ymin = Lower95, ymax = Upper95), width = 0, linewidth = 0.4) +
+      geom_point(size = 2, colour = "#7B3294") +
+      geom_text(aes(label = sprintf("%d genes", Overlap)), vjust = -1, size = 1.9) +
+      scale_y_log10() +
+      labs(x = "Recovery time", y = "Odds ratio (95% CI)", tag = "c",
+           title = "APA genes among 3'aTWAS brain-disorder genes",
+           subtitle = "Logistic regression with ortholog-mapped tested genes as background, adjusted for expression and ortholog support.") +
+      fig_theme()
+  }
+  assemble_rows(rows, heights = rep(1, length(rows)), title = "Figure 5. Alternative polyadenylation after sleep deprivation")
 }
 
 # Gene-level 3'aTWAS overlap enrichment. Map the entire tested rat background
@@ -5559,11 +6063,16 @@ twas_results <- tryCatch(run_twas_overlap_analysis(), error = function(e) {
 # Record complementary-stage errors explicitly; primary abundance results are
 # still useful, but the manuscript must not claim a missing analysis ran.
 complementary_errors <- character()
-for (nm in c("PAS_usage","TWAS_enrichment")) tryCatch({
-  if(nm=="PAS_usage") run_pas_usage() else if (is.null(twas_results)) stop("3'aTWAS overlap did not run") else
+for (nm in c("Time_course","APA","TWAS_enrichment","APA_TWAS_enrichment","APA_figure")) tryCatch({
+  if (nm=="Time_course") run_time_course() else
+  if (nm=="APA") run_apa_analysis() else
+  if (nm=="APA_figure") { if (is.null(APA_RESULTS)) stop("APA analysis did not run")
+    save_figure(plot_apa_figure(), paper_fig_dir, "Figure_5_APA", 180, 170) } else
+  if (is.null(twas_results)) stop("3'aTWAS overlap did not run") else
+  if (nm=="APA_TWAS_enrichment") { if (is.null(APA_RESULTS)) stop("APA analysis did not run"); run_apa_twas_enrichment(twas_results$mapping) } else
     run_twas_enrichment(selected_primary,twas_results$mapping)
 },error=function(e) {complementary_errors <<- c(complementary_errors,paste(nm,conditionMessage(e),sep=": ")); warning(tail(complementary_errors,1))})
-writeLines(if(length(complementary_errors)) complementary_errors else "Both complementary stages completed.",file.path(output_dir,"Complementary_Status.txt"))
+writeLines(if(length(complementary_errors)) complementary_errors else "All complementary stages completed (time course, APA, TWAS enrichment, APA-TWAS enrichment, Figure 5).",file.path(output_dir,"Complementary_Status.txt"))
 write_provenance()
 
 figure_zip <- create_all_figures_zip()
