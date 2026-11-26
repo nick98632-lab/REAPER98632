@@ -1901,7 +1901,7 @@ fit_marginal_trend <- function(lx, likelihood, start = NULL, basis = NULL, multi
   if (is.null(basis)) basis <- matrix(numeric(), nrow = length(lx), ncol = 0L)
   d <- ncol(basis)
   lo <- c(log(TREND_MIN_COEF), log(TREND_MIN_COEF), TREND_B_RANGE[1], log(DISP_PRIOR_VAR_MIN), rep(-5, d))
-  hi <- c(log(TREND_MAX_COEF), TREND_B_RANGE[2], log(DISP_PRIOR_VAR_MAX), rep(5, d))
+  hi <- unname(c(log(TREND_MAX_COEF), TREND_B_RANGE[2], log(DISP_PRIOR_VAR_MAX), rep(5, d)))
   cache <- new.env(parent = emptyenv())
   calc <- function(q) {
     if (!is.null(cache$q) && identical(q, cache$q)) return(cache$out)
@@ -1934,7 +1934,8 @@ fit_marginal_trend <- function(lx, likelihood, start = NULL, basis = NULL, multi
     return(fit_marginal_trend(lx, likelihood, start = fallback, basis = basis, multistart = TRUE))
   if (!length(fits)) return(list(converged=FALSE, loglik=-Inf, par=rep(NA_real_,4+d), n=length(lx), tau2=NA_real_))
   o <- fits[[which.min(vapply(fits, `[[`, numeric(1), "value"))]]
-  list(converged=TRUE, loglik=-o$value, par=o$par, n=length(lx), tau2=exp(o$par[4]))
+  par <- unname(o$par)
+  list(converged=TRUE, loglik=-o$value, par=par, n=length(lx), tau2=exp(par[4]))
 }
 
 # Fit the identical hierarchical objective to the comparison counts before MAP
@@ -3667,7 +3668,7 @@ cutoff_one <- function(i) {
   pr <- pr[order(pr$k),,drop=FALSE]; pr$LogLik[!pr$Converged] <- NA_real_
   pr$LRT_vs_one_trend <- 2*(pr$LogLik-l_one); pr$Delta_from_max <- 2*(pr$LogLik-best$loglik); pr$Chosen <- pr$k==k
   drop_at <- function(d) {j<-which.min(abs(pr$k-(k+d))); if(abs(pr$k[j]-(k+d))<=125) pr$Delta_from_max[j] else NA_real_}
-  q <- function(p) c(a0=exp(p[1]),a1=exp(p[2]),b=p[3])
+  q <- function(p) { p <- unname(p); c(a0=exp(p[1]),a1=exp(p[2]),b=p[3]) }
   pl <- q(best$le$par); pm <- q(best$rem$par); po <- q(one$par)
   bics <- c(pooled=bic_one, evs=bic_split, continuous=bic_cont, variance=bic_var, pc12=bic_pc12)
   bics <- bics[is.finite(bics)]
