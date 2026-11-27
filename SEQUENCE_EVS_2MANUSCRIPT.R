@@ -19,8 +19,8 @@
 #      robust QL, TMM and alternative partitions;
 #   3. experiment level: multiplicity, the 40-sample time-course model, APA,
 #      3'aTWAS enrichment;
-#   4. validation: full-pipeline label permutations, negative binomial
-#      simulations (12 scenarios), cutoff stability, filter sensitivity;
+#   4. validation: negative binomial simulations (7 scenarios), cutoff
+#      stability, filter sensitivity;
 #   5. external validation on GSE100349 (rat WTTS-seq) and GSE151173 (mouse
 #      liver 3' mRNA-seq, WT): discoveries, real-data null splits, replication;
 #   6. figures 1-8, supplementary figures S1-S5, tables, lockfile.
@@ -30,9 +30,8 @@
 # validation stage. No setting is tuned on discoveries.
 # Environment options (defaults: development / publication profile):
 #   SEQUENCE_PROFILE (development | publication), SEQUENCE_CORES (1 on a 4 GB
-#   server), SEQUENCE_SELECTION_BOOT (19 / 99), SEQUENCE_PERMUTATIONS (3 / 125),
-#   SEQUENCE_PERMUTATION_SET (balanced / all), SEQUENCE_SIM_REPS (2 / 1000),
-#   SEQUENCE_SIM_NPAS (3000 / 10000), SEQUENCE_SIM_SCENARIOS (all 12),
+#   server), SEQUENCE_SELECTION_BOOT (19 / 99), SEQUENCE_SIM_REPS (2 / 1000),
+#   SEQUENCE_SIM_NPAS (3000 / 10000), SEQUENCE_SIM_SCENARIOS (all 7),
 #   SEQUENCE_SIM_MODELS, SEQUENCE_STABILITY_SUBSETS (3 / 25),
 #   SEQUENCE_STABILITY_METHOD (subsample | bootstrap),
 #   SEQUENCE_FILTER_THRESHOLDS ("1x1,20x5" / "1x1,5x3,20x5"),
@@ -43,7 +42,7 @@
 #   SEQUENCE_PRIOR_VAR_MIN (0.01), SEQUENCE_NULL_METHOD (fndr),
 #   SEQUENCE_EXTERNAL (1), SEQUENCE_EXTERNAL_WTTS / SEQUENCE_EXTERNAL_LIVER (paths
 #   to GSE100349 / GSE151173 count tables; default data/<GEO file name>),
-#   SEQUENCE_EXTERNAL_PERMUTATIONS (3 / 34), SEQUENCE_EXTERNAL_NULL_SPLITS
+#   SEQUENCE_EXTERNAL_NULL_SPLITS
 #   (3 / 60), SEQUENCE_EXTERNAL_REPLICATION_SPLITS (2 / 10),
 #   SEQUENCE_FDR_TOLERANCE (0.025),
 #   SEQUENCE_SELFTEST (1 = unit tests on synthetic data only).
@@ -56,11 +55,11 @@ MANUSCRIPT_METHODS <- c(
   "**Hierarchical dispersion model with eigenvector splitting**  ",
   "Methods accompanying `SEQUENCE_EVS_2MANUSCRIPT.R` (build SEQUENCE_EVS_MANUSCRIPT_HIERARCHICAL_V9_FINAL) · 27 November 2026",
   "",
-  "This document describes the algorithm as implemented. Numerical results are written by the pipeline to the Summary_Tables folder and are not part of this text. The novel components are the eigenvector-guided partition and its marginal adjusted-likelihood cutoff; the cited literature supports the constituent statistical methods, not EVS itself. Because EVS chooses its partition from the counts it tests, its false discovery rate (FDR) is not guaranteed by theory; it is assessed empirically by full-pipeline permutation and simulation, and nominal and empirical FDR are reported separately.",
+  "This document describes the algorithm as implemented. Numerical results are written by the pipeline to the Summary_Tables folder and are not part of this text. The novel components are the eigenvector-guided partition and its marginal adjusted-likelihood cutoff; the cited literature supports the constituent statistical methods, not EVS itself. Because EVS chooses its partition from the counts it tests, its false discovery rate (FDR) is not guaranteed by theory; it is assessed empirically by full-pipeline simulation and on real null data from an independent dataset, and nominal and empirical FDR are reported separately.",
   "",
   "## Study design and input",
   "",
-  "The analytical unit is a WTTS-Seq polyadenylation site (PAS), identified by OrigID; gene symbols are annotations, never units of differential testing. The study is a 4 × 2 factorial time course: rats in recovery after sleep deprivation (R arms, treatment) sampled at 0, 2, 4 and 8 h of recovery, and undisturbed controls sampled at the same clock times (ZT6, ZT8, ZT10 and ZT14), five animals per arm (40 samples, eight arms). Four prespecified pairwise comparisons are analysed: RT0 vs ZT6, RT2 vs ZT8, RT4 vs ZT10 and RT8 vs ZT14; the full design is analysed jointly in a separate time-course model. For each comparison a PAS is eligible if it has at least 10 reads in at least 5 of the comparison's ten samples (prespecified; the size of one group; designs with other group sizes, in the simulations and external datasets, require 10 reads in as many samples as one group holds). The rule ignores condition labels, so it cannot favour PASs that differ between groups, and it removes PASs too sparse to carry information on dispersion. The same universe is used for every model and for the 40-sample time-course model (applied across all 40 samples). Sensitivity to the filter is assessed by repeating the pooled and forced EVS analyses (filter, ranking, cutoff search, moderation and tests) at ≥1 read in ≥1 sample and ≥20 reads in ≥5 samples (and ≥5 reads in ≥3 samples in the publication profile). Before any analysis the pipeline checks that every arm has five distinct animals assigned to the correct condition, that counts are non-negative integers, and that the design matrix has full rank. Each animal is sampled once and the metadata record no pairing or batch, so none is modelled and permutations are unrestricted within a comparison; the pipeline screens for duplicate and near-identical sequencing libraries, which detects duplicated sequencing but does not by itself establish independence; independence rests on the design (one animal per sample). [1, 5]",
+  "The analytical unit is a WTTS-Seq polyadenylation site (PAS), identified by OrigID; gene symbols are annotations, never units of differential testing. The study is a 4 × 2 factorial time course: rats in recovery after sleep deprivation (R arms, treatment) sampled at 0, 2, 4 and 8 h of recovery, and undisturbed controls sampled at the same clock times (ZT6, ZT8, ZT10 and ZT14), five animals per arm (40 samples, eight arms). Four prespecified pairwise comparisons are analysed: RT0 vs ZT6, RT2 vs ZT8, RT4 vs ZT10 and RT8 vs ZT14; the full design is analysed jointly in a separate time-course model. For each comparison a PAS is eligible if it has at least 10 reads in at least 5 of the comparison's ten samples (prespecified; the size of one group; designs with other group sizes, in the external datasets, require 10 reads in as many samples as one group holds). The rule ignores condition labels, so it cannot favour PASs that differ between groups, and it removes PASs too sparse to carry information on dispersion. The same universe is used for every model and for the 40-sample time-course model (applied across all 40 samples). Sensitivity to the filter is assessed by repeating the pooled and forced EVS analyses (filter, ranking, cutoff search, moderation and tests) at ≥1 read in ≥1 sample and ≥20 reads in ≥5 samples (and ≥5 reads in ≥3 samples in the publication profile). Before any analysis the pipeline checks that every arm has five distinct animals assigned to the correct condition, that counts are non-negative integers, and that the design matrix has full rank. Each animal is sampled once and the metadata record no pairing or batch, so none is modelled; the pipeline screens for duplicate and near-identical sequencing libraries, which detects duplicated sequencing but does not by itself establish independence; independence rests on the design (one animal per sample). [1, 5]",
   "",
   "## Normalization and eigenvector ranking",
   "",
@@ -82,7 +81,7 @@ MANUSCRIPT_METHODS <- c(
   "",
   "For each admissible k, separate hierarchical marginal likelihoods are fitted to the LE and REM PASs of the comparison, and the profile log likelihood is the sum of the two maximized objectives. Admissible cutoffs leave at least 200 PASs in each partition, with k at most half the comparison's PASs. The search evaluates the admissible endpoints and a grid of step 250, then refines at steps 25, 5 and 1 around the three best candidates of each stage (ties prefer smaller k); each fit starts from the parameters of the nearest evaluated cutoff and falls back to the pooled start, with multiple starts, if it does not converge. The selected k* is the largest converged objective on the evaluated grid: a grid-refined maximum, not a proven global optimum. No Wald statistic, p-value, fold change, discovery count or HBFSS score enters selection, and a counter of significance computations verifies this. Because the ranking, the likelihood and the tests use the same counts and the cutoff is chosen adaptively, the likelihood-ratio statistic and BIC are reported as descriptive measures of model fit, not as tests. EVS ranked by PC1 is the prespecified primary split.",
   "",
-  "Pooled versus split. Whether the data support two dispersion populations at all is decided by a parametric bootstrap of the complete adaptive procedure (McLachlan's bootstrap of the likelihood-ratio statistic, which has no standard reference distribution here because k is chosen and the ranking is learned from the data). B data sets (19 in the development profile, 99 in the publication profile) are simulated from the fitted pooled model of the comparison: DESeq2's fitted means and dispersions drawn from the pooled trend and τ². Each is filtered, re-ranked (VST, per-condition PC1), its likelihoods are recomputed and its best split is found on the coarse grid. The statistic is the coarse-grid likelihood ratio, split versus pooled, compared with the observed coarse-grid statistic at the same resolution; p = (1 + #{LRT* ≥ LRT_obs})/(B + 1), computed from the finite bootstrap statistics, and EVS is selected when p ≤ 0.05; at least 80% of the bootstrap replicates must succeed, otherwise the decision is reported as undetermined and no adaptive result is given. The same rule is used for the observed comparisons and for every validation and external analysis, and every one of those analyses generates a new bootstrap distribution from its own counts: each permutation, simulated data set, stability subset, external comparison, external permutation, null split and replication half is filtered, normalized, ranked and searched, and B bootstrap data sets are simulated from its own fitted pooled model and analysed in the same way. No bootstrap distribution is reused between analyses. The adaptive procedure reports EVS when selected and the pooled model otherwise; forced EVS is always reported as well, and the two are labelled separately in every table. [19, 28]",
+  "Pooled versus split. Whether the data support two dispersion populations at all is decided by a parametric bootstrap of the complete adaptive procedure (McLachlan's bootstrap of the likelihood-ratio statistic, which has no standard reference distribution here because k is chosen and the ranking is learned from the data). B data sets (19 in the development profile, 99 in the publication profile) are simulated from the fitted pooled model of the comparison: DESeq2's fitted means and dispersions drawn from the pooled trend and τ². Each is filtered, re-ranked (VST, per-condition PC1), its likelihoods are recomputed and its best split is found on the coarse grid. The statistic is the coarse-grid likelihood ratio, split versus pooled, compared with the observed coarse-grid statistic at the same resolution; p = (1 + #{LRT* ≥ LRT_obs})/(B + 1), computed from the finite bootstrap statistics, and EVS is selected when p ≤ 0.05; at least 80% of the bootstrap replicates must succeed, otherwise the decision is reported as undetermined and no adaptive result is given. The same rule is used for the observed comparisons and for every validation and external analysis, and every one of those analyses generates a new bootstrap distribution from its own counts: each simulated data set, stability subset, external comparison, null split and replication half is filtered, normalized, ranked and searched, and B bootstrap data sets are simulated from its own fitted pooled model and analysed in the same way. No bootstrap distribution is reused between analyses. The adaptive procedure reports EVS when selected and the pooled model otherwise; forced EVS is always reported as well, and the two are labelled separately in every table. [19, 28]",
   "",
   "## Differential PAS abundance",
   "",
@@ -98,7 +97,7 @@ MANUSCRIPT_METHODS <- c(
   "",
   "## Model comparison",
   "",
-  "A complete differential abundance analysis is run for: DESeq2 with its default settings (own size factors, parametric trend, its prior variance, Cook's flagging and independent filtering); edgeR robust quasi-likelihood (TMM normalization, robust empirical Bayes dispersions and QL F-tests) [11, 20, 21]; and, under the primary testing rules (the Original's Cook's list and HBFSS threshold, one BH per analysis, no independent filtering), harmonized conventional DESeq2 (parametric trend and DESeq2's prior variance); the pooled hierarchical model with TMM instead of median-of-ratios size factors; pooled hierarchical moderation (the Original); PC1-based EVS (primary); a split ranked by within-condition VST variance; a split ranked by each PAS's contribution to the PC1–PC2 subspace, λ₁v²ᵢ₁ + λ₂v²ᵢ₂; continuous-rank moderation, in which a centred natural cubic spline (3 df) of log(1 + dᵢ) shifts each PAS's prior centre (applied to DESeq2's dispFit before the MAP step) with one prior variance; random partitions (three by default), in which the union depths are permuted; and the adaptive procedure (pooled versus EVS, above). Every split model is searched for its own k with the same likelihood, admissibility rules and grid resolution as PC1 EVS. Discovery counts and BIC are descriptive; whether a model controls the FDR and gains power is judged from the simulations. [1–3, 5]",
+  "A complete differential abundance analysis is run for: DESeq2 with its default settings (own size factors, parametric trend, its prior variance, Cook's flagging and independent filtering); edgeR robust quasi-likelihood (TMM normalization, robust empirical Bayes dispersions and QL F-tests) [11, 20, 21]; and, under the primary testing rules (the Original's Cook's list and HBFSS threshold, one BH per analysis, no independent filtering), harmonized conventional DESeq2 (parametric trend and DESeq2's prior variance); the pooled hierarchical model with TMM instead of median-of-ratios size factors; pooled hierarchical moderation (the Original); PC1-based EVS (primary); a split ranked by within-condition VST variance; a split ranked by each PAS's contribution to the PC1–PC2 subspace, λ₁v²ᵢ₁ + λ₂v²ᵢ₂; continuous-rank moderation, in which a centred natural cubic spline (3 df) of log(1 + dᵢ) shifts each PAS's prior centre (applied to DESeq2's dispFit before the MAP step) with one prior variance; random partitions (three by default), in which the union depths are permuted; the adaptive procedure (pooled versus EVS, above); and EVS at the cutoff of the published analysis, k = 5,000 per condition (Leading Edge = union of the two top-5,000 sets), with the current ranking, moderation and tests, so that only the cutoff differs from PC1 EVS at k*. The published analysis is also reproduced as published: PASs with at least one read in the comparison; PCA (centred, unscaled) on DESeq2 median-of-ratios normalized counts within each condition; the 5,000 PASs with the largest |PC1 loading| per condition, their union forming the Leading Edge and all other PASs the Remainder; standard DESeq2 (own size factors and dispersions) run separately on each subset with BH within each subset; Standard = BH < 0.10 and |apeglm log₂FC| ≥ 1, Strong = greaterAbs(1) BH < 0.10 and |apeglm log₂FC| ≥ 1, as defined in the published analysis (its Weak and HBFSS calls are not reproduced). Its Standard calls, Leading Edge size and overlap with PC1 EVS are reported side by side (the published Standard definition includes a fold-change gate that the current Standard test does not). Every split model is searched for its own k with the same likelihood, admissibility rules and grid resolution as PC1 EVS. Discovery counts and BIC are descriptive; whether a model controls the FDR and gains power is judged from the simulations. [1–3, 5]",
   "",
   "## Sensitivity analyses",
   "",
@@ -108,19 +107,19 @@ MANUSCRIPT_METHODS <- c(
   "",
   "Every replicate below re-runs the complete adaptive analysis on its own counts: filter, normalization, VST, PC1 ranking, profiled likelihood, k*, the pooled-versus-split decision (with a new bootstrap generated from that replicate, above), moderation, testing and BH. No observed-data ranking, cutoff or dispersion is reused, and the pipeline verifies that the observed-data caches are unchanged after validation.",
   "",
-  "Full-depth permutation. Within each comparison, under no treatment effect the ten animals (same time point and protocol) are exchangeable. For each reassignment into two groups of five the complete analysis is recomputed for DESeq2 default, the pooled hierarchical model, PC1 EVS and the adaptive procedure. Balanced reassignments (two animals swapped between groups), which dilute any true effect most, are used in the development profile; the publication profile evaluates all 125 distinct non-identity partitions per comparison (252 labelled assignments; a label swap gives identical tests). Reported per model: Standard calls, the proportion of reassignments with any Standard call, the type I error at nominal 0.05 and 0.01 across PASs, the Kolmogorov–Smirnov distance of the p-values from uniformity and pooled p-value histograms. Permutation dilutes but does not remove true effects, and the animals need not be exactly exchangeable; these permutations are therefore a sensitivity analysis of error control, and they estimate null error rates only where exchangeability and the absence of effects that survive permutation can be justified. [19]",
+  "Label permutation of the observed data is not used: permuting animals within a comparison dilutes but does not remove real treatment effects, so it provides no true null. Error rates are estimated from simulations with known truth and from real-data null splits of an independent dataset (External validation).",
   "",
-  "Negative binomial simulation. Counts are simulated from one comparison's fitted parameters (RT4 vs ZT10 by default): PAS means, size factors, the fitted pooled or LE/REM trends and prior variances, and PAS dependence through a sample-level effect shared by the PASs of a gene (SD 0.10 on the log scale). Twelve scenarios: a complete null and effects (2% of PASs at each of |log₂FC| = 0.5, 1 and 2) under homogeneous dispersion; null and effects with two dispersion populations as fitted (the only scenarios generated from the EVS populations); effects with continuous heterogeneity (a PAS-level shift of log dispersion, SD 0.8); null and effects with PC1 unrelated to dispersion (two populations assigned at random with respect to the ranking, plus a latent sample factor on 10% of PASs that dominates PC1); and effects with lower depth (size factors × 0.25), three or eight animals per group, outliers (1% of PASs with one count inflated tenfold) and compositional bias (the 1% most abundant PASs raised fourfold in treatment). All models are applied to every data set: DESeq2 default, harmonized DESeq2, edgeR robust QL, pooled hierarchical (median-of-ratios and TMM), PC1 EVS, variance split, random partition and the adaptive procedure (plus the PC1–PC2 split and continuous-rank moderation in the publication profile). Reported per model and scenario as the Monte Carlo mean with a 95% interval (mean ± 1.96 SE; for the empirical FDR an empirical-Bernstein interval, below): empirical FDR (mean false discovery proportion, zero when there are no discoveries), the probability of any false discovery, power overall and by effect size, false-positive rate, specificity, precision, false non-discovery rate, bias and root mean squared error of the final dispersions (log scale) and of the log₂ fold changes, coverage of Wald 95% intervals, the empirical FDR and power of the Strong and Weak calls against their own truths and of the exploratory HBFSS flags against all non-null PASs, runtime, memory, failures and how often the adaptive procedure selects EVS. Because the false discovery proportion is bounded and is often zero in every replicate, its interval is the empirical-Bernstein 95% interval [31], which keeps a non-zero width in that case, instead of a normal approximation. With a prespecified tolerance of 2.5 percentage points, a method's FDR is classified as acceptable when the upper bound is at most 12.5%, unacceptable when the lower bound exceeds 12.5%, and inconclusive otherwise; with the development settings almost every result is inconclusive. A simulated data set whose analysis fails is re-analysed up to twice; a replicate that still fails is counted as failed for every model (attempted, successful and failed numbers are reported), never as zero discoveries. EVS is judged to gain only if its power is higher while its FDR is classified as acceptable. The design and reporting follow Morris et al. [27]",
+  "Negative binomial simulation. Counts are simulated from one comparison's fitted parameters (RT4 vs ZT10 by default): PAS means, size factors, the fitted pooled or LE/REM trends and prior variances, and PAS dependence through a sample-level effect shared by the PASs of a gene (SD 0.10 on the log scale). Seven scenarios: a complete null and effects (2% of PASs at each of |log₂FC| = 0.5, 1 and 2) under homogeneous dispersion; null and effects with two dispersion populations as fitted (the only scenarios generated from the EVS populations); effects with continuous heterogeneity (a PAS-level shift of log dispersion, SD 0.8); and null and effects with PC1 unrelated to dispersion (two populations assigned at random with respect to the ranking, plus a latent sample factor on 10% of PASs that dominates PC1). All scenarios use the base comparison's design (five animals per group) and sequencing depth. All models are applied to every data set: DESeq2 default, harmonized DESeq2, edgeR robust QL, pooled hierarchical (median-of-ratios and TMM), PC1 EVS, variance split, random partition and the adaptive procedure (plus the PC1–PC2 split and continuous-rank moderation in the publication profile). Reported per model and scenario as the Monte Carlo mean with a 95% interval (mean ± 1.96 SE; for the empirical FDR an empirical-Bernstein interval, below): empirical FDR (mean false discovery proportion, zero when there are no discoveries), the probability of any false discovery, power overall and by effect size, false-positive rate, specificity, precision, false non-discovery rate, bias and root mean squared error of the final dispersions (log scale) and of the log₂ fold changes, coverage of Wald 95% intervals, the empirical FDR and power of the Strong and Weak calls against their own truths and of the exploratory HBFSS flags against all non-null PASs, runtime, memory, failures and how often the adaptive procedure selects EVS. Because the false discovery proportion is bounded and is often zero in every replicate, its interval is the empirical-Bernstein 95% interval [31], which keeps a non-zero width in that case, instead of a normal approximation. With a prespecified tolerance of 2.5 percentage points, a method's FDR is classified as acceptable when the upper bound is at most 12.5%, unacceptable when the lower bound exceeds 12.5%, and inconclusive otherwise; with the development settings almost every result is inconclusive. A simulated data set whose analysis fails is re-analysed up to twice; a replicate that still fails is counted as failed for every model (attempted, successful and failed numbers are reported), never as zero discoveries. EVS is judged to gain only if its power is higher while its FDR is classified as acceptable. The design and reporting follow Morris et al. [27]",
   "",
   "Cutoff stability. Biological replicates are resampled within each arm by leaving one animal out per arm (25 subsets per comparison). Resampling with replacement is available but duplicates animals, which DESeq2 would treat as independent replicates. For each subset, k*, the PC1 ranking, LE membership and size, the trends and prior variances, the pooled-versus-split decision and the Standard discoveries are recomputed; reported are the median k* and its 2.5–97.5% range, LE size, the LE Jaccard similarity and the Spearman correlation of union depths with the full data, the variability of τ² and of the trend exponents, the frequency with which EVS is selected, and the proportion of full-data discoveries reproduced. No cutoff is chosen retrospectively.",
   "",
-  "Run profiles. A development profile (19 bootstrap replicates, 3 permutations, 2 simulations per scenario of 3,000 PASs, 3 stability subsets, two filter thresholds) checks that every stage runs and reveals gross departures only. The publication profile (99 bootstrap replicates, all 125 permutations per comparison, 1,000 simulations per scenario of 10,000 PASs, 25 stability subsets, three filter thresholds) provides the precision required for claims of FDR control and power; only its results support such claims.",
+  "Run profiles. A development profile (19 bootstrap replicates, 2 simulations per scenario of 3,000 PASs, 3 stability subsets, two filter thresholds) checks that every stage runs and reveals gross departures only. The publication profile (99 bootstrap replicates, 1,000 simulations per scenario of 10,000 PASs, 25 stability subsets, three filter thresholds) provides the precision required for claims of FDR control and power; only its results support such claims.",
   "",
   "## External validation",
   "",
   "The frozen procedure (filter rule, ranking, likelihood, cutoff search, pooled-versus-split bootstrap, moderation and tests; nothing changed after these data were seen) is applied to two independent public 3′-end datasets chosen by prespecified criteria: public, PAS-level raw integer counts, independent biological replicates, at least three per group and a defined two-group contrast. Each analysis is compared with DESeq2 default, edgeR robust QL and the pooled hierarchical model, and every adaptive analysis generates its own bootstrap. Before analysis, PAS identifiers are checked for duplicates (identifiers are never altered), and sample identities, group assignments and raw count integrity (non-negative integers, no missing values) are verified; a failed check stops that dataset's analysis.",
   "",
-  "GEO GSE100349 (rat WTTS-seq, the same 3′-end protocol and species as the primary study; Control versus OB, four animals per group, PAS table as deposited; one unlabelled total row removed) has no known truth. Reported are each method's discoveries, k* and the pooled-versus-split decision, and label permutations (all 34 distinct non-identity partitions of four versus four in the publication profile), reported as a sensitivity analysis of error control.",
+  "GEO GSE100349 (rat WTTS-seq, the same 3′-end protocol and species as the primary study; Control versus OB, four animals per group, PAS table as deposited; one unlabelled total row removed) has no known truth. Reported are each method's discoveries, k* and the pooled-versus-split decision.",
   "",
   "GEO GSE151173 (mouse liver 3′ mRNA-seq every 4 h, ZT02–ZT22, six animals per time point; only the wild-type animals are used, each sampled once) provides two benchmarks. A real-data null: at each time point the six animals are split three versus three (10 distinct splits per time point, 60 in all); genotype, time and tissue are identical, so every discovery is false and no simulation assumption is involved. Replication with independent animals: for ZT14 versus ZT02 (antiphase, prespecified) the animals are divided into two disjoint halves of three plus three; each method is applied to half A, and half B supplies a reference defined independently of EVS, the PASs called (BH < 0.10) by both DESeq2 default and edgeR robust QL. Reported are the share of the reference recovered in half A and the share of half-A discoveries with the same sign and p < 0.05 in half B under both conventional methods. Because the reference is built from conventional methods it can favour them; it is not ground truth, and observed discovery comparisons are not validated power.",
   "",
@@ -138,11 +137,11 @@ MANUSCRIPT_METHODS <- c(
   "",
   "## Figures",
   "",
-  "Figure 1, EVS: per-condition PC1 ranking and the selected cutoff (gene-wise dispersions with the LE, REM and pooled trends at k*; profile likelihood over k). Figure 2, dispersion moderation (DESeq2 dispersion plots, trend exponent, prior variance used). Figure 3, empirical FDR and power of every method across the simulation scenarios. Figure 4, differential PAS abundance and effect sizes (discoveries of every model, apeglm fold changes of the discoveries, discoveries gained and lost by EVS relative to the pooled model). Figure 5, stability and model selection (k* across resamples, the pooled-versus-split bootstrap, discoveries under label permutation). Figure 6, alternative polyadenylation. Figure 7, 3′aTWAS enrichment (Firth odds ratios with 95% intervals; non-estimable rows listed). Figure 8, the time-course model. Supplementary Figure S1, model fit and sensitivity analyses (descriptive BIC, discoveries of every model, prior-floor and IHW analyses); S2, APA detail; S3, further simulation endpoints (false non-discovery rate, dispersion and fold-change accuracy, interval coverage); S4, abundance filter sensitivity; S5, external validation (discoveries, false discoveries on real null data, replication with independent animals). Per comparison: volcano plots, PCA, PC1 evidence and 3′aTWAS overlap.",
+  "Figure 1, EVS: per-condition PC1 ranking and the selected cutoff (gene-wise dispersions with the LE, REM and pooled trends at k*; profile likelihood over k). Figure 2, dispersion moderation (DESeq2 dispersion plots, trend exponent, prior variance used). Figure 3, empirical FDR and power of every method across the simulation scenarios. Figure 4, differential PAS abundance and effect sizes (discoveries of every model, apeglm fold changes of the discoveries, discoveries gained and lost by EVS relative to the pooled model). Figure 5, stability and model selection (k* across resamples, the pooled-versus-split bootstrap). Figure 6, alternative polyadenylation. Figure 7, 3′aTWAS enrichment (Firth odds ratios with 95% intervals; non-estimable rows listed). Figure 8, the time-course model. Supplementary Figure S1, model fit and sensitivity analyses (descriptive BIC, discoveries of every model, prior-floor and IHW analyses); S2, APA detail; S3, further simulation endpoints (false non-discovery rate, dispersion and fold-change accuracy, interval coverage); S4, abundance filter sensitivity; S5, external validation (discoveries, false discoveries on real null data, replication with independent animals). Per comparison: volcano plots, PCA, PC1 evidence and 3′aTWAS overlap.",
   "",
   "## Reproducibility and limitations",
   "",
-  "The run writes into a staging directory that replaces the previous output only after the run completes, so a failed run leaves earlier results intact; the result is one output directory and one ZIP archive of it, and raw data, annotations and code are never modified. Simulation results are written once, as aggregate tables, at the end of the simulation stage. Random numbers use L'Ecuyer-CMRG streams with fixed seeds. Unit tests on synthetic data (analytic gradients, the profile score equations, the filter, partition disjointness, joint BH, Simes, permutation set sizes, recovery of a known two-population split and determinism) are run with SEQUENCE_SELFTEST=1 and written with the synthetic dataset. The pipeline records the cutoff profile, the pooled-versus-split bootstrap, fitted coefficients and prior variances, the model comparison, the sensitivity and validation analyses, full PAS-level results, input MD5 checksums, sessionInfo(), an renv lockfile (renv is a required package; renv.lock: R, Bioconductor and every package with its version and installation source, restorable with renv::restore()), settings and seeds, stage runtimes and memory, and a table of automated validation checks. EVS selects its partition from the tested counts, so its nominal FDR is a claim that rests on the empirical validation, whose precision depends on the number of permutations and simulations run. Permutations of the observed data are sensitivity analyses, not exact null benchmarks; the true-null splits of the external liver data are the real-data null benchmark. The simulations use parameters fitted to one comparison. External validation uses one rat dataset with only four animals per group and unknown truth, and one mouse liver dataset in which the true-null splits have three animals per group; neither is a sleep-deprivation study, so they test the method's error control and reproducibility rather than the biological findings. The time-course model uses one dispersion population. Without a transcript annotation, APA is reported as distal/proximal switching. The nominal 10% and 20% FDR levels are prespecified, not optimized, and no discovery count or TWAS result was used to tune any setting.",
+  "The run writes into a staging directory that replaces the previous output only after the run completes, so a failed run leaves earlier results intact; the result is one output directory and one ZIP archive of it, and raw data, annotations and code are never modified. Simulation results are written once, as aggregate tables, at the end of the simulation stage. Random numbers use L'Ecuyer-CMRG streams with fixed seeds. Unit tests on synthetic data (analytic gradients, the profile score equations, the filter, partition disjointness, joint BH, Simes, recovery of a known two-population split and determinism) are run with SEQUENCE_SELFTEST=1 and written with the synthetic dataset. The pipeline records the cutoff profile, the pooled-versus-split bootstrap, fitted coefficients and prior variances, the model comparison, the sensitivity and validation analyses, full PAS-level results, input MD5 checksums, sessionInfo(), an renv lockfile (renv is a required package; renv.lock: R, Bioconductor and every package with its version and installation source, restorable with renv::restore()), settings and seeds, stage runtimes and memory, and a table of automated validation checks. EVS selects its partition from the tested counts, so its nominal FDR is a claim that rests on the empirical validation, whose precision depends on the number of simulations and external null splits analysed. The true-null splits of the external liver data are the real-data null benchmark. The simulations use parameters fitted to one comparison. External validation uses one rat dataset with only four animals per group and unknown truth, and one mouse liver dataset in which the true-null splits have three animals per group; neither is a sleep-deprivation study, so they test the method's error control and reproducibility rather than the biological findings. The time-course model uses one dispersion population. Without a transcript annotation, APA is reported as distal/proximal switching. The nominal 10% and 20% FDR levels are prespecified, not optimized, and no discovery count or TWAS result was used to tune any setting.",
   "",
   "# References",
   "",
@@ -498,8 +497,7 @@ stopifnot(is.finite(MIN_PAS_COUNT), MIN_PAS_COUNT >= 1L, is.finite(MIN_PAS_SAMPL
 # Purpose: Eligible pas.
 eligible_pas <- function(x, min_count = MIN_PAS_COUNT, min_samples = MIN_PAS_SAMPLES)
   rowSums(x >= min_count) >= min_samples
-# Designs with other group sizes (simulations with 3 or 8 animals per group,
-# external datasets) scale the sample requirement with the group size (5 of 5
+# Designs with other group sizes (external datasets) scale the sample requirement with the group size (5 of 5
 # here), so the rule keeps its meaning: >= 10 reads in as many samples as one
 # group holds.
 filter_rule <- function(coldata) {
@@ -3055,6 +3053,49 @@ run_sensitivity_analyses <- function(comparison_name, evs, coldata, annot_df, sf
 }
 
 # Complete DE analysis of every model of the comparison (item 4).
+# Published analysis (SEQUENCE.R, build SEQUENCE_JOURNAL_READY_2026-08-22),
+# reproduced as published so its results can be compared directly: PASs with
+# at least one read in the comparison; PCA (centred, unscaled) on DESeq2
+# median-of-ratios normalized counts within each condition; the 5,000 PASs with
+# the largest |PC1 loading| per condition; Leading Edge = the union of the two
+# top-5,000 sets (Joint + Disjoint), Remainder = all other PASs; standard DESeq2
+# (own size factors and dispersions, default settings) run separately on each
+# subset with BH within each subset; Standard = BH < 0.10 and |apeglm log2FC|
+# >= 1, Strong = greaterAbs(1) BH < 0.10 and |apeglm log2FC| >= 1 (the
+# published definitions). The published Weak and HBFSS calls depend on its
+# empirical-null step and are not reproduced (NA).
+PUBLISHED_TOP_N <- 5000L
+fit_published_5k <- function(raw, coldata) {
+  raw <- raw[, rownames(coldata), drop = FALSE]
+  dds0 <- DESeq2::estimateSizeFactors(DESeq2::DESeqDataSetFromMatrix(raw, colData = coldata, design = make_design_formula(coldata)))
+  nc <- DESeq2::counts(dds0, normalized = TRUE)
+  top <- function(cond) {
+    smp <- rownames(coldata)[coldata$condition == cond]
+    ld <- abs(stats::prcomp(t(nc[, smp, drop = FALSE]), center = TRUE, scale. = FALSE, rank. = 1)$rotation[, 1])
+    names(ld)[order(ld, decreasing = TRUE)][seq_len(min(PUBLISHED_TOP_N, length(ld)))]
+  }
+  le <- union(top("trt"), top("untrt")); rem <- setdiff(rownames(raw), le)
+  one <- function(ids, view) {
+    dds <- DESeq2::DESeqDataSetFromMatrix(raw[ids, , drop = FALSE], colData = coldata, design = make_design_formula(coldata))
+    dds <- dds[rowSums(DESeq2::counts(dds)) > 0, ]
+    dds <- suppressMessages(DESeq2::DESeq(dds, betaPrior = FALSE, quiet = TRUE))
+    ct <- c("condition", "trt", "untrt")
+    r <- DESeq2::results(dds, contrast = ct, alpha = BH_FDR_STANDARD, pAdjustMethod = "BH")
+    rs <- DESeq2::results(dds, contrast = ct, lfcThreshold = lfc_boundary, altHypothesis = "greaterAbs",
+                          alpha = BH_FDR_STRONG, pAdjustMethod = "BH")
+    shr <- suppressMessages(DESeq2::lfcShrink(dds, coef = get_condition_coef(dds), type = "apeglm", quiet = TRUE))$log2FoldChange
+    big <- is.finite(shr) & abs(shr) >= lfc_boundary
+    data.frame(View = view, feature_id = rownames(r), pvalue = r$pvalue, padj_global = r$padj,
+               Standard = !is.na(r$padj) & r$padj < BH_FDR_STANDARD & big,
+               Strong = !is.na(rs$padj) & rs$padj < BH_FDR_STRONG & big, Weak = NA, HBFSS = NA,
+               log2FoldChange = r$log2FoldChange, lfcSE = r$lfcSE, lfc_shrunk = shr,
+               dispersion_final = DESeq2::dispersions(dds), stringsAsFactors = FALSE)
+  }
+  f <- rbind(one(le, "leading_edge_dataset"), one(rem, "remainder_dataset"))
+  attr(f, "leading_edge") <- length(le)
+  f
+}
+
 run_model_comparison <- function(comparison_name, evs, coldata, annot_df, sf, gene_dds, cooks, hc_p,
                                  analysis_results) {
   y <- evs$raw_dataset; ids <- rownames(y)
@@ -3086,11 +3127,20 @@ run_model_comparison <- function(comparison_name, evs, coldata, annot_df, sf, ge
                                          error = function(e) { warning(comparison_name, ": continuous-rank model failed: ",
                                                                        conditionMessage(e), call. = FALSE); NULL })
   }
+  # The paper's cutoff (k = 5,000 per condition) on the current ranking and
+  # framework: only the cutoff differs from PC1 EVS.
+  mats5 <- split_matrices(y, md$pc1, PUBLISHED_TOP_N)
+  if (!is.null(mats5))
+    res[["EVS, k = 5,000 (paper cutoff)"]] <- tryCatch(lean_analysis(mats5, coldata, lab("EVS k = 5000"), sf, gene_dds, cooks, hc_p, annot_df),
+                                                       error = function(e) { warning(comparison_name, ": k = 5,000 model failed: ", conditionMessage(e), call. = FALSE); NULL })
   res <- Filter(Negate(is.null), res)
   cm <- CUTOFF$models[CUTOFF$models$Comparison == comparison_name, , drop = FALSE]
   flags <- lapply(res, discovery_flags)
   ext <- list("DESeq2 default" = tryCatch(fit_deseq2_default(y, coldata), error = function(e) NULL),
-              "edgeR robust QL" = tryCatch(fit_edger_ql(y, coldata), error = function(e) NULL))
+              "edgeR robust QL" = tryCatch(fit_edger_ql(y, coldata), error = function(e) NULL),
+              "Published analysis (k = 5,000)" = tryCatch(fit_published_5k(comparison_raw_counts(comparison_name), coldata),
+                                                          error = function(e) { warning(comparison_name, ": published analysis failed: ",
+                                                                                        conditionMessage(e), call. = FALSE); NULL }))
   flags <- c(flags, Filter(Negate(is.null), ext))
   sel_model <- CUTOFF$summary$Selected_Model[CUTOFF$summary$Comparison == comparison_name]
   if (isTRUE(sel_model %in% c("EVS", "Pooled")))
@@ -3099,8 +3149,12 @@ run_model_comparison <- function(comparison_name, evs, coldata, annot_df, sf, ge
   model_comparison_rows[[comparison_name]] <<- dplyr::bind_rows(lapply(names(flags), function(nm) {
     cnt <- count_discoveries(flags[[nm]])
     j <- match(nm, cm$Model)
+    k5 <- grepl("5,000", nm)
+    le5 <- if (nm == "Published analysis (k = 5,000)") attr(flags[[nm]], "leading_edge") %||% NA_integer_ else
+      if (k5) sum(md$pc1[ids] <= PUBLISHED_TOP_N) else NA_integer_
     data.frame(Comparison = comparison_name, Model = nm,
-               k = if (is.na(j)) NA_integer_ else cm$k[j], Leading_Edge = if (is.na(j)) NA_integer_ else cm$Leading_Edge[j],
+               k = if (k5) PUBLISHED_TOP_N else if (is.na(j)) NA_integer_ else cm$k[j],
+               Leading_Edge = if (k5) as.integer(le5) else if (is.na(j)) NA_integer_ else cm$Leading_Edge[j],
                PAS_tested = cnt[["n_tested"]], Standard = cnt[["Standard"]], Strong = cnt[["Strong"]],
                Weak = cnt[["Weak"]], HBFSS = cnt[["HBFSS"]],
                Selected_by_adaptive_procedure = (nm == "PC1 EVS" && identical(sel_model, "EVS")) ||
@@ -3120,11 +3174,12 @@ save_multiplicity_table <- function() {
   rows <- lapply(mods, function(m) {
     d <- dplyr::bind_rows(lapply(names(MODEL_FLAGS), function(cmp) {
       f <- MODEL_FLAGS[[cmp]][[m]]
-      if (is.null(f)) NULL else data.frame(Comparison = cmp, pvalue = f$pvalue, Standard = f$Standard)
+      if (is.null(f)) NULL else data.frame(Comparison = cmp, pvalue = f$pvalue, Standard = f$Standard,
+                                           lfc_gate = if (m == "Published analysis (k = 5,000)") is.finite(f$lfc_shrunk) & abs(f$lfc_shrunk) >= lfc_boundary else TRUE)
     }))
     if (!nrow(d)) return(NULL)
     q <- rep(NA_real_, nrow(d)); ok <- is.finite(d$pvalue); q[ok] <- stats::p.adjust(d$pvalue[ok], "BH")
-    d$Experiment <- !is.na(q) & q < BH_FDR_STANDARD
+    d$Experiment <- !is.na(q) & q < BH_FDR_STANDARD & d$lfc_gate
     dplyr::bind_rows(lapply(split(d, d$Comparison), function(z)
       data.frame(Comparison = z$Comparison[1], Model = m, Standard_BH_within_comparison = sum(z$Standard),
                  Standard_BH_experiment_wide = sum(z$Experiment))))
@@ -3632,7 +3687,7 @@ save_dispersion_outputs <- function() {
 # Because the ranking, the likelihood and the tests use the same counts, the
 # likelihood-ratio statistic and BIC are descriptive model-fit measures (the
 # adaptive cutoff invalidates their reference distributions); error rates are
-# assessed by full-pipeline permutation and simulation (VALIDATION section).
+# assessed by full-pipeline simulation and the external null splits (VALIDATION).
 EXPERIMENT_ARMS <- c("R0", "ZT6", "R2", "ZT8", "R4", "ZT10", "R8", "ZT14")
 EXPERIMENT_CACHE <- new.env(parent = emptyenv())
 SPLIT_MIN_SET <- 200L
@@ -3832,7 +3887,7 @@ search_cutoff <- function(depth, lx, likelihood, one, k_max, depth_all=depth, st
 }
 
 # k* of one ranking for a prepared cache (used by the primary analysis and by
-# every permutation, simulation and subsample, so all use the same rule).
+# every simulation, subsample and external analysis, so all use the same rule).
 select_cutoff <- function(si, depth_all, one) {
   k_max <- floor(length(depth_all) / 2)
   search_cutoff(depth_all[si$ids], si$lx, si$lk, one, k_max, depth_all)
@@ -5437,7 +5492,7 @@ plot_time_course_figure <- function() {
 # FIGURE 3: MODEL COMPARISON AND SENSITIVITY
 # =============================================================================
 # (a) BIC of each alternative minus BIC of EVS (negative = better than EVS);
-# (b) observed coarse-grid LRT vs the permutation searches; (c) Standard
+# (b) observed coarse-grid LRT vs the bootstrap searches; (c) Standard
 # discoveries across the primary and sensitivity analyses.
 # Supplementary Figure S1: (a) BIC of each model relative to PC1 EVS (descriptive model fit;
 # the adaptive cutoff invalidates formal BIC inference), (b) Standard
@@ -6661,25 +6716,18 @@ run_twas_enrichment <- function(mapping) {
 # decision, moderation, testing, BH) on data whose truth is known or controlled.
 # Every replicate builds its own cache from its own counts; no observed-data
 # ranking, cutoff or dispersion is reused (checked at the end of the stage).
-#  * Label permutation within each matched comparison. Under no treatment
-#    effect the ten animals of a comparison (one time point, one protocol, one
-#    animal per sample) are exchangeable; no blocks are recorded in the
-#    metadata. Balanced reassignments (two animals swapped per group) dilute
-#    true effects most; "all" uses all 126 distinct partitions of the 252
-#    labelled assignments (a label swap gives identical tests). Permutation
-#    does not remove true effects and the animals need not be exactly
-#    exchangeable, so permutations are a sensitivity analysis of error
-#    control; they estimate null error rates only where exchangeability and
-#    the absence of effects surviving permutation can be justified.
+#  * Label permutation of the observed data is not used: permuting animals
+#    dilutes but does not remove real treatment effects, so it gives no true
+#    null. Error rates come from the simulations (known truth) and from the
+#    real-data null splits of the external liver data.
 #  * Negative binomial simulation with known truth, from the fitted parameters
 #    of one comparison (abundances, size factors, mean-dispersion trends and
 #    prior variances, gene-level sample effects for PAS dependence). Scenarios
 #    include a complete null, mixtures of null and non-null PASs with weak
 #    (|log2FC| 0.5), moderate (1) and strong (2) effects, homogeneous, two-
-#    population and continuous dispersion heterogeneity, PC1 unrelated to
-#    dispersion, lower depth, 3 and 8 animals per group, outliers and
-#    compositional bias. Only two scenarios are generated from the EVS
-#    populations; the others do not favour EVS by construction.
+#    population and continuous dispersion heterogeneity, and PC1 unrelated to
+#    dispersion (seven scenarios). Only two scenarios are generated from the
+#    EVS populations; the others do not favour EVS by construction.
 #  * Cutoff stability by resampling animals within arms (default: leave one
 #    animal out per arm; bootstrap optional).
 #  * Sensitivity to the abundance filter.
@@ -6696,8 +6744,8 @@ run_twas_enrichment <- function(mapping) {
 # SEQUENCE_FILTER_THRESHOLDS, SEQUENCE_SIM_SCENARIOS, SEQUENCE_SIM_MODELS).
 # Development settings reveal gross departures only; claims of FDR control and
 # power require the publication settings.
-# Adaptive procedure. Every replicate (permutation, simulation, stability
-# subset, external analysis) generates its own pooled-vs-split bootstrap from
+# Adaptive procedure. Every replicate (simulation, stability subset, external
+# analysis) generates its own pooled-vs-split bootstrap from
 # its own counts, normalization, ranking, likelihood and cutoff search, and
 # applies the same rule (selection_decision) as the observed comparisons. No
 # bootstrap distribution is reused between analyses.
@@ -6709,9 +6757,6 @@ run_twas_enrichment <- function(mapping) {
 # is at most the threshold, Unacceptable if the lower bound exceeds it,
 # Inconclusive otherwise.
 VALIDATION_ON <- !identical(Sys.getenv("SEQUENCE_VALIDATION", "1"), "0")
-PERM_N <- env_int("SEQUENCE_PERMUTATIONS", if (PUB) 125L else 3L)
-PERM_SET <- match.arg(Sys.getenv("SEQUENCE_PERMUTATION_SET", if (PUB) "all" else "balanced"), c("balanced", "all"))
-PERM_MODELS <- c("deseq2_default", "pooled", "pc1", "adaptive")
 SIM_REPS <- env_int("SEQUENCE_SIM_REPS", if (PUB) 1000L else 2L)
 SIM_NPAS <- env_int("SEQUENCE_SIM_NPAS", if (PUB) 10000L else 3000L)
 SIM_BASE <- Sys.getenv("SEQUENCE_SIM_BASE", "RT4_ZT10")
@@ -6719,8 +6764,7 @@ SIM_MODELS <- trimws(strsplit(Sys.getenv("SEQUENCE_SIM_MODELS",
   paste0("deseq2_default,conventional,edger,pooled,pooled_tmm,pc1,variance,random,adaptive",
          if (PUB) ",pc12,continuous" else "")), ",")[[1]])
 ALL_SCENARIOS <- c("null_homogeneous", "effects_homogeneous", "null_two_populations", "effects_two_populations",
-                   "effects_continuous", "null_pc1_unrelated", "effects_pc1_unrelated", "effects_low_depth",
-                   "effects_n3", "effects_n8", "effects_outliers", "effects_composition")
+                   "effects_continuous", "null_pc1_unrelated", "effects_pc1_unrelated")
 SIM_SCENARIOS <- {
   v <- trimws(strsplit(Sys.getenv("SEQUENCE_SIM_SCENARIOS", paste(ALL_SCENARIOS, collapse = ",")), ",")[[1]])
   v[v %in% ALL_SCENARIOS]
@@ -6734,8 +6778,6 @@ SIM_GENE_SD <- 0.10              # sample-level effect shared by the PASs of a g
 SIM_CONT_SD <- 0.8               # continuous heterogeneity: SD of a PAS-level shift of log dispersion
 SIM_FACTOR_SD <- 0.60            # loadings of the latent factor that dominates PC1 (pc1_unrelated)
 SIM_FACTOR_FRACTION <- 0.10
-SIM_OUTLIER_FRACTION <- 0.01     # PASs with one count multiplied by 10
-SIM_COMPOSITION_FRACTION <- 0.01 # most abundant PASs raised 4-fold in treatment
 STAB_N <- env_int("SEQUENCE_STABILITY_SUBSETS", if (PUB) 25L else 3L)
 STAB_METHOD <- match.arg(Sys.getenv("SEQUENCE_STABILITY_METHOD", "subsample"), c("subsample", "bootstrap"))
 FILTER_THRESHOLDS <- trimws(strsplit(Sys.getenv("SEQUENCE_FILTER_THRESHOLDS", if (PUB) "1x1,5x3,20x5" else "1x1,20x5"), ",")[[1]])
@@ -6838,63 +6880,6 @@ null_metrics <- function(f) {
              KS_D = if (length(p) > 1L) unname(suppressWarnings(stats::ks.test(p, "punif"))$statistic) else NA_real_)
 }
 
-# ---- Permutations -------------------------------------------------------------
-permutation_sets <- function(trt, ctl) {
-  if (PERM_SET == "balanced") {
-    a <- utils::combn(trt, 2L, simplify = FALSE); b <- utils::combn(ctl, 2L, simplify = FALSE)
-    g <- expand.grid(i = seq_along(a), j = seq_along(b))
-    lapply(seq_len(nrow(g)), function(r) c(setdiff(trt, a[[g$i[r]]]), b[[g$j[r]]]))
-  } else {
-    all <- utils::combn(c(trt, ctl), length(trt), simplify = FALSE)
-    key <- vapply(all, function(x) { y <- setdiff(c(trt, ctl), x); paste(sort(if (min(x) < min(y)) x else y), collapse = "|") }, "")
-    all <- all[!duplicated(key)]
-    Filter(function(x) !setequal(x, trt) && !setequal(x, ctl), all)
-  }
-}
-
-run_permutation_validation <- function(annot_df) {
-  rows <- list(); null_p <- list()
-  for (i in seq_len(nrow(comparison_table))) {
-    cmp <- comparison_table$comparison_name[i]; cache <- comparison_cache[[cmp]]
-    cd <- cache$coldata; raw <- comparison_raw_counts(cmp); smp <- colnames(raw)
-    trt <- smp[cd[smp, "condition"] == "trt"]; ctl <- smp[cd[smp, "condition"] == "untrt"]
-    sets <- permutation_sets(trt, ctl)
-    set.seed(SPLIT_SEED + 100L * i)
-    use <- if (PERM_N >= length(sets)) seq_along(sets) else sort(sample.int(length(sets), PERM_N))
-    for (j in use) {
-      cdp <- cd; cdp$condition <- factor(ifelse(smp %in% sets[[j]], "trt", "untrt"), levels = c("untrt", "trt"))
-      r <- tryCatch(reanalyze_matrix(raw, cdp, sprintf("%s permutation %d", cmp, j), PERM_MODELS, annot_df,
-                                     SPLIT_SEED + 1000L * i + j),
-                    error = function(e) { warning(cmp, " permutation ", j, " failed: ", conditionMessage(e), call. = FALSE); NULL })
-      if (is.null(r)) next
-      for (m in names(r$calls)) {
-        rows[[length(rows) + 1L]] <- cbind(
-          data.frame(Comparison = cmp, Permutation = j, Treated = paste(sets[[j]], collapse = ","),
-                     Swapped_per_group = length(setdiff(trt, sets[[j]])), Model = MODEL_LABELS[[m]],
-                     k = if (is.null(r$k[[m]])) NA_integer_ else r$k[[m]],
-                     Selected = if (m == "adaptive") r$selected else NA_character_),
-          null_metrics(r$calls[[m]]))
-        pv <- r$calls[[m]]$pvalue; pv <- pv[is.finite(pv)]
-        null_p[[length(null_p) + 1L]] <- data.frame(Comparison = cmp, Model = MODEL_LABELS[[m]],
-          Bin = cut(pv, seq(0, 1, by = 0.05), include.lowest = TRUE, labels = FALSE)) |>
-          dplyr::count(Comparison, Model, Bin)
-      }
-      save_csv(dplyr::bind_rows(rows), file.path(summary_table_dir, "Table_Validation_Permutations.csv"))
-      message(sprintf("[validation] %s permutation %d done", cmp, j))
-    }
-  }
-  d <- dplyr::bind_rows(rows)
-  if (!nrow(d)) return(invisible(NULL))
-  h <- dplyr::bind_rows(null_p) |> dplyr::group_by(Comparison, Model, Bin) |> dplyr::summarise(n = sum(n), .groups = "drop")
-  save_csv(as.data.frame(h), file.path(summary_table_dir, "Table_Validation_Permutation_Pvalue_Histogram.csv"))
-  s <- d |> dplyr::group_by(Comparison, Model) |>
-    dplyr::summarise(Permutations = dplyr::n(), Mean_Standard = mean(Standard), Max_Standard = max(Standard),
-                     Prob_any_discovery = mean(Any_Standard), Mean_TypeI_p05 = mean(TypeI_p05),
-                     Mean_TypeI_p01 = mean(TypeI_p01), Median_KS_D = stats::median(KS_D), .groups = "drop")
-  save_csv(as.data.frame(s), file.path(summary_table_dir, "Table_Validation_Permutation_Summary.csv"))
-  invisible(d)
-}
-
 # ---- Simulations --------------------------------------------------------------
 simulation_base <- function() {
   if (!SIM_BASE %in% names(comparison_cache)) stop("Unknown simulation base comparison: ", SIM_BASE)
@@ -6916,14 +6901,8 @@ simulate_counts <- function(base, scenario, seed) {
   n <- min(SIM_NPAS, length(base$ids))
   ids <- sample(base$ids, n)
   mu <- base$mean[ids]; unit <- base$unit[ids]
-  # Design: five animals per group, or 3 / 8 with size factors resampled.
-  n_per <- if (grepl("_n3$", scenario)) 3L else if (grepl("_n8$", scenario)) 8L else 5L
-  if (n_per == 5L) { sf <- base$sf; coldata <- base$coldata } else {
-    smp <- c(sprintf("SimT_%d", seq_len(n_per)), sprintf("SimC_%d", seq_len(n_per)))
-    sf <- stats::setNames(sample(unname(base$sf), 2L * n_per, replace = TRUE), smp)
-    coldata <- data.frame(condition = factor(rep(c("trt", "untrt"), each = n_per), levels = c("untrt", "trt")), row.names = smp)
-  }
-  if (grepl("low_depth", scenario)) sf <- sf * 0.25
+  # Design and depth of the base comparison (five animals per group).
+  sf <- base$sf; coldata <- base$coldata
   smp <- names(sf)
   la <- if (grepl("two_populations", scenario)) {
     le <- base$in_le[ids]
@@ -6945,10 +6924,6 @@ simulate_counts <- function(base, scenario, seed) {
       beta[w] <- SIM_EFFECTS[[j]] * sample(c(-1, 1), m, replace = TRUE); cls[w] <- names(SIM_EFFECTS)[j]
     }
   }
-  if (grepl("composition", scenario)) {
-    top <- order(mu, decreasing = TRUE)[seq_len(max(1L, round(n * SIM_COMPOSITION_FRACTION)))]
-    beta[top] <- 2; cls[top] <- "strong"
-  }
   gu <- unique(unit)
   G <- matrix(stats::rnorm(length(gu) * length(smp), 0, SIM_GENE_SD), length(gu))[match(unit, gu), , drop = FALSE]
   if (grepl("pc1_unrelated", scenario)) {
@@ -6959,11 +6934,6 @@ simulate_counts <- function(base, scenario, seed) {
   M <- outer(mu, sf[smp]) * exp(G) * 2^outer(beta, as.numeric(trt))
   y <- matrix(stats::rnbinom(length(M), mu = as.vector(M), size = rep(1 / alpha, times = ncol(M))),
               nrow = n, dimnames = list(ids, smp))
-  if (grepl("outliers", scenario)) {
-    w <- sample.int(n, max(1L, round(n * SIM_OUTLIER_FRACTION)))
-    j <- sample.int(ncol(y), length(w), replace = TRUE)
-    y[cbind(w, j)] <- y[cbind(w, j)] * 10L + 10L
-  }
   list(y = y, coldata = coldata, beta = stats::setNames(beta, ids), class = stats::setNames(cls, ids),
        alpha = stats::setNames(alpha, ids))
 }
@@ -7196,14 +7166,13 @@ run_validation <- function(annot_df) {
     record_stage_time(paste("Validation:", nm), proc.time()[["elapsed"]] - st)
     v
   }
-  VALIDATION_RESULTS$perm <<- if (PERM_N > 0L) stage("Permutations", run_permutation_validation(annot_df)) else NULL
   VALIDATION_RESULTS$sim <<- if (SIM_REPS > 0L) stage("Simulations", run_simulation_validation(annot_df)) else NULL
   VALIDATION_RESULTS$stab <<- if (STAB_N > 0L) stage("Stability", run_stability_analysis(annot_df)) else NULL
   VALIDATION_RESULTS$filter <<- if (length(FILTER_THRESHOLDS)) stage("Filter sensitivity", run_filter_sensitivity(annot_df)) else NULL
   add_validation("Validation replicates did not alter the observed-data caches (no leakage)", "All comparisons",
                  identical(before, cache_fingerprint()), "fingerprints of size factors, PAS sets and rankings")
-  writeLines(c(sprintf("Profile %s. Permutations: %d per comparison (%s); simulations: %d per scenario x %d scenarios (%d PASs, base %s); stability: %d subsets (%s); filters: %s",
-                       RUN_PROFILE, PERM_N, PERM_SET, SIM_REPS, length(SIM_SCENARIOS), SIM_NPAS, SIM_BASE, STAB_N, STAB_METHOD,
+  writeLines(c(sprintf("Profile %s. Simulations: %d per scenario x %d scenarios (%d PASs, base %s); stability: %d subsets (%s); filters: %s",
+                       RUN_PROFILE, SIM_REPS, length(SIM_SCENARIOS), SIM_NPAS, SIM_BASE, STAB_N, STAB_METHOD,
                        paste(FILTER_THRESHOLDS, collapse = ", ")),
                if (length(status)) status else "All validation stages completed."),
              file.path(output_dir, "Validation_Status.txt"))
@@ -7222,7 +7191,8 @@ VALIDATION_RESULTS <- list()
 MODEL_COLS <- c("DESeq2 default" = "#9E9E9E", "Conventional DESeq2" = "#7F7F7F", "edgeR robust QL" = "#8C564B",
                 "Pooled hierarchical" = "#2B2B2B", "Pooled hierarchical, TMM" = "#5E5E5E", "PC1 EVS" = "#1F6FB2",
                 "Variance split" = "#E69F00", "PC1-PC2 split" = "#009E73", "Continuous rank" = "#CC79A7",
-                "Random partition" = "#56B4E9", "Adaptive (pooled vs EVS)" = "#D55E00")
+                "Random partition" = "#56B4E9", "Adaptive (pooled vs EVS)" = "#D55E00",
+                "EVS, k = 5,000 (paper cutoff)" = "#4C9BD6", "Published analysis (k = 5,000)" = "#000000")
 
 STAGE_TIMES <- list()
 record_stage_time <- function(stage, seconds) {
@@ -7307,7 +7277,7 @@ plot_abundance_figure <- function() {
 }
 
 # Figure 5: cutoff stability and model selection: k* across resamples, the
-# pooled-vs-split bootstrap, and discoveries under label permutation.
+# pooled-vs-split bootstrap.
 plot_stability_figure <- function() {
   rows <- list()
   st <- read_summary("Table_Cutoff_Stability.csv")
@@ -7336,18 +7306,7 @@ plot_stability_figure <- function() {
            subtitle = "Grey: complete adaptive search on data simulated from the fitted pooled model; orange: observed.") +
       fig_theme()
   }
-  pm <- read_summary("Table_Validation_Permutations.csv")
-  if (!is.null(pm) && nrow(pm)) {
-    pm$Comparison <- as_comp(pm$Comparison); pm$Model <- factor(pm$Model, levels = names(MODEL_COLS))
-    rows[[length(rows) + 1L]] <- ggplot(pm, aes(Comparison, Standard, colour = Model)) +
-      geom_point(position = position_dodge(width = 0.6), size = 1, alpha = 0.8) +
-      scale_colour_manual(values = MODEL_COLS, name = NULL, drop = TRUE) +
-      scale_x_discrete(labels = function(x) sub("_", "\n", x)) +
-      labs(x = NULL, y = "Standard discoveries", tag = letters[length(rows) + 1L], title = "Label permutations (complete pipeline)",
-           subtitle = "Sensitivity analysis: null error estimates only if animals are exchangeable and no effect survives permutation.") +
-      fig_theme()
-  }
-  if (!length(rows)) stop("no stability, selection or permutation results")
+  if (!length(rows)) stop("no stability or selection results")
   assemble_rows(rows, heights = rep(1, length(rows)), title = "Figure 5. Cutoff stability and model-selection robustness")
 }
 
@@ -7435,6 +7394,24 @@ save_discovery_tables <- function() {
     cbind(data.frame(Model = m, Total_discoveries = sum(per, na.rm = TRUE), Unique_PASs = length(ids)), as.data.frame(as.list(per)))
   }))
   save_csv(tot, file.path(summary_table_dir, "Table_Discovery_Totals.csv"))
+  # Direct comparison with the published analysis (k = 5,000).
+  pap <- dplyr::bind_rows(lapply(names(MODEL_FLAGS), function(cmp) {
+    fl <- MODEL_FLAGS[[cmp]]; pub <- fl[["Published analysis (k = 5,000)"]]; e <- fl[["PC1 EVS"]]; e5 <- fl[["EVS, k = 5,000 (paper cutoff)"]]
+    if (is.null(pub)) return(NULL)
+    std <- function(f) if (is.null(f)) character() else f$feature_id[f$Standard %in% TRUE]
+    cs <- CUTOFF$summary[CUTOFF$summary$Comparison == cmp, , drop = FALSE]
+    data.frame(Comparison = cmp, k_star = OPTIMAL_K[[cmp]] %||% NA_integer_,
+               Leading_Edge_k_star = if (nrow(cs) && "Leading_Edge" %in% names(cs)) cs$Leading_Edge[1] else NA_integer_,
+               Published_PAS_tested = nrow(pub), Published_Leading_Edge = attr(pub, "leading_edge") %||% NA_integer_,
+               Published_Standard = length(std(pub)),
+               Published_BH_only_no_LFC_gate = sum(!is.na(pub$padj_global) & pub$padj_global < BH_FDR_STANDARD),
+               Published_Strong = sum(pub$Strong %in% TRUE),
+               EVS_k5000_Standard = length(std(e5)), PC1_EVS_k_star_Standard = length(std(e)),
+               PC1_EVS_and_Published = length(intersect(std(e), std(pub))),
+               PC1_EVS_only = length(setdiff(std(e), std(pub))), Published_only = length(setdiff(std(pub), std(e))),
+               Note = "Published Standard requires |apeglm log2FC| >= 1 (published definition); current Standard has no fold-change gate")
+  }))
+  if (nrow(pap)) save_csv(pap, file.path(summary_table_dir, "Table_Published_5K_Comparison.csv"))
   invisible(TRUE)
 }
 
@@ -7482,9 +7459,8 @@ save_reproducibility_tables <- function() {
 # contrast):
 #  * GSE100349: rat WTTS-seq (the same 3'-end protocol and species as the
 #    primary study), Control vs OB, four animals per group. Truth is unknown:
-#    reported are discoveries of every method, k*, the pooled-vs-split decision,
-#    and label permutations (all 34 distinct non-identity partitions of 4 vs 4
-#    in the publication profile) as a sensitivity analysis of error control.
+#    reported are discoveries of every method, k* and the pooled-vs-split
+#    decision.
 #  * GSE151173: mouse liver 3' mRNA-seq every 4 h (ZT02-ZT22), six animals per
 #    time point per group; only the WT animals are used (each animal sampled
 #    once). (i) Real-data null: at each time point the six WT animals are split
@@ -7499,8 +7475,7 @@ save_reproducibility_tables <- function() {
 #    the same sign and p < 0.05 in B under both conventional methods
 #    (replication). The reference is built from conventional methods, so it
 #    can favour them; it is not ground truth.
-# Every adaptive analysis (each full comparison, permutation, null split and
-# half) generates its own pooled-vs-split bootstrap inside reanalyze_matrix().
+# Every adaptive analysis (each full comparison, null split and half) generates its own pooled-vs-split bootstrap inside reanalyze_matrix().
 # Duplicate PAS identifiers, sample identities, group assignments and count
 # integrity are checked first; a failed check stops that dataset.
 # Files: SEQUENCE_EXTERNAL_WTTS (default data/GSE100349_Expression_table_WTTS-seq_rat.txt.gz)
@@ -7508,7 +7483,6 @@ save_reproducibility_tables <- function() {
 # missing files are reported, not silently skipped.
 EXTERNAL_ON <- !identical(Sys.getenv("SEQUENCE_EXTERNAL", "1"), "0")
 EXT_MODELS <- c("deseq2_default", "edger", "pooled", "pc1", "adaptive")
-EXT_PERM_N <- env_int("SEQUENCE_EXTERNAL_PERMUTATIONS", if (PUB) 34L else 3L)
 EXT_NULL_N <- env_int("SEQUENCE_EXTERNAL_NULL_SPLITS", if (PUB) 60L else 3L)
 EXT_REPL_N <- env_int("SEQUENCE_EXTERNAL_REPLICATION_SPLITS", if (PUB) 10L else 2L)
 EXT_ROWS <- list(summary = list(), null = list(), repl = list())
@@ -7575,22 +7549,6 @@ run_external_validation <- function(annot_df) {
     ext_require("External GSE100349: PAS identifiers unique", "GSE100349", !anyDuplicated(rownames(x)))
     r <- reanalyze_matrix(x, cd, "GSE100349 OB vs Control", EXT_MODELS, ann, SPLIT_SEED + 70002L)
     ext_record("GSE100349 (rat WTTS-seq)", "OB vs Control", r)
-    smp <- colnames(x); sets <- utils::combn(smp, 4L, simplify = FALSE)
-    key <- vapply(sets, function(s) paste(sort(if (smp[1] %in% s) s else setdiff(smp, s)), collapse = "|"), "")
-    sets <- sets[!duplicated(key)]
-    sets <- Filter(function(s) !setequal(s, smp[trt]) && !setequal(s, smp[!trt]), sets)
-    set.seed(SPLIT_SEED + 70003L)
-    use <- if (EXT_PERM_N >= length(sets)) seq_along(sets) else sort(sample.int(length(sets), EXT_PERM_N))
-    for (j in use) {
-      rp <- tryCatch(reanalyze_matrix(x, ext_coldata(smp, smp %in% sets[[j]]), sprintf("GSE100349 permutation %d", j),
-                                      EXT_MODELS, ann, SPLIT_SEED + 70100L + j), error = function(e) NULL)
-      if (is.null(rp)) { status <- c(status, sprintf("GSE100349 permutation %d failed", j)); next }
-      for (m in names(rp$calls)) EXT_ROWS$null[[length(EXT_ROWS$null) + 1L]] <<- cbind(
-        data.frame(Dataset = "GSE100349 (rat WTTS-seq)", Null_type = "Label permutation (sensitivity analysis)",
-                   Split = j, Group1 = paste(sets[[j]], collapse = ","), Model = MODEL_LABELS[[m]],
-                   Selected = if (m == "adaptive") rp$selected else NA_character_), null_metrics(rp$calls[[m]]))
-      message(sprintf("[external] GSE100349 permutation %d done", j))
-    }
   }, error = function(e) status <<- c(status, paste("GSE100349:", conditionMessage(e))))
   # ---- GSE151173: mouse liver, WT only ----
   p2 <- external_path("SEQUENCE_EXTERNAL_LIVER", "GSE151173_PAS_RAW_Table.txt.gz")
@@ -7662,8 +7620,7 @@ run_external_validation <- function(annot_df) {
   if (length(EXT_ROWS$null)) {
     d <- dplyr::bind_rows(EXT_ROWS$null)
     save_csv(d, file.path(summary_table_dir, "Table_External_Validation_Null.csv"))
-    s <- d |> dplyr::mutate(Null_class = ifelse(grepl("true null", Null_type), "Real-data null (3 vs 3 WT)", "Label permutation (sensitivity analysis)")) |>
-      dplyr::group_by(Dataset, Null_class, Model) |>
+    s <- d |> dplyr::group_by(Dataset, Null_type, Model) |>
       dplyr::summarise(Splits = dplyr::n(), Mean_Standard = mean(Standard), Max_Standard = max(Standard),
                        Prob_any_discovery = mean(Any_Standard), Mean_TypeI_p05 = mean(TypeI_p05),
                        Mean_TypeI_p01 = mean(TypeI_p01), Median_KS_D = stats::median(KS_D), .groups = "drop")
@@ -7673,8 +7630,8 @@ run_external_validation <- function(annot_df) {
     d <- dplyr::bind_rows(EXT_ROWS$repl)
     save_csv(d, file.path(summary_table_dir, "Table_External_Validation_Replication.csv"))
   }
-  writeLines(c(sprintf("Profile %s. GSE100349 permutations %d; GSE151173 null splits %d, replication splits %d.",
-                       RUN_PROFILE, EXT_PERM_N, EXT_NULL_N, EXT_REPL_N),
+  writeLines(c(sprintf("Profile %s. GSE151173 null splits %d, replication splits %d.",
+                       RUN_PROFILE, EXT_NULL_N, EXT_REPL_N),
                if (length(status)) status else "All external validation stages completed."),
              file.path(output_dir, "External_Validation_Status.txt"))
   invisible(TRUE)
@@ -7696,11 +7653,10 @@ plot_external_supplement <- function() {
   n <- read_summary("Table_External_Validation_Null.csv")
   if (!is.null(n) && nrow(n)) {
     n$Model <- factor(n$Model, levels = names(MODEL_COLS))
-    n$Class <- ifelse(grepl("true null", n$Null_type), "GSE151173: WT 3 vs 3 (true null)", "GSE100349: label permutation")
     rows[[length(rows) + 1L]] <- ggplot(n, aes(Model, Standard + 1, colour = Model)) +
-      geom_jitter(width = 0.15, height = 0, size = 1, alpha = 0.8) + facet_wrap(~ Class) +
+      geom_jitter(width = 0.15, height = 0, size = 1, alpha = 0.8) +
       scale_y_log10() + scale_colour_manual(values = MODEL_COLS, guide = "none") +
-      labs(x = NULL, y = "Standard discoveries + 1", tag = letters[length(rows) + 1L], title = "False discoveries on real null data") +
+      labs(x = NULL, y = "Standard discoveries + 1", tag = letters[length(rows) + 1L], title = "False discoveries on real null data (GSE151173, WT 3 vs 3 within a time point)") +
       fig_theme() + theme(axis.text.x = element_text(angle = 30, hjust = 1))
   }
   r <- read_summary("Table_External_Validation_Replication.csv")
@@ -7794,13 +7750,6 @@ run_unit_tests <- function(out_dir) {
     f <- discovery_flags(list(leading_edge_dataset = mk(sprintf("a%d", 1:50), p1), remainder_dataset = mk(sprintf("b%d", 1:80), p2)))
     isTRUE(all.equal(f$padj_global, stats::p.adjust(c(p1, p2), "BH"))) })
   test("Simes combination", isTRUE(all.equal(simes_p(c(0.01, 0.04, 0.5)), min(c(0.01 * 3, 0.04 * 3 / 2, 0.5)))))
-  test("Permutation sets: 100 balanced and 125 distinct non-identity partitions", {
-    trt <- sprintf("T%d", 1:5); ctl <- sprintf("C%d", 1:5)
-    old <- PERM_SET
-    on.exit(PERM_SET <<- old)
-    PERM_SET <<- "balanced"; nb <- length(permutation_sets(trt, ctl))
-    PERM_SET <<- "all"; na <- length(permutation_sets(trt, ctl))
-    structure(nb == 100L && na == 125L, detail = sprintf("balanced %d, all %d", nb, na)) })
   test("Cutoff search on two simulated dispersion populations finds a split near the truth", {
     cache <- build_comparison_cache(syn$y[eligible_pas(syn$y), ], syn$coldata)
     si <- split_inputs(cache)
@@ -7817,12 +7766,6 @@ run_unit_tests <- function(out_dir) {
               one = list(f = function(m) 0.05 + 1 / m, tau2 = 0.2), le = list(f = function(m) 0.2 + 1 / m, tau2 = 0.2),
               rem = list(f = function(m) 0.02 + 1 / m, tau2 = 0.2))
     identical(simulate_counts(b, "effects_two_populations", 7L)$y, simulate_counts(b, "effects_two_populations", 7L)$y) })
-  test("Simulated designs with 3 and 8 animals per group", {
-    b <- list(ids = rownames(syn$y), mean = stats::setNames(rowMeans(syn$y) + 1, rownames(syn$y)),
-              unit = stats::setNames(rownames(syn$y), rownames(syn$y)), in_le = syn$high_dispersion,
-              sf = stats::setNames(rep(1, 10), colnames(syn$y)), coldata = syn$coldata,
-              one = list(f = function(m) 0.05 + 1 / m, tau2 = 0.2))
-    ncol(simulate_counts(b, "effects_n3", 1L)$y) == 6L && ncol(simulate_counts(b, "effects_n8", 1L)$y) == 16L })
   d <- dplyr::bind_rows(res)
   save_csv(d, file.path(out_dir, "Table_Unit_Tests.csv"))
   d
