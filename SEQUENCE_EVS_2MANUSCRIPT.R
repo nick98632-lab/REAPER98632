@@ -6892,7 +6892,7 @@ simulation_base <- function() {
   tr <- function(p) { p <- unname(p); list(f = make_trend_function(exp(p[1]), exp(p[2]), p[3]), tau2 = exp(p[4])) }
   list(ids = ids, mean = stats::setNames(mc$baseMean[match(ids, rownames(cache$gene_dds))], ids),
        unit = stats::setNames(unit, ids), in_le = stats::setNames(cache$depth[ids] <= k, ids),
-       sf = cache$sf, coldata = cache$coldata, one = tr(fit$one), le = tr(fit$le), rem = tr(fit$rem),
+       sf = cache$sf, coldata = cache$coldata, one = tr(fit$one), le = tr(fit$le), rem = tr(fit$rem)
 )
 }
 
